@@ -14,3 +14,6 @@ wheels/
 
 # Runtime flat-file state (human-editable, but not committed)
 data/state/
+
+# Demo scratch database (ui/cli_demo.py)
+demo.db

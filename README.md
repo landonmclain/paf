@@ -39,6 +39,18 @@ uv run python -m ui.cli "Say hello to Maya"
 A single agent turn runs end-to-end, emits a trace to Langfuse (if keys set),
 and writes its structured output to `data/state/last_greeting.json`.
 
+### Interactive CLI demo (cross-process memory)
+
+```bash
+uv run --env-file .env ui/cli_demo.py
+```
+
+Talks to the live `openai:gpt-5.4-nano` model and persists the conversation to
+`ui/demo.db`, so a fresh process can resume the same dialog. Requires
+`OPENAI_API_KEY` (added to the gitignored `.env`; uv needs the explicit
+`--env-file .env` flag — it does not auto-load the project `.env` in this setup).
+Set `MODEL='test'` inside the file for a keyless, deterministic run.
+
 ## Status
 
 Private M1 scaffold. Evals deferred (not M1). Logfire explicitly not used —
