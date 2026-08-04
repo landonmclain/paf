@@ -26,7 +26,9 @@ def setup_observability() -> bool:
     os.environ.setdefault("OTEL_EXPORTER_OTLP_HEADERS", "")
 
     try:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
         from opentelemetry.sdk.resources import Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -36,9 +38,11 @@ def setup_observability() -> bool:
     headers = {
         "Authorization": (
             "Basic "
-            + __import__("base64").b64encode(
+            + __import__("base64")
+            .b64encode(
                 f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
-            ).decode()
+            )
+            .decode()
         )
     }
 

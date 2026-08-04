@@ -6,11 +6,10 @@ the CLI and other UIs import. Kept minimal; the root stays lean.
 
 from __future__ import annotations
 
-from paf.agents import build_agent
+from paf.config import settings
 from paf.observability.instrumentation import setup_observability
 from paf.storage import FlatFileStorage
 from paf.storage.protocol import Storage
-from paf.config import settings
 
 
 def init_runtime() -> None:

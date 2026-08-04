@@ -6,7 +6,8 @@ SQLite, Postgres, or object-store. Backends swap via config, never a rewrite.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable

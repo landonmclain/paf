@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from paf.storage.protocol import Storage
+from paf.config import settings
 
 
 class FlatFileStorage:
@@ -20,8 +20,10 @@ class FlatFileStorage:
     Each key maps to ``<dir>/<key>.json``. Simple, inspectable, diffable.
     """
 
-    def __init__(self, root: str | Path = "data/state") -> None:
-        self.root = Path(root)
+    def __init__(self, root: str | Path | None = None) -> None:
+        # Default to the project-root-anchored config value (see paf.config),
+        # never CWD-relative, so state lands in one canonical place.
+        self.root = Path(root) if root is not None else settings.storage_root
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
@@ -44,7 +46,11 @@ class FlatFileStorage:
     def search(self, query: str, limit: int = 50) -> list[str]:
         """Filename substring search over keys."""
         q = query.lower()
-        hits = [p.name[: -len(".json")] for p in self.root.glob("*.json") if q in p.name.lower()]
+        hits = [
+            p.name[: -len(".json")]
+            for p in self.root.glob("*.json")
+            if q in p.name.lower()
+        ]
         return hits[:limit]
 
     def delete(self, key: str) -> None:

@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Anchored to the repo root (…/src/paf/config.py → …/), not the process CWD.
+# This keeps runtime state in one canonical place no matter where the CLI is
+# launched from, and stays overridable via STORAGE_ROOT env var / .env.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
     """App configuration. Reads from environment + .env (gitignored)."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # Model to use for agents (provider-qualified, e.g. "openai:gpt-4o").
     model_name: str = "openai:gpt-4o-mini"
@@ -18,8 +27,9 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
 
-    # Storage root for flat-file state.
-    storage_root: str = "data/state"
+    # Storage root for flat-file state. Default anchors to the repo root
+    # regardless of CWD (see PROJECT_ROOT); overridable via STORAGE_ROOT.
+    storage_root: Path = PROJECT_ROOT / "data" / "state"
 
 
 settings = Settings()

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from paf.main import init_runtime, get_storage
+from paf.main import get_storage, init_runtime
 from paf.observability.instrumentation import shutdown_observability
 
 
