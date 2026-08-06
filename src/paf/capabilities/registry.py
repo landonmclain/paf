@@ -7,16 +7,35 @@ etc.) do NOT need a catalog entry — they are native to ``Agent.from_spec`` and
 spec loader resolves them without ``custom_capability_types``. This catalog exists
 only for capabilities the loader cannot resolve by default (harness capabilities
 like ``StepPersistence``), keyed by the CamelCase name used in the spec YAML.
+
+Compaction is built in Python (see ``compaction.py``): ``TieredCompaction``'s nested
+``tiers`` must be real strategy objects, and no harness compaction class overrides
+``from_spec``, so a YAML ``tiers:`` dict list would crash at run time. The tier types
+are still cataloged so a profile can reference them and the schema stays complete.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from pydantic_ai_harness.compaction import (
+    ClampOversizedMessages,
+    ClearToolResults,
+    SlidingWindowCompaction,
+    SummarizingCompaction,
+    TieredCompaction,
+)
 from pydantic_ai_harness.step_persistence import StepPersistence
 
 # name -> capability type. The name is the serialization form used in a spec's
 # `capabilities:` entry and the key a profile allowlists against.
 CAPABILITY_TYPES: dict[str, type[Any]] = {
     "StepPersistence": StepPersistence,
+    # Compaction types. TieredCompaction is assembled in Python (compaction.py);
+    # the tier types are cataloged so the profile allowlist + schema stay complete.
+    "TieredCompaction": TieredCompaction,
+    "ClampOversizedMessages": ClampOversizedMessages,
+    "ClearToolResults": ClearToolResults,
+    "SlidingWindowCompaction": SlidingWindowCompaction,
+    "SummarizingCompaction": SummarizingCompaction,
 }

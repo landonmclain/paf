@@ -8,6 +8,7 @@ from typing import Any
 from pydantic_ai import Agent, AgentSpec
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
+from paf.capabilities.runtime import build_runtime_capabilities
 from paf.config import SPECS_DIR
 
 DEFAULT_SPEC_DIRECTORY = SPECS_DIR
@@ -51,14 +52,21 @@ def build_agent(
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
 
+    ```agent_name`` is the spec file base name (``assistant`` → ``assistant.yaml``).
+
     ``profile`` is the capability allowlist for this agent kind — resolved to
     ``custom_capability_types`` so the spec's ``capabilities:`` entries can only
     come from the allowlisted catalog. Defaults to ``ASSISTANT_PROFILE``, M1's
     one real agent kind.
 
+    ``build_runtime_capabilities()`` assembles capabilities that cannot resolve
+    from YAML (the tiered ``TieredCompaction``, whose nested strategy objects have
+    no ``from_spec``) and passes them via ``Agent.from_spec(..., capabilities=)``,
+    which merges them with any spec-declared capabilities (e.g. ``StepPersistence``).
+
     Overrides are passed as kwargs to ``Agent.from_spec``. Supported:
     ``model``, ``instructions``, ``model_settings``, ``name``, ``output_type``.
-    Tools and capabilities must be declared in the spec YAML.
+    Tools and spec-declarable capabilities must be declared in the spec YAML.
     """
     profile = profile or ASSISTANT_PROFILE
     spec = load_agent_spec(agent_name, spec_directory)
@@ -69,5 +77,8 @@ def build_agent(
         # default registry; allowlisting them here is what lets the YAML
         # `capabilities:` entry resolve.
         custom_capability_types=profile.capability_types(),
+        # Capabilities that only Python can construct (tiered compaction) merge
+        # here with the spec-declared ones via Agent.from_spec.
+        capabilities=build_runtime_capabilities(),
         **overrides,
     )

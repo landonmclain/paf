@@ -7,11 +7,12 @@ resolves a profile to the ``custom_capability_types`` it passes to
 ``Agent.from_file``; the spec YAML then selects concrete capability instances from
 that allowlisted set.
 
-M1 has exactly one real profile: **assistant** (allowlists ``StepPersistence``,
-M1's core storage point). There is no ``summary`` profile — ``summary.yaml`` is a
-*model recipe* (model / instructions / settings) for the compaction capability,
-not an agent, so it has nothing to whitelist. Per the M1 plan, do not scaffold a
-blank summary profile until summary earns a capability of its own (YAGNI).
+M1 has exactly one real profile: **assistant** (allowlists ``StepPersistence`` and
+the compaction tier types — M1's core storage point + context management). There
+is no ``summary`` profile: compaction's summarizing tier is not an agent, so its
+model and prompt are configured in ``compaction.py`` (the summarizer inherits the
+assistant's model by default). Per the M1 plan, do not scaffold a blank summary
+profile until summary earns a capability of its own (YAGNI).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .registry import CAPABILITY_TYPES
+from paf.capabilities.registry import CAPABILITY_TYPES
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,11 +48,19 @@ class AgentProfile:
         return tuple(CAPABILITY_TYPES[name] for name in self.capability_names)
 
 
-# The single real M1 profile. The assistant may enable persistence (and later,
-# per the M1 roadmap, compaction + ConversationSearch as those land in its spec).
+# The single real M1 profile. The assistant may enable persistence and context
+# compaction (both harness capabilities). ConversationSearch lands here once it's
+# added in a later M1 step, per the roadmap.
 ASSISTANT_PROFILE = AgentProfile(
     name="assistant",
-    capability_names=("StepPersistence",),
+    capability_names=(
+        "StepPersistence",
+        "TieredCompaction",
+        "ClampOversizedMessages",
+        "ClearToolResults",
+        "SlidingWindowCompaction",
+        "SummarizingCompaction",
+    ),
 )
 
 
