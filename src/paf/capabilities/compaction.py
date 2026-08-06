@@ -48,7 +48,7 @@ def build_compaction() -> TieredCompaction:
     them for a longer-lived context.
     """
     return TieredCompaction(
-        target_fraction=0.75,
+        target_tokens=1200,
         tiers=[
             # 1. Clamp any single oversized part (rare, but cheap when it fires).
             ClampOversizedMessages(
@@ -68,8 +68,8 @@ def build_compaction() -> TieredCompaction:
             ),
             # 4. LLM rewrite — only if still over budget after the cheap tiers.
             SummarizingCompaction(
-                max_messages=1,
-                keep_messages=20,
+                max_messages=2,
+                keep_messages=2,
             ),
         ],
     )
