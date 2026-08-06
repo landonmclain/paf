@@ -8,7 +8,7 @@ from typing import Any
 from pydantic_ai import Agent, AgentSpec
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
-from paf.capabilities.runtime import build_runtime_capabilities
+from paf.capabilities.build import build_runtime_capabilities
 from paf.config import SPECS_DIR
 
 DEFAULT_SPEC_DIRECTORY = SPECS_DIR

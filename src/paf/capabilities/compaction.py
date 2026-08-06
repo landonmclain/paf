@@ -12,7 +12,7 @@ Harness compaction classes (``TieredCompaction`` and every tier type) do NOT ove
 declared in YAML; it must be assembled here, in Python.
 
 This module owns that assembly. ``build_compaction()`` builds the full ``TieredCompaction``
-ladder; ``build_runtime_capabilities()`` (in ``runtime.py``) hands it to ``build_agent``,
+ladder; ``build_runtime_capabilities()`` (in ``build.py``) hands it to ``build_agent``,
 which passes it via the ``capabilities=`` kwarg to ``Agent.from_spec`` (which MERGES it
 with any spec-declared capabilities, ``agent/__init__.py``). Spec-declarable capabilities
 that DO override ``from_spec`` (``StepPersistence``) stay in the YAML.
