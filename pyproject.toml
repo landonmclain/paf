@@ -16,6 +16,18 @@ packages = ["src/paf"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Live/integration tests are opt-in: they hit the real model + Langfuse and
+# need `.env`. Excluded from the default run; invoke with `pytest -m live`.
+addopts = "-m 'not live'"
+markers = [
+    "live: integration test requiring .env (real model call + Langfuse tracing)",
+]
+# pydantic_graph emits "There is no current event loop" when run_sync executes
+# outside a running loop (pytest). It's a third-party deprecation unrelated to
+# our code; ignore it so the live suite is pristine.
+filterwarnings = [
+    "ignore:There is no current event loop:DeprecationWarning:pydantic_graph",
+]
 
 [tool.uv]
 package = true
