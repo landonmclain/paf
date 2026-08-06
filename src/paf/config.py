@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     )
 
     # Model to use for agents (provider-qualified, e.g. "openai:gpt-4o").
-    model_name: str = "openai:gpt-4o-mini"
+    # M1 placeholder (D5) — transient; specs/*.yaml hold per-agent overrides.
+    model_name: str = "openai:gpt-5.4-nano"
 
     # Observability / Langfuse OTLP endpoint + keys (empty = tracing disabled).
     otlp_endpoint: str = "http://localhost:3000/api/public/otel/v1/traces"
