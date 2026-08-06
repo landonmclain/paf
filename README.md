@@ -15,7 +15,8 @@ flagship portfolio framework. Import name: **`paf`**.
   resolves natively (model, instructions, settings); capabilities that need real
   Python objects (tiered compaction, persistence + recall over one shared store)
   are assembled in `capabilities/build.py` and merged via `Agent.from_spec`.
-- **Durable, lossless recall** — `StepPersistence` writes every run to SQLite;
+- **Durable, lossless recall** — `StepPersistence` writes every run to a
+  flat-file store (`data/`, JSON/JSONL — greppable, no DB to administer);
   `ConversationSearch` gives the model a BM25 recall tool over the *same* store,
   so anything compaction (sliding window or summary) drops from live context is
   retrievable.
