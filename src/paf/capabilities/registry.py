@@ -25,6 +25,7 @@ from pydantic_ai_harness.compaction import (
     SummarizingCompaction,
     TieredCompaction,
 )
+from pydantic_ai_harness.conversation_search import ConversationSearch
 from pydantic_ai_harness.step_persistence import StepPersistence
 
 # name -> capability type. The name is the serialization form used in a spec's
@@ -38,4 +39,8 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     "ClearToolResults": ClearToolResults,
     "SlidingWindowCompaction": SlidingWindowCompaction,
     "SummarizingCompaction": SummarizingCompaction,
+    # Lossless recall over the persistence store. Built in Python (build.py) because
+    # its `source` needs a real SnapshotHistorySource object; cataloged so the
+    # profile allowlist + schema stay complete.
+    "ConversationSearch": ConversationSearch,
 }

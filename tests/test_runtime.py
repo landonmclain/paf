@@ -9,6 +9,8 @@ model end-to-end through the ``Session`` and is excluded from the default
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from paf import runtime
@@ -63,3 +65,35 @@ def test_session_runs_one_turn_live() -> None:
         assert s.name == "assistant"
         # One user turn -> at least the user + assistant messages recorded.
         assert len(s.history) >= 2
+
+
+@pytest.mark.live
+def test_session_stream_emits_text_events_live() -> None:
+    """Session.stream yields 'text' events and sets last_result after the run."""
+    with runtime.Session("assistant") as s:
+        events: list[runtime.StreamEvent] = []
+        parts: list[str] = []
+
+        async def run() -> None:
+            async for ev in s.stream("Count from one to three in one line."):
+                events.append(ev)
+                if ev.kind == "text":
+                    parts.append(ev.text)
+
+        asyncio.run(run())
+
+        assert events, "expected at least one event"
+        assert any(ev.kind == "text" for ev in events), "expected text events"
+        assert "".join(parts).strip(), "expected a non-empty assembled answer"
+        assert s.last_result is not None, "expected last_result after stream"
+        assert len(s.history) >= 2
+
+
+@pytest.mark.live
+def test_stream_event_repr_and_defaults() -> None:
+    """StreamEvent exposes kind + optional fields with sane defaults."""
+    ev = runtime.StreamEvent(kind="text", text="hi")
+    assert ev.kind == "text"
+    assert ev.text == "hi"
+    assert ev.tool_name == ""
+    assert ev.args == ""

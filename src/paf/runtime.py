@@ -26,22 +26,48 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from pydantic_ai import (
     Agent,
     AgentRunResult,
     AgentRunResultEvent,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
     PartDeltaEvent,
     PartStartEvent,
 )
-from pydantic_ai.messages import TextPartDelta
+from pydantic_ai.messages import TextPartDelta, ThinkingPartDelta
 
 from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
 from paf.specs import build_agent
+
+
+@dataclass(frozen=True)
+class StreamEvent:
+    """One renderable event from an agent run.
+
+    UI-agnostic: a caller (REPL, web socket, TTS pipeline) maps these onto
+    whatever it shows. ``kind`` is one of:
+
+    - ``"text"``      a token chunk of the model's answer (``text``)
+    - ``"thinking"``  a reasoning token (suppress or render faintly)
+    - ``"tool_call"`` the model invoked a tool (``tool_name``, ``args``)
+    - ``"tool_result"`` a tool returned (``tool_name``, ``text``)
+
+    The settled ``AgentRunResult`` lands on ``self.last_result`` when the run
+    completes, and ``self.history`` accumulates the turn's messages — callers
+    never need to reconstruct the transcript from these events.
+    """
+
+    kind: Literal["text", "thinking", "tool_call", "tool_result"]
+    text: str = ""
+    tool_name: str = ""
+    args: str = ""
 
 
 class Session:
@@ -97,17 +123,21 @@ class Session:
         prompt: str,
         *,
         conversation_id: str | None = None,
-    ) -> AsyncIterator[str]:
-        """Run one turn, yielding the answer's text deltas as they arrive.
+    ) -> AsyncIterator[StreamEvent]:
+        """Run one turn, yielding renderable :class:`StreamEvent` objects.
 
-        Mirrors ``ui/cli_demo.py``'s event loop: ``run_stream_events`` feed text
-        deltas (``TextPartDelta``) out of the model. Hand a caller a simple
-        string-stream to forward to a TTY/renderer; the full settled result
-        lands on ``self.last_result`` when the turn completes.
+        Driven by ``agent.run_stream_events`` (the official pydantic-ai
+        streaming API, as in ``ui/cli_demo.py``). Emits a token for every
+        ``TextPartDelta`` (``kind="text"``), a reasoning token for each
+        ``ThinkingPartDelta`` (``kind="thinking"``), and a ``tool_call`` /
+        ``tool_result`` pair whenever the agent invokes a tool.
+
+        On completion (``AgentRunResultEvent``) the settled result lands on
+        ``self.last_result`` and the turn's messages are appended to
+        ``self.history`` — the two things a caller needs after the stream ends.
 
         The chosen ``conversation_id`` (explicit > session default) is threaded
-        through so persistent storage restores prior history. The turn's new
-        messages are appended to ``self.history``.
+        through so persistent storage restores prior history.
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
 
@@ -120,14 +150,39 @@ class Session:
             async for event in event_stream:
                 if isinstance(event, PartStartEvent):
                     # First chunk of a part arrives in .part; emit it or the
-                    # leading text is silently dropped (cli_demo timestamps this).
+                    # leading text is silently dropped (cli_demo tags this).
                     delta = _part_leading_text(event.part)
                     if delta:
-                        yield delta
-                elif isinstance(event, PartDeltaEvent) and isinstance(
-                    event.delta, TextPartDelta
-                ):
-                    yield event.delta.content_delta
+                        yield StreamEvent(kind="text", text=delta)
+                elif isinstance(event, PartDeltaEvent):
+                    if isinstance(event.delta, TextPartDelta):
+                        yield StreamEvent(kind="text", text=event.delta.content_delta)
+                    elif isinstance(event.delta, ThinkingPartDelta):
+                        yield StreamEvent(
+                            kind="thinking", text=event.delta.content_delta
+                        )
+                    # ToolCallPartDelta: args stream in; the full args are shown
+                    # on the FunctionToolCallEvent line instead (as cli_demo does).
+                elif isinstance(event, FunctionToolCallEvent):
+                    yield StreamEvent(
+                        kind="tool_call",
+                        tool_name=str(event.part.tool_name or ""),
+                        args=(
+                            event.part.args
+                            if isinstance(event.part.args, str)
+                            else str(event.part.args)
+                        ),
+                    )
+                elif isinstance(event, FunctionToolResultEvent):
+                    yield StreamEvent(
+                        kind="tool_result",
+                        tool_name=str(event.part.tool_name or ""),
+                        text=(
+                            event.part.content
+                            if isinstance(event.part.content, str)
+                            else str(event.part.content or "")
+                        ),
+                    )
                 elif isinstance(event, AgentRunResultEvent):
                     result = event.result
 
@@ -143,10 +198,15 @@ class Session:
         *,
         conversation_id: str | None = None,
     ) -> str:
-        """Run one turn and return the complete final text (async)."""
+        """Run one turn and return the complete final text (async).
+
+        Thin convenience over :meth:`stream` that keeps only the answer text
+        (``kind == "text"``) and discards tool/thinking events.
+        """
         parts: list[str] = []
-        async for text in self.stream(prompt, conversation_id=conversation_id):
-            parts.append(text)
+        async for event in self.stream(prompt, conversation_id=conversation_id):
+            if event.kind == "text":
+                parts.append(event.text)
         return "".join(parts)
 
     # -- thin sync convenience -----------------------------------------------

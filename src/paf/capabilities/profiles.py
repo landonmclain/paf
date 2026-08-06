@@ -48,13 +48,14 @@ class AgentProfile:
         return tuple(CAPABILITY_TYPES[name] for name in self.capability_names)
 
 
-# The single real M1 profile. The assistant may enable persistence and context
-# compaction (both harness capabilities). ConversationSearch lands here once it's
-# added in a later M1 step, per the roadmap.
+# The single real M1 profile. The assistant may enable persistence, lossless
+# recall of that persisted history (ConversationSearch), and context compaction
+# (all harness capabilities).
 ASSISTANT_PROFILE = AgentProfile(
     name="assistant",
     capability_names=(
         "StepPersistence",
+        "ConversationSearch",
         "TieredCompaction",
         "ClampOversizedMessages",
         "ClearToolResults",
