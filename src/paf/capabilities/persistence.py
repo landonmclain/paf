@@ -27,20 +27,22 @@ from pydantic_ai_harness.conversation_search import (
     ConversationSearch,
     SnapshotHistorySource,
 )
-from pydantic_ai_harness.step_persistence import SqliteStepStore, StepPersistence
+from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
 from paf.config import PROJECT_ROOT, settings
 
-# Canonical store for M1 persistence + recall. One instance, handed to both
-# StepPersistence (writer) and ConversationSearch (reader), so the search corpus
-# is exactly the persisted history. Anchored to the repo root (not CWD).
-_DB_PATH = PROJECT_ROOT / Path(settings.db_path)
+# Canonical store root for M1 persistence + recall. A directory of flat files
+# (JSONL events, JSON snapshots per run) — greppable/inspectable, no DB to
+# administer. One instance, handed to both StepPersistence (writer) and
+# ConversationSearch (reader), so the search corpus is exactly the persisted
+# history. Anchored to the repo root (not CWD).
+_STORE_DIR = PROJECT_ROOT / Path(settings.db_path)
 
 
-def _build_store() -> SqliteStepStore:
+def _build_store() -> FileStepStore:
     """Build the single shared persistence store."""
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return SqliteStepStore(database=_DB_PATH)
+    _STORE_DIR.mkdir(parents=True, exist_ok=True)
+    return FileStepStore(directory=_STORE_DIR)
 
 
 def build_persistence() -> list:

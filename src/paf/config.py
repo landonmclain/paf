@@ -29,9 +29,10 @@ class Settings(BaseSettings):
     # M1 placeholder (D5) — transient; specs/*.yaml hold per-agent overrides.
     model_name: str = "openai:gpt-5.4-nano"
 
-    # Persistence DB path. Relative paths resolve against PROJECT_ROOT so the
-    # store lands in one canonical place regardless of launch CWD.
-    db_path: str = "data/paf.db"
+    # Persistence store root (a DIRECTORY of flat files). Relative paths resolve
+    # against PROJECT_ROOT so the store lands in one canonical place regardless
+    # of launch CWD.
+    db_path: str = "data/paf"
 
     # Observability / Langfuse OTLP endpoint + keys (empty = tracing disabled).
     otlp_endpoint: str = "http://localhost:3000/api/public/otel/v1/traces"

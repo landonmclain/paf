@@ -12,12 +12,11 @@ wheels/
 # Secrets
 .env
 
-# Runtime flat-file state (human-editable, but not committed)
-data/state/
-
-# Persistence databases (paf.sqlite) — runtime state, not source
-data/*.db
-*.db
+# Persistence store — runtime state, not source. Historically a sqlite db;
+# now the harness FileStepStore writes a directory of JSON/JSONL under
+# data/paf/. Ignore the whole runtime dir.
+data/
+!.env.example
 
 # Demo scratch database (ui/cli_demo.py)
 demo.db
