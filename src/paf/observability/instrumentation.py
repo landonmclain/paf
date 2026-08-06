@@ -22,8 +22,10 @@ def setup_observability() -> bool:
         return False
 
     os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", settings.otlp_endpoint)
-    # Langfuse expects Basic auth via the public/secret key pair.
-    os.environ.setdefault("OTEL_EXPORTER_OTLP_HEADERS", "")
+    # NOTE: do NOT set OTEL_EXPORTER_OTLP_HEADERS here. An empty-string value
+    # makes the OTLP exporter override/drop the Authorization header we pass
+    # via `headers=` below, so Langfuse silently rejects every POST (traces
+    # never land). Auth is carried on the exporter itself.
 
     try:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
@@ -56,6 +58,14 @@ def setup_observability() -> bool:
     from opentelemetry import trace
 
     trace.set_tracer_provider(provider)
+
+    # REQUIRED: pydantic-ai does NOT emit spans by default (Agent.instrument is
+    # off unless enabled). Without this, no agent/metadata/model spans are ever
+    # created and Langfuse receives nothing. See pydantic docs "OTel without
+    # Logfire" and langfuse.com/docs/integrations/pydantic-ai (Step 3).
+    from pydantic_ai import Agent
+
+    Agent.instrument_all()
     return True
 
 

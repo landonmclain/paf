@@ -15,5 +15,9 @@ wheels/
 # Runtime flat-file state (human-editable, but not committed)
 data/state/
 
+# Persistence databases (paf.sqlite) — runtime state, not source
+data/*.db
+*.db
+
 # Demo scratch database (ui/cli_demo.py)
 demo.db
