@@ -1,38 +1,112 @@
-"""Thin CLI — the M1 user interface (a basic script in its own ui/ folder).
+"""Real CLI REPL on top of :class:`paf.runtime.Session`.
 
-Run a single agent turn end-to-end:
-    uv run python -m ui.cli "Say hello to Maya"          # uses .env model
-    uv run python -m ui.cli --test "Say hello to Maya"   # keyless 'test' model
+The production-shaped loop: one ``Session`` built from ``specs/assistant.yaml``
+(which already wires ``StepPersistence``, ``ConversationSearch``, and the
+``TieredCompaction`` ladder), a stable ``conversation_id`` for durable cross-turn
+history, and a live renderer over :meth:`Session.stream`'s ``StreamEvent``s.
+
+``Session`` owns everything ``cli_demo.py`` hand-rolled — tracing setup/teardown,
+the build, message-history accumulation per turn, and the ``run_stream_events``
+driver. This file is deliberately thin: it maps events to the console.
+
+Usage:
+    python ui/cli.py
+    # defaults to conversation_id "cli-primary"
+
+Commands:
+    quit / exit / /q   exit
+
+Needs OPENAI_API_KEY (live nano model). Run twice with the same
+conversation_id to see persistence + recall: start a session, quit, restart,
+then ask for something only reachable via search_conversation_history.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
-from paf.main import init_runtime
-from paf.observability.instrumentation import shutdown_observability
+from paf.capabilities.persistence import _build_store
+from paf.runtime import Session, StreamEvent
+
+CONVERSATION_ID = "cli-primary"
+
+# ── render: map StreamEvent -> console --------------------------------------
+# StreamEvent(kind=...) -> what to draw. Text streams in place (no newline until
+# a tool banner or the answer ends); thinking is suppressed to stderr; tools are
+# interleaved as lines so they never collide with the streaming answer.
 
 
-async def run(prompt: str, use_test_model: bool) -> None:
-    init_runtime()
+def render(event: StreamEvent) -> None:
+    """Draw one StreamEvent to the terminal, tracking the streaming answer."""
+    if event.kind == "text":
+        if event.text:
+            print(event.text, end="", flush=True)
+    elif event.kind == "thinking":
+        # Reasoning tokens: quiet by default. Uncomment to show/annotate.
+        pass
+    elif event.kind == "tool_call":
+        sys.stdout.write("\n")  # end any in-flight streaming text
+        print(f"\ud83d\udded\ufe0f tool \u2192 {event.tool_name}({event.args})")
+    elif event.kind == "tool_result":
+        print(f"\u2705 \u2192 {event.text}")
+    # Unknown kinds: ignore.
 
-    from paf.agents.example_agent import build_agent
 
-    agent = build_agent(model_name="test" if use_test_model else None)
-    result = await agent.run(prompt)
-    print(result.output.model_dump_json(indent=2))
-
-    # Flush + shut down the tracer so the short-lived process's spans persist.
-    shutdown_observability()
+def _startup_banner(session: Session) -> None:
+    """Show whether this conversation already has durable history."""
+    try:
+        runs = asyncio.run(
+            _build_store().list_runs(conversation_id=session.conversation_id)
+        )
+    except Exception as exc:  # noqa: BLE001 - persistence is optional sugar here
+        print(f"(persistence check skipped: {exc})")
+        return
+    if runs:
+        print(f"[resumed: {len(runs)} prior run(s) in {session.conversation_id}]")
+    else:
+        print(f"[new conversation: {session.conversation_id}]")
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    use_test_model = "--test" in sys.argv
-    prompt = " ".join(args) or "Say hello to Maya."
-    asyncio.run(run(prompt, use_test_model))
+    if not os.environ.get("OPENAI_API_KEY"):
+        print(
+            "OPENAI_API_KEY not set. Provide it to call the live model:\n"
+            "  export OPENAI_API_KEY=sk-..."
+        )
+        return 2
+
+    with Session("assistant", conversation_id=CONVERSATION_ID) as session:
+        _startup_banner(session)
+        print('type a message, or "quit" to exit')
+
+        while True:
+            try:
+                prompt = input("you> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nbye")
+                return 0
+
+            if not prompt:
+                continue
+            if prompt.lower() in {"quit", "exit", "/q"}:
+                print("bye")
+                return 0
+
+            print("bot> ", end="", flush=True)
+            # stream() accumulates history + land last_result itself; we only
+            # render.
+            asyncio.run(_consume(session, prompt))
+            print()  # trailing newline after the streamed answer
+
     return 0
+
+
+async def _consume(session: Session, prompt: str) -> None:
+    """Drive one streamed turn to completion, rendering each event."""
+    async for event in session.stream(prompt, conversation_id=session.conversation_id):
+        render(event)
 
 
 if __name__ == "__main__":

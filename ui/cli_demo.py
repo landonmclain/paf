@@ -61,9 +61,6 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
-    ThinkingPart,
-    ToolCallPart,
-    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai_harness.compaction import (
@@ -289,7 +286,9 @@ async def main() -> None:
             # AgentRunResultEvent always fires when the graph settles, so `result`
             # is set here -- but guard for static checkers / a hypothetical early
             # stream teardown.
-            assert result is not None, "run_stream_events aborted before AgentRunResultEvent"
+            assert result is not None, (
+                "run_stream_events aborted before AgentRunResultEvent"
+            )
             # ACKNOWLEDGE: result.new_messages() returns only THIS turn's messages
             # (message_history + older runs are excluded), so overwriting history
             # with it would drop the prior session. Accumulate instead.
