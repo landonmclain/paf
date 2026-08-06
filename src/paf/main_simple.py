@@ -1,31 +1,21 @@
-"""Minimal one-turn entrypoint — build agent from spec, run once, print."""
+"""Minimal one-turn entrypoint — use the runtime Session, run once, print.
+
+The Session owns build + tracing + stream + flush, so this stops re-implementing
+``setup_observability() → build_agent() → agent.run() → shutdown_observability()``
+by hand. A ``with`` block guarantees spans flush before the short-lived process
+exits (a bare ``run_sync`` can drop them).
+"""
 
 from __future__ import annotations
 
-from pydantic_ai import Agent
-
-from paf.observability.instrumentation import (
-    setup_observability,
-    shutdown_observability,
-)
-from paf.specs import build_agent
-
-
-def build_assistant() -> Agent:
-    """Build the assistant agent from specs/assistant.yaml."""
-    return build_agent("assistant")
+from paf.runtime import Session
 
 
 def main() -> None:
-    """Build agent, send one prompt, print response."""
-    setup_observability()
-    agent = build_assistant()
-    print(f"Agent: {agent.name}", flush=True)
-    result = agent.run_sync("Say hello in one sentence.")
-    print(f"\n{result.output}")
-    # Flush buffered OTel spans before the short-lived process exits, or the
-    # BatchSpanProcessor drops them and traces never reach Langfuse.
-    shutdown_observability()
+    with Session("assistant") as s:
+        print(f"Agent: {s.name}", flush=True)
+        result = s.run_sync("Say hello in one sentence.")
+        print(f"\n{result}")
 
 
 if __name__ == "__main__":
