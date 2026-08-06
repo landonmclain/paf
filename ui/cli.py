@@ -10,23 +10,18 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from paf.main import get_storage, init_runtime
+from paf.main import init_runtime
 from paf.observability.instrumentation import shutdown_observability
 
 
 async def run(prompt: str, use_test_model: bool) -> None:
     init_runtime()
-    storage = get_storage()
 
     from paf.agents.example_agent import build_agent
 
     agent = build_agent(model_name="test" if use_test_model else None)
     result = await agent.run(prompt)
     print(result.output.model_dump_json(indent=2))
-
-    # Exercise the storage seam so inspectable state exists.
-    storage.set("last_greeting", result.output.model_dump())
-    print("\n[state] wrote data/state/last_greeting.json")
 
     # Flush + shut down the tracer so the short-lived process's spans persist.
     shutdown_observability()

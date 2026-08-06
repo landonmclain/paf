@@ -1,9 +1,8 @@
-"""storage — the Storage Protocol + swappable backends.
+"""storage — reserved for the framework redo.
 
-Core differentiator: pydantic-ai doesn't dictate this. Backends swap via config.
+The old flat-file KV store (``Storage`` protocol + ``FlatFileStorage``) has been
+removed: pydantic-ai (via the harness ``StepPersistence`` / ``SqliteStepStore``)
+ships durable storage, and M1 embraces that rather than a custom protocol. A
+persistence wrapper (create/restore/append) lands here during the framework
+redo.
 """
-
-from paf.storage.flatfile import FlatFileStorage
-from paf.storage.protocol import Storage
-
-__all__ = ["Storage", "FlatFileStorage"]

@@ -7,8 +7,8 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Anchored to the repo root (…/src/paf/config.py → …/), not the process CWD.
-# This keeps runtime state in one canonical place no matter where the CLI is
-# launched from, and stays overridable via STORAGE_ROOT env var / .env.
+# Keeps runtime state (e.g. a future DB path) in one canonical place no matter
+# where the CLI is launched from.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -27,10 +27,6 @@ class Settings(BaseSettings):
     otlp_endpoint: str = "http://localhost:3000/api/public/otel/v1/traces"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-
-    # Storage root for flat-file state. Default anchors to the repo root
-    # regardless of CWD (see PROJECT_ROOT); overridable via STORAGE_ROOT.
-    storage_root: Path = PROJECT_ROOT / "data" / "state"
 
 
 settings = Settings()
