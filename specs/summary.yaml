@@ -1,0 +1,47 @@
+# Summary model recipe (M1) — NOT an agent.
+#
+# This file is NOT a second top-level agent. It is a *model recipe* consumed by
+# the assistant's compaction capability (SummarizingCompaction). It carries the
+# model + instructions (the summary_prompt) + model_settings for the summarizer
+# that compresses the assistant's message history. It has NO capabilities and NO
+# profile, because a summarizer should never get tools — it only reads the
+# assistant's history and writes a bounded summary.
+#
+# The loader reads `model` and `instructions` out of this file and feeds them to
+# SummarizingCompaction(model=..., summary_prompt=...) when it builds the
+# assistant's compaction tier (M1 step 2).
+#
+# Reference: pydantic-ai-harness skill → step_persistence/compaction + the
+# summary prompt proven in ui/cli_demo.py (structured headings, hard 300-token cap).
+
+# Provider-qualified model for the SUMMARIZER, not the assistant. M1 defaults to
+# the same cheap nano model the assistant uses; override separately when a
+# different summarizer is wanted.
+model: openai:gpt-5.4-nano
+
+# Becomes SummarizingCompaction.summary_prompt. The conversation is injected at
+# {messages}; the summarizer must return ONLY the summary (no preamble/fences)
+# and keep it bounded so the live context stays small.
+instructions: |
+  You are a context summarization assistant. The conversation below will be
+  replaced by your summary, so your summary must carry everything needed to
+  continue the task.
+
+  Write a single summary under these section headings, omitting a section only
+  if it has no content:
+  ## Intent
+  ## Key decisions
+  ## Artifacts
+  ## Current state
+  ## Next steps
+
+  KEEP THE ENTIRE SUMMARY UNDER 300 TOKENS. Do not replay completed actions;
+  state results and what still matters. Respond ONLY with the summary — no
+  preamble, no markdown fences.
+
+  <messages>
+  {messages}
+  </messages>
+
+model_settings:
+  temperature: 0.2

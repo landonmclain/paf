@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic_ai import Agent, AgentSpec
 
+from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.config import SPECS_DIR
 
 DEFAULT_SPEC_DIRECTORY = SPECS_DIR
@@ -45,13 +46,28 @@ def load_agent_spec(
 def build_agent(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+    profile: AgentProfile | None = None,
     **overrides: Any,
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
+
+    ``profile`` is the capability allowlist for this agent kind — resolved to
+    ``custom_capability_types`` so the spec's ``capabilities:`` entries can only
+    come from the allowlisted catalog. Defaults to ``ASSISTANT_PROFILE``, M1's
+    one real agent kind.
 
     Overrides are passed as kwargs to ``Agent.from_spec``. Supported:
     ``model``, ``instructions``, ``model_settings``, ``name``, ``output_type``.
     Tools and capabilities must be declared in the spec YAML.
     """
+    profile = profile or ASSISTANT_PROFILE
     spec = load_agent_spec(agent_name, spec_directory)
-    return Agent.from_spec(spec, **overrides)
+    return Agent.from_spec(
+        spec,
+        # Resolve the agent kind's allowlist to the capability TYPES the loader
+        # registers. Harness capabilities (StepPersistence) aren't in pydantic-ai's
+        # default registry; allowlisting them here is what lets the YAML
+        # `capabilities:` entry resolve.
+        custom_capability_types=profile.capability_types(),
+        **overrides,
+    )
