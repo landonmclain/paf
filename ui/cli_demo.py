@@ -137,6 +137,17 @@ def on_context_usage(usage) -> None:
     context_usage.append(f"context: {pct:.0f}%{note}")
 
 
+def _safe(s: object) -> str:
+    """Make a model-produced value safe to print under utf-8.
+
+    ``FunctionToolCallEvent.part.args`` is ``str | dict | None`` and can carry
+    lone UTF-16 surrogate code units (the model streaming a partially-decoded
+    arg), which ``print`` then blows up on with ``UnicodeEncodeError``. Coerce
+    to str and drop unencodable characters.
+    """
+    return str(s).encode("utf-8", errors="replace").decode("utf-8")
+
+
 def _part_text(part) -> str:
     """Pull the human text out of a str|list[str] content field."""
     if isinstance(part.content, str):
@@ -276,9 +287,9 @@ async def main() -> None:
                         # ToolCallPartDelta ignored -- full args on the call line
                     elif isinstance(event, FunctionToolCallEvent):
                         _ensure_newline()
-                        print(f"🛠️ tool → {event.part.tool_name}({event.part.args})")
+                        print(f"🛠️ tool → {event.part.tool_name}({_safe(event.part.args)})")
                     elif isinstance(event, FunctionToolResultEvent):
-                        print(f"✅ → {event.part.content}")
+                        print(f"✅ → {_safe(str(event.part.content))}")
                     elif isinstance(event, AgentRunResultEvent):
                         result = event.result  # authoritative full transcript
             _ensure_newline()

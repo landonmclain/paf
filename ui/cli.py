@@ -38,6 +38,17 @@ CONVERSATION_ID = "cli-primary"
 # interleaved as lines so they never collide with the streaming answer.
 
 
+def _safe(s: str) -> str:
+    """Make a model-produced string safe to print under utf-8.
+
+    ``FunctionToolCallEvent.args`` can carry lone UTF-16 surrogate code units
+    (the model streaming a partially-decoded arg), which ``print`` then blows up
+    on with ``UnicodeEncodeError`` — crashing the whole REPL mid-turn. Drop any
+    unencodable characters rather than raise.
+    """
+    return s.encode("utf-8", errors="replace").decode("utf-8")
+
+
 def render(event: StreamEvent) -> None:
     """Draw one StreamEvent to the terminal, tracking the streaming answer."""
     if event.kind == "text":
@@ -48,9 +59,9 @@ def render(event: StreamEvent) -> None:
         pass
     elif event.kind == "tool_call":
         sys.stdout.write("\n")  # end any in-flight streaming text
-        print(f"\ud83d\udded\ufe0f tool \u2192 {event.tool_name}({event.args})")
+        print(f"\U0001f9ed tool \u2192 {event.tool_name}({_safe(event.args)})")
     elif event.kind == "tool_result":
-        print(f"\u2705 \u2192 {event.text}")
+        print(f"\u2705 \u2192 {_safe(event.text)}")
     # Unknown kinds: ignore.
 
 
