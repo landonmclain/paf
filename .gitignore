@@ -12,6 +12,10 @@ wheels/
 # Secrets
 .env
 
+# Hermes workspace-local plans (plan skill output). Plans are preserved in the
+# Obsidian vault (Portfolio-GitHub/History/), not in the public repo.
+.hermes/
+
 # Persistence store — runtime state, not source. Historically a sqlite db;
 # now the harness FileStepStore writes a directory of JSON/JSONL under
 # data/paf/. Ignore the whole runtime dir.
