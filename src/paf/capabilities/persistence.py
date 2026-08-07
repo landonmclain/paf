@@ -36,7 +36,7 @@ from paf.config import PROJECT_ROOT, settings
 # administer. One instance, handed to both StepPersistence (writer) and
 # ConversationSearch (reader), so the search corpus is exactly the persisted
 # history. Anchored to the repo root (not CWD).
-_STORE_DIR = PROJECT_ROOT / Path(settings.db_path)
+_STORE_DIR = PROJECT_ROOT / Path(settings.persistence_dir)
 
 
 def _build_store() -> FileStepStore:
