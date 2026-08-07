@@ -15,10 +15,15 @@ def setup_observability() -> bool:
     """Enable tracing if Langfuse keys + an endpoint are configured.
 
     Returns True if tracing was enabled (so callers know whether to flush on
-    exit). Safe to call unconditionally: no-ops when keys are absent, so the
-    package also works with tracing off (e.g. in tests or offline).
+    exit). Safe to call unconditionally: no-ops when any of the keys or the
+    endpoint are absent (all come from .env), so the package also works with
+    tracing off (e.g. in tests or offline).
     """
-    if not settings.langfuse_public_key or not settings.langfuse_secret_key:
+    if (
+        not settings.langfuse_public_key
+        or not settings.langfuse_secret_key
+        or not settings.otlp_endpoint
+    ):
         return False
 
     os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", settings.otlp_endpoint)

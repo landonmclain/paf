@@ -29,8 +29,12 @@ class Settings(BaseSettings):
     # of launch CWD.
     persistence_dir: str = "data/paf"
 
-    # Observability / Langfuse OTLP endpoint + keys (empty = tracing disabled).
-    otlp_endpoint: str = "http://localhost:3000/api/public/otel/v1/traces"
+    # Observability (Langfuse OTLP). Provide these in .env / the environment —
+    # they are secrets + host config, NOT meant to be entered here. All three
+    # blank = tracing off entirely (setup_observability no-ops); providing keys
+    # (and an endpoint) turns traces on. pydantic-settings merges .env values
+    # over these empty defaults at import time.
+    otlp_endpoint: str = ""
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
 
