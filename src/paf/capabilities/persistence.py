@@ -16,13 +16,15 @@ no divergence between the write path and the recall-corpus read path.
 
 This module owns that assembly. ``build_persistence()`` builds the single shared store
 and returns the persistence + recall + turn-index capabilities wired over it;
-``build_runtime_capabilities()`` (in ``build.py``) merges them with ``build_compaction()``
-into the agent.
+``build_runtime_capabilities(profile)`` (in ``build.py``) selects the subset the profile
+allowlists and hands it to the agent via ``Agent.from_spec(capabilities=)``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai_harness.conversation_search import (
     ConversationSearch,
@@ -52,27 +54,51 @@ def _build_store() -> FileStepStore:
     return FileStepStore(directory=_STORE_DIR)
 
 
-def build_persistence() -> list:
+def _build_step_persistence(store: FileStepStore) -> StepPersistence:
+    """The write side: appends every step of a run to the shared store."""
+    return StepPersistence(store=store, agent_name="assistant")
+
+
+def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
+    """Lossless recall over the SAME store StepPersistence writes to."""
+    return ConversationSearch(
+        source=SnapshotHistorySource(store), scope="conversation"
+    )
+
+
+def _build_turn_index(store: FileStepStore) -> TurnIndexCapability:
+    """One-line-per-turn index in context; appends to its own JSONL store but
+    reads the shared store so `read_turn` resolves what StepPersistence writes."""
+    return TurnIndexCapability(
+        source=SnapshotHistorySource(store),
+        index_store=TurnIndexStore(_INDEX_DIR),
+        store=store,
+    )
+
+
+# Name -> builder, keyed by the SAME names a profile allowlists (registry.py).
+# The profile is the gatekeeper: `build_runtime_capabilities(profile)` selects
+# builders by profile.capability_names, so *only* what the profile allows is
+# constructed — one shared store handed to whichever are selected. There is no
+# separate hardcoded list; this IS the resolution of the allowlist names.
+PERSISTENCE_BUILDERS: dict[str, Callable[[FileStepStore], Any]] = {
+    "StepPersistence": _build_step_persistence,
+    "ConversationSearch": _build_conversation_search,
+    "TurnIndex": _build_turn_index,
+}
+
+
+def build_persistence(names: Iterable[str] | None = None) -> list:
     """Assemble the persistence + recall capabilities over one shared store.
 
-    Returns `StepPersistence` (the writer), `ConversationSearch` (the lossless
-    recall reader), and `TurnIndexCapability` (the one-line-per-turn index + gated
-    `read_turn`) all wired to the SAME ``FileStepStore``, so the model can
-    retrieve anything compaction (sliding window or summary) dropped from the
-    live context, plus anything from past runs — and both the search corpus and
-    the `read_turn` resolution target provably match what gets persisted.
+    Defaults to every builder in :data:`PERSISTENCE_BUILDERS`, i.e. the full
+    persistence + recall + turn-index set, all wired to the SAME ``FileStepStore``.
+    Pass an explicit ``names`` iterable to build only those (used by tests and by
+    ``build_runtime_capabilities(profile)`` to honor a profile's allowlist).
     """
     store = _build_store()
     return [
-        StepPersistence(store=store, agent_name="assistant"),
-        # Lossless recall over the SAME store StepPersistence writes to.
-        ConversationSearch(source=SnapshotHistorySource(store), scope="conversation"),
-        # One-line-per-turn index in context. source reads the SAME store (so
-        # read_turn resolves the exact history StepPersistence writes); the
-        # append-only index lives in its own JSONL store.
-        TurnIndexCapability(
-            source=SnapshotHistorySource(store),
-            index_store=TurnIndexStore(_INDEX_DIR),
-            store=store,
-        ),
+        builder(store)
+        for name, builder in PERSISTENCE_BUILDERS.items()
+        if names is None or name in names
     ]

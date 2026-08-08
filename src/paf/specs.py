@@ -77,8 +77,9 @@ def build_agent(
         # default registry; allowlisting them here is what lets the YAML
         # `capabilities:` entry resolve.
         custom_capability_types=profile.capability_types(),
-        # Capabilities that only Python can construct (tiered compaction) merge
-        # here with the spec-declared ones via Agent.from_spec.
-        capabilities=build_runtime_capabilities(),
+        # Capabilities that only Python can construct merge here with any
+        # spec-declared ones via Agent.from_spec. The profile is the gatekeeper:
+        # only capabilities in its allowlist are built (see build.py).
+        capabilities=build_runtime_capabilities(profile),
         **overrides,
     )

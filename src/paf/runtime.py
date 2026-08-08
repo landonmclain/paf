@@ -40,11 +40,13 @@ from pydantic_ai import (
 )
 from pydantic_ai.messages import TextPartDelta, ThinkingPartDelta
 
+from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
 from paf.specs import build_agent
+from pydantic_ai_harness.step_persistence import continue_run
 
 
 @dataclass(frozen=True)
@@ -94,15 +96,30 @@ class Session:
         *,
         conversation_id: str | None = None,
         trace: bool = True,
+        resume: bool = True,
+        store=None,
     ) -> None:
         self.agent_name = agent_name
         self.conversation_id = conversation_id
         self.trace = trace
+        # ``resume``: seed ``self.history`` from durable storage on the first run
+        # (continue_run over the shared flat-file store) so a fresh process picks
+        # up where the prior session left off. M1 semantics: continue_run returns
+        # the full snapshot, compaction summary included -- no suppression here.
+        # Set ``False`` for a genuinely fresh conversation (e.g. tests, probe runs
+        # that must NOT inherit prior history).
+        self.resume = resume
+        self._resumed = False
+        self._restored = False
+        # Default to the canonical shared flat-file store (same directory
+        # build_persistence()/cli use). Injectable for tests / custom roots.
+        self._store = store if store is not None else _build_store()
         if trace:
             setup_observability()
         self._agent: Agent[Any, Any] = build_agent(agent_name)
-        # Running message history for cross-turn persistence. Callers may seed
-        # this (e.g. resumed via StepPersistence) before the first run.
+        # Running message history for cross-turn persistence. Populated by
+        # ``_ensure_resumed`` from durable storage on the first run (if resume)
+        # and then accumulated per-turn.
         self.history: list = []
 
     # -- introspection -------------------------------------------------------
@@ -115,6 +132,47 @@ class Session:
     @property
     def name(self) -> str:
         return self._agent.name or self.agent_name
+
+    # -- resume --------------------------------------------------------------
+
+    @property
+    def restored_count(self) -> int:
+        """Number of prior messages loaded by ``continue_run`` resume (0 if none)."""
+        return len(self.history) if self._restored else 0
+
+    async def restore(self, *, conversation_id: str | None = None) -> int:
+        """Load prior history from the store now, returning ``restored_count``.
+
+        Explicit form of the auto-resume — call it before the first run (e.g. to
+        show "resumed N prior messages" in a banner). Same semantics as
+        ``_ensure_resumed``: ``continue_run`` full snapshot (compaction summary
+        included), idempotent, safe to call early or never.
+        """
+        cid = conversation_id if conversation_id is not None else self.conversation_id
+        await self._ensure_resumed(cid)
+        return self.restored_count
+
+    async def _ensure_resumed(self, conversation_id: str | None) -> None:
+        """Seed ``self.history`` from the store exactly once (before the first run).
+
+        ``continue_run`` loads the latest settled snapshot for the conversation's
+        most recent run and returns it as a message history — M1 semantics, full
+        snapshot (compaction summary included). Idempotent: only acts when resume
+        is enabled, the conversation has a stable id, and this is the first run.
+        A conversation with no prior runs stays empty (``restored_count == 0``).
+        """
+        if self._resumed or not self.resume or conversation_id is None:
+            self._resumed = True
+            return
+        self._resumed = True
+        try:
+            runs = await self._store.list_runs(conversation_id=conversation_id)
+            if not runs:
+                return
+            self.history = await continue_run(self._store, run_id=runs[-1].run_id)
+            self._restored = True
+        except Exception:  # noqa: BLE001 - resume is sugar; never break the run
+            self._restored = False
 
     # -- async core ----------------------------------------------------------
 
@@ -140,6 +198,7 @@ class Session:
         through so persistent storage restores prior history.
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
+        await self._ensure_resumed(cid)
 
         result: AgentRunResult | None = None
         async with self._agent.run_stream_events(

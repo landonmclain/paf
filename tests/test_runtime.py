@@ -10,8 +10,16 @@ model end-to-end through the ``Session`` and is excluded from the default
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai_harness.step_persistence import (
+    ContinuableSnapshot,
+    FileStepStore,
+    RunRecord,
+)
 
 from paf import runtime
 
@@ -45,6 +53,92 @@ def test_session_importable_and_news() -> None:
     # the model config which we don't touch here.
     assert callable(runtime.Session)
     assert callable(runtime.Session.run_sync)
+
+
+# -- resume (continue_run auto-seed) -----------------------------------------
+
+
+async def _seed_run(store: FileStepStore, run_id: str, conv: str, msg: str) -> None:
+    """Register a run + a complete snapshot with one user message, so continue_run has history."""
+    await store.register_run(
+        RunRecord(run_id=run_id, conversation_id=conv, agent_name="assistant")
+    )
+    await store.save_snapshot(
+        ContinuableSnapshot(
+            run_id=run_id,
+            step_index=0,
+            messages=[
+                ModelRequest(parts=[UserPromptPart(content=msg)]),
+                ModelResponse(parts=[TextPart(content="ack")]),
+            ],
+            conversation_id=conv,
+            parent_run_id=None,
+            agent_name="assistant",
+            timestamp=datetime.now(timezone.utc),
+            state="complete",
+        )
+    )
+
+
+def test_session_restore_loads_prior_history(tmp_path: Path) -> None:
+    """A fresh Session with an existing conversation resumes from the store."""
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario() -> None:
+        await _seed_run(store, "r1", "conv", "seed me")
+        s = runtime.Session("assistant", conversation_id="conv", trace=False, store=store)
+        n = await s.restore()
+        assert n == 2  # two prior messages (user + assistant)
+        assert s.restored_count == 2
+        assert len(s.history) == 2
+
+    asyncio.run(scenario())
+
+
+def test_session_restore_fresh_conversation_is_empty(tmp_path: Path) -> None:
+    """A conversation with no prior runs resumes empty (a genuinely new session)."""
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario() -> None:
+        s = runtime.Session("assistant", conversation_id="conv", trace=False, store=store)
+        n = await s.restore()
+        assert n == 0
+        assert s.restored_count == 0
+        assert s.history == []
+
+    asyncio.run(scenario())
+
+
+def test_session_restore_respects_resume_false(tmp_path: Path) -> None:
+    """resume=False must NOT seed history even when prior runs exist (probe/test use)."""
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario() -> None:
+        await _seed_run(store, "r1", "conv", "seed me")
+        s = runtime.Session(
+            "assistant", conversation_id="conv", trace=False, store=store, resume=False
+        )
+        n = await s.restore()
+        assert n == 0
+        assert s.history == []
+
+    asyncio.run(scenario())
+
+
+def test_session_restore_is_idempotent(tmp_path: Path) -> None:
+    """Calling restore() twice does not double-seed history."""
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario() -> None:
+        await _seed_run(store, "r1", "conv", "seed me")
+        s = runtime.Session("assistant", conversation_id="conv", trace=False, store=store)
+        first = await s.restore()
+        second = await s.restore()
+        assert first == 2
+        assert second == 2
+        assert len(s.history) == 2  # not 4
+
+    asyncio.run(scenario())
 
 
 class _Part:

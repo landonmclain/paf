@@ -27,7 +27,6 @@ import asyncio
 import os
 import sys
 
-from paf.capabilities.persistence import _build_store
 from paf.runtime import Session, StreamEvent
 
 CONVERSATION_ID = "cli-primary"
@@ -66,16 +65,18 @@ def render(event: StreamEvent) -> None:
 
 
 def _startup_banner(session: Session) -> None:
-    """Show whether this conversation already has durable history."""
+    """Show whether this conversation resumes durable history.
+
+    Session.restore() seeds self.history from the shared store (continue_run).
+    Returns the count of prior messages loaded -- 0 = a fresh conversation.
+    """
     try:
-        runs = asyncio.run(
-            _build_store().list_runs(conversation_id=session.conversation_id)
-        )
+        restored = asyncio.run(session.restore())
     except Exception as exc:  # noqa: BLE001 - persistence is optional sugar here
-        print(f"(persistence check skipped: {exc})")
+        print(f"(persistence/resume skipped: {exc})")
         return
-    if runs:
-        print(f"[resumed: {len(runs)} prior run(s) in {session.conversation_id}]")
+    if restored:
+        print(f"[resumed: {restored} prior message(s)]")
     else:
         print(f"[new conversation: {session.conversation_id}]")
 
