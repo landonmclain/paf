@@ -156,10 +156,13 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         """Build the per-conversation turn index after each settled run.
 
         Reads the harness's own run/event shards straight from the shared store
-        (``generated_turns`` over ``self.store``) and appends one-line summaries
-        to ``index_store`` -- the "pull the data straight from the store on our
-        hook" pattern. Scoped to ``ctx.conversation_id`` so live `cli-primary`
-        turns land under `cli-primary`, never swept from a global `list_runs`.
+        (``generated_turns`` over ``self.store``, resolving full runs via
+        ``self.source``) and appends one-line summaries to ``index_store`` -- the
+        "pull the data straight from the store on our hook" pattern. Each one-liner
+        is produced from the run's **full recovered history** (whole run, per-part
+        caps on tool args/results -- see ``_extract``). Scoped to
+        ``ctx.conversation_id`` so live `cli-primary` turns land under `cli-primary`,
+        never swept from a global `list_runs`.
 
         Runs synchronously in the hook for now (the summarizer is a hash stub);
         the rest of the hook returns `result` unchanged. When ``self.store`` is
@@ -175,6 +178,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
                 CursorStore(self.index_store.directory),
                 self.index_store,
                 conversation_id=ctx.conversation_id,
+                source=self.source,
             )
         except Exception:
             # Index build must never break the run (matches the harness's

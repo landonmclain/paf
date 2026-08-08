@@ -2,9 +2,16 @@
 
 The "step 1" of the turn-index build order (see `_capability` docstring): the writer that
 produces the one-line-per-turn index. It is structured so the LLM summarizer can move to the
-background later without a redesign -- for now the summarizer is a **stub** (hash/event-derived
-placeholder, no model call) that runs synchronously, so the pipeline can be tested and the real
-LLM dropped in at a single seam.
+background later without a redesign -- for now the summarizer is an **async stub** (no model
+call) that runs synchronously within `generated_turns`, so the pipeline can be tested and the
+real LLM dropped in at a single seam.
+
+**Turn context for the summarizer.** The one-liner is produced from the run's **full recovered
+history** (`HistorySource.run_history` -> `build_turn_context`), NOT the trimmed collector.
+Per the design decision (Landon 2026-08-08) the whole run is sent, with per-part caps on tool
+call args and tool results; the user prompt and final assistant text pass through whole. The
+collector (`events.jsonl`) remains the metadata trail / per-step zoom-in -- it is no longer the
+summarizer's input.
 
 Two data surfaces (the "collect a lot / show a little" split):
 
@@ -26,8 +33,8 @@ A **`cursor.json`** per conversation records how far the collector mirror has be
 re-running the summarizer processes only new events (idempotent, no opaque DB).
 
 Future-seam commentary:
-- `summarize_turn` is a plain function: the real LLM summarizer replaces the stub body (or a
-  `summarizer: Callable` is passed in). Same signature either way.
+- `summarize_turn` is an async function over the rendered run context: the real LLM summarizer
+  replaces the stub body (or a `summarizer: Callable` is passed in). Same signature either way.
 - This module runs sync-blocking today. To move it to the background, call `generate_index`
   from `after_node_run` / a notification hook or a worker task -- the function is already
   pure over (collector -> cursor) and needs no change.
@@ -42,8 +49,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic_ai_harness.conversation_search import SnapshotHistorySource
+from pydantic_ai_harness.conversation_search._source import HistorySource
 from pydantic_ai_harness.step_persistence import EventKind, FileStepStore, StepEvent
 
+from ._extract import build_turn_context
 from ._store import TurnIndexStore
 
 
@@ -274,37 +284,57 @@ class CursorStore:
 
 
 # ---------------------------------------------------------------------------
-# Turn summarizer (STUB — no LLM call; real model drops into this seam)
+# Turn summarizer (async stub over the FULL rendered run -- real model drops in here)
 # ---------------------------------------------------------------------------
 
 
-def summarize_turn(
-    events: list[EventRecord],
+async def summarize_turn(
+    context: str,
     *,
     run_id: str,
     message_index: int,
     conversation_id: str | None,
 ) -> str:
-    """Stub one-liner for a turn. Deterministic, no model call.
+    """Produce the one-line summary for a turn from its **full rendered run context**.
 
-    Replace this body (or its `Callable` injection) with the real LLM summarizer; the
-    surrounding pipeline (`generate_index`) is unchanged. The stub builds a stable placeholder
-    from the events so the index is usable and testable without a model.
+    `context` is the flat text rendition of the ENTIRE run (user prompt + every
+    tool call/result + final answer) via `build_turn_context` -- the whole run,
+    per-part caps on tool args/results. This is NOT the trimmed collector.
+
+    This is the single seam where the real LLM summarizer drops in. Today it is
+    a deterministic stub (no model call) so the pipeline is testable end-to-end
+    without a model or API key; the shape (async, returns one bounded `str`) is
+    exactly what the LLM version returns.
     """
-    if not events:
-        # A turn with no mirrored events: title it from the run.
-        return f"turn {message_index} in run {run_id} (no events indexed)"
-    kinds = [e.kind for e in events]
-    tools = sorted({e.tool_name for e in events if e.tool_name})
-    failed = [e for e in events if e.kind.endswith("failed")]
-    # Deterministic content hash -> stable placeholder differing by content.
-    digest = hashlib.sha256("|".join(kinds).encode()).hexdigest()[:8]
-    parts = [f"turn {message_index} in run {run_id}"]
+    if not context or not context.strip():
+        # A run with no recoverable message content: title it from the run.
+        return f"turn {message_index} in run {run_id} (no message history)"
+    # Deterministic one-liner from the context: first user line + tool names +
+    # content hash. Captures "asked X, used tools Y" without a model.
+    lines = [ln for ln in context.splitlines() if ln.strip()]
+    digest = hashlib.sha256(context.encode()).hexdigest()[:8]
+    tools = _tools_in_context(lines)
+    returned = f"{len(lines)} message line(s)"
     if tools:
-        parts.append("tools: " + ", ".join(tools))
-    if failed:
-        parts.append(f"{len(failed)} failure(s)")
-    return f"{'; '.join(parts)} [{digest}]"
+        returned = "tools: " + ", ".join(tools)
+    return f"turn {message_index} · {lines[0][:120]} → {returned} [{digest}]"
+
+
+def _tools_in_context(lines: list[str]) -> list[str]:
+    """Collect distinct tool names from `tool call:` / `tool result (` lines."""
+    tools: set[str] = set()
+    for ln in lines:
+        low = ln.lower()
+        if low.startswith("tool call: "):
+            name = ln.split("tool call: ", 1)[1].split("(", 1)[0].strip()
+            if name:
+                tools.add(name)
+        elif low.startswith("tool result ("):
+            inner = ln.split("tool result (", 1)[1]
+            name = inner.split(")", 1)[0].strip()
+            if name:
+                tools.add(name)
+    return sorted(tools)
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +349,7 @@ async def generated_turns(
     summary_index: TurnIndexStore,
     *,
     conversation_id: str | None = None,
+    source: HistorySource | None = None,
 ) -> list[dict[str, object]]:
     """Merge new collector events into the per-conversation ledger, then summarize new turns.
 
@@ -326,11 +357,19 @@ async def generated_turns(
     only missing `index.jsonl` entries (dedup on content hash is left to the store/consumers).
     Returns the appended summary records (the newly-indexed turns).
 
+    `source` resolves the full run history fed to the summarizer (``HistorySource.run_history``
+    -> ``build_turn_context``). It must wrap the same persistence as `store` so the index's
+    ``(run_id, message_index)`` refs dereference correctly via `read_turn`. Defaults to a
+    ``SnapshotHistorySource(store)``.
+
     The `FileStepStore` API is async, so this orchestrator is async too; call it from an existing
     event loop (pydantic-ai hooks already run in one). To move summarization to the background,
     schedule this function on a worker task -- it already needs no change.
     """
     written: list[dict[str, object]] = []
+    if source is None:
+        source = SnapshotHistorySource(store)
+    hsrc: HistorySource = source  # narrow for Pyright (reassign above doesn't re-narrow the param)
     # 1. Enumerate runs, mirror their events into the consolidated ledger (dedup by key).
     seen: set[tuple[str, int, str]] = set()
     runs = await store.list_runs(conversation_id=conversation_id)
@@ -366,7 +405,17 @@ async def generated_turns(
             ):
                 continue
             mi = len([e for e in group if e.kind == "tool_call_completed"])
-            summary = summarize_turn(group, run_id=run_id, message_index=mi, conversation_id=conv)
+            # Fetch the run's FULL recovered history, render it to one flat block
+            # (per-part caps on tool args/results), then summarize -- the whole run,
+            # never just the trimmed collector.
+            history = await hsrc.run_history(run_id=run_id)
+            context = build_turn_context(history)
+            summary = await summarize_turn(
+                context,
+                run_id=run_id,
+                message_index=mi,
+                conversation_id=conv,
+            )
             entry = summary_index.append(
                 conversation_id=conv,
                 run_id=run_id,

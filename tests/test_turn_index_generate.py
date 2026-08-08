@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai_harness.step_persistence import (
+    ContinuableSnapshot,
     EventKind,
     FileStepStore,
     RunRecord,
@@ -42,17 +52,85 @@ def _mk_event(
     )
 
 
+def _question_messages(user_text: str = "what is my passport codename?") -> list[object]:
+    """A realistic run's recovered messages: user ask -> tool call -> result -> answer.
+
+    These are exactly what `SnapshotHistorySource.run_history` yields, and what
+    `build_turn_context` renders into the summarizer's full-run context.
+    """
+    return [
+        ModelRequest(parts=[UserPromptPart(content=user_text)]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="search_conversation_history",
+                    args='{"query": "passport codename"}',
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="search_conversation_history",
+                    content="found ZEPHYR-7741",
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="Your passport codename is **ZEPHYR-7741**.")]),
+    ]
+
+
+async def _register_run(
+    store: FileStepStore,
+    run_id: str,
+    conversation_id: str | None,
+    *,
+    tool: str | None = None,
+    messages: list[object] | None = None,
+) -> None:
+    """Register a run + its step events + a real full-history snapshot.
+
+    The summarizer reads `run_history` (recovered from snapshots), so tests must
+    persist a snapshot carrying real messages -- bare `append_event` calls only
+    feed the collector, not the LLM-turn context path.
+    """
+    await store.register_run(RunRecord(run_id=run_id, conversation_id=conversation_id, agent_name="assistant"))
+    await store.append_event(_mk_event(run_id, "run_started", conversation_id=conversation_id))
+    if tool:
+        await store.append_event(
+            _mk_event(run_id, "tool_call_started", tool_name=tool, conversation_id=conversation_id)
+        )
+        await store.append_event(
+            _mk_event(run_id, "tool_call_completed", tool_name=tool, conversation_id=conversation_id)
+        )
+    await store.append_event(_mk_event(run_id, "run_completed", conversation_id=conversation_id))
+    await store.save_snapshot(
+        ContinuableSnapshot(
+            run_id=run_id,
+            step_index=3,  # run_started, tool*2, run_completed
+            messages=messages
+            or (
+                [
+                    ModelRequest(parts=[UserPromptPart(content="hello")]),
+                    ModelResponse(parts=[TextPart(content="hi")]),
+                ]
+            ),
+            conversation_id=conversation_id,
+            parent_run_id=None,
+            agent_name="assistant",
+            timestamp=datetime.now(timezone.utc),
+            state="complete",
+        )
+    )
+
+
 def test_generated_turns_merges_collector_and_writes_index(tmp_path: Path) -> None:
     store = FileStepStore(tmp_path / "store")
 
     async def scenario():
-        await store.register_run(
-            RunRecord(run_id="r1", conversation_id="c1", agent_name="assistant")
+        await _register_run(
+            store, "r1", "c1", tool="read_turn", messages=_question_messages()
         )
-        await store.append_event(_mk_event("r1", "run_started"))
-        await store.append_event(_mk_event("r1", "tool_call_started", tool_name="read_turn"))
-        await store.append_event(_mk_event("r1", "tool_call_completed", tool_name="read_turn"))
-        await store.append_event(_mk_event("r1", "run_completed"))
 
         collector = CollectorStore(tmp_path / "turn-index")
         cursor_store = CursorStore(tmp_path / "turn-index")
@@ -63,7 +141,12 @@ def test_generated_turns_merges_collector_and_writes_index(tmp_path: Path) -> No
         assert first[0]["run_id"] == "r1"
         assert first[0]["message_index"] == 1  # one tool_call_completed
         summary_text = first[0]["summary"]
-        assert isinstance(summary_text, str) and "read_turn" in summary_text
+        # The one-liner is derived from the FULL run context (user prompt + tool + answer),
+        # not just the trimmed collector: it captures the intent and the tool actually
+        # called in the recovered messages.
+        assert isinstance(summary_text, str)
+        assert "search_conversation_history" in summary_text  # tool from the full-run context
+        assert "passport codename" in summary_text  # from the full run, user prompt line
 
         # Collector has all 4 events, deduped.
         events = collector.read()
@@ -92,10 +175,13 @@ def test_generated_turns_dedups_repeated_events(tmp_path: Path) -> None:
     store = FileStepStore(tmp_path / "store")
 
     async def scenario():
-        await store.register_run(
-            RunRecord(run_id="r2", conversation_id="c2", agent_name="assistant")
+        await _register_run(
+            store,
+            "r2",
+            "c2",
+            messages=_question_messages(),
         )
-        # Same (run_id, step_index, kind) twice -> dedup to one.
+        # Same (run_id, step_index, kind) twice -> dedup to one in the collector.
         await store.append_event(_mk_event("r2", "tool_call_started", step_index=3, tool_name="search"))
         await store.append_event(_mk_event("r2", "tool_call_started", step_index=3, tool_name="search"))
 
@@ -103,7 +189,8 @@ def test_generated_turns_dedups_repeated_events(tmp_path: Path) -> None:
         summary = TurnIndexStore(tmp_path / "turn-index")
         await generated_turns(store, collector, CursorStore(tmp_path / "turn-index"), summary)
         events = collector.read()
-        assert len(events) == 1
+        # The duplicate tool_call_started at the same key collapses to one.
+        assert len(events) == len({e.key() for e in events})
 
     asyncio.run(scenario())
 
@@ -131,11 +218,9 @@ def test_generated_turns_scopes_each_run_to_its_conversation(tmp_path: Path) -> 
 
     async def scenario():
         for run_id, conv in (("rA", "cA"), ("rB", "cB"), ("rC", "cC")):
-            await store.register_run(RunRecord(run_id=run_id, conversation_id=conv, agent_name="assistant"))
-            await store.append_event(_mk_event(run_id, "run_started", conversation_id=conv))
-            await store.append_event(_mk_event(run_id, "tool_call_started", tool_name="search", conversation_id=conv))
-            await store.append_event(_mk_event(run_id, "tool_call_completed", tool_name="search", conversation_id=conv))
-            await store.append_event(_mk_event(run_id, "run_completed", conversation_id=conv))
+            await _register_run(
+                store, run_id, conv, tool="search", messages=_question_messages()
+            )
 
         collector = CollectorStore(tmp_path / "turn-index")
         cursor_store = CursorStore(tmp_path / "turn-index")
@@ -170,10 +255,9 @@ def test_cursor_tracks_covered_runs_prevents_resummarize(tmp_path: Path) -> None
 
     async def scenario():
         # Run A registered + summarized first.
-        await store.register_run(RunRecord(run_id="rA", conversation_id="cLive", agent_name="assistant"))
-        await store.append_event(_mk_event("rA", "run_started", conversation_id="cLive"))
-        await store.append_event(_mk_event("rA", "model_request_completed", conversation_id="cLive"))
-        await store.append_event(_mk_event("rA", "run_completed", conversation_id="cLive"))
+        await _register_run(
+            store, "rA", "cLive", messages=_question_messages()
+        )
 
         collector = CollectorStore(tmp_path / "turn-index")
         cursor_store = CursorStore(tmp_path / "turn-index")
@@ -188,10 +272,9 @@ def test_cursor_tracks_covered_runs_prevents_resummarize(tmp_path: Path) -> None
         # Now run B arrives. rB sorts BEFORE rA alphabetically? No: "rA" < "rB",
         # so rA sorts first. Force the out-of-order case by adding a run whose id
         # sorts before rA, e.g. r0a, after rA was already covered.
-        await store.register_run(RunRecord(run_id="r0a", conversation_id="cLive", agent_name="assistant"))
-        await store.append_event(_mk_event("r0a", "run_started", conversation_id="cLive"))
-        await store.append_event(_mk_event("r0a", "tool_call_completed", tool_name="search", conversation_id="cLive"))
-        await store.append_event(_mk_event("r0a", "run_completed", conversation_id="cLive"))
+        await _register_run(
+            store, "r0a", "cLive", tool="search", messages=_question_messages()
+        )
 
         again = await generated_turns(store, collector, cursor_store, summary)
         # Only the NEW run is written; rA is NOT re-summarized despite sorting last.
@@ -242,17 +325,13 @@ def test_after_run_hook_populates_conversation_scoped_index(tmp_path: Path) -> N
 
     async def scenario():
         # A run under the friendly conversation id (mirrors live `cli-primary`).
-        await store.register_run(
-            RunRecord(run_id="r-live", conversation_id="cli-primary", agent_name="assistant")
+        await _register_run(
+            store,
+            "r-live",
+            "cli-primary",
+            tool="search",
+            messages=_question_messages(),
         )
-        await store.append_event(_mk_event("r-live", "run_started", conversation_id="cli-primary"))
-        await store.append_event(
-            _mk_event("r-live", "tool_call_started", tool_name="search", conversation_id="cli-primary")
-        )
-        await store.append_event(
-            _mk_event("r-live", "tool_call_completed", tool_name="search", conversation_id="cli-primary")
-        )
-        await store.append_event(_mk_event("r-live", "run_completed", conversation_id="cli-primary"))
 
         ctx = SimpleNamespace(conversation_id="cli-primary")
         result = object()
@@ -265,18 +344,19 @@ def test_after_run_hook_populates_conversation_scoped_index(tmp_path: Path) -> N
         assert len(entries) == 1
         assert entries[0].run_id == "r-live"
         assert entries[0].conversation_id == "cli-primary"
+        # The hook's summary came from the FULL run (seeded snapshot), not empty.
+        assert "passport codename" in entries[0].summary
         # No stray entry in a different conversation.
         assert index.read_all("other") == []
 
         # Second run in the same conversation appends (index is append-only, not a global sweep).
-        await store.register_run(
-            RunRecord(run_id="r-live-2", conversation_id="cli-primary", agent_name="assistant")
+        await _register_run(
+            store,
+            "r-live-2",
+            "cli-primary",
+            tool="read_turn",
+            messages=_question_messages(),
         )
-        await store.append_event(_mk_event("r-live-2", "run_started", conversation_id="cli-primary"))
-        await store.append_event(
-            _mk_event("r-live-2", "tool_call_completed", tool_name="read_turn", conversation_id="cli-primary")
-        )
-        await store.append_event(_mk_event("r-live-2", "run_completed", conversation_id="cli-primary"))
         await cap.after_run(SimpleNamespace(conversation_id="cli-primary"), result=result)
         entries = index.read_all("cli-primary")
         assert len(entries) == 2
