@@ -1,0 +1,26 @@
+"""Turn Summary Index -- M2's first feature, as an installable pydantic-ai capability.
+
+A one-line-per-turn index injected into context (recognition beats recall) with a
+`read_turn` tool that resolves a ref back into pydantic-ai persistence through the
+`HistorySource` seam. Works with any pydantic-ai persistence backend.
+
+See `turn_summary_index._capability` for the composition (source + own append-only index).
+"""
+
+from pydantic_ai_harness.conversation_search._source import (
+    HistorySource,
+    SnapshotHistorySource,
+)
+
+from ._capability import TurnSummaryIndex
+from ._store import TurnIndexEntry, TurnIndexStore
+from ._toolset import TurnSummaryIndexToolset
+
+__all__ = [
+    'HistorySource',
+    'SnapshotHistorySource',
+    'TurnIndexEntry',
+    'TurnIndexStore',
+    'TurnSummaryIndex',
+    'TurnSummaryIndexToolset',
+]
