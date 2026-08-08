@@ -56,7 +56,7 @@ ASSISTANT_PROFILE = AgentProfile(
     capability_names=(
         "StepPersistence",
         "ConversationSearch",
-        "TurnSummaryIndex",
+        "TurnIndex",
         "TieredCompaction",
         "ClampOversizedMessages",
         "ClearToolResults",

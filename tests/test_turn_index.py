@@ -27,10 +27,10 @@ from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import ContinuableSnapshot, FileStepStore
 
 from paf.capabilities.registry import CAPABILITY_TYPES
-from paf.capabilities.turn_summary import (
+from paf.capabilities.turn_index import (
+    TurnIndexCapability,
     TurnIndexStore,
-    TurnSummaryIndex,
-    TurnSummaryIndexToolset,
+    TurnIndexToolset,
 )
 from paf.specs import build_agent
 
@@ -44,13 +44,13 @@ pytestmark = pytest.mark.skipif(
 #      consistency of the module-level skip) ---------------------------------
 
 
-def test_catalog_registers_turn_summary_index() -> None:
-    assert "TurnSummaryIndex" in CAPABILITY_TYPES
-    assert CAPABILITY_TYPES["TurnSummaryIndex"] is TurnSummaryIndex
+def test_catalog_registers_turn_index() -> None:
+    assert "TurnIndex" in CAPABILITY_TYPES
+    assert CAPABILITY_TYPES["TurnIndex"] is TurnIndexCapability
 
 
 def test_from_spec_reconstructs_capability(tmp_path: Path) -> None:
-    cap = TurnSummaryIndex.from_spec(tmp_path, max_lines=5)
+    cap = TurnIndexCapability.from_spec(tmp_path, max_lines=5)
     # Both surfaces reconstructed from one directory:
     #  * source reads pyai persistence at that dir
     #  * index_store owns the append-only JSONL at that dir
@@ -62,13 +62,13 @@ def test_from_spec_reconstructs_capability(tmp_path: Path) -> None:
 
 
 def test_get_serialization_name() -> None:
-    assert TurnSummaryIndex.get_serialization_name() == "TurnSummaryIndex"
+    assert TurnIndexCapability.get_serialization_name() == "TurnIndex"
 
 
 # ---- build_agent integration: the capability lands on the assistant ---------
 
 
-def test_build_agent_includes_turn_summary_index() -> None:
+def test_build_agent_includes_turn_index() -> None:
     agent = build_agent("assistant")
     root = getattr(agent, "root_capability", None) or getattr(
         agent, "_root_capability", None
@@ -80,7 +80,7 @@ def test_build_agent_includes_turn_summary_index() -> None:
     def walk(node: Any) -> None:
         if node is None:
             return
-        if isinstance(node, TurnSummaryIndex):
+        if isinstance(node, TurnIndexCapability):
             found.append(node)
             return
         if isinstance(node, (list, tuple)):
@@ -94,7 +94,7 @@ def test_build_agent_includes_turn_summary_index() -> None:
                 walk(getattr(node, f.name, None))
 
     walk(root)
-    assert found, "assistant should carry the TurnSummaryIndex capability"
+    assert found, "assistant should carry the TurnIndex capability"
     cap = found[0]
     # Shared-store invariant: source reads the same persistence as StepPersistence.
     assert isinstance(cap.source, SnapshotHistorySource)
@@ -127,7 +127,7 @@ def test_read_turn_resolves_ref_through_persistence(tmp_path: Path) -> None:
             message_index=0,
             summary="auth header fix",
         )
-        ts = TurnSummaryIndexToolset(source, index)
+        ts = TurnIndexToolset(source, index)
         return await ts._finder.resolve("run-t:0", run_id="run-t", conversation_id="conv-t")
 
     out = asyncio.run(scenario())

@@ -28,7 +28,7 @@ from pydantic_ai_harness.compaction import (
 from pydantic_ai_harness.conversation_search import ConversationSearch
 from pydantic_ai_harness.step_persistence import StepPersistence
 
-from paf.capabilities.turn_summary import TurnSummaryIndex
+from paf.capabilities.turn_index import TurnIndexCapability
 
 # name -> capability type. The name is the serialization form used in a spec's
 # `capabilities:` entry and the key a profile allowlists against.
@@ -47,6 +47,6 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     "ConversationSearch": ConversationSearch,
     # One-line-per-turn index in context + gated `read_turn`. Built in Python (build.py)
     # to share the single persistence store; has `from_spec`, so it can ALSO resolve
-    # declaratively from a spec (`- TurnSummaryIndex: {index_dir: ...}`).
-    "TurnSummaryIndex": TurnSummaryIndex,
+    # declaratively from a spec (`- TurnIndex: {index_dir: ...}`).
+    "TurnIndex": TurnIndexCapability,
 }

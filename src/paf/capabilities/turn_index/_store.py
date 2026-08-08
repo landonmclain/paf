@@ -1,6 +1,6 @@
 """Append-only flat-file index store for turn summaries.
 
-The turn-summary index is *derived* data: it is NOT part of pydantic-ai's run
+The turn index is *derived* data: it is NOT part of pydantic-ai's run
 history. It lives beside it, in its own append-only store, and each entry is
 keyed to a full turn in pydantic-ai persistence *by reference* -- the
 (conversation_id, run_id, message_index) tuple that `SnapshotHistorySource`
@@ -89,6 +89,11 @@ class TurnIndexStore:
     """
 
     def __init__(self, directory: str | Path = '.turn-index') -> None:
+        """Append-only one-line-turn index store.
+
+        Defaults to `.turn-index` for a standalone store, but `paf` always passes
+        the configured `data/.turn-index` explicitly (see `paf.config.turn_index_dir`).
+        """
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
 

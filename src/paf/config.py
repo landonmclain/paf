@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # of launch CWD.
     persistence_dir: str = "data/paf"
 
+    # The derived one-line-per-turn index lives NEXT TO the step store, as its own
+    # append-only JSONL surface (sibling of `data/paf/{conversation_id}/index.jsonl`,
+    # not inside it). Relative paths resolve against PROJECT_ROOT like persistence_dir.
+    # Overridable via env / .env (TURN_INDEX_DIR), consistent with persistence_dir.
+    turn_index_dir: str = "data/.turn-index"
+
     # Observability (Langfuse OTLP). Provide these in .env / the environment —
     # they are secrets + host config, NOT meant to be entered here. All three
     # blank = tracing off entirely (setup_observability no-ops); providing keys

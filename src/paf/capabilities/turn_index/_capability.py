@@ -1,4 +1,4 @@
-"""`TurnSummaryIndex` capability: a one-line-per-turn index in context + gated `read_turn`.
+"""`TurnIndexCapability`: a one-line-per-turn index in context + gated `read_turn`.
 
 This is M2's first feature (see the vault: `Turn-Summary-Index.md`), structured as an
 installable pydantic-ai capability. It is the *episodic turn index* arm -- distinct from
@@ -21,16 +21,16 @@ not a store of its own choosing.
 from pydantic_ai import Agent
 from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
-from turn_summary_index import TurnSummaryIndex
+from turn_index import TurnIndexCapability
 
 store = FileStepStore('.step-persistence')
 agent = Agent(
     'openrouter:deepseek/deepseek-v4-flash-0731:nitro',
     capabilities=[
         StepPersistence(store=store),                        # pydantic-ai owns writing full history
-        TurnSummaryIndex(
+        TurnIndexCapability(
             source=SnapshotHistorySource(store),             # reads pydantic-ai persistence
-            index_store=TurnIndexStore('.turn-index'),       # owns the derived one-line index
+            index_store=TurnIndexStore('.turn-index'),   # owns the derived one-line index
         ),
     ],
 )
@@ -70,12 +70,12 @@ from pydantic_ai.toolsets import AgentToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
 from ._store import TurnIndexStore
-from ._toolset import TurnSummaryIndexToolset
+from ._toolset import TurnIndexToolset
 
-_MARKER = 'turn-summary-index.v1'
+_MARKER = 'turn-index.v1'
 
 _INSTRUCTIONS = (
-    'A one-line summary of every past turn is kept in context (the turn-summary index). '
+    'A one-line summary of every past turn is kept in context (the turn index). '
     'Each line shows a ref. When a turn looks relevant, call `read_turn` with that ref to pull '
     'the full original turn back into context. When you need the wider picture beyond a single '
     'turn, use `search_conversation_history`.'
@@ -83,7 +83,7 @@ _INSTRUCTIONS = (
 
 
 @dataclass
-class TurnSummaryIndex(AbstractCapability[AgentDepsT]):
+class TurnIndexCapability(AbstractCapability[AgentDepsT]):
     """Episodic turn index: one-line summaries in context + gated `read_turn` into pyai persistence."""
 
     source: HistorySource
@@ -104,12 +104,12 @@ class TurnSummaryIndex(AbstractCapability[AgentDepsT]):
     add_instructions: bool = True
     """Emit an instruction telling the model `read_turn` / the index exist."""
 
-    tool_id: str = 'turn-summary-index'
+    tool_id: str = 'turn-index'
     """Toolset id for `read_turn` / `search_index`."""
 
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:
         """Provide the `read_turn` + `search_index` toolset over the source + index."""
-        return TurnSummaryIndexToolset(
+        return TurnIndexToolset(
             self.source,
             self.index_store,
             tool_id=self.tool_id,
@@ -191,7 +191,7 @@ class TurnSummaryIndex(AbstractCapability[AgentDepsT]):
     @classmethod
     def get_serialization_name(cls) -> str | None:
         """Return the name used by custom capability specs."""
-        return 'TurnSummaryIndex'
+        return 'TurnIndex'
 
     @classmethod
     def from_spec(
@@ -201,8 +201,8 @@ class TurnSummaryIndex(AbstractCapability[AgentDepsT]):
         max_lines: int = 40,
         inject_index: bool = True,
         add_instructions: bool = True,
-        tool_id: str = 'turn-summary-index',
-    ) -> 'TurnSummaryIndex[Any]':
+        tool_id: str = 'turn-index',
+    ) -> 'TurnIndexCapability[Any]':
         """Reconstruct the capability from a spec-declarable store directory.
 
         `source` and `index_store` are not YAML-serializable (a `HistorySource` is
@@ -215,14 +215,14 @@ class TurnSummaryIndex(AbstractCapability[AgentDepsT]):
               declaratively.
             - The append-only turn index lives under the same root as its own
               `data/index.jsonl`, so the whole capability is self-owning from a
-              spec. Use `TurnSummaryIndex(index_dir=...)` in YAML:
+              spec. Use `TurnIndexCapability(index_dir=...)` in YAML:
 
                   capabilities:
-                    - TurnSummaryIndex: {index_dir: data/paf}
+                    - TurnIndex: {index_dir: data/paf}
 
         For programmatic assembly that must share a live store instance (as
         `paf.capabilities.persistence.build_persistence` does), construct
-        `TurnSummaryIndex(source=..., index_store=...)` directly instead.
+        `TurnIndexCapability(source=..., index_store=...)` directly instead.
         """
         from pydantic_ai_harness.conversation_search import SnapshotHistorySource
         from pydantic_ai_harness.step_persistence import FileStepStore

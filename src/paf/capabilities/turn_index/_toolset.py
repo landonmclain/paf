@@ -28,7 +28,7 @@ from ._store import TurnIndexEntry, TurnIndexStore
 READ_TURN_DESCRIPTION = """\
 Read one specific turn from persisted conversation history, by its index ref.
 
-The turn-summary index keeps a one-line summary of every turn in context. When
+The turn index keeps a one-line summary of every turn in context. When
 you recognize from the index that a turn is relevant, call this with that run's
 (ref) to pull the FULL original turn -- the exact user prompt and assistant
 responses / tool calls -- back into context.
@@ -145,7 +145,7 @@ def _render_message(message) -> str:
     return f'<{type(message).__name__}>'
 
 
-class TurnSummaryIndexToolset(FunctionToolset[AgentDepsT]):
+class TurnIndexToolset(FunctionToolset[AgentDepsT]):
     """Includes `read_turn` (resolve a ref through pyai persistence) and `search_index` (BM25 over one-liners)."""
 
     def __init__(
@@ -153,7 +153,7 @@ class TurnSummaryIndexToolset(FunctionToolset[AgentDepsT]):
         source: HistorySource,
         index_store: TurnIndexStore,
         *,
-        tool_id: str = 'turn-summary-index',
+        tool_id: str = 'turn-index',
     ) -> None:
         super().__init__(id=tool_id)
         self._source = source

@@ -4,7 +4,7 @@ A one-line-per-turn index injected into context (recognition beats recall) with 
 `read_turn` tool that resolves a ref back into pydantic-ai persistence through the
 `HistorySource` seam. Works with any pydantic-ai persistence backend.
 
-See `turn_summary_index._capability` for the composition (source + own append-only index).
+See `turn_index._capability` for the composition (source + own append-only index).
 """
 
 from pydantic_ai_harness.conversation_search._source import (
@@ -12,15 +12,15 @@ from pydantic_ai_harness.conversation_search._source import (
     SnapshotHistorySource,
 )
 
-from ._capability import TurnSummaryIndex
+from ._capability import TurnIndexCapability
 from ._store import TurnIndexEntry, TurnIndexStore
-from ._toolset import TurnSummaryIndexToolset
+from ._toolset import TurnIndexToolset
 
 __all__ = [
     'HistorySource',
     'SnapshotHistorySource',
     'TurnIndexEntry',
     'TurnIndexStore',
-    'TurnSummaryIndex',
-    'TurnSummaryIndexToolset',
+    'TurnIndexCapability',
+    'TurnIndexToolset',
 ]
