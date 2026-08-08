@@ -17,6 +17,7 @@ from ._generate import (
     CollectorStore,
     CursorStore,
     EventRecord,
+    generated_turns,
     summarize_turn,
 )
 from ._store import TurnIndexEntry, TurnIndexStore
@@ -32,5 +33,6 @@ __all__ = [
     'CollectorStore',
     'CursorStore',
     'EventRecord',
+    'generated_turns',
     'summarize_turn',
 ]

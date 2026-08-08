@@ -142,10 +142,20 @@ class CollectorStore:
             os.fsync(fh.fileno())
 
     def read(self, conversation_id: str | None = None) -> list[EventRecord]:
-        files = [
-            self.directory / sub / "events.jsonl"
-            for sub in sorted(p.name for p in self.directory.iterdir() if p.is_dir())
-        ]
+        """Read the collector ledger, optionally scoped to one conversation.
+
+        When ``conversation_id`` is ``None``, return every conversation's events
+        (used for a global sweep). Otherwise filter to just that conversation's own
+        ``events.jsonl`` -- the per-conversation ledger is authoritative and the
+        file set is exactly ``<dir>/<conversation_id>/events.jsonl``.
+        """
+        if conversation_id is not None:
+            files = [self._path(conversation_id)]
+        else:
+            files = [
+                self.directory / sub / "events.jsonl"
+                for sub in sorted(p.name for p in self.directory.iterdir() if p.is_dir())
+            ]
         lines: list[EventRecord] = []
         for f in files:
             if not f.exists():

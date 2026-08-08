@@ -116,3 +116,55 @@ def test_event_record_roundtrip() -> None:
     assert d["error"] == "boom"
     restored = EventRecord(**d)  # type: ignore[arg-type]  # dict[str,object] is a lossy json view
     assert restored == rec
+
+
+def test_generated_turns_scopes_each_run_to_its_conversation(tmp_path: Path) -> None:
+    """Regression: multi-conversation runs must not cross-contaminate the index.
+
+    Previously ``CollectorStore.read()`` ignored its ``conversation_id`` argument and
+    returned every conversation's events, so the summary loop wrote each run into every
+    conversation's ``index.jsonl``. Each run must be summarized once, into its own
+    conversation's directory only.
+    """
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario():
+        for run_id, conv in (("rA", "cA"), ("rB", "cB"), ("rC", "cC")):
+            await store.register_run(RunRecord(run_id=run_id, conversation_id=conv, agent_name="assistant"))
+            await store.append_event(_mk_event(run_id, "run_started", conversation_id=conv))
+            await store.append_event(_mk_event(run_id, "tool_call_started", tool_name="search", conversation_id=conv))
+            await store.append_event(_mk_event(run_id, "tool_call_completed", tool_name="search", conversation_id=conv))
+            await store.append_event(_mk_event(run_id, "run_completed", conversation_id=conv))
+
+        collector = CollectorStore(tmp_path / "turn-index")
+        cursor_store = CursorStore(tmp_path / "turn-index")
+        summary = TurnIndexStore(tmp_path / "turn-index")
+
+        written = await generated_turns(store, collector, cursor_store, summary)
+        assert len(written) == 3  # one summary per run, no duplicates
+
+        # Each conversation's index holds exactly its own run -- and only once.
+        for run_id, conv in (("rA", "cA"), ("rB", "cB"), ("rC", "cC")):
+            entries = summary.read_all(conv)
+            assert len(entries) == 1, f"{conv} index contaminated: {[e.run_id for e in entries]}"
+            assert entries[0].run_id == run_id
+
+        # Re-run stays idempotent and scoped.
+        again = await generated_turns(store, collector, cursor_store, summary)
+        assert again == []
+        for conv in ("cA", "cB", "cC"):
+            assert len(summary.read_all(conv)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_collector_read_scopes_to_conversation(tmp_path: Path) -> None:
+    collector = CollectorStore(tmp_path / "turn-index")
+    collector.append(EventRecord.from_step_event(_mk_event("r1", "run_started", conversation_id="c1")))
+    collector.append(EventRecord.from_step_event(_mk_event("r2", "run_started", conversation_id="c2")))
+
+    c1 = collector.read("c1")
+    c2 = collector.read("c2")
+    assert [e.run_id for e in c1] == ["r1"]
+    assert [e.run_id for e in c2] == ["r2"]
+    assert len(collector.read()) == 2  # unscoped = all conversations
