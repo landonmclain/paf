@@ -11,11 +11,13 @@ Harness compaction classes (``TieredCompaction`` and every tier type) do NOT ove
 ``Sequence[CompactionStrategy]`` — real objects. So the tiered compaction cannot be
 declared in YAML; it must be assembled here, in Python.
 
-This module owns that assembly. ``build_compaction()`` builds the full ``TieredCompaction``
-ladder; ``build_runtime_capabilities()`` (in ``build.py``) hands it to ``build_agent``,
-which passes it via the ``capabilities=`` kwarg to ``Agent.from_spec`` (which MERGES it
-with any spec-declared capabilities, ``agent/__init__.py``). Spec-declarable capabilities
-that DO override ``from_spec`` (``StepPersistence``) stay in the YAML.
+This module owns that assembly. ``build_compaction()`` builds the ``TieredCompaction``
+ladder **minus the summarizing tier**: with turn-index ON (the M2 summary layer), the LLM
+rewrite (``SummarizingCompaction``) is mutually exclusive with the `<turn-index>` one-liner
+block — both inject a compressed *memory* of past turns. The non-summary tiers (clamp,
+clear-tool-results, sliding window) are pure context management and stay; they only ever
+*shrink* the live context without producing a competing summary. ``build_runtime_capabilities()``
+(in ``build.py``) selects the compaction builder iff the agent's profile allowlists it.
 """
 
 from __future__ import annotations
@@ -24,25 +26,27 @@ from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
     SlidingWindowCompaction,
-    SummarizingCompaction,
     TieredCompaction,
 )
 
 
 def build_compaction() -> TieredCompaction:
-    """Assemble the assistant's context-compaction capability.
+    """Assemble the assistant's context-compaction capability (no summary tier).
 
     Cheap tiers first, expensive last — ``TieredCompaction`` runs them in order
     and escalates only while the history still exceeds the budget (it stops once
     the history fits ``target_fraction`` of the model's context window). Ladder
-    (least → most destructive / expensive):
+    (least → most destructive / expensive), WITHOUT ``SummarizingCompaction``:
 
     1. ``ClampOversizedMessages`` — trim any single oversized part to head+tail.
     2. ``ClearToolResults`` — replace tool-call/result pairs with placeholders.
     3. ``SlidingWindowCompaction`` — drop oldest messages, keep the recent window
        (plus the first user message) — the harness's cheap default.
-    4. ``SummarizingCompaction`` — the LLM rewrite; only reached if still over
-       budget. Inherits the assistant's model when ``model`` is omitted.
+
+    The LLM rewrite (4. ``SummarizingCompaction``) is intentionally absent — it
+    is mutually exclusive with the turn-index one-liner block (both are summaries).
+    Context is bounded here by pruning; long-term recall is the store-backed
+    ``ConversationSearch`` / ``read_turn`` instead of a compacted summary.
 
     Values are small/observable for M1 so a few turns trip the escalation; raise
     them for a longer-lived context.
@@ -64,11 +68,6 @@ def build_compaction() -> TieredCompaction:
             # 3. Drop the oldest messages, keep the recent window + first user msg.
             SlidingWindowCompaction(
                 max_messages=4,
-                keep_messages=2,
-            ),
-            # 4. LLM rewrite — only if still over budget after the cheap tiers.
-            SummarizingCompaction(
-                max_messages=2,
                 keep_messages=2,
             ),
         ],

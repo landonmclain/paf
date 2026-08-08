@@ -4,8 +4,9 @@ Pins the M2 contract: building the assistant from specs/assistant.yaml (with the
 TurnIndex profile) yields an Agent carrying —
   * a spec-declared StepPersistence (resolved from YAML via from_spec),
   * a Python-assembled TurnIndexCapability (the `capabilities=` runtime seam),
-  * and NO builtin compaction — turn-index IS the summary layer; turn-index and
-    SummarizingCompaction are mutually exclusive (see build.py + vault).
+  * and a no-summary compaction ladder — turn-index is the summary layer, so the
+    SummarizingCompaction tier is mutually exclusive and removed (see compaction.py).
+    The non-summary tiers (clamp / clear-tool / sliding-window) stay as context mgmt.
 
 This only *builds* the agent — it makes no model call — but constructing an
 `openai:` Agent requires `OPENAI_API_KEY` to be present (the provider is
@@ -59,6 +60,32 @@ def _collect_capabilities(node: Any, seen: set[type] | None = None) -> set[type]
     return seen
 
 
+def _find_compaction(node: Any) -> TieredCompaction | None:
+    """Locate the (single) TieredCompaction anywhere in a composed root capability."""
+    if node is None:
+        return None
+    if isinstance(node, TieredCompaction):
+        return node
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            found = _find_compaction(item)
+            if found is not None:
+                return found
+        return None
+    if isinstance(node, dict):
+        for value in node.values():
+            found = _find_compaction(value)
+            if found is not None:
+                return found
+        return None
+    if dataclasses.is_dataclass(node) and not isinstance(node, type):
+        for field in dataclasses.fields(node):
+            found = _find_compaction(getattr(node, field.name, None))
+            if found is not None:
+                return found
+    return None
+
+
 def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
     agent = build_agent("assistant")
     root = getattr(agent, "root_capability", None) or getattr(
@@ -68,19 +95,26 @@ def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
 
     caps = _collect_capabilities(root)
 
-    # Persistence leg (spec-declared) + turn-index leg (Python runtime seam).
+    # Persistence leg (spec-declared) + turn-index leg (Python runtime seam) +
+    # the no-summary compaction ladder (profile-gated "Compaction").
     assert StepPersistence in caps
     assert TurnIndexCapability in caps
-    # Builtin compaction is REMOVED — turn-index is the sole summary layer.
-    assert TieredCompaction not in caps
+    assert TieredCompaction in caps
+    # The summarizing tier is the one mutually exclusive with the turn-index block.
+    compaction = _find_compaction(root)
+    assert compaction is not None
+    from pydantic_ai_harness.compaction import SummarizingCompaction
+
+    assert not any(type(t) is SummarizingCompaction for t in compaction.tiers)
 
 
 def test_build_agent_excludes_compaction_when_turn_index() -> None:
     """Turn-index and SummarizingCompaction are mutually exclusive summary layers.
 
-    With the TurnIndex profile, no TieredCompaction / compacting tier may be wired
-    into the agent — otherwise the model gets BOTH the <turn-index> one-liners and
-    a `Summary of previous conversation` in the same request (redundant/confusing).
+    With the TurnIndex profile, the agent still carries context compaction (the
+    no-summary ladder), but that ladder must NOT include a SummarizingCompaction —
+    otherwise the model gets BOTH the <turn-index> one-liners AND an LLM-rewritten
+    `Summary of previous conversation` in the same request (redundant/confusing).
     """
     agent = build_agent("assistant")
     root = getattr(agent, "root_capability", None) or getattr(
@@ -88,27 +122,12 @@ def test_build_agent_excludes_compaction_when_turn_index() -> None:
     )
     assert root is not None
 
-    compaction: Any = None
+    compaction = _find_compaction(root)
+    # Compaction IS present (no-summary ladder); it just contains no summary tier.
+    assert compaction is not None
+    from pydantic_ai_harness.compaction import SummarizingCompaction
 
-    def find_compaction(node: Any) -> None:
-        nonlocal compaction
-        if node is None:
-            return
-        if isinstance(node, TieredCompaction):
-            compaction = node
-            return
-        if isinstance(node, (list, tuple)):
-            for item in node:
-                find_compaction(item)
-        elif isinstance(node, dict):
-            for value in node.values():
-                find_compaction(value)
-        elif dataclasses.is_dataclass(node) and not isinstance(node, type):
-            for field in dataclasses.fields(node):
-                find_compaction(getattr(node, field.name, None))
-
-    find_compaction(agent._root_capability)
-    assert compaction is None
+    assert not any(type(tier) is SummarizingCompaction for tier in compaction.tiers)
 
 
 def _runtime_capabilities_for(names: tuple[str, ...]):
@@ -129,14 +148,19 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     used to hardcode a fixed set and ignore the profile — so every agent got
     everything regardless of its allowlist. Now it is the resolution of the profile.
     """
-    # The real assistant profile: persistence + recall + turn-index, and NOTHING
-    # else (TieredCompaction/compaction is deliberately absent — mutex with index).
+    # The real assistant profile: persistence + recall + turn-index + compaction
+    # (the no-summary ladder). Everything the profile lists is present.
     assistant = _runtime_capabilities_for(ASSISTANT_PROFILE.capability_names)
     types = {type(c) for c in assistant}
     assert StepPersistence in types
     assert ConversationSearch in types
     assert TurnIndexCapability in types
-    assert TieredCompaction not in types
+    assert TieredCompaction in types
+    # ...and the compaction ladder excludes the summarizing tier (mutex with index).
+    compaction = next(c for c in assistant if isinstance(c, TieredCompaction))
+    from pydantic_ai_harness.compaction import SummarizingCompaction
+
+    assert not any(type(t) is SummarizingCompaction for t in compaction.tiers)
 
     # A minimal profile with only StepPersistence must get ONLY StepPersistence.
     minimal = _runtime_capabilities_for(("StepPersistence",))
@@ -146,3 +170,7 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     # none of the un-allowed ones.
     no_index = _runtime_capabilities_for(("StepPersistence", "ConversationSearch"))
     assert {type(c) for c in no_index} == {StepPersistence, ConversationSearch}
+
+    # A profile WITHOUT "Compaction" gets no compaction at all.
+    no_compaction = _runtime_capabilities_for(("StepPersistence", "TurnIndex"))
+    assert TieredCompaction not in {type(c) for c in no_compaction}

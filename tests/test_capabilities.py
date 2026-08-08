@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import pytest
 from pydantic_ai_harness.compaction import (
+    ClampOversizedMessages,
+    ClearToolResults,
+    SlidingWindowCompaction,
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
@@ -35,6 +38,9 @@ def test_catalog_covers_everything_build_uses() -> None:
     assert tier_names <= set(CAPABILITY_TYPES)
     assert "StepPersistence" in CAPABILITY_TYPES
     assert CAPABILITY_TYPES["StepPersistence"] is StepPersistence
+    # "Compaction" is the profile-gated name that resolves the no-summary ladder.
+    assert "Compaction" in CAPABILITY_TYPES
+    assert CAPABILITY_TYPES["Compaction"] is TieredCompaction
 
 
 def test_capability_types_resolves_and_raises_on_missing() -> None:
@@ -61,21 +67,24 @@ def test_compaction_builds_real_strategy_objects() -> None:
     that bit us when tiers were YAML dicts (AttributeError 'model')."""
     compaction = build_compaction()
     assert isinstance(compaction, TieredCompaction)
-    from pydantic_ai_harness.compaction import (
-        ClampOversizedMessages,
-        ClearToolResults,
-        SlidingWindowCompaction,
-        SummarizingCompaction,
-    )
 
     # `CompactionStrategy` is a bare Protocol (not runtime_checkable), so we can't
     # isinstance against it. Assert each tier is a real concrete strategy (a class,
-    # not a raw dict) drawn from the escalation ladder's known types.
+    # not a raw dict) drawn from the no-summary ladder's known types.
     strategy_types = (
         ClampOversizedMessages,
         ClearToolResults,
         SlidingWindowCompaction,
-        SummarizingCompaction,
     )
-    assert len(compaction.tiers) == 4
+    assert len(compaction.tiers) == 3
     assert all(type(tier) in strategy_types for tier in compaction.tiers)
+
+
+def test_compaction_excludes_the_summarizing_tier() -> None:
+    """The summarizing tier is mutually exclusive with the turn-index one-liner:
+    with turn-index ON, compaction is the no-summary ladder (clamp / clear-tool /
+    sliding-window) and must NOT emit SummarizingCompaction."""
+    compaction = build_compaction()
+    from pydantic_ai_harness.compaction import SummarizingCompaction
+
+    assert not any(type(tier) is SummarizingCompaction for tier in compaction.tiers)

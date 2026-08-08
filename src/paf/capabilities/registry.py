@@ -34,7 +34,10 @@ from paf.capabilities.turn_index import TurnIndexCapability
 # `capabilities:` entry and the key a profile allowlists against.
 CAPABILITY_TYPES: dict[str, type[Any]] = {
     "StepPersistence": StepPersistence,
-    # Compaction types. TieredCompaction is assembled in Python (compaction.py);
+    # "Compaction" gates the Python-built no-summary ladder (see compaction.py);
+    # TieredCompaction is its concrete type for catalog/schema completeness.
+    "Compaction": TieredCompaction,
+    # Compaction tier types. TieredCompaction is assembled in Python (compaction.py);
     # the tier types are cataloged so the profile allowlist + schema stay complete.
     "TieredCompaction": TieredCompaction,
     "ClampOversizedMessages": ClampOversizedMessages,

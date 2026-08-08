@@ -56,11 +56,12 @@ ASSISTANT_PROFILE = AgentProfile(
     capability_names=(
         "StepPersistence",
         "ConversationSearch",
-        # Turn-index is the summary layer (M2). The builtin compaction tiers are
-        # deliberately NOT allowlisted here — turn-index and SummarizingCompaction
-        # are mutually exclusive summary layers (see build.py / vault). The only
-        # way to re-add compaction would be a deliberate profile change.
         "TurnIndex",
+        # Context compaction WITHOUT the summarizing tier (the LLM rewrite is
+        # mutually exclusive with the <turn-index> one-liner block). Clamp /
+        # clear-tool-results / sliding-window are pure context management and
+        # stay; see compaction.py.
+        "Compaction",
     ),
 )
 
