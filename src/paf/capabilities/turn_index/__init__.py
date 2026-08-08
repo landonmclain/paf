@@ -13,6 +13,12 @@ from pydantic_ai_harness.conversation_search._source import (
 )
 
 from ._capability import TurnIndexCapability
+from ._generate import (
+    CollectorStore,
+    CursorStore,
+    EventRecord,
+    summarize_turn,
+)
 from ._store import TurnIndexEntry, TurnIndexStore
 from ._toolset import TurnIndexToolset
 
@@ -23,4 +29,8 @@ __all__ = [
     'TurnIndexStore',
     'TurnIndexCapability',
     'TurnIndexToolset',
+    'CollectorStore',
+    'CursorStore',
+    'EventRecord',
+    'summarize_turn',
 ]
