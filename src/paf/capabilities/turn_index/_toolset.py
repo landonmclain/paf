@@ -178,7 +178,7 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         query: str,
     ) -> str:
         """Return index entries whose summary contains `query` (case-insensitive substring)."""
-        entries = self._index_store.read_all(conversation_id=None)
+        entries = self._index_store.read_all(conversation_id=ctx.conversation_id)
         q = query.lower()
         hits = [e for e in entries if q in e.summary.lower()]
         if not hits:

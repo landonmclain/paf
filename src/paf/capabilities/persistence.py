@@ -73,5 +73,6 @@ def build_persistence() -> list:
         TurnIndexCapability(
             source=SnapshotHistorySource(store),
             index_store=TurnIndexStore(_INDEX_DIR),
+            store=store,
         ),
     ]

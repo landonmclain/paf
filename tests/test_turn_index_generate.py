@@ -13,6 +13,7 @@ from pydantic_ai_harness.step_persistence import (
 )
 
 from paf.capabilities.turn_index import TurnIndexStore
+from paf.capabilities.turn_index._capability import TurnIndexCapability
 from paf.capabilities.turn_index._generate import (
     CollectorStore,
     CursorStore,
@@ -158,6 +159,55 @@ def test_generated_turns_scopes_each_run_to_its_conversation(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
+def test_cursor_tracks_covered_runs_prevents_resummarize(tmp_path: Path) -> None:
+    """Regression: a single-watermark cursor re-summarizes OLDER runs when a newer run
+    sorts first in the iteration (out-of-write-order), producing duplicate index lines.
+
+    The cursor must track the SET of covered run_ids so each `after_run`/`generated_turns`
+    is a true no-op for already-indexed turns -- not just the most-recent run.
+    """
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario():
+        # Run A registered + summarized first.
+        await store.register_run(RunRecord(run_id="rA", conversation_id="cLive", agent_name="assistant"))
+        await store.append_event(_mk_event("rA", "run_started", conversation_id="cLive"))
+        await store.append_event(_mk_event("rA", "model_request_completed", conversation_id="cLive"))
+        await store.append_event(_mk_event("rA", "run_completed", conversation_id="cLive"))
+
+        collector = CollectorStore(tmp_path / "turn-index")
+        cursor_store = CursorStore(tmp_path / "turn-index")
+        summary = TurnIndexStore(tmp_path / "turn-index")
+
+        first = await generated_turns(store, collector, cursor_store, summary)
+        assert len(first) == 1
+        assert first[0]["run_id"] == "rA"
+        c = cursor_store.load("cLive")
+        assert c.is_covered("rA")
+
+        # Now run B arrives. rB sorts BEFORE rA alphabetically? No: "rA" < "rB",
+        # so rA sorts first. Force the out-of-order case by adding a run whose id
+        # sorts before rA, e.g. r0a, after rA was already covered.
+        await store.register_run(RunRecord(run_id="r0a", conversation_id="cLive", agent_name="assistant"))
+        await store.append_event(_mk_event("r0a", "run_started", conversation_id="cLive"))
+        await store.append_event(_mk_event("r0a", "tool_call_completed", tool_name="search", conversation_id="cLive"))
+        await store.append_event(_mk_event("r0a", "run_completed", conversation_id="cLive"))
+
+        again = await generated_turns(store, collector, cursor_store, summary)
+        # Only the NEW run is written; rA is NOT re-summarized despite sorting last.
+        assert sorted(str(w["run_id"]) for w in again) == ["r0a"]
+        entries = summary.read_all("cLive")
+        assert len(entries) == 2
+        assert {e.run_id for e in entries} == {"rA", "r0a"}
+
+        # Rerun is fully idempotent -- neither run rewritten.
+        third = await generated_turns(store, collector, cursor_store, summary)
+        assert third == []
+        assert len(summary.read_all("cLive")) == 2
+
+    asyncio.run(scenario())
+
+
 def test_collector_read_scopes_to_conversation(tmp_path: Path) -> None:
     collector = CollectorStore(tmp_path / "turn-index")
     collector.append(EventRecord.from_step_event(_mk_event("r1", "run_started", conversation_id="c1")))
@@ -168,3 +218,90 @@ def test_collector_read_scopes_to_conversation(tmp_path: Path) -> None:
     assert [e.run_id for e in c1] == ["r1"]
     assert [e.run_id for e in c2] == ["r2"]
     assert len(collector.read()) == 2  # unscoped = all conversations
+
+
+def test_after_run_hook_populates_conversation_scoped_index(tmp_path: Path) -> None:
+    """The `after_run` hook pulls events straight from the store and keys them by the
+    run's `conversation_id` (the "pull from store on our hook" slice).
+
+    A `cli-primary` run must land under `cli-primary` in the turn index -- never swept
+    from a global `list_runs(None)` or cross-contaminated into another conversation's
+    directory. The hook leaves `result` untouched and is a no-op when `store` is None.
+    """
+    from types import SimpleNamespace
+
+    from pydantic_ai_harness.conversation_search import SnapshotHistorySource
+
+    store = FileStepStore(tmp_path / "store")
+    index = TurnIndexStore(tmp_path / "turn-index")
+    cap = TurnIndexCapability(
+        source=SnapshotHistorySource(store),
+        index_store=index,
+        store=store,
+    )
+
+    async def scenario():
+        # A run under the friendly conversation id (mirrors live `cli-primary`).
+        await store.register_run(
+            RunRecord(run_id="r-live", conversation_id="cli-primary", agent_name="assistant")
+        )
+        await store.append_event(_mk_event("r-live", "run_started", conversation_id="cli-primary"))
+        await store.append_event(
+            _mk_event("r-live", "tool_call_started", tool_name="search", conversation_id="cli-primary")
+        )
+        await store.append_event(
+            _mk_event("r-live", "tool_call_completed", tool_name="search", conversation_id="cli-primary")
+        )
+        await store.append_event(_mk_event("r-live", "run_completed", conversation_id="cli-primary"))
+
+        ctx = SimpleNamespace(conversation_id="cli-primary")
+        result = object()
+        out = await cap.after_run(ctx, result=result)
+
+        # Hook trivially returns the result unchanged.
+        assert out is result
+        # Index entry landed under cli-primary (this conversation only).
+        entries = index.read_all("cli-primary")
+        assert len(entries) == 1
+        assert entries[0].run_id == "r-live"
+        assert entries[0].conversation_id == "cli-primary"
+        # No stray entry in a different conversation.
+        assert index.read_all("other") == []
+
+        # Second run in the same conversation appends (index is append-only, not a global sweep).
+        await store.register_run(
+            RunRecord(run_id="r-live-2", conversation_id="cli-primary", agent_name="assistant")
+        )
+        await store.append_event(_mk_event("r-live-2", "run_started", conversation_id="cli-primary"))
+        await store.append_event(
+            _mk_event("r-live-2", "tool_call_completed", tool_name="read_turn", conversation_id="cli-primary")
+        )
+        await store.append_event(_mk_event("r-live-2", "run_completed", conversation_id="cli-primary"))
+        await cap.after_run(SimpleNamespace(conversation_id="cli-primary"), result=result)
+        entries = index.read_all("cli-primary")
+        assert len(entries) == 2
+        assert {e.run_id for e in entries} == {"r-live", "r-live-2"}
+
+    asyncio.run(scenario())
+
+
+def test_after_run_hook_noop_without_store(tmp_path: Path) -> None:
+    """A `from_spec`-style capability with no writer store is a no-op on `after_run`."""
+    from types import SimpleNamespace
+
+    from pydantic_ai_harness.conversation_search import SnapshotHistorySource
+
+    index = TurnIndexStore(tmp_path / "turn-index")
+    cap = TurnIndexCapability(
+        source=SnapshotHistorySource(FileStepStore(tmp_path / "store")),
+        index_store=index,
+        store=None,
+    )
+
+    async def scenario():
+        result = object()
+        out = await cap.after_run(SimpleNamespace(conversation_id="cli-primary"), result=result)
+        assert out is result
+        assert index.read_all() == []
+
+    asyncio.run(scenario())

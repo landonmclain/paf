@@ -177,22 +177,53 @@ class CollectorStore:
 
 @dataclass
 class Cursor:
-    """Watermark of the furthest collector event already consumed.
+    """Watermark of which runs have been summarized, per conversation.
 
-    `merged_until` = max (run_id, step_index) whose events have been mirrored into the
-    per-conversation ledger. `summarized_until` = max message_index whose turn has an
-    `index.jsonl` entry for the run. Flat-file JSON; the ledger is authoritative.
+    `run_id` / `step_index` / `message_index` record the LAST run advanced past
+    (kept for introspection/back-compat), but the authoritative idempotency check
+    is `covered_runs` -- the set of run_ids whose `index.jsonl` entry already
+    exists. A single watermark is insufficient: runs in a shared conversation
+    iterate out of write order (a newer run can sort before an older one), so a
+    lone `run_id` only gates the most-recent run and older runs get re-summarized
+    every hook (O(n^2) duplicate index lines). Tracking the covered set makes each
+    `after_run` a true no-op for already-indexed turns. Flat-file JSON; the ledger
+    (`events.jsonl`) and `index.jsonl` remain authoritative -- the cursor is a
+    derived performance/forward-watermark, and losing it only re-runs idempotent
+    appends.
     """
 
     run_id: str | None = None
     step_index: int = 0
     message_index: int = 0
+    covered_runs: set[str] | None = None
+
+    def __post_init__(self) -> None:
+        # Normalize to a set so `_covered` is always cheap even for old cursors.
+        if self.covered_runs is None:
+            self.covered_runs = set()
+        else:
+            self.covered_runs = set(self.covered_runs)
+
+    @property
+    def covered(self) -> set[str]:
+        # NB: `x or set()` is WRONG here -- an empty set is falsy, so it would return a
+        # throwaway set and `covered.add()` would silently mutate nothing. Check for None.
+        return self.covered_runs if self.covered_runs is not None else set()
+
+    def is_covered(self, run_id: str) -> bool:
+        """True when `run_id` already has an `index.jsonl` entry in this conversation."""
+        return run_id in self.covered
+
+    def mark_covered(self, run_id: str) -> None:
+        """Record that `run_id`'s turn has been summarized into this conversation's index."""
+        self.covered.add(run_id)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "run_id": self.run_id,
             "step_index": self.step_index,
             "message_index": self.message_index,
+            "covered_runs": sorted(self.covered),
         }
 
     @classmethod
@@ -200,17 +231,21 @@ class Cursor:
         rid = data.get("run_id")
         step = data.get("step_index", 0)
         msg = data.get("message_index", 0)
+        covered = data.get("covered_runs")
         return cls(
             run_id=str(rid) if isinstance(rid, str) else None,
             step_index=int(step) if isinstance(step, int) else 0,
             message_index=int(msg) if isinstance(msg, int) else 0,
+            covered_runs=set(covered) if isinstance(covered, list) else set(),
         )
 
     def advance(self, run_id: str, step_index: int, message_index: int) -> None:
         # Runs are appended in order, so a single watermark is sufficient.
+        # (Now supplemented by `covered_runs`, which is authoritative.)
         self.run_id = run_id
         self.step_index = step_index
         self.message_index = max(self.message_index, message_index)
+        self.mark_covered(run_id)
 
 
 class CursorStore:
@@ -318,8 +353,12 @@ async def generated_turns(
         for e in evs:
             by_run.setdefault(e.run_id, []).append(e)
         for run_id, group in sorted(by_run.items()):
-            # Cursor gate: skip runs already fully summarized (idempotency). A run is
-            # "covered" when the cursor has advanced past its max step_index.
+            # Cursor gate: skip runs already summarized (idempotency). `covered_runs`
+            # is the authoritative check -- a single watermark can't gate runs that
+            # iterate out of write order. The `step_index` high-water is kept as a
+            # fallback for pre-`covered_runs` cursors (back-compat).
+            if cursor.is_covered(run_id):
+                continue
             if (
                 cursor.run_id == run_id
                 and group

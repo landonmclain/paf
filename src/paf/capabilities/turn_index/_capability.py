@@ -56,6 +56,7 @@ from typing import Any
 
 from pydantic_ai.agent.abstract import AgentInstructions
 from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.run import AgentRunResult
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -68,7 +69,9 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AgentToolset
 
 from pydantic_ai_harness.conversation_search._source import HistorySource
+from pydantic_ai_harness.step_persistence import FileStepStore
 
+from ._generate import CollectorStore, CursorStore, generated_turns
 from ._store import TurnIndexStore
 from ._toolset import TurnIndexToolset
 
@@ -93,6 +96,16 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
     index_store: TurnIndexStore
     """Append-only JSONL store of one-line summaries (the capability's OWN persistence). Never
     stores full turns -- only the (conversation, run, message_index) keys into `source`."""
+
+    store: FileStepStore | None = None
+    """The shared pydantic-ai persistence store this capability derives its index from.
+
+    When set, `after_run` reads the harness's own run/event shards straight from this store
+    (via `generated_turns`) to build the per-conversation index -- the "pull the data straight
+    from the store on our hook" pattern. `None` (e.g. a pure `from_spec` YAML reconstruction
+    that only needs read_turn/search) disables the writer hook; index population is then left
+    to an external `generated_turns` caller.
+    """
 
     max_lines: int = 40
     """Maximum number of index lines injected into the current request."""
@@ -121,8 +134,10 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
             return None
         return _INSTRUCTIONS
 
-    def _render_index(self) -> str:
-        entries = self.index_store.read_all(conversation_id=None)
+    def _render_index(self, conversation_id: str | None) -> str:
+        # Scope the injected one-line index to THIS conversation so live `cli-primary`
+        # turns show only their own summaries -- never a global sweep of every run.
+        entries = self.index_store.read_all(conversation_id=conversation_id)
         if not entries:
             return ''
         entries = entries[-self.max_lines :] if self.max_lines else entries
@@ -131,6 +146,41 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
             ref = f'{e.run_id}:{e.message_index}'
             lines.append(f'- [{ref}] {e.summary}')
         return '\n'.join(lines)
+
+    async def after_run(
+        self,
+        ctx: RunContext[AgentDepsT],
+        *,
+        result: AgentRunResult[Any],
+    ) -> AgentRunResult[Any]:
+        """Build the per-conversation turn index after each settled run.
+
+        Reads the harness's own run/event shards straight from the shared store
+        (``generated_turns`` over ``self.store``) and appends one-line summaries
+        to ``index_store`` -- the "pull the data straight from the store on our
+        hook" pattern. Scoped to ``ctx.conversation_id`` so live `cli-primary`
+        turns land under `cli-primary`, never swept from a global `list_runs`.
+
+        Runs synchronously in the hook for now (the summarizer is a hash stub);
+        the rest of the hook returns `result` unchanged. When ``self.store`` is
+        None (pure YAML/`from_spec` reconstruction), this is a no-op -- the index
+        is populated by an external caller instead.
+        """
+        if self.store is None:
+            return result
+        try:
+            await generated_turns(
+                self.store,
+                CollectorStore(self.index_store.directory),
+                CursorStore(self.index_store.directory),
+                self.index_store,
+                conversation_id=ctx.conversation_id,
+            )
+        except Exception:
+            # Index build must never break the run (matches the harness's
+            # `injection_errors='ignore'` / snapshot-fallback posture).
+            pass
+        return result
 
     async def before_model_request(
         self,
@@ -148,7 +198,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
             return request_context
 
         try:
-            rendered = self._render_index()
+            rendered = self._render_index(ctx.conversation_id)
         except Exception:
             # Index read failure must not break the request (matches Memory's
             # `injection_errors='ignore'` default posture).
@@ -233,6 +283,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         return cls(
             source=SnapshotHistorySource(store),
             index_store=TurnIndexStore(directory),
+            store=store,
             max_lines=max_lines,
             inject_index=inject_index,
             add_instructions=add_instructions,
