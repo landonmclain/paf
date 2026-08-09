@@ -7,6 +7,11 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-foundation"
+version = "0.1.0"
+source = { directory = "/home/alice/projects/Personal/agent-foundation" }
+
+[[package]]
 name = "aiofile"
 version = "3.11.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1137,6 +1142,7 @@ name = "pydantic-agent-framework"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "agent-foundation" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
 ]
@@ -1150,6 +1156,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-foundation", directory = "/home/alice/projects/Personal/agent-foundation" },
     { name = "pydantic-ai" },
     { name = "pydantic-settings" },
 ]

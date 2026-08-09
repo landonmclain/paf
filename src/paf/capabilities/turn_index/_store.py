@@ -1,4 +1,4 @@
-"""Append-only flat-file index store for turn summaries.
+"""Append-only turn index store, backed by the `agent_foundation` storage seam.
 
 The turn index is *derived* data: it is NOT part of pydantic-ai's run
 history. It lives beside it, in its own append-only store, and each entry is
@@ -6,7 +6,17 @@ keyed to a full turn in pydantic-ai persistence *by reference* -- the
 (conversation_id, run_id, turn_id) triple that `SnapshotHistorySource` can
 resolve back to the original messages.
 
-Schema (structured, 2026-08-08): each line carries the flat `summary` (the
+This store used to be a raw-`Path` JSONL writer. It is now a **thin adapter over
+the `agent_foundation.storage.StorageService` seam** (M2 wiring, 2026-08-08):
+it routes every append through `service.append(kind, scan_root, record)` and
+every read through `service.read_rows(...)`, so the turn index is just one
+`kind` ("turn_index") under whatever storage medium the consumer picked. The
+ref model, schema, and call sites are unchanged; only the I/O went through the
+seam. This is what lets a background worker (Background-Queue-Storage-Spec §4b)
+share the same store instance as the capability -- one seam, one home for the
+journal, regardless of medium.
+
+Schema (structured, 2026-08-08): each row carries the flat `summary` (the
 in-context one-liner, backward-compatible) PLUS optional structured fields
 `key_terms` and `outcome` produced by the real LLM summarizer. `search_index`
 matches across `summary` AND `key_terms` -- the whole point of splitting the
@@ -34,48 +44,37 @@ Design contract (append-only):
   - Idempotent by construction: re-summarizing an already-indexed turn yields
     a content-identical duplicate unless the (LLM-derived) text drifted.
     Consumers may dedup on content hash.
-  - Appends are single atomic line-write (open 'a', one line) -- no partial
-    record can corrupt the store, and it stays valid for a dump/diff even
-    mid-run.
+  - Appends are single atomic line-writes (via `StorageService.append`) -- no
+    partial record can corrupt the store, and it stays valid for a dump/diff
+    even mid-run.
 
-Layout (flat-file-first, inspectable/editable/diffable, no opaque DB)::
+Layout (now through the seam's flat-file medium; see `FlatFileStorage`):
 
-    <root>/
-      <conversation_id>/
-        index.jsonl     # append-only journal; one JSON object per line
-        meta.json       # convenience counters only (rewritten in place); NOT authoritative
-
-Each `index.jsonl` line::
-
-    {"conversation_id", "run_id", "turn_id", "ts", "summary",
-     "key_terms"?, "outcome"?, "hash"}
+    <base>/<hash(scan_root)>/turn_index.jsonl     # append-only journal; one row per turn
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+from agent_foundation.storage import FlatFileStorage, StorageService
+
+# The `kind` this store reads/writes under the storage seam. Stable per consumer
+# family, so a SQLite/object-store backend can route rows the same way.
+_KIND = "turn_index"
+
+# Default logical root the journal keys under, when the consumer supplies a
+# directory (back-compat with `TurnIndexStore(directory=...)` / paf.config).
+# Only used to derive a stable scan_root for the seam; the actual on-disk path
+# is `<FlatFileStorage base>/<hash(this)>/turn_index.jsonl`.
+_DEFAULT_ROOT = Path(".turn-index")
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _by_conversation(root: Path, conversation_id: str | None) -> Path:
-    """Return the directory for a conversation, creating it.
-
-    `None`/empty conversations sort under a reserved `__default__` namespace
-    so unlabelled runs still get a home without colliding with a real id.
-    """
-    segment = conversation_id if conversation_id else '__default__'
-    safe = segment.replace('/', '_').replace('\\', '_')
-    directory = root / safe
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+    return datetime.now(UTC)
 
 
 def _content_hash(conversation_id: str | None, run_id: str, turn_id: int, summary: str) -> str:
@@ -83,6 +82,11 @@ def _content_hash(conversation_id: str | None, run_id: str, turn_id: int, summar
     return hashlib.sha256(
         f'{conversation_id}|{run_id}|{turn_id}|{summary}'.encode()
     ).hexdigest()
+
+
+def _scan_root_for(directory: str | Path | None) -> Path:
+    """Normalize the legacy directory arg into a stable seam scan_root."""
+    return Path(directory) if directory is not None else _DEFAULT_ROOT
 
 
 @dataclass(kw_only=True)
@@ -114,27 +118,71 @@ class TurnIndexEntry:
 
 
 class TurnIndexStore:
-    """Append-only JSONL store of one-line turn summaries.
+    """Append-only turn index, backed by a `StorageService` seam.
 
     This is the capability's OWN persistence (the derived index). It never
     stores full turns -- the (conversation, run, turn_id) key resolves through
     `HistorySource` back into pydantic-ai persistence.
+
+    Accepts either an explicit `StorageService` (preferred -- the shared seam,
+    so a background worker and the capability write the same journal) or a
+    directory `Path`/`str` (back-compat: auto-wraps a `FlatFileStorage` and
+    keys under that base). `scan_root` for the seam defaults to the legacy
+    directory when given, else `data/.turn-index`-style default; rows carry a
+    `conversation_id` field so per-conversation scoping is preserved in the
+    adapter, and `read_all(None)` spans conversations.
     """
 
-    def __init__(self, directory: str | Path = '.turn-index') -> None:
-        """Append-only one-line-turn index store.
+    def __init__(
+        self,
+        storage: StorageService | str | Path = _DEFAULT_ROOT,
+        *,
+        root: str | Path | None = None,
+    ) -> None:
+        if isinstance(storage, (str, Path)):
+            base = Path(storage)
+            self.service: StorageService = FlatFileStorage(base_dir=base)
+            self.scan_root = _scan_root_for(root)
+        else:
+            self.service = storage
+            self.scan_root = _scan_root_for(root)
 
-        Defaults to `.turn-index` for a standalone store, but `paf` always passes
-        the configured `data/.turn-index` explicitly (see `paf.config.turn_index_dir`).
-        """
-        self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
+    # --- seam plumbing ----------------------------------------------------
 
-    def _path(self, conversation_id: str | None) -> Path:
-        return _by_conversation(self.directory, conversation_id) / 'index.jsonl'
+    def _row(self, entry: TurnIndexEntry) -> dict:
+        row: dict = {
+            'conversation_id': entry.conversation_id,
+            'run_id': entry.run_id,
+            'turn_id': entry.turn_id,
+            'ts': entry.ts,
+            'summary': entry.summary,
+            'hash': entry.hash,
+        }
+        if entry.key_terms:
+            row['key_terms'] = entry.key_terms
+        if entry.outcome:
+            row['outcome'] = entry.outcome
+        return row
 
-    def _meta_path(self, conversation_id: str | None) -> Path:
-        return _by_conversation(self.directory, conversation_id) / 'meta.json'
+    def _rows(self) -> list[TurnIndexEntry]:
+        """Parse every appended row back into entries (all conversations)."""
+        entries = []
+        for data in self.service.read_rows(_KIND, self.scan_root):
+            entries.append(
+                TurnIndexEntry(
+                    conversation_id=data.get('conversation_id'),
+                    run_id=data['run_id'],
+                    turn_id=data['turn_id'],
+                    ts=data['ts'],
+                    summary=data['summary'],
+                    hash=data['hash'],
+                    key_terms=data.get('key_terms'),
+                    outcome=data.get('outcome'),
+                )
+            )
+        return entries
+
+    # --- append ------------------------------------------------------------
 
     def append(
         self,
@@ -146,7 +194,7 @@ class TurnIndexStore:
         key_terms: list[str] | None = None,
         outcome: str | None = None,
     ) -> TurnIndexEntry:
-        """Append one entry atomically (single line-append). Returns the entry."""
+        """Append one entry atomically (via the seam's single-row append)."""
         entry = TurnIndexEntry(
             conversation_id=conversation_id,
             run_id=run_id,
@@ -157,48 +205,29 @@ class TurnIndexStore:
             key_terms=key_terms,
             outcome=outcome,
         )
-        path = self._path(conversation_id)
-        row: dict[str, object] = {
-            'conversation_id': conversation_id,
-            'run_id': run_id,
-            'turn_id': turn_id,
-            'ts': entry.ts,
-            'summary': summary,
-            'hash': entry.hash,
-        }
-        if key_terms:
-            row['key_terms'] = key_terms
-        if outcome:
-            row['outcome'] = outcome
-        line = json.dumps(row, ensure_ascii=False)
-        with path.open('a', encoding='utf-8') as fh:
-            fh.write(line + '\n')
-            fh.flush()
-            os.fsync(fh.fileno())
-        self._bump_meta(conversation_id)
+        self.service.append(_KIND, self.scan_root, self._row(entry))
         return entry
+
+    # --- reads -------------------------------------------------------------
 
     def read_all(self, conversation_id: str | None = None) -> list[TurnIndexEntry]:
         """Read every entry across all conversations (default), or one conversation."""
-        entries: list[TurnIndexEntry] = []
+        entries = self._rows()
+        entries.sort(key=lambda e: e.ts)
         if conversation_id is None:
-            for sub in self.directory.iterdir():
-                if sub.is_dir():
-                    entries.extend(self._read_file(sub / 'index.jsonl'))
-            entries.sort(key=lambda e: e.ts)
             return entries
-        return self._read_file(self._path(conversation_id))
+        return [e for e in entries if e.conversation_id == conversation_id]
 
     def latest_for(self, conversation_id: str | None, run_id: str, turn_id: int) -> TurnIndexEntry | None:
         """Resolve a key to its most recent entry (append-only correctness view)."""
-        entries = [
+        matches = [
             e
-            for e in self._read_file(self._path(conversation_id))
-            if e.run_id == run_id and e.turn_id == turn_id
+            for e in self._rows()
+            if e.conversation_id == conversation_id and e.run_id == run_id and e.turn_id == turn_id
         ]
-        if not entries:
+        if not matches:
             return None
-        return entries[-1]
+        return matches[-1]
 
     def has(self, conversation_id: str | None, run_id: str, turn_id: int) -> bool:
         """Whether a turn already has an index entry (idempotency for the writer)."""
@@ -206,40 +235,3 @@ class TurnIndexStore:
 
     def count(self, conversation_id: str | None = None) -> int:
         return len(self.read_all(conversation_id))
-
-    def _read_file(self, path: Path) -> list[TurnIndexEntry]:
-        if not path.exists():
-            return []
-        entries: list[TurnIndexEntry] = []
-        with path.open('r', encoding='utf-8') as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                data = json.loads(line)
-                entries.append(
-                    TurnIndexEntry(
-                        conversation_id=data['conversation_id'],
-                        run_id=data['run_id'],
-                        turn_id=data['turn_id'],
-                        ts=data['ts'],
-                        summary=data['summary'],
-                        hash=data['hash'],
-                        key_terms=data.get('key_terms'),
-                        outcome=data.get('outcome'),
-                    )
-                )
-        return entries
-
-    def _bump_meta(self, conversation_id: str | None) -> None:
-        """Rewrite meta.json (convenience counters only; the journal is authoritative)."""
-        path = self._meta_path(conversation_id)
-        entries = self._read_file(self._path(conversation_id))
-        meta = {
-            'conversation_id': conversation_id,
-            'count': len(entries),
-            'updated': _utcnow().isoformat(),
-        }
-        tmp = path.with_suffix('.tmp')
-        tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding='utf-8')
-        os.replace(tmp, path)

@@ -67,8 +67,10 @@ def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
 
 
 def _build_turn_index(store: FileStepStore) -> TurnIndexCapability:
-    """One-line-per-turn index in context; appends to its own JSONL store but
-    reads the shared store so `read_turn` resolves what StepPersistence writes."""
+    """One-line-per-turn index in context; appends via the agent-foundation
+    `StorageService` seam (its `TurnIndexStore` wraps a `FlatFileStorage` at
+    `_INDEX_DIR`), but reads the shared store so `read_turn` resolves what
+    `StepPersistence` writes."""
     return TurnIndexCapability(
         source=SnapshotHistorySource(store),
         index_store=TurnIndexStore(_INDEX_DIR),
