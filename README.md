@@ -77,18 +77,25 @@ resolved through the `HistorySource` protocol seam — so it works with **any**
 pydantic-ai backend (InMemory / File / Sqlite / Mongo). Shared store, two
 surfaces.
 
-Declarative `from_spec` reconstructs the whole capability from a single directory:
+Declarative `from_spec` reconstructs the whole capability from a single directory,
+with an optional flat `summarizer:` block that configures the LLM summarizer
+(direct `TurnSummarizer(**d)` — it's a leaf helper, not itself a capability):
 
 ```yaml
 capabilities:
-  - TurnIndex: { index_dir: data/paf }
+  - TurnIndex:
+      index_dir: data/paf
+      summarizer:                 # omit for the deterministic (keyless) stub
+        budget_chars: 160         # one-liner char cap
+        max_key_terms: 6          # search vocabulary cap
+        # model: ollama:llama3.1  # cheap/local, independent of the chat model
 ```
 
 Verified live (2026-08-08): a real-model call at the 160-char budget returned a
 156-char `sentence` with `key_terms` `['pg_stat_activity','pgbouncer',
 'auth_sessions','statement_timeout',…]` and `outcome: resolved`; at a tight
-70-char budget the shorten retry fired and returned a 57-char sentence. 53 tests
-green (6 summarizer).
+70-char budget the shorten retry fired and returned a 57-char sentence. 55 tests
+green.
 
 ## Layout
 
@@ -139,7 +146,8 @@ committed: per-turn synchronous indexing via `after_model_request`, a real
 structured-output LLM summarizer with char-budget retry, one-line index injected
 into context (recognition beats recall), `read_turn` back into persistence, and
 `search_index` over summaries + key terms — built as a clean, installable
-capability.
+capability. The summarizer is spec-declarable as a flat `summarizer:` block
+(leaf helper, not a registered capability).
 
 ## Roadmap
 
