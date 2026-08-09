@@ -6,6 +6,13 @@ keyed to a full turn in pydantic-ai persistence *by reference* -- the
 (conversation_id, run_id, turn_id) triple that `SnapshotHistorySource` can
 resolve back to the original messages.
 
+Schema (structured, 2026-08-08): each line carries the flat `summary` (the
+in-context one-liner, backward-compatible) PLUS optional structured fields
+`key_terms` and `outcome` produced by the real LLM summarizer. `search_index`
+matches across `summary` AND `key_terms` -- the whole point of splitting the
+record (the "Postgres vs 'the database'" case: the sentence phrases it
+abstractly, `key_terms` carries the searchable vocabulary).
+
 The ref model changed (2026-08-08, per-turn indexing):
 
   OLD  (run_id, message_index) -- a message_index keyed into `run_history`
@@ -40,7 +47,8 @@ Layout (flat-file-first, inspectable/editable/diffable, no opaque DB)::
 
 Each `index.jsonl` line::
 
-    {"conversation_id", "run_id", "turn_id", "ts", "summary", "hash"}
+    {"conversation_id", "run_id", "turn_id", "ts", "summary",
+     "key_terms"?, "outcome"?, "hash"}
 """
 
 from __future__ import annotations
@@ -79,7 +87,13 @@ def _content_hash(conversation_id: str | None, run_id: str, turn_id: int, summar
 
 @dataclass(kw_only=True)
 class TurnIndexEntry:
-    """One append-only one-line summary, keyed to a full turn in pyai persistence."""
+    """One append-only one-line summary, keyed to a full turn in pyai persistence.
+
+    `summary` is the flat in-context one-liner (always present, backward-compatible).
+    `key_terms` / `outcome` are the OPTIONAL structured fields from the real LLM
+    summarizer; `key_terms` are what `search_index` also matches, so a turn whose
+    sentence phrases things abstractly is still found by its vocabulary.
+    """
 
     conversation_id: str | None
     run_id: str
@@ -87,6 +101,8 @@ class TurnIndexEntry:
     ts: str
     summary: str
     hash: str
+    key_terms: list[str] | None = None
+    outcome: str | None = None
 
     def key(self) -> tuple[str | None, str, int]:
         return (self.conversation_id, self.run_id, self.turn_id)
@@ -127,6 +143,8 @@ class TurnIndexStore:
         run_id: str,
         turn_id: int,
         summary: str,
+        key_terms: list[str] | None = None,
+        outcome: str | None = None,
     ) -> TurnIndexEntry:
         """Append one entry atomically (single line-append). Returns the entry."""
         entry = TurnIndexEntry(
@@ -136,19 +154,23 @@ class TurnIndexStore:
             ts=_utcnow().isoformat(),
             summary=summary,
             hash=_content_hash(conversation_id, run_id, turn_id, summary),
+            key_terms=key_terms,
+            outcome=outcome,
         )
         path = self._path(conversation_id)
-        line = json.dumps(
-            {
-                'conversation_id': conversation_id,
-                'run_id': run_id,
-                'turn_id': turn_id,
-                'ts': entry.ts,
-                'summary': summary,
-                'hash': entry.hash,
-            },
-            ensure_ascii=False,
-        )
+        row: dict[str, object] = {
+            'conversation_id': conversation_id,
+            'run_id': run_id,
+            'turn_id': turn_id,
+            'ts': entry.ts,
+            'summary': summary,
+            'hash': entry.hash,
+        }
+        if key_terms:
+            row['key_terms'] = key_terms
+        if outcome:
+            row['outcome'] = outcome
+        line = json.dumps(row, ensure_ascii=False)
         with path.open('a', encoding='utf-8') as fh:
             fh.write(line + '\n')
             fh.flush()
@@ -203,6 +225,8 @@ class TurnIndexStore:
                         ts=data['ts'],
                         summary=data['summary'],
                         hash=data['hash'],
+                        key_terms=data.get('key_terms'),
+                        outcome=data.get('outcome'),
                     )
                 )
         return entries

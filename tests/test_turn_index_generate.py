@@ -99,7 +99,7 @@ def test_summarize_turn_append_writes_stable_ref(tmp_path: Path) -> None:
         turn_id=0,
         messages=_one_turn(),
     )
-    appended, summary = summarize_turn_append(turn=turn, index_store=index)
+    appended, summary = asyncio.run(summarize_turn_append(turn=turn, index_store=index))
     assert appended is True
     assert isinstance(summary, str)
     # One-line captures intent + tool from the slice.
@@ -136,7 +136,7 @@ def test_summarize_turn_sees_the_completed_turn_including_response(tmp_path: Pat
     # The hook appends the just-returned response to close the turn.
     full = [*slice_only, ModelResponse(parts=[TextPart("Your codename is ZEPHYR-7741.")])]
     turn = Turn(run_id="r1", conversation_id="c1", turn_id=0, messages=full)
-    appended, summary = summarize_turn_append(turn=turn, index_store=index)
+    appended, summary = asyncio.run(summarize_turn_append(turn=turn, index_store=index))
     assert appended is True
     # Stub emits the user intent line + the tool that ran.
     assert summary.startswith("user: what is my passport codename?")
@@ -152,8 +152,8 @@ def test_summarize_turn_sees_the_completed_turn_including_response(tmp_path: Pat
 def test_summarize_turn_append_is_idempotent(tmp_path: Path) -> None:
     index = TurnIndexStore(tmp_path / "index")
     turn = Turn(run_id="r1", conversation_id="c1", turn_id=0, messages=_one_turn())
-    first, _ = summarize_turn_append(turn=turn, index_store=index)
-    second, _ = summarize_turn_append(turn=turn, index_store=index)
+    first, _ = asyncio.run(summarize_turn_append(turn=turn, index_store=index))
+    second, _ = asyncio.run(summarize_turn_append(turn=turn, index_store=index))
     assert first is True
     assert second is False  # already indexed -> no duplicate line
     assert len(index.read_all("c1")) == 1
@@ -163,8 +163,8 @@ def test_distinct_turns_get_distinct_stable_ids(tmp_path: Path) -> None:
     index = TurnIndexStore(tmp_path / "index")
     t0 = Turn(run_id="r1", conversation_id="c1", turn_id=0, messages=_one_turn("first", "A"))
     t1 = Turn(run_id="r1", conversation_id="c1", turn_id=1, messages=_one_turn("second", "B"))
-    summarize_turn_append(turn=t0, index_store=index)
-    summarize_turn_append(turn=t1, index_store=index)
+    asyncio.run(summarize_turn_append(turn=t0, index_store=index))
+    asyncio.run(summarize_turn_append(turn=t1, index_store=index))
     entries = index.read_all("c1")
     assert {e.turn_id for e in entries} == {0, 1}
     assert [e.ref for e in entries] == ["r1:0", "r1:1"]

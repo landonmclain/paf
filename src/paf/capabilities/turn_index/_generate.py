@@ -35,6 +35,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, User
 
 from ._extract import build_turn_context
 from ._store import TurnIndexStore
+from ._summarizer import TurnSummary
 
 _TURN_ID_MISSING = -1
 
@@ -121,28 +122,44 @@ def summarize_turn(turn: Turn, *, index_store: TurnIndexStore) -> str:
     return f'{lines[0][:120]} → {tail}'
 
 
-def summarize_turn_append(
+async def summarize_turn_append(
     *,
     turn: Turn,
     index_store: TurnIndexStore,
+    summary: TurnSummary | None = None,
 ) -> tuple[bool, str]:
     """Summarize `turn` and append to the index iff it is not already indexed.
 
-    Returns `(appended, summary)`. Idempotent per turn: an already-indexed
+    `summary` is the WRITE seam. When provided it is a structured `TurnSummary`
+    from the real LLM summarizer -- its `sentence` becomes the one-liner and its
+    `key_terms` / `outcome` are persisted alongside it for `search_index`. When
+    omitted (`None`, default) the deterministic `summarize_turn` stub one-liner
+    is used -- the pipeline still works without a model or API key.
+
+    Returns `(appended, one-liner)`. Idempotent per turn: an already-indexed
     turn is a no-op. This is the function the capability hook calls directly;
     moving it to a background worker changes only WHERE it is called, not what
     it does.
     """
-    summary = summarize_turn(turn, index_store=index_store)
+    if summary is None:
+        one_line = summarize_turn(turn, index_store=index_store)
+        key_terms: list[str] | None = None
+        outcome: str | None = None
+    else:
+        one_line = summary.sentence
+        key_terms = summary.key_terms or None
+        outcome = summary.outcome
     if index_store.has(turn.conversation_id, turn.run_id, turn.turn_id):
-        return False, summary
+        return False, one_line
     index_store.append(
         conversation_id=turn.conversation_id,
         run_id=turn.run_id,
         turn_id=turn.turn_id,
-        summary=summary,
+        summary=one_line,
+        key_terms=key_terms,
+        outcome=outcome,
     )
-    return True, summary
+    return True, one_line
 
 
 def _tools_in_context(lines: list[str]) -> list[str]:

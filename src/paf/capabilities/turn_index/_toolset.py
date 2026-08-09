@@ -179,10 +179,20 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         ctx: RunContext[AgentDepsT],
         query: str,
     ) -> str:
-        """Return index entries whose summary contains `query` (case-insensitive substring)."""
+        """Return index entries matching `query` (case-insensitive substring).
+
+        Matches across BOTH the one-liner `summary` AND the structured
+        `key_terms` -- so a turn whose sentence phrases things abstractly
+        ("the database") is still found by its search vocabulary ("Postgres").
+        """
         entries = self._index_store.read_all(conversation_id=ctx.conversation_id)
         q = query.lower()
-        hits = [e for e in entries if q in e.summary.lower()]
+        hits = [
+            e
+            for e in entries
+            if q in e.summary.lower()
+            or any(q in kt.lower() for kt in (e.key_terms or []))
+        ]
         if not hits:
             return f'No index entries matching {query!r} ({len(entries)} indexed).'
         lines = [f'[{self._ref(e)}] {e.summary}' for e in hits[:20]]

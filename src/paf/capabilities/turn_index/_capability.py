@@ -61,7 +61,6 @@ LLM summarizer drops in at that single seam. The write path is deliberately back
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -85,7 +84,9 @@ from pydantic_ai_harness.conversation_search._source import HistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore
 
 from ._generate import Turn, summarize_turn_append, this_turn_id, this_turn_slice
+from ._extract import build_turn_context
 from ._store import TurnIndexStore
+from ._summarizer import TurnSummarizer
 from ._toolset import TurnIndexToolset
 
 _MARKER = 'turn-index.v1'
@@ -123,6 +124,18 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
 
     max_lines: int = 40
     """Maximum number of index lines injected into the current request."""
+
+    summarizer: TurnSummarizer | None = None
+    """Optional real-LLM turn summarizer for the WRITE path.
+
+    When set, `after_model_request` runs `summarizer.summarize(...)` (a real
+    pydantic-ai structured-output call with char-budget retry) to produce the
+    one-liner `sentence` plus structured `key_terms` / `outcome`, persisted into
+    the index and matched by `search_index`. When `None` (default), the
+    deterministic stub one-liner is used -- the pipeline works without a model
+    or API key. Defaults to a cheap secondary model, decoupled from the chat
+    model, so the index write stays cheap.
+    """
 
     inject_index: bool = True
     """Inject the bounded one-line index into the current request when true; else only static
@@ -191,7 +204,12 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
                     turn_id=turn_id,
                     messages=[*this_turn_slice(messages), response],
                 )
-                await asyncio.to_thread(summarize_turn_append, turn=turn, index_store=self.index_store)
+                if self.summarizer is not None:
+                    rendered = build_turn_context(turn.messages)
+                    summary = await self.summarizer.summarize(rendered)
+                    await summarize_turn_append(turn=turn, index_store=self.index_store, summary=summary)
+                else:
+                    await summarize_turn_append(turn=turn, index_store=self.index_store)
         except Exception:
             # Index build must never break the request (matches the harness's
             # `injection_errors='ignore'` / snapshot-fallback posture).
