@@ -288,6 +288,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         inject_index: bool = True,
         add_instructions: bool = True,
         tool_id: str = 'turn-index',
+        summarizer: dict[str, Any] | None = None,
     ) -> 'TurnIndexCapability[Any]':
         """Reconstruct the capability from a spec-declarable store directory.
 
@@ -306,12 +307,40 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
                   capabilities:
                     - TurnIndex: {index_dir: data/paf}
 
+        An optional flat `summarizer:` block configures the LLM summarizer. It
+        is a plain dict of `TurnSummarizer` constructor kwargs (NOT a nested
+        capability -- `TurnSummarizer` is a leaf helper, not an
+        `AbstractCapability`, so it cannot route through the capability
+        registry):
+
+            capabilities:
+              - TurnIndex:
+                  index_dir: data/paf
+                  summarizer:
+                    model: ollama:llama3.1
+                    budget_chars: 160
+                    max_key_terms: 6
+
+        Omitted `summarizer` (or `None`) leaves the deterministic stub in place
+        (no model/API key needed); `model` inside the block defaults to the same
+        OpenRouter DeepSeek family as the chat agent.
+
         For programmatic assembly that must share a live store instance (as
         `paf.capabilities.persistence.build_persistence` does), construct
         `TurnIndexCapability(source=..., index_store=...)` directly instead.
         """
         from pydantic_ai_harness.conversation_search import SnapshotHistorySource
         from pydantic_ai_harness.step_persistence import FileStepStore
+
+        from ._summarizer import TurnSummarizer
+
+        summarizer_obj: TurnSummarizer | None = None
+        if summarizer is not None:
+            # Flat dict of TurnSummarizer kwargs -> direct construction. The
+            # summarizer is a leaf helper (not an AbstractCapability), so it is
+            # NOT resolved through the capability registry -- a plain **dict
+            # keeps every knob a spec surface without a registry round-trip.
+            summarizer_obj = TurnSummarizer(**summarizer)
 
         directory = Path(index_dir)
         directory.mkdir(parents=True, exist_ok=True)
@@ -324,4 +353,5 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
             inject_index=inject_index,
             add_instructions=add_instructions,
             tool_id=tool_id,
+            summarizer=summarizer_obj,
         )

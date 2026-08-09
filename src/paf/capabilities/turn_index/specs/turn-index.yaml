@@ -1,0 +1,63 @@
+# TurnIndex capability spec — M2 feature 1, fully declarative.
+#
+# This spec lives INSIDE the capability folder (`turn_index/`) so the messaging
+# capability is self-contained: the same file that documents every knob is what
+# a future consumer (or a nested `Agent.from_spec`) would load to get the turn
+# index with a real LLM summarizer, no Python.
+#
+# It mirrors the repo-level `specs/assistant.yaml` for the *chat* agent, but is
+# scoped to the TURN-INDEX CAPABILITY alone — a reference/default the capability
+# ships and can regress-test against, rather than the assistant's runtime spec.
+#
+# ── Top-level capability: TurnIndex ──────────────────────────────────────────
+# `index_dir`:  single root the capability owns. `source` (a `SnapshotHistorySource`
+#               over a `FileStepStore`) and `index_store` (the append-only JSONL)
+#               are BOTH rebuilt from it, so a YAML spec needs only this one path.
+# `max_lines`:  max one-liners injected into the current request (recognition).
+# `inject_index`: inject the bounded index into the request (else only tool guidance).
+# `add_instructions`: emit the instruction telling the model `read_turn`/search exist.
+# `tool_id`:    toolset id for `read_turn` / `search_index`.
+# `summarizer`: (optional) FLAT config dict for the LLM summarizer — a plain
+#               dict of `TurnSummarizer` constructor kwargs, NOT a nested
+#               capability (TurnSummarizer is a leaf helper, not an
+#               AbstractCapability, so it cannot route through the capability
+#               registry; `from_spec` passes it straight to `TurnSummarizer(**d)`).
+#               Omit → deterministic stub (no model/API key needed).
+#
+# ── summarizer knobs ─────────────────────────────────────────────────────────
+# `model`:               pydantic-ai model string. Prefix selects the provider and
+#                        env key automatically (`ollama:llama3.1` → local Ollama, no
+#                        key; `openrouter:...` → OPENROUTER_API_KEY; `openai:...` +
+#                        base_url → a self-hosted OpenAI-compatible server). The
+#                        summarizer is configured here so it can use a cheap/local
+#                        model INDEPENDENT of the chat agent's.
+# `budget_chars`:        one-liner char cap (default 160).
+# `max_key_terms`:       search vocabulary cap (default 6).
+# `retries`:             pydantic-ai schema/validation retries (default 2).
+# `max_shorten_retries`: length-retry loop over budget (default 2).
+# `max_output_tokens`:   LLM output budget for the summarizer call (default 400).
+
+name: turn-index
+
+# A capability spec has no top-level `model` — the chat model belongs to the
+# agent spec (`specs/assistant.yaml`). The turn index's model is configured only
+# under `capabilities[TurnIndex].summarizer` below.
+capabilities:
+  - TurnIndex:
+      index_dir: data/.turn-index
+      max_lines: 40
+      inject_index: true
+      add_instructions: true
+      tool_id: turn-index
+      # Omit `summarizer` for a zero-config deterministic stub. To use a real LLM
+      # (local or remote), uncomment and fill:
+      #
+      # summarizer:
+      #   model: ollama:llama3.1        # local Ollama, no API key
+      #   # model: openrouter:deepseek/deepseek-v4-flash-0731:nitro   # default
+      #   # model: openai:local-model     # + base_url / provider for vLLM, llama.cpp
+      #   budget_chars: 160
+      #   max_key_terms: 6
+      #   retries: 2
+      #   max_shorten_retries: 2
+      #   max_output_tokens: 400

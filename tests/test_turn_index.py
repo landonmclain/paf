@@ -31,6 +31,7 @@ from paf.capabilities.turn_index import (
     TurnIndexCapability,
     TurnIndexStore,
     TurnIndexToolset,
+    TurnSummarizer,
 )
 from paf.specs import build_agent
 
@@ -63,6 +64,29 @@ def test_from_spec_reconstructs_capability(tmp_path: Path) -> None:
 
 def test_get_serialization_name() -> None:
     assert TurnIndexCapability.get_serialization_name() == "TurnIndex"
+
+
+def test_from_spec_default_summarizer_is_stub(tmp_path: Path) -> None:
+    """No `summarizer` block => deterministic stub (no model/API key fired)."""
+    cap = TurnIndexCapability.from_spec(tmp_path)
+    assert cap.summarizer is None
+
+
+def test_from_spec_flat_summarizer_dict(tmp_path: Path) -> None:
+    """A flat `summarizer:` dict is passed straight to `TurnSummarizer(**d)`.
+
+    `TurnSummarizer` is a LEAF HELPER, not an AbstractCapability, so from_spec
+    must not route it through the capability registry -- it just constructs it.
+    """
+    cap = TurnIndexCapability.from_spec(
+        tmp_path,
+        summarizer={"budget_chars": 200, "max_key_terms": 8},
+    )
+    assert isinstance(cap.summarizer, TurnSummarizer)
+    assert cap.summarizer.budget_chars == 200
+    assert cap.summarizer.max_key_terms == 8
+    # Unspecified knob falls through to the constructor default.
+    assert cap.summarizer.model == "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
 
 
 # ---- build_agent integration: the capability lands on the assistant ---------

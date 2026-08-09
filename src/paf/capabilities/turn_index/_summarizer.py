@@ -77,7 +77,7 @@ class TurnSummary(BaseModel):
             f'Up to {MAX_KEY_TERMS} concrete nouns/names/vocabulary from this turn that a '
             'future search would use -- real entity names (APIs, databases, tools, people, '
             'concepts, error codes). NOT generic words. These make the turn searchable even '
-            "when the sentence phrases it abstractly."
+            '"when the sentence phrases it abstractly."'
         ),
     )
     outcome: Literal['resolved', 'blocked', 'error', 'decided', 'awaiting'] = Field(
@@ -107,6 +107,10 @@ class TurnSummarizer:
     Concrete model is injectable (constructor `model=`), so the index can use a
     cheap/fast secondary model independent of the chat model. Defaults to the
     same OpenRouter DeepSeek family used for the main agent to stay zero-config.
+
+    NOT a capability: a plain leaf helper, spec-declarable only in that
+    `TurnIndexCapability.from_spec` passes a flat `summarizer:` dict straight to
+    the constructor.
     """
 
     def __init__(
