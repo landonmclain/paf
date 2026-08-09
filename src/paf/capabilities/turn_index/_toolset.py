@@ -29,17 +29,31 @@ READ_TURN_DESCRIPTION = """\
 Read one specific turn from persisted conversation history, by its index ref.
 
 The turn index keeps a one-line summary of every turn in context. When
-you recognize from the index that a turn is relevant, call this with that run's
-(ref) to pull the FULL original turn -- the exact user prompt and assistant
-responses / tool calls -- back into context.
+you recognize from the index (or a `search_index` hit) that a turn is relevant,
+call this with that run's (ref) to pull the FULL original turn -- the exact user prompt
+and assistant responses / tool calls -- back into context.
 
 Pass ref='{run_id}' to fetch one run's entire durable history, or
 ref='{run_id}:{turn_id}' to fetch just the turn at that index (copy the exact
 ref shown in the index). `turn_id` is the ordinal of the turn's user prompt
 within the run (0, 1, ...), so refs are stable.
 
-When one turn is not enough and you need a wider picture, escalate to
-`search_conversation_history`.
+This is the targeted read step (rung 4): call it only once you HAVE a ref for the
+turn you want -- from the injected index or a `search_index` hit. If you don't yet
+have a ref and no index line names the turn, use `search_index` first. When one
+turn is not enough and you need a wider picture, escalate to
+`search_conversation_history` (last resort).
+"""
+
+SEARCH_INDEX_DESCRIPTION = """\
+Search the one-line turn summaries with simple substring matching.
+
+This is the CHEAP recall step, between the injected turn index (rung 2) and the
+wide `search_conversation_history` (last resort). Reach for it when you have NO
+ref yet and don't know which turn holds the fact — the answer isn't in context
+and no index line names the turn. It matches both the one-liner summary and its
+`key_terms`. If a hit gives you a ref, call `read_turn(ref)` for the full turn;
+don't jump straight to `search_conversation_history`.
 """
 
 
@@ -162,7 +176,7 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         self._index_store = index_store
         self._finder = _TurnFinder(source)
         self.add_function(self.read_turn, name='read_turn', description=READ_TURN_DESCRIPTION)
-        self.add_function(self.search_index, name='search_index', description='Search the one-line turn summaries with simple substring matching.')
+        self.add_function(self.search_index, name='search_index', description=SEARCH_INDEX_DESCRIPTION)
 
     async def read_turn(
         self,

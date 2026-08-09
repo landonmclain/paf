@@ -39,7 +39,11 @@ from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
 
 pytestmark = pytest.mark.live
 
-PASSPHRASE = "zephyr-quartz-4471"
+# A neutral, disposable fact is used (not a "passphrase"/"secret" — see PRB below):
+# the value assertion must test RECALL, not the model's willingness to regurgitate
+# a security secret. Planting a secret-looking phrase and asserting it surfaces
+# measures safety compliance, not retention. The tool path is identical either way.
+FACT = "the company picnic is on September 14"
 
 
 def _build_agent(*, store: FileStepStore, index_dir: Path, max_lines: int = 4):
@@ -85,13 +89,19 @@ def _run_turn(agent, prompt: str, cid: str) -> tuple[list[str], str]:
     return tool_calls, "".join(text_parts)
 
 
-def test_live_recall_via_read_turn() -> None:
-    """A real, persisted fact survives a cold start and is recalled via read_turn.
+def test_live_recall_evicted_fact() -> None:
+    """A real, persisted fact survives a cold start and is recalled via the ladder.
 
-    Geometry: seed the passphrase in a REAL turn (so it's in persisted history
-    AND indexed under the SAME run_id -- the run-id invariant). A fresh agent over
-    the same store/cid must (a) recognize it needs the retrieval tool, and
-    (b) surface the exact passphrase. We gate on read_turn being invoked.
+    Geometry: seed the fact in a REAL turn (so it's in persisted history AND
+    indexed under the SAME run_id -- the run-id invariant). Evict it past the
+    max_lines=4 injected tail with a few REAL-but-meaningless small-talk turns.
+    A fresh agent over the same store/cid must (a) escalate to a retrieval tool
+    (read_turn OR search_index -- it can't answer from the evicted tail), and
+    (b) surface the fact. We gate on BOTH the tool call and the value.
+
+    The fact is DISPOSABLE and neutral: we assert the model RECALLS it, not that
+    it will regurgitate a secret on demand (that would be testing safety
+    compliance, not retention -- and the real model refuses, correctly).
     """
     cid = f"live-recall-{uuid.uuid4().hex[:8]}"
     with tempfile.TemporaryDirectory() as td:
@@ -99,11 +109,11 @@ def test_live_recall_via_read_turn() -> None:
         store = FileStepStore(directory=base / "steps")
         index_dir = base / "index"
 
-        # SEED with a real model turn that plants the passphrase in the transcript.
+        # SEED with a real model turn that plants the fact in the transcript.
         seed_agent = _build_agent(store=store, index_dir=index_dir)
         seed_tools, seed_text = _run_turn(
             seed_agent,
-            f"Remember this for later: the encrypted volume passphrase is {PASSPHRASE}. "
+            f"Remember for later: {FACT}. "
             "Do not do anything else, just acknowledge.",
             cid,
         )
@@ -112,18 +122,38 @@ def test_live_recall_via_read_turn() -> None:
             "seed turn was not indexed"
         )
 
+        # Evict the fact from the max_lines=4 injected tail by running a handful
+        # of REAL (but meaningless) turns in the same conversation. Each one is
+        # persisted + summarized by the real machinery, so every index row
+        # references real history -- no fake data. Enough small talk and the
+        # seed fact (turn 0) scrolls past the tail, so the ONLY way the model can
+        # surface it at recall is a retrieval tool (C2 geometry).
+        chit = _build_agent(store=store, index_dir=index_dir)
+        for line in (
+            "Hi there.",
+            "How are you?",
+            "My name is John.",
+            "What can I call you?",
+        ):
+            _run_turn(chit, line, cid)
+
         # COLD-START recall in a FRESH agent over the same store + cid.
         recall_agent = _build_agent(store=store, index_dir=index_dir)
         tools, text = _run_turn(
             recall_agent,
-            "From your turn index / history (you may need a tool), what was the "
-            "encrypted volume passphrase? Reply with just the passphrase.",
+            "From your turn index / history (you may need a tool), what is the "
+            "date of the company picnic? Reply with just the date.",
             cid,
         )
 
-        # 1. The model must actually invoke a retrieval tool (grounding check).
+        # 1. The model must actually invoke a retrieval tool (grounding check). The
+        #    fact was evicted from the injected tail, and `read_turn`/`search_index`
+        #    are the ladder rungs that can surface a one-liner match. (A model may
+        #    also call search_conversation_history, the wide fallback, and still be
+        #    correct -- but if it neither reads the index nor searches, it cannot
+        #    be grounded in persisted history given the eviction.)
         assert any(t in tools for t in ("read_turn", "search_index")), (
             f"model did not invoke a retrieval tool; tools={tools!r} text={text!r}"
         )
         # 2. The value re-covered from persistence surfaces in the answer.
-        assert PASSPHRASE in text, f"answer missing passphrase; tools={tools!r} text={text!r}"
+        assert "September 14" in text, f"answer missing the fact; tools={tools!r} text={text!r}"

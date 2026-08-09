@@ -94,10 +94,20 @@ from ._toolset import TurnIndexToolset
 _MARKER = 'turn-index.v1'
 
 _INSTRUCTIONS = (
-    'A one-line summary of every past turn is kept in context (the turn index). '
-    'Each line shows a ref. When a turn looks relevant, call `read_turn` with that ref to pull '
-    'the full original turn back into context. When you need the wider picture beyond a single '
-    'turn, use `search_conversation_history`.'
+    'To recall past turns, escalate in THIS order — use only as many rungs as '
+    'needed, cheapest first:\n'
+    '1. IN CONTEXT — if the answer is already in your context, answer it. Never '
+    'tool-call for something you already have.\n'
+    '2. TURN INDEX — a one-line summary + ref of every past turn is injected in '
+    'your request. Recognize the relevant turn from it (no tool call).\n'
+    '3. `search_index(query)` — substring scan over index lines + key terms. Use '
+    'when you have NO ref and don\'t know which turn.\n'
+    '4. `read_turn(ref)` — pull the full turn for a ref you have from the index '
+    'or step 3 when the one-liner isn\'t enough.\n'
+    '5. `search_conversation_history(query)` — wide BM25 search over persisted '
+    'history. LAST RESORT; only if the above came up empty.\n'
+    'Skip rungs that aren\'t needed: if the index already names the turn, go '
+    'straight to `read_turn` — don\'t call `search_index` first.'
 )
 
 
@@ -144,7 +154,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
     guidance (tool availability)."""
 
     add_instructions: bool = True
-    """Emit an instruction telling the model `read_turn` / the index exist."""
+    """Emit the composite recall ladder (recognition → search_index → read_turn → search_conversation_history)."""
 
     tool_id: str = 'turn-index'
     """Toolset id for `read_turn` / `search_index`."""
@@ -158,7 +168,16 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         )
 
     def get_instructions(self) -> AgentInstructions[AgentDepsT] | None:
-        """Tell the model the index + `read_turn` exist, unless `add_instructions` is false."""
+        """Emit the composite recall ladder (recognition → search_index → read_turn → search_conversation_history).
+
+        This is the SINGLE authoritative escalation instruction for all three
+        recall tools. It references `search_conversation_history` / `read_turn` /
+        `search_index` and names their order, so when `TurnIndex` is present the
+        builder suppresses the harness `ConversationSearch`'s own `add_instructions`
+        (see ``build_runtime_capabilities``) to avoid two conflicting scraps.
+        ``add_instructions=False`` disables it entirely (e.g. a profile that owns
+        its own recall guidance elsewhere).
+        """
         if not self.add_instructions:
             return None
         return _INSTRUCTIONS
