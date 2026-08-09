@@ -4,10 +4,24 @@ This is M2's first feature (see the vault: `Turn-Summary-Index.md`), structured 
 installable pydantic-ai capability. It is the *episodic turn index* arm -- distinct from
 compaction (context-fit) and `Memory` (durable facts).
 
+It separates TWO concerns (2026-08-08):
+
+1. **Write path -- collect + summarize, per completed turn.** `after_model_request`
+   fires the moment the model answers each turn: it slices *this turn* (last user
+   anchor -> the completed response) straight from the live `ctx.messages`, summarizes
+   it, and appends one line to `index_store`, keyed by a STABLE `turn_id`. This runs
+   synchronously today and is a pure per-turn write that moves to a background worker
+   unchanged. It never touches context and is independent of compaction.
+
+2. **Read path -- inject + recall.** `before_model_request` injects a BOUNDED tail of
+   the index into the current request (recognition beats recall) and `read_turn`
+   resolves a ref back into pydantic-ai persistence through the `HistorySource` seam.
+   This is the only place the index touches context.
+
 Architecture (two persistence surfaces, intentionally decoupled):
 
 1. **Its own append-only persistence** (`index_store`) holds the *derived* one-line
-   summaries, keyed by `(conversation_id, run_id, message_index)`. Flat JSONL, flat-file-first.
+   summaries, keyed by `(conversation_id, run_id, turn_id)`. Flat JSONL, flat-file-first.
    The index NEVER stores full turns.
 2. **Reads pydantic-ai persistence directly** (`source`) -- it holds a `HistorySource`
    (e.g. `SnapshotHistorySource(store)` over the same store a `StepPersistence` capability
@@ -41,14 +55,13 @@ one-line-per-turn menu is injected into the current request (Memory-style, marke
 it never accumulates), letting the model *recognize* a relevant turn and `read_turn` it, instead
 of forcing a blind `search` first.
 
-One-liner generation (Step 1 of the build order) is intentionally **not** wired here yet -- this
-capability provides the storage + retrieval + injection seam. The background writer that LLM's a
-summary per turn into e.g. `NotificationHook`/`after_node_run` and appends via `index_store.append`
-is the next slice. See the module `readme` / design note for the build order.
+One-liner generation is a deterministic stub today (see `_generate.summarize_turn`); the real
+LLM summarizer drops in at that single seam. The write path is deliberately background-ready.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -56,11 +69,11 @@ from typing import Any
 
 from pydantic_ai.agent.abstract import AgentInstructions
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.run import AgentRunResult
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelRequestPart,
+    ModelResponse,
     TextContent,
     UserPromptPart,
 )
@@ -71,7 +84,7 @@ from pydantic_ai.toolsets import AgentToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore
 
-from ._generate import CollectorStore, CursorStore, generated_turns
+from ._generate import Turn, summarize_turn_append, this_turn_id, this_turn_slice
 from ._store import TurnIndexStore
 from ._toolset import TurnIndexToolset
 
@@ -95,16 +108,17 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
 
     index_store: TurnIndexStore
     """Append-only JSONL store of one-line summaries (the capability's OWN persistence). Never
-    stores full turns -- only the (conversation, run, message_index) keys into `source`."""
+    stores full turns -- only the (conversation, run, turn_id) keys into `source`."""
 
     store: FileStepStore | None = None
-    """The shared pydantic-ai persistence store this capability derives its index from.
+    """Optional shared pydantic-ai persistence store this capability derives its index from.
 
-    When set, `after_run` reads the harness's own run/event shards straight from this store
-    (via `generated_turns`) to build the per-conversation index -- the "pull the data straight
-    from the store on our hook" pattern. `None` (e.g. a pure `from_spec` YAML reconstruction
-    that only needs read_turn/search) disables the writer hook; index population is then left
-    to an external `generated_turns` caller.
+    **Deprecated for the write path** (see `after_model_request`): the per-turn
+    index is now built straight from the live `ctx.messages` in the request
+    hook, so it no longer needs to re-read a persisted run via `self.store`.
+    Kept only for back-compat / read_turn resolution when a store is available;
+    `None` (e.g. a pure `from_spec` YAML reconstruction that only needs
+    read_turn/search) is fully supported for the writer.
     """
 
     max_lines: int = 40
@@ -143,48 +157,46 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         entries = entries[-self.max_lines :] if self.max_lines else entries
         lines = []
         for e in entries:
-            ref = f'{e.run_id}:{e.message_index}'
-            lines.append(f'- [{ref}] {e.summary}')
+            lines.append(f'- [{e.ref}] {e.summary}')
         return '\n'.join(lines)
 
-    async def after_run(
+    async def after_model_request(
         self,
         ctx: RunContext[AgentDepsT],
         *,
-        result: AgentRunResult[Any],
-    ) -> AgentRunResult[Any]:
-        """Build the per-conversation turn index after each settled run.
+        request_context: ModelRequestContext,
+        response: ModelResponse,
+    ) -> ModelResponse:
+        """Index the just-completed user turn, synchronously, on the write path.
 
-        Reads the harness's own run/event shards straight from the shared store
-        (``generated_turns`` over ``self.store``, resolving full runs via
-        ``self.source``) and appends one-line summaries to ``index_store`` -- the
-        "pull the data straight from the store on our hook" pattern. Each one-liner
-        is produced from the run's **full recovered history** (whole run, per-part
-        caps on tool args/results -- see ``_extract``). Scoped to
-        ``ctx.conversation_id`` so live `cli-primary` turns land under `cli-primary`,
-        never swept from a global `list_runs`.
-
-        Runs synchronously in the hook for now (the summarizer is a hash stub);
-        the rest of the hook returns `result` unchanged. When ``self.store`` is
-        None (pure YAML/`from_spec` reconstruction), this is a no-op -- the index
-        is populated by an external caller instead.
+        Fires the moment the model finishes answering each turn — the earliest
+        point the turn's content is complete and stable. By pydantic-ai's graph
+        ordering (`_agent_graph._finish_handling`), `after_model_request` runs
+        BEFORE the returned `response` is appended to `ctx.state.message_history`
+        (line ~1616 vs ~1625), so the live `ctx.messages` does NOT yet hold the
+        final answer. We therefore synthesize the completed turn as
+        `this_turn_slice(ctx.messages) + [response]`: the slice from the turn's
+        user anchor (user prompt + tool traffic) plus the just-returned response
+        that closes it. Summarizes it, and appends one line to `index_store`,
+        keyed by a STABLE `turn_id` (the ordinal of the anchor among the run's
+        user prompts) so the ref never rots as the run grows.
         """
-        if self.store is None:
-            return result
         try:
-            await generated_turns(
-                self.store,
-                CollectorStore(self.index_store.directory),
-                CursorStore(self.index_store.directory),
-                self.index_store,
-                conversation_id=ctx.conversation_id,
-                source=self.source,
-            )
+            messages = list(ctx.messages)
+            turn_id = this_turn_id(messages)
+            if turn_id >= 0:
+                turn = Turn(
+                    run_id=ctx.run_id,
+                    conversation_id=ctx.conversation_id,
+                    turn_id=turn_id,
+                    messages=[*this_turn_slice(messages), response],
+                )
+                await asyncio.to_thread(summarize_turn_append, turn=turn, index_store=self.index_store)
         except Exception:
-            # Index build must never break the run (matches the harness's
+            # Index build must never break the request (matches the harness's
             # `injection_errors='ignore'` / snapshot-fallback posture).
             pass
-        return result
+        return response
 
     async def before_model_request(
         self,

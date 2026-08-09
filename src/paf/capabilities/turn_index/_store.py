@@ -3,8 +3,21 @@
 The turn index is *derived* data: it is NOT part of pydantic-ai's run
 history. It lives beside it, in its own append-only store, and each entry is
 keyed to a full turn in pydantic-ai persistence *by reference* -- the
-(conversation_id, run_id, message_index) tuple that `SnapshotHistorySource`
-can resolve back to the original messages.
+(conversation_id, run_id, turn_id) triple that `SnapshotHistorySource` can
+resolve back to the original messages.
+
+The ref model changed (2026-08-08, per-turn indexing):
+
+  OLD  (run_id, message_index) -- a message_index keyed into `run_history`
+        rots as the run grows: the k-th user turn is at a different position
+        once later messages arrive, so a ref written early becomes stale.
+
+  NEW  (run_id, turn_id) -- `turn_id` is the ORDINAL of the turn's user-prompt
+        anchor within the run (`0` for the first user turn, `1` for the next,
+        ...). The same messages always yield the same ordinals, so the ref is
+        stable for the life of the run AND `read_turn` re-finds the anchor by
+        walking `run_history(run_id)` to the turn_id-th user prompt. Idiom is
+        `read_turn('{run_id}:{turn_id}')`.
 
 Design contract (append-only):
   - Entries are never edited or deleted. A wrong summary is *corrected* by
@@ -27,7 +40,7 @@ Layout (flat-file-first, inspectable/editable/diffable, no opaque DB)::
 
 Each `index.jsonl` line::
 
-    {"conversation_id", "run_id", "message_index", "ts", "summary", "hash"}
+    {"conversation_id", "run_id", "turn_id", "ts", "summary", "hash"}
 """
 
 from __future__ import annotations
@@ -35,10 +48,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
 
 
 def _utcnow() -> datetime:
@@ -58,10 +70,10 @@ def _by_conversation(root: Path, conversation_id: str | None) -> Path:
     return directory
 
 
-def _content_hash(conversation_id: str | None, run_id: str, message_index: int, summary: str) -> str:
+def _content_hash(conversation_id: str | None, run_id: str, turn_id: int, summary: str) -> str:
     """Stable content hash of a single index entry (used for idempotent dedup)."""
     return hashlib.sha256(
-        f'{conversation_id}|{run_id}|{message_index}|{summary}'.encode()
+        f'{conversation_id}|{run_id}|{turn_id}|{summary}'.encode()
     ).hexdigest()
 
 
@@ -71,21 +83,26 @@ class TurnIndexEntry:
 
     conversation_id: str | None
     run_id: str
-    message_index: int
+    turn_id: int
     ts: str
     summary: str
     hash: str
 
     def key(self) -> tuple[str | None, str, int]:
-        return (self.conversation_id, self.run_id, self.message_index)
+        return (self.conversation_id, self.run_id, self.turn_id)
+
+    @property
+    def ref(self) -> str:
+        """Stable dereference handle, idiom `read_turn('{run_id}:{turn_id}')`."""
+        return f'{self.run_id}:{self.turn_id}'
 
 
 class TurnIndexStore:
     """Append-only JSONL store of one-line turn summaries.
 
     This is the capability's OWN persistence (the derived index). It never
-    stores full turns -- the (conversation, run, message_index) key resolves
-    through `HistorySource` back into pydantic-ai persistence.
+    stores full turns -- the (conversation, run, turn_id) key resolves through
+    `HistorySource` back into pydantic-ai persistence.
     """
 
     def __init__(self, directory: str | Path = '.turn-index') -> None:
@@ -108,24 +125,24 @@ class TurnIndexStore:
         *,
         conversation_id: str | None,
         run_id: str,
-        message_index: int,
+        turn_id: int,
         summary: str,
     ) -> TurnIndexEntry:
         """Append one entry atomically (single line-append). Returns the entry."""
         entry = TurnIndexEntry(
             conversation_id=conversation_id,
             run_id=run_id,
-            message_index=message_index,
+            turn_id=turn_id,
             ts=_utcnow().isoformat(),
             summary=summary,
-            hash=_content_hash(conversation_id, run_id, message_index, summary),
+            hash=_content_hash(conversation_id, run_id, turn_id, summary),
         )
         path = self._path(conversation_id)
         line = json.dumps(
             {
                 'conversation_id': conversation_id,
                 'run_id': run_id,
-                'message_index': message_index,
+                'turn_id': turn_id,
                 'ts': entry.ts,
                 'summary': summary,
                 'hash': entry.hash,
@@ -150,16 +167,20 @@ class TurnIndexStore:
             return entries
         return self._read_file(self._path(conversation_id))
 
-    def latest_for(self, conversation_id: str | None, run_id: str, message_index: int) -> TurnIndexEntry | None:
+    def latest_for(self, conversation_id: str | None, run_id: str, turn_id: int) -> TurnIndexEntry | None:
         """Resolve a key to its most recent entry (append-only correctness view)."""
         entries = [
             e
             for e in self._read_file(self._path(conversation_id))
-            if e.run_id == run_id and e.message_index == message_index
+            if e.run_id == run_id and e.turn_id == turn_id
         ]
         if not entries:
             return None
         return entries[-1]
+
+    def has(self, conversation_id: str | None, run_id: str, turn_id: int) -> bool:
+        """Whether a turn already has an index entry (idempotency for the writer)."""
+        return self.latest_for(conversation_id, run_id, turn_id) is not None
 
     def count(self, conversation_id: str | None = None) -> int:
         return len(self.read_all(conversation_id))
@@ -178,7 +199,7 @@ class TurnIndexStore:
                     TurnIndexEntry(
                         conversation_id=data['conversation_id'],
                         run_id=data['run_id'],
-                        message_index=data['message_index'],
+                        turn_id=data['turn_id'],
                         ts=data['ts'],
                         summary=data['summary'],
                         hash=data['hash'],

@@ -34,8 +34,9 @@ you recognize from the index that a turn is relevant, call this with that run's
 responses / tool calls -- back into context.
 
 Pass ref='{run_id}' to fetch one run's entire durable history, or
-ref='{run_id}:{message_index}' to fetch just the turn anchored at that message
-(copy the exact ref shown in the index).
+ref='{run_id}:{turn_id}' to fetch just the turn at that index (copy the exact
+ref shown in the index). `turn_id` is the ordinal of the turn's user prompt
+within the run (0, 1, ...), so refs are stable.
 
 When one turn is not enough and you need a wider picture, escalate to
 `search_conversation_history`.
@@ -53,14 +54,15 @@ class _IndexLine:
 
 
 class _TurnFinder:
-    """Resolves a (conversation, run, message_index) ref into the durable turn.
+    """Resolves a (conversation, run, turn_id) ref into the durable turn.
 
     A user turn is anchored by the `ModelRequest` that carries a `UserPromptPart`
     in `HistorySource.run_history(run_id)` -- exactly the linking key captured in
-    the design doc: one-liner -> (run_id, message_index) ->
-    `run_history(run_id)[message_index]`. This is Pydantic's run history being
-    line-addressable; `message_index` is the position of the turn's `ModelRequest`
-    in that recovered list.
+    the design doc: one-liner -> (run_id, turn_id) -> walk `run_history(run_id)`
+    to the turn_id-th user-prompt anchor. `turn_id` is the ORDINAL of the anchor
+    among the run's user prompts, so it is STABLE for the life of the run (the
+    same messages always resolve to the same ordinal) -- unlike a `message_index`,
+    which rots as later messages are appended.
     """
 
     def __init__(self, source: HistorySource) -> None:
@@ -78,25 +80,25 @@ class _TurnFinder:
             return f"No persisted history for run '{run_id}' (is it in this store?)."
         if ':' in ref:
             try:
-                message_index = int(ref.split(':', 1)[1])
+                turn_id = int(ref.rsplit(':', 1)[1])
             except ValueError:
-                return f"Malformed ref '{ref}'; expected '{run_id}' or '{run_id}:<message_index>'."
-            return self._render_turn(history, message_index, run_id)
+                return f"Malformed ref '{ref}'; expected '{run_id}' or '{run_id}:<turn_id>'."
+            return self._render_turn(history, turn_id, run_id)
         return self._render_run(history, run_id)
 
-    def _render_turn(self, history, message_index: int, run_id: str) -> str:
-        # Find the Nth ModelRequest carrying a UserPromptPart (the turn anchor).
+    def _render_turn(self, history, turn_id: int, run_id: str) -> str:
+        # Find the turn_id-th ModelRequest carrying a UserPromptPart (the anchor).
         anchors = [
             i for i, m in enumerate(history) if _is_user_turn(m)
         ]
-        if message_index < 0 or message_index >= len(anchors):
+        if turn_id < 0 or turn_id >= len(anchors):
             return (
-                f"No turn at message_index {message_index} in run '{run_id}' "
+                f"No turn at index {turn_id} in run '{run_id}' "
                 f"({len(anchors)} user turns total)."
             )
-        start = anchors[message_index]
+        start = anchors[turn_id]
         # A turn spans from its anchor to the next user-turn anchor (or the end).
-        end = anchors[message_index + 1] if message_index + 1 < len(anchors) else len(history)
+        end = anchors[turn_id + 1] if turn_id + 1 < len(anchors) else len(history)
         lines = []
         for i in range(start, end):
             lines.append(_render_message(history[i]))
@@ -187,4 +189,4 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         return 'Index matches:\n' + '\n'.join(lines)
 
     def _ref(self, entry: TurnIndexEntry) -> str:
-        return f'{entry.run_id}:{entry.message_index}'
+        return entry.ref

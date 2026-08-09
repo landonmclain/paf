@@ -124,7 +124,7 @@ def test_read_turn_resolves_ref_through_persistence(tmp_path: Path) -> None:
         index.append(
             conversation_id="conv-t",
             run_id="run-t",
-            message_index=0,
+            turn_id=0,
             summary="auth header fix",
         )
         ts = TurnIndexToolset(source, index)
@@ -138,11 +138,13 @@ def test_read_turn_resolves_ref_through_persistence(tmp_path: Path) -> None:
 def test_turn_index_store_is_append_only(tmp_path: Path) -> None:
     index = TurnIndexStore(tmp_path)
     index.append(
-        conversation_id="c1", run_id="r1", message_index=0, summary="summary 1"
+        conversation_id="c1", run_id="r1", turn_id=0, summary="summary 1"
     )
     index.append(
-        conversation_id="c1", run_id="r1", message_index=0, summary="summary 1"
+        conversation_id="c1", run_id="r1", turn_id=0, summary="summary 1"
     )  # duplicate re-index: not edited, appended
     entries = index.read_all("c1")
     assert len(entries) == 2  # append-only retains the duplicate, never rewrites
     assert index.latest_for("c1", "r1", 0) is not None
+    assert index.has("c1", "r1", 0) is True
+    assert index.has("c1", "r1", 1) is False
