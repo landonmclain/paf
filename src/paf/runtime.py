@@ -38,7 +38,12 @@ from pydantic_ai import (
     PartDeltaEvent,
     PartStartEvent,
 )
-from pydantic_ai.messages import TextPartDelta, ThinkingPartDelta
+from pydantic_ai.messages import (
+    TextPart,
+    TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
+)
 
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
@@ -210,9 +215,14 @@ class Session:
                 if isinstance(event, PartStartEvent):
                     # First chunk of a part arrives in .part; emit it or the
                     # leading text is silently dropped (cli_demo tags this).
-                    delta = _part_leading_text(event.part)
+                    # Tag by part kind, not by content, so a thinking part's
+                    # opening token isn't mistaken for the answer (the model can
+                    # stream the first reasoning token before switching over).
+                    part = event.part
+                    delta = _part_leading_text(part)
                     if delta:
-                        yield StreamEvent(kind="text", text=delta)
+                        kind = "thinking" if isinstance(part, ThinkingPart) else "text"
+                        yield StreamEvent(kind=kind, text=delta)
                 elif isinstance(event, PartDeltaEvent):
                     if isinstance(event.delta, TextPartDelta):
                         yield StreamEvent(kind="text", text=event.delta.content_delta)
