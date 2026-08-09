@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from ._markers import injected_artifact_markers
+
 # NOTE: part types are imported lazily inside the narrowers to match the rest
 # of this package (see _toolset._render_message) -- pydantic-ai exposes no
 # public `Part` union, so isinstance-narrowing on the concrete classes is the
@@ -49,13 +51,26 @@ def truncate(text: object, limit: int | None) -> str:
 
 
 def _render_user_content(content: object) -> str:
-    """UserPromptPart.content is `str | list[Content]`; flatten to a single str, uncapped."""
+    """UserPromptPart.content is `str | list[Content]`; flatten to a single str, uncapped.
+
+    Drops injected artifacts (`<turn-index>` / harness `<memory>` blocks, which
+    carry a metadata marker) so a turn's summarization reflects the user's real
+    prompt, not the transient context injection StepPersistence snapshotted.
+    """
     if isinstance(content, str):
         return content
-    # A list of Content blocks (text/images); render text parts, skip binary.
+    # A list of Content blocks (text/images); render text parts, skip injected
+    # artifacts and binary.
     parts: list[str] = []
     for c in content:
-        if hasattr(c, "content") and isinstance(c.content, str):
+        if isinstance(c, str):
+            parts.append(c)
+        elif hasattr(c, "content") and isinstance(c.content, str):
+            metadata = getattr(c, "metadata", None)
+            if isinstance(metadata, str) and any(
+                metadata.startswith(m) for m in injected_artifact_markers()
+            ):
+                continue  # injected block -- not durable user content
             parts.append(c.content)
     return " ".join(p for p in parts if p) or str(content)
 

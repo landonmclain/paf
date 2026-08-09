@@ -17,12 +17,13 @@ import json
 from dataclasses import dataclass
 
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelRequest, TextContent, UserPromptPart
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
+from ._markers import injected_artifact_markers
 from ._store import TurnIndexEntry, TurnIndexStore
 
 READ_TURN_DESCRIPTION = """\
@@ -133,6 +134,18 @@ def _is_user_turn(message) -> bool:
     )
 
 
+def _is_injected_text(text) -> bool:
+    """Return whether a `TextContent` is an injected artifact (not durable user content).
+
+    Matches the metadata marker set shared with `_capability` (our turn-index)
+    and the harness `Memory` capability. The marker is scope-qualified for the
+    memory family (`...v1:<scope_hash>`), so we match on the stable base prefix.
+    """
+    return getattr(text, 'metadata', None) is not None and any(
+        getattr(text, 'metadata').startswith(marker) for marker in injected_artifact_markers()
+    )
+
+
 def _render_message(message) -> str:
     from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 
@@ -142,10 +155,22 @@ def _render_message(message) -> str:
             if isinstance(part, UserPromptPart):
                 content = part.content
                 if not isinstance(content, str):
-                    content = ' '.join(
-                        c.content if hasattr(c, 'content') and isinstance(c.content, str) else ''
-                        for c in content
-                    ) if not isinstance(content, str) else content
+                    # Content is a list[str | TextContent]; drop injected artifacts
+                    # (turn-index / memory blocks snapshotted into the User msg), then
+                    # join the durable text. This is the read-side strip: a recalled
+                    # turn shows the user's real prompt, NOT the transient injected index.
+                    parts_out: list[str] = []
+                    for item in content:
+                        if isinstance(item, str):
+                            # Plain string segments are durable user text.
+                            parts_out.append(item)
+                        elif isinstance(item, TextContent) and not _is_injected_text(item):
+                            parts_out.append(item.content)
+                    content = ' '.join(parts_out)
+                    if not content:
+                        # A UserPromptPart with only injected content carries no durable
+                        # user text worth showing; skip it entirely.
+                        continue
                 lines.append(f'User: {content}')
             else:
                 lines.append(f'[{type(part).__name__}]')

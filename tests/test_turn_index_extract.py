@@ -113,3 +113,29 @@ def test_context_unknown_kind_not_dropped() -> None:
 
     ctx = build_turn_context([_Bogus()])
     assert "BOGUS-MESSAGE" in ctx
+
+
+def test_context_strips_injected_turn_index_block() -> None:
+    """The summarizer must NOT see the injected `<turn-index>` block."""
+    from pydantic_ai.messages import TextContent
+
+    run = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=[
+                        "what is my codename?",
+                        TextContent(
+                            "<turn-index>\n[abc:1] user asked earlier\n</turn-index>",
+                            metadata="turn-index.v1",
+                        ),
+                    ]
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="Your codename is ZEPHYR-7741.")]),
+    ]
+    ctx = build_turn_context(run)
+    assert "<turn-index>" not in ctx
+    assert "my codename" in ctx  # real user prompt survives
+    assert "ZEPHYR-7741" in ctx  # assistant text survives

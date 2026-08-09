@@ -87,11 +87,10 @@ from pydantic_ai_harness.step_persistence import FileStepStore
 
 from ._generate import Turn, summarize_turn_append, this_turn_id, this_turn_slice
 from ._extract import build_turn_context
+from ._markers import TURN_INDEX_MARKER
 from ._store import TurnIndexStore
 from ._summarizer import TurnSummarizer
 from ._toolset import TurnIndexToolset
-
-_MARKER = 'turn-index.v1'
 
 _INSTRUCTIONS = (
     'To recall past turns, escalate in THIS order — use only as many rungs as '
@@ -248,7 +247,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         and never accumulates stale index blocks or clobbers sibling capabilities'
         injections. Logic mirrors `pydantic_ai_harness.memory.Memory.before_model_request`.
         """
-        self._remove_previous(request_context.messages, _MARKER)
+        self._remove_previous(request_context.messages, TURN_INDEX_MARKER)
         if not self.inject_index:
             return request_context
 
@@ -262,7 +261,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
             return request_context
 
         block = f'<turn-index>\n{rendered}\n</turn-index>'
-        part = UserPromptPart([TextContent(block, metadata=_MARKER)])
+        part = UserPromptPart([TextContent(block, metadata=TURN_INDEX_MARKER)])
         latest = request_context.messages[-1]
         if not isinstance(latest, ModelRequest):
             raise RuntimeError('model request history must end with a ModelRequest')
