@@ -143,16 +143,62 @@ capability.
 
 ## Roadmap
 
-- **Background the summarizer (M2 next).** The per-turn write is already a pure,
-  self-contained call; move it off the request path onto a background worker.
-  Because it's stateless and keyed by stable `turn_id`, this is a wiring change,
-  not a redesign.
-- **In-context read path (separate slice).** Decide how many index lines to
-  inject, eviction/ordering among competing summaries, and how the injected index
-  composes with `Memory` and compaction.
-- **Installable package split.** The turn-index subtree is `paf`-free in spirit;
-  extract it into a standalone installable package later.
-- **M2 memory arm.** The `Memory` capability (durable-fact extraction) is charted
-  as the second M2 feature, sharing the same flat-file seam.
-- **Evals** (deferred, not M1/M2 core): long-conversation recall fidelity,
-  injection-in-context effectiveness, summarizer budget adherence.
+M2's direction note + three design specs (the *living* plan, iterating as we
+build) live in the vault: `History/M2-Builtins-Queues-Codebase-Map.md` and
+`Designs/{Foundation-Package,Background-Queue-Storage,Codebase-Search-Call-Graph-Storage}-Spec.md`.
+The roadmap below is that plan.
+
+**The unifying rule (M2 §B):** *anything that **forms or transforms** knowledge is
+an LLM **write**; anything that **reads** it is deterministic.* Every write that
+isn't on the current answer's critical path goes **background** — that's *why*
+the queue exists, not just an optimization. In that spirit the turn-index
+summarizer (feature 1) is already a pure, stateless, `turn_id`-keyed write: it
+sits **synchronously** today only for testing, and moves to the background
+worker unchanged once the queue lands.
+
+1. **Foundation package — `agent-foundation` (M2 next, the do-first).** A
+   standalone, **framework-free** dependency (stdlib only, no pydantic-ai) with
+   two seams every later piece hangs off:
+   - **`StorageService`** — a `FlatFileStorage` behind a `Protocol`, swappable
+     later for SQLite / object-store / MCP. The abstract-storage seam (Phase 0
+     of the codebase-map spec).
+   - **`BackgroundQueueService[JobT]`** — an idle-exit async worker queue
+     (ported from coding_agent's `app/services/background/`), the "available to
+     whatever wants to use them, not tied to any one" layer.
+2. **Background the writes (M2 §B).** Route the *three* LLM-write consumers
+   through the queue, off the answer's critical path:
+   - the **turn-index** one-liner generator (already spec'd as a `TurnIndexJob`
+     in the queue spec — the pure write above),
+   - compaction's **`MdSummaryService`** (replacing the current blocking
+     `SummarizingCompaction`), and
+   - a **Memory reconciler** (below).
+   The enqueue site is *one*, owned by the hook; results are **eventually**
+   consistent (next turn may or may not see the just-enqueued write).
+3. **Codebase map (M2 §C, the centerpiece) — 4 phases (spec'd).**
+   - **P0** — `StorageService` seam (shared with item 1).
+   - **P1** — tree-sitter symbol upgrade (`py-tree-sitter-languages`; fixes the
+     JS/TS stub + PHP line-hacking).
+   - **P2** — **call graph + `callers`** ("who calls X" — the headline add, via
+     `references.json` + `call_graph.json`).
+   - **P3** — broadened `code_search` + an aider-style `map_tokens`-ranked
+     distilled map.
+   - **P4 (opt)** — expose the codebase as an MCP tool-source.
+   - **Rides the graph for free:** dead-code detection, docstring enrichment
+     (both ideas, not decisions).
+4. **Memory arm (M2 §B second arm).** Adopt `pydantic_ai_harness.memory.Memory`
+   (`FileStore(...)` — flat-file notebook, the `system/`-vs-`reference/` split
+   built in); layer SteadierPath's **LangMem** extractor + a background
+   reconciler on top, writing through the same store. mem0 rejected (paywall on
+   good extraction), Graphiti not-a-fit for flat-file-first.
+5. **BEAM validation harness (M2 §D, the north-star).** A `bench/beam/` driver
+   (judge ≠ answerer, stable judge) running a single-agent, three-context
+   ablation — baseline (`message_history=`), working-memory (+background
+   scratchpad), retrieval (`ConversationSearch`/`read_turn`) — graded by the
+   same judge vs BEAM's rubrics. This is how "does a modification help or hurt"
+   gets answered instead of by vibes, and it's what makes item 2's changes
+   *testable*.
+
+**Secondary / deferred (below the five above):** tuning the in-context read path
+(index-line injection budget, eviction/ordering, composition with `Memory`);
+extracting turn-index into a standalone installable package; M3 multi-agent
+(`Runner` over the same `Agent` units); M4 security toolkit.
