@@ -136,23 +136,32 @@ def test_read_turn_resolves_ref_through_persistence(tmp_path: Path) -> None:
         ModelRequest(parts=[UserPromptPart("turn two: fix deploy script")]),
         ModelResponse(parts=[TextPart("fixed.")]),
     ]
+    # The run_id the capability writes and the store keys by MUST be the SAME
+    # id. In production both derive from pydantic-ai's ctx.run_id (StepPersistence
+    # is built WITHOUT agent_name, so the harness falls through to ctx.run_id, and
+    # TurnIndex.after_model_request writes ctx.run_id). Regressing this — e.g.
+    # passing agent_name so the store keys by `assistant-<hex>` — breaks read_turn;
+    # use one shared id here to mirror the fix.
+    run_id = "019fe72b-9653-70f3-93ce-c34032c6b601"
 
     async def scenario() -> str:
         await store.save_snapshot(
             ContinuableSnapshot(
-                run_id="run-t", step_index=3, messages=msgs, conversation_id="conv-t"
+                run_id=run_id, step_index=3, messages=msgs, conversation_id="conv-t"
             )
         )
         source = SnapshotHistorySource(store)
         index = TurnIndexStore(tmp_path / "index")
         index.append(
             conversation_id="conv-t",
-            run_id="run-t",
+            run_id=run_id,
             turn_id=0,
             summary="auth header fix",
         )
         ts = TurnIndexToolset(source, index)
-        return await ts._finder.resolve("run-t:0", run_id="run-t", conversation_id="conv-t")
+        return await ts._finder.resolve(
+            f"{run_id}:0", run_id=run_id, conversation_id="conv-t"
+        )
 
     out = asyncio.run(scenario())
     assert "turn one: added auth header" in out
@@ -172,3 +181,29 @@ def test_turn_index_store_is_append_only(tmp_path: Path) -> None:
     assert index.latest_for("c1", "r1", 0) is not None
     assert index.has("c1", "r1", 0) is True
     assert index.has("c1", "r1", 1) is False
+
+
+def test_step_persistence_run_id_matches_ctx_run_id() -> None:
+    """REGRESSION: the store and the TurnIndex must key runs by the SAME id.
+
+    The TurnIndex capability writes pydantic-ai's `ctx.run_id` (``019fe…``) into
+    the index refs. `read_turn` resolves those refs through `SnapshotHistorySource`,
+    which walks the store by `RunRecord.run_id`. If StepPersistence is built with
+    `agent_name`, the harness's `_derive_run_id` prefixes its OWN id
+    (``assistant-<hex>``) and the store no longer keys by `ctx.run_id` -- so every
+    ref the index writes becomes unresolvable ("No persisted history for run ...").
+    This test pins the invariant that `_build_step_persistence` does NOT set
+    `agent_name`, keeping both sides on `ctx.run_id`.
+    """
+    from paf.capabilities.persistence import _build_store, _build_step_persistence
+
+    store = _build_store()
+    step = _build_step_persistence(store)
+
+    class _Ctx:
+        run_id = "019fe72b-9653-70f3-93ce-c34032c6b601"
+
+    derived = step._derive_run_id(_Ctx())  # type: ignore[attr-defined]
+    # Store run id is EXACTLY pydantic-ai's ctx.run_id, not assistant-<hex>.
+    assert derived == _Ctx.run_id
+    assert not derived.startswith("assistant-")

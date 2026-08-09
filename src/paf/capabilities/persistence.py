@@ -55,8 +55,17 @@ def _build_store() -> FileStepStore:
 
 
 def _build_step_persistence(store: FileStepStore) -> StepPersistence:
-    """The write side: appends every step of a run to the shared store."""
-    return StepPersistence(store=store, agent_name="assistant")
+    """The write side: appends every step of a run to the shared store.
+
+    IMPORTANT: no ``agent_name``. StepPersistence derives its run_id as
+    ``{agent_name}-{uuid}`` when agent_name is set (the harness's ``_derive_run_id``),
+    which would make the STORE key runs by ``assistant-<hex>`` while the TurnIndex
+    capability writes pydantic-ai's ``ctx.run_id`` (``019fe…``) -- a run-id namespace
+    mismatch that silently broke ``read_turn`` (refs never resolve). With agent_name
+    unset, StepPersistence falls through to ``ctx.run_id``, so store and index agree
+    on the same id and every ref round-trips.
+    """
+    return StepPersistence(store=store)
 
 
 def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
