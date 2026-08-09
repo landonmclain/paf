@@ -55,8 +55,10 @@ one-line-per-turn menu is injected into the current request (Memory-style, marke
 it never accumulates), letting the model *recognize* a relevant turn and `read_turn` it, instead
 of forcing a blind `search` first.
 
-One-liner generation is a deterministic stub today (see `_generate.summarize_turn`); the real
-LLM summarizer drops in at that single seam. The write path is deliberately background-ready.
+The one-liner is a real LLM summarizer by default (`_summarizer.py`: a pydantic-ai
+structured-output `TurnSummary` call with char-budget retry), injected through the
+`summarizer` seam and falling back to a deterministic stub when unset. The write
+path is deliberately background-ready.
 """
 
 from __future__ import annotations
