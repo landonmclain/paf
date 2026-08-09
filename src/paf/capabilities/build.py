@@ -27,6 +27,7 @@ from __future__ import annotations
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
+from paf.capabilities.turn_index import build_turn_index
 
 # The profile name that gates context compaction in build_runtime_capabilities.
 _COMPACTION_CAPABILITY = "Compaction"
@@ -35,18 +36,24 @@ _COMPACTION_CAPABILITY = "Compaction"
 def build_runtime_capabilities(profile: AgentProfile) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
-    Persistence + recall + turn-index select per :data:`PERSISTENCE_BUILDERS` by
-    ``profile.capability_names``, all handed the SAME store (so write / search /
-    read_turn provably resolve the same history). ``Compaction`` (the no-summary
-    ladder) is appended iff the profile allowlists it. A profile may list fewer —
-    e.g. a minimal agent with only ``StepPersistence`` — and that is exactly what
-    it gets. Capability names without a Python builder are left for the
-    spec-declared (YAML) path.
+    Persistence + recall select per :data:`PERSISTENCE_BUILDERS`; ``TurnIndex``
+    builds itself via :func:`turn_index.build_turn_index`, but all are handed the
+    SAME store (so write / search / read_turn provably resolve the same history).
+    ``Compaction`` (the no-summary ladder) is appended iff the profile allowlists
+    it. A profile may list fewer — e.g. a minimal agent with only
+    ``StepPersistence`` — and that is exactly what it gets. Capability names
+    without a Python builder are left for the spec-declared (YAML) path.
     """
+    # Both builders are keyed by the SAME names a profile allowlists, so the
+    # profile is the gatekeeper for each.
+    builders = {
+        **PERSISTENCE_BUILDERS,
+        "TurnIndex": build_turn_index,
+    }
     store = _build_store()
     capabilities = [
         builder(store)
-        for name, builder in PERSISTENCE_BUILDERS.items()
+        for name, builder in builders.items()
         if name in profile.capability_names
     ]
     if _COMPACTION_CAPABILITY in profile.capability_names:

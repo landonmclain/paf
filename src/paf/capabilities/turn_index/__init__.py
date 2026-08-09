@@ -13,6 +13,7 @@ from pydantic_ai_harness.conversation_search._source import (
     SnapshotHistorySource,
 )
 
+from ._builders import build_turn_index
 from ._capability import TurnIndexCapability
 from ._generate import (
     Turn,
@@ -33,6 +34,7 @@ __all__ = [
     'TurnIndexStore',
     'TurnIndexCapability',
     'TurnIndexToolset',
+    'build_turn_index',
     'DEFAULT_BUDGET_CHARS',
     'MAX_KEY_TERMS',
     'TurnSummarizer',
