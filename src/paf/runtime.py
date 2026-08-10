@@ -47,6 +47,7 @@ from pydantic_ai_harness.step_persistence import continue_run
 
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
+    _json_dumps,
     root_span,
     setup_observability,
     shutdown_observability,
@@ -266,7 +267,7 @@ class Session:
                         result = event.result
                         # Set the trace output NOW, while the root span is still
                         # open -- the settled answer is the only complete output.
-                        _span.set_attribute("langfuse.observation.output", _run_output(result))
+                        _span.set_attribute("langfuse.observation.output", _json_dumps(_run_output(result)))
         assert result is not None, "run_stream_events ended before AgentRunResultEvent"
         self.last_result = result
         # ACKNOWLEDGE (cli_demo): result.new_messages() is ONLY this turn; older
