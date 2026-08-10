@@ -22,5 +22,8 @@ wheels/
 data/
 !.env.example
 
+# Generated benchmark run outputs (graded runner writes JSON per full run).
+tests/results/
+
 # Demo scratch database (ui/cli_demo.py)
 demo.db
