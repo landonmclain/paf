@@ -25,9 +25,9 @@ from pydantic_ai_harness.compaction import (
     SummarizingCompaction,
     TieredCompaction,
 )
-from pydantic_ai_harness.conversation_search import ConversationSearch
 from pydantic_ai_harness.step_persistence import StepPersistence
 
+from paf.capabilities.search import ConversationSearch
 from paf.capabilities.turn_index import TurnIndexCapability
 
 # name -> capability type. The name is the serialization form used in a spec's

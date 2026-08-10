@@ -4,9 +4,14 @@ Like :mod:`paf.capabilities.compaction`, this owns capabilities that can't clean
 resolve from YAML because they need real Python objects as arguments (see
 ``build.py`` for the full rationale on the ``capabilities=`` seam). For M1 that is
 `ConversationSearch` and `TurnIndexCapability`: their ``source: HistorySource`` needs
-a real ``SnapshotHistorySource(store)`` object, and no harness recall class overrides
+a real ``SnapshotHistorySource(store)`` object, and no recall class overrides
 ``from_spec`` (and `TurnIndexCapability`, though it DOES override `from_spec`, is wired
 here to share the live store) — so they are assembled here, in Python.
+
+``ConversationSearch`` is the paf-owned search capability
+(``paf.capabilities.search``), a drop-in for the harness's of the same name — so the
+recall surface shares the marker-strip that keeps injected ``<turn-index>`` /
+``<memory>`` blocks out of the corpus.
 
 ``TurnIndexCapability`` is NOT built here: it owns its builder in
 ``paf.capabilities.turn_index`` (``build_turn_index``) so its summarizer/content
@@ -32,12 +37,9 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from pydantic_ai_harness.conversation_search import (
-    ConversationSearch,
-    SnapshotHistorySource,
-)
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
+from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.config import PROJECT_ROOT, settings
 
 # Canonical store root for M1 persistence + recall. A directory of flat files

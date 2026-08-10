@@ -23,10 +23,10 @@ from typing import Any
 
 import pytest
 from pydantic_ai_harness.compaction import TieredCompaction
-from pydantic_ai_harness.conversation_search import ConversationSearch
 from pydantic_ai_harness.step_persistence import StepPersistence
 
 from paf.capabilities.profiles import ASSISTANT_PROFILE
+from paf.capabilities.search import ConversationSearch
 from paf.capabilities.turn_index import TurnIndexCapability
 from paf.specs import build_agent
 
