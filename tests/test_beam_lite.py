@@ -38,7 +38,7 @@ import uuid
 from pathlib import Path
 
 from pydantic_ai import AgentRunResultEvent
-from pydantic_ai.messages import FunctionToolCallEvent, TextPart
+from pydantic_ai.messages import FunctionToolCallEvent
 from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
@@ -139,12 +139,13 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> tuple[li
     On a provider that omits part of usage the missing fields default to 0.
     """
     tool_calls: list[str] = []
-    text_parts: list[str] = []
+    text: str = ""
     usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0,
                              "cache_read_tokens": 0, "cache_write_tokens": 0,
                              "total_tokens": 0, "requests": 0}
 
     async def run():
+        nonlocal text
         with root_span(
             name,
             **{
@@ -157,6 +158,10 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> tuple[li
                     if isinstance(event, FunctionToolCallEvent):
                         tool_calls.append(str(event.part.tool_name or ""))
                     elif isinstance(event, AgentRunResultEvent):
+                        # Authoritative final result (single source of truth). Do NOT
+                        # stitch stream TextParts here: PartStartEvent carries the
+                        # FIRST chunk and PartEndEvent the COMPLETE part, so joining
+                        # both duplicates the prefix ("ThThursdays"). Use result.output.
                         u = event.result.usage  # RunUsage (property, not a method)
                         usage["input_tokens"] = getattr(u, "input_tokens", 0) or 0
                         usage["output_tokens"] = getattr(u, "output_tokens", 0) or 0
@@ -164,17 +169,15 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> tuple[li
                         usage["cache_write_tokens"] = getattr(u, "cache_write_tokens", 0) or 0
                         usage["total_tokens"] = getattr(u, "total_tokens", 0) or 0
                         usage["requests"] = getattr(u, "requests", 0) or 0
+                        text = event.result.output
                         # Trace output on the root span while it's still open.
                         _span.set_attribute(
                             "langfuse.observation.output",
                             _json_dumps({"output": event.result.output}),
                         )
-                    elif hasattr(event, "part") and event.part is not None:
-                        if isinstance(event.part, TextPart):
-                            text_parts.append(event.part.content)
 
     asyncio.run(run())
-    return tool_calls, "".join(text_parts), usage
+    return tool_calls, text, usage
 
 
 # ---------------------------------------------------------------------------
