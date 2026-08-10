@@ -214,7 +214,7 @@ class Session:
         # the settled AgentRunResult lands, before the span closes.
         with root_span(
             f"paf.run.{cid or 'default'}",
-            **({"langfuse.observation.input": _run_input(prompt, self.history)}),
+            **({"langfuse.observation.input": _run_input(prompt, cid)}),
         ) as _span:
             async with self._agent.run_stream_events(
                 prompt,
@@ -330,16 +330,18 @@ def _part_leading_text(part: Any) -> str:
     return ""
 
 
-def _run_input(prompt: str, history: list) -> dict:
+def _run_input(prompt: str, cid: str | None) -> dict:
     """Serialize a turn's input for the Langfuse trace root span.
 
     ``langfuse.observation.input`` is what Langfuse's OTLP mapper shows in the
-    trace-list Input column. pydantic-ai's own ``gen_ai.input.messages`` isn't
-    mapped by Langfuse, so we capture the prompt + history here. Messages are
-    reduced to a compact, JSON-safe shape (role + one-line summary) rather than
-    the raw ``ModelRequest``/``ModelResponse`` objects, which don't serialize.
+    trace-list Input column. That column is the *user's* input for that turn --
+    the current prompt -- NOT the accumulated history. pydantic-ai's own
+    `gen_ai.input.messages` on the agent/generation spans already carries full
+    per-message context (and reads coherently when you click into the span), so
+    dumping the whole transcript here would just bloat the list view and
+    duplicate what's a click away. cid is included for at-a-glance grouping.
     """
-    return {"prompt": prompt, "history": list(history)}
+    return {"prompt": prompt, "conversation_id": cid}
 
 
 def _run_output(result: Any) -> dict:

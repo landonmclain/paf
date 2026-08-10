@@ -46,7 +46,7 @@ def test_root_span_sets_langfuse_input_and_output(captured) -> None:
     with root_span(
         "paf.run.cli",
         _tracer(captured),
-        **({"langfuse.observation.input": {"prompt": "hi", "history": []}}),
+        **({"langfuse.observation.input": {"prompt": "hi", "conversation_id": "cli"}}),
     ) as span:
         span.set_attribute("langfuse.observation.output", '{"output": "hello"}')
     captured.force_flush()
@@ -68,13 +68,13 @@ def test_root_span_values_are_json_serialized(captured) -> None:
     with root_span(
         "paf.run.x",
         _tracer(captured),
-        **({"langfuse.observation.input": {"prompt": "remember", "history": [1, 2]}}),
+        **({"langfuse.observation.input": {"prompt": "remember", "conversation_id": "x"}}),
     ):
         pass
     captured.force_flush()
     attrs = _attrs(captured.get_finished_spans()[0])
     decoded = json.loads(attrs["langfuse.observation.input"])
-    assert decoded == {"prompt": "remember", "history": [1, 2]}, decoded
+    assert decoded == {"prompt": "remember", "conversation_id": "x"}, decoded
 
 
 def test_root_span_graceful_under_noop_tracer() -> None:
