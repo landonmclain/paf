@@ -61,9 +61,10 @@ def _build_memory(store) -> Memory:
 def _conversation_search_suppressed(store):
     """ConversationSearch with its own instruction scrap disabled.
 
-    Used when TurnIndex is co-present: TurnIndex's `get_instructions` emits the
-    composite recall ladder that already names search_conversation_history's slot,
-    so this capability's standalone "a search_conversation_history tool can retrieve
+    Used when TurnIndex OR Memory owns the composite recall ladder: TurnIndex's
+    `get_instructions` (when Memory absent) or Memory's composite `_DEFAULT_GUIDANCE`
+    (when present) already name `search_conversation_history`'s slot, so this
+    capability's standalone "a search_conversation_history tool can retrieve
     exact details…" fragment would be duplicative and potentially conflicting.
     Same shared store either way — this only toggles instruction emission.
     """
@@ -72,6 +73,23 @@ def _conversation_search_suppressed(store):
         scope="conversation",
         add_instructions=False,
     )
+
+
+def _turn_index_suppressed(store):
+    """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
+
+    When the profile also allowlists ``Memory``, Memory's composite
+    ``_DEFAULT_GUIDANCE`` is the single recall ladder (durable-fact + past-turn +
+    last-rung history). It already names ``search_index`` / ``read_turn`` /
+    ``search_conversation_history``, so TurnIndex's own self-contained ladder would
+    be a conflicting duplicate. Same shared store — this only toggles instruction
+    emission; the `search_index` / `read_turn` tools stay registered.
+    """
+    from dataclasses import replace
+
+    from paf.capabilities.turn_index import build_turn_index
+
+    return replace(build_turn_index(store), add_instructions=False)
 
 
 def build_runtime_capabilities(profile: AgentProfile) -> list:
@@ -85,11 +103,16 @@ def build_runtime_capabilities(profile: AgentProfile) -> list:
     ``StepPersistence`` — and that is exactly what it gets. Capability names
     without a Python builder are left for the spec-declared (YAML) path.
 
-    **Recall-instruction ownership:** when the profile allowlists BOTH ``TurnIndex``
-    and ``ConversationSearch``, ``TurnIndex`` owns the composite recall ladder
-    (recognition → search_index → read_turn → search_conversation_history) in its
-    ``get_instructions``, so ``ConversationSearch`` gets ``add_instructions=False``
-    here to keep that single ladder the ONLY recall guidance the model sees.
+    **Recall-instruction ownership:** exactly ONE capability emits the composite
+    recall ladder. When ``Memory`` is allowlisted it owns it (durable-fact +
+    past-turn + last-rung history, in ``_DEFAULT_GUIDANCE``), so ``TurnIndex`` and
+    ``ConversationSearch`` get ``add_instructions=False`` here to keep that single
+    ladder the ONLY recall guidance the model sees. When ``Memory`` is absent but
+    ``TurnIndex`` is present, ``TurnIndex`` owns it (recognition → search_index →
+    read_turn → search_conversation_history), and ``ConversationSearch`` alone is
+    suppressed. The suppression gates live here (build time) because capabilities
+    cannot see each other; ``add_instructions=False`` never disables tool
+    registration.
     """
     # Both builders are keyed by the SAME names a profile allowlists, so the
     # profile is the gatekeeper for each.
@@ -102,17 +125,26 @@ def build_runtime_capabilities(profile: AgentProfile) -> list:
         "Memory": _build_memory,
     }
     store = _build_store()
-    # TurnIndex emits the composite recall ladder that already covers
-    # search_conversation_history's slot, so when both are present suppress the
-    # harness ConversationSearch's own instruction scrap to avoid two conflicting
-    # fragments (the model was reproducing them back in registration order).
+    # Exactly ONE capability owns the composite recall ladder:
+    #   - Memory present       -> Memory's `_DEFAULT_GUIDANCE` is the ladder (durable
+    #     fact + past-turn + last-rung history); TurnIndex and ConversationSearch's
+    #     instruction scraps are suppressed so the model sees one ladder, not three.
+    #   - Memory absent        -> TurnIndex owns it (recognition -> search_index ->
+    #     read_turn -> search_conversation_history); ConversationSearch suppressed.
+    # The suppression gates live HERE (build time) because capabilities can't see
+    # each other; `add_instructions=False` only toggles instruction TEXT, never the
+    # tool registration (search_index / read_turn / search_conversation_history are
+    # still attached).
     has_turn_index = "TurnIndex" in profile.capability_names
+    has_memory = "Memory" in profile.capability_names
     capabilities = []
     for name, builder in builders.items():
         if name not in profile.capability_names:
             continue
-        if name == "ConversationSearch" and has_turn_index:
+        if name == "ConversationSearch" and (has_turn_index or has_memory):
             capabilities.append(_conversation_search_suppressed(store))
+        elif name == "TurnIndex" and has_memory:
+            capabilities.append(_turn_index_suppressed(store))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
