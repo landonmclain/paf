@@ -10,14 +10,22 @@ harness marker base means the existing strip sites (``turn_index/_markers``,
 ``search/_render``) already drop injected memory -- no strip churn.
 
 Decisions vs the harness original:
-- Only the ``file`` (``FileStore``: plain-Markdown files + a hidden SQLite
-  journal) and in-memory (``InMemoryStore``) backends are kept. SQLite and
-  Postgres stores are dropped (not used by paf; the FileStore journal already
-  uses sqlite internally).
-- ``from_spec`` accepts ``backend='memory' | 'file'`` only.
+- The store backends kept are ``InMemoryStore`` (process-lifetime), ``FileStore``
+  (plain-Markdown files + a hidden SQLite journal), and ``MarkdownStorage``
+  (plain `.md` files + a flat ``.memory-state.json`` CAS sidecar, written with
+  the foundation's atomic helpers). SQLite and Postgres stores are dropped (not
+  used by paf).
+- ``from_spec`` accepts ``backend='memory' | 'file' | 'markdown'``. Process
+  memory ignores ``directory``; ``file`` and ``markdown`` use it as the store
+  root (default ``.agent-memory``).
 
 - ``_store``     -- ``MemoryStore``/``SearchableMemoryStore`` protocols, CAS
                     mutation machinery, ``InMemoryStore``, ``FileStore``.
+- ``_markdown``  -- ``MarkdownStorage``: flat-file backend. Bodies real ``.md``,
+                    version/CAS in a flat sidecar, atomic writes via the
+                    foundation helpers. Deliberately does NOT ride the
+                    ``StorageService`` protocol (that seam models the
+                    derived/index shape; memory is authoritative/document).
 - ``_toolset``   -- ``MemoryToolset`` (write/read/delete/search_memory).
 - ``_capability``-- the ``Memory`` capability (drop-in for the harness).
 """
@@ -25,6 +33,7 @@ Decisions vs the harness original:
 from __future__ import annotations
 
 from ._capability import Memory
+from ._markdown import MarkdownStorage
 from ._store import (
     FileStore,
     InMemoryStore,
@@ -57,6 +66,7 @@ __all__ = [
     "FileStore",
     "InMemoryStore",
     "MAIN_FILENAME",
+    "MarkdownStorage",
     "Memory",
     "MemoryConflictError",
     "MemoryDeleteResult",

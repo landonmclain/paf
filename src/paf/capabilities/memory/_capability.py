@@ -277,7 +277,7 @@ class Memory(AbstractCapability[AgentDepsT]):
     def from_spec(
         cls,
         *,
-        backend: Literal['memory', 'file'] = 'memory',
+        backend: Literal['memory', 'file', 'markdown'] = 'memory',
         directory: str = '.agent-memory',
         agent_name: str = 'main',
         heading: str = '',
@@ -292,9 +292,16 @@ class Memory(AbstractCapability[AgentDepsT]):
         guidance: str | None = None,
         injection_errors: Literal['ignore', 'raise'] = 'ignore',
     ) -> Memory[AgentDepsT]:
-        """Construct a memory capability from serializable options."""
-        if backend != 'file' and directory != '.agent-memory':
-            raise ValueError('directory is only valid with backend="file"')
+        """Construct a memory capability from serializable options.
+
+        ``backend`` selects the durable store: ``memory`` (process-lifetime
+        ``InMemoryStore``), ``file`` (positive ``FileStore``), or ``markdown``
+        (``MarkdownStorage`` — plain `.md` bodies + a flat ``.memory-state.json``
+        CAS sidecar). ``directory`` is only valid for the ``file`` and
+        ``markdown`` backends.
+        """
+        if backend not in ('file', 'markdown') and directory != '.agent-memory':
+            raise ValueError('directory is only valid with backend="file" or backend="markdown"')
 
         if backend == 'memory':
             store: MemoryStore = InMemoryStore()
@@ -302,8 +309,10 @@ class Memory(AbstractCapability[AgentDepsT]):
             from ._store import FileStore
 
             store = FileStore(directory)
-        else:
-            raise ValueError(f'unknown backend {backend!r}; expected `memory`, `file`')
+        else:  # markdown
+            from ._markdown import MarkdownStorage
+
+            store = MarkdownStorage(directory)
         return cls(
             store=store,
             agent_name=agent_name,

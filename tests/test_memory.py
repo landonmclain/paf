@@ -215,3 +215,44 @@ def test_toolset_roundtrip_innem() -> None:
 def test_toolset_roundtrip_file(tmp_path: Path) -> None:
     cap = Memory(store=FileStore(tmp_path), agent_name="test-agent")
     asyncio.run(_toolset_roundtrip(cap))
+
+
+# ---------------------------------------------------------------------------
+# MarkdownStorage: the storage-seam backend (real .md bodies + flat sidecar)
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_roundtrip(tmp_path: Path) -> None:
+    """MarkdownStorage matches the MemoryStore protocol end-to-end.
+
+    Flat-file backend: bodies are plain inspectable `.md` files with a flat
+    ``.memory-state.json`` CAS sidecar per scope — no hidden journal, no seam
+    fabrication. (Memory is authoritative/document shape; the ``StorageService``
+    protocol models the derived/index shape and is deliberately not forced on it.)
+    """
+    from paf.capabilities.memory._markdown import MarkdownStorage
+
+    store = MarkdownStorage(tmp_path)
+    asyncio.run(_roundtrip(store))
+
+    # Real readable .md bodies (flat-file principle), not JSON blobs.
+    assert (tmp_path / "scope" / "postgres.md").is_file()
+    assert "the scheduler uses Postgres" in (tmp_path / "scope" / "postgres.md").read_text()
+    # Flat, diffable version sidecar — no sqlite journal.
+    state = tmp_path / "scope" / ".memory-state.json"
+    assert state.is_file()
+    assert "postgres.md" in state.read_text()
+
+
+def test_markdown_from_spec(tmp_path: Path) -> None:
+    """from_spec(backend='markdown') dispatches to MarkdownStorage, not FileStore."""
+    from paf.capabilities.memory._markdown import MarkdownStorage
+
+    cap = Memory.from_spec(backend="markdown", directory=str(tmp_path), agent_name="test-agent")
+    assert isinstance(cap.store, MarkdownStorage)
+    assert cap.store._root == tmp_path  # type: ignore[attr-defined]
+    # The old `file` backend is untouched.
+    from paf.capabilities.memory._store import FileStore
+
+    cap_file = Memory.from_spec(backend="file", directory=str(tmp_path), agent_name="test-agent")
+    assert isinstance(cap_file.store, FileStore)
