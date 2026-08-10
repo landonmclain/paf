@@ -27,6 +27,7 @@ from pydantic_ai_harness.compaction import (
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
 
+from paf.capabilities.memory import Memory
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.turn_index import TurnIndexCapability
 
@@ -52,4 +53,9 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # to share the single persistence store; has `from_spec`, so it can ALSO resolve
     # declaratively from a spec (`- TurnIndex: {index_dir: ...}`).
     "TurnIndex": TurnIndexCapability,
+    # Durable-facts notebook (MEMORY.md + topic files). Near-copy of the harness
+    # Memory capability; paf-owned so its injected block shares the one marker
+    # convention. GATED: allowlisted so a spec can opt-in, but NOT attached by
+    # default. Has `from_spec`, so it resolves declaratively (`- Memory: {...}`).
+    "Memory": Memory,
 }

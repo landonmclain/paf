@@ -57,6 +57,11 @@ ASSISTANT_PROFILE = AgentProfile(
         "StepPersistence",
         "ConversationSearch",
         "TurnIndex",
+        # Durable-facts notebook. AVAILABLE via a spec `- Memory: {...}` entry but
+        # NOT attached by default -- gated until BEAM shows it adds recall value
+        # (toggle it off/on per-beat without touching the ladder). Near-copy of the
+        # harness Memory; its injected block is marker-stripped by the shared convention.
+        "Memory",
         # Context compaction WITHOUT the summarizing tier (the LLM rewrite is
         # mutually exclusive with the <turn-index> one-liner block). Clamp /
         # clear-tool-results / sliding-window are pure context management and
