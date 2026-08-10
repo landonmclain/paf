@@ -5,8 +5,8 @@ Companion to :class:`~paf.capabilities.memory._store.InMemoryStore` and
 its version/CAS metadata in a hidden SQLite journal, ``MarkdownStorage`` keeps
 **everything flat and diffable**: the memory bodies are plain Markdown files and
 the version/CAS bookkeeping lives in a ``.memory-state.json`` sidecar per scope
-directory. Both are written atomically via ``agent_foundation``'s
-``write_atomic`` helper.
+directory. Both are written atomically via the local ``write_atomic`` helper
+(inline-copied from ``agent-foundation`` so memory carries no external dependency).
 
 Why it does *not* route through the ``StorageService`` *protocol*: that seam
 models the **derived/index** shape (append-only JSONL logs + ``BlockRef`` byte
@@ -36,8 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio.to_thread
-from agent_foundation.storage.atomic import read_json, write_atomic, write_json_atomic
-
+from ._atomic import read_json, write_atomic, write_json_atomic
 from ._store import (
     MemoryConflictError,
     MemoryFile,

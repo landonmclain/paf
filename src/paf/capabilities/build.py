@@ -24,14 +24,38 @@ its ``capability_names`` and that agent won't get it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from paf.capabilities.compaction import build_compaction
+from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.turn_index import build_turn_index
+from paf.config import PROJECT_ROOT
 
 # The profile name that gates context compaction in build_runtime_capabilities.
 _COMPACTION_CAPABILITY = "Compaction"
+
+# Where the Memory capability writes its readable `.md` bodies + `.memory-state.json`
+# CAS sidecar, anchored to the repo root (same convention as persistence/_STORE_DIR).
+_MEMORY_DIR = PROJECT_ROOT / Path("data/memory")
+
+
+def _build_memory(store) -> Memory:
+    """Markdown-backed durable memory (flat, diffable `.md` files + CAS sidecar).
+
+    ``store`` (the shared persistence store) is accepted for a uniform builder
+    signature but unused: memory owns its own ``MarkdownStorage`` rather than
+    writing into the run-events store. Un-gated for the M2 live-test beat so the
+    model can persist facts as inspectable files under ``data/memory/``.
+    """
+    return Memory.from_spec(
+        backend="markdown",
+        directory=str(_MEMORY_DIR),
+        agent_name="assistant",
+        inject_memory=True,
+    )
 
 
 def _conversation_search_suppressed(store):
@@ -72,6 +96,10 @@ def build_runtime_capabilities(profile: AgentProfile) -> list:
     builders = {
         **PERSISTENCE_BUILDERS,
         "TurnIndex": build_turn_index,
+        # Memory is its own store (MarkdownStorage), not the shared run store, so
+        # its builder ignores the arg — but keeping it here means the profile's
+        # `Memory` allowlist entry actually gets built (un-gated, M2 live-test beat).
+        "Memory": _build_memory,
     }
     store = _build_store()
     # TurnIndex emits the composite recall ladder that already covers

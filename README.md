@@ -149,6 +149,20 @@ into context (recognition beats recall), `read_turn` back into persistence, and
 capability. The summarizer is spec-declarable as a flat `summarizer:` block
 (leaf helper, not a registered capability).
 
+**Memory arm is now paf-owned and live.** `ConversationSearch` is a paf-local
+BM25 search (`paf.capabilities.search`, `search_conversation_history` tool), and
+`Memory` was re-homed from the harness into `paf.capabilities.memory` as a
+**paf-owned capability**, UN-GATED in the `assistant` profile. It runs
+`backend="markdown"`, writing readable `.md` bodies plus a flat
+`.memory-state.json` CAS sidecar under `data/memory/` (root-anchored). The three
+atomic helpers (`write_atomic` / `read_json` / `write_json_atomic`) are inlined
+into `paf/capabilities/memory/_atomic.py`, so **memory no longer depends on
+`agent-foundation`** — that "move memory onto the `StorageService` seam" idea was
+thrown out (memory is the authoritative/document shape; the seam is the
+derived/index shape — a mis-fit). `agent-foundation` remains a dependency for the
+**turn-index** store only. A root `conftest.py` wires `.env` into `os.environ` at
+import time so bare `pytest` and `pytest -m live` both run green.
+
 ## Roadmap
 
 M2's direction note + three design specs (the *living* plan, iterating as we
@@ -193,11 +207,13 @@ worker unchanged once the queue lands.
    - **P4 (opt)** — expose the codebase as an MCP tool-source.
    - **Rides the graph for free:** dead-code detection, docstring enrichment
      (both ideas, not decisions).
-4. **Memory arm (M2 §B second arm).** Adopt `pydantic_ai_harness.memory.Memory`
-   (`FileStore(...)` — flat-file notebook, the `system/`-vs-`reference/` split
-   built in); layer SteadierPath's **LangMem** extractor + a background
-   reconciler on top, writing through the same store. mem0 rejected (paywall on
-   good extraction), Graphiti not-a-fit for flat-file-first.
+4. **Memory arm (M2 §B second arm) — live.** `Memory` is re-homed as a **paf-owned
+   capability** (`paf/capabilities/memory/`), un-gated, running `backend="markdown"`
+   → readable `.md` bodies + flat `.memory-state.json` CAS sidecar (atomics inlined,
+   `agent-foundation` dropped). Next on this arm: layer SteadierPath's **LangMem**
+   extractor + a **background reconciler** (the §B "off the critical path" write)
+   on top; mem0 rejected (paywall on good extraction), Graphiti not-a-fit for
+   flat-file-first.
 5. **BEAM validation harness (M2 §D, the north-star).** A `bench/beam/` driver
    (judge ≠ answerer, stable judge) running a single-agent, three-context
    ablation — baseline (`message_history=`), working-memory (+background
