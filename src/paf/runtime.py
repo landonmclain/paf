@@ -39,19 +39,19 @@ from pydantic_ai import (
     PartStartEvent,
 )
 from pydantic_ai.messages import (
-    TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
 )
+from pydantic_ai_harness.step_persistence import continue_run
 
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
+    root_span,
     setup_observability,
     shutdown_observability,
 )
 from paf.specs import build_agent
-from pydantic_ai_harness.step_persistence import continue_run
 
 
 @dataclass(frozen=True)
@@ -206,61 +206,72 @@ class Session:
         await self._ensure_resumed(cid)
 
         result: AgentRunResult | None = None
-        async with self._agent.run_stream_events(
-            prompt,
-            message_history=self.history,
-            conversation_id=cid,
-        ) as event_stream:
-            async for event in event_stream:
-                if isinstance(event, PartStartEvent):
-                    # First chunk of a part arrives in .part; emit it or the
-                    # leading text is silently dropped (cli_demo tags this).
-                    # Tag by part kind, not by content, so a thinking part's
-                    # opening token isn't mistaken for the answer (the model can
-                    # stream the first reasoning token before switching over).
-                    part = event.part
-                    delta = _part_leading_text(part)
-                    if delta:
-                        kind = "thinking" if isinstance(part, ThinkingPart) else "text"
-                        yield StreamEvent(kind=kind, text=delta)
-                elif isinstance(event, PartDeltaEvent):
-                    if isinstance(event.delta, TextPartDelta):
-                        yield StreamEvent(kind="text", text=event.delta.content_delta)
-                    elif isinstance(event.delta, ThinkingPartDelta):
+        # Trace hygiene: open ONE root span for the whole turn so Langfuse's
+        # trace-list view gets a non-empty Input. pydantic-ai only emits
+        # gen_ai.input.messages/output.messages, which Langfuse does not map --
+        # we set langfuse.observation.input/output here (SDK-free; see
+        # instrumentation.root_span). Input is known up front; output is set once
+        # the settled AgentRunResult lands, before the span closes.
+        with root_span(
+            f"paf.run.{cid or 'default'}",
+            **({"langfuse.observation.input": _run_input(prompt, self.history)}),
+        ) as _span:
+            async with self._agent.run_stream_events(
+                prompt,
+                message_history=self.history,
+                conversation_id=cid,
+            ) as event_stream:
+                async for event in event_stream:
+                    if isinstance(event, PartStartEvent):
+                        # First chunk of a part arrives in .part; emit it or the
+                        # leading text is silently dropped (cli_demo tags this).
+                        # Tag by part kind, not by content, so a thinking part's
+                        # opening token isn't mistaken for the answer (the model can
+                        # stream the first reasoning token before switching over).
+                        part = event.part
+                        delta = _part_leading_text(part)
+                        if delta:
+                            kind = "thinking" if isinstance(part, ThinkingPart) else "text"
+                            yield StreamEvent(kind=kind, text=delta)
+                    elif isinstance(event, PartDeltaEvent):
+                        if isinstance(event.delta, TextPartDelta):
+                            yield StreamEvent(kind="text", text=event.delta.content_delta)
+                        elif isinstance(event.delta, ThinkingPartDelta):
+                            yield StreamEvent(
+                                kind="thinking", text=event.delta.content_delta
+                            )
+                        # ToolCallPartDelta: args stream in; the full args are shown
+                        # on the FunctionToolCallEvent line instead (as cli_demo does).
+                    elif isinstance(event, FunctionToolCallEvent):
                         yield StreamEvent(
-                            kind="thinking", text=event.delta.content_delta
+                            kind="tool_call",
+                            tool_name=str(event.part.tool_name or ""),
+                            args=(
+                                event.part.args
+                                if isinstance(event.part.args, str)
+                                else str(event.part.args)
+                            ),
                         )
-                    # ToolCallPartDelta: args stream in; the full args are shown
-                    # on the FunctionToolCallEvent line instead (as cli_demo does).
-                elif isinstance(event, FunctionToolCallEvent):
-                    yield StreamEvent(
-                        kind="tool_call",
-                        tool_name=str(event.part.tool_name or ""),
-                        args=(
-                            event.part.args
-                            if isinstance(event.part.args, str)
-                            else str(event.part.args)
-                        ),
-                    )
-                elif isinstance(event, FunctionToolResultEvent):
-                    yield StreamEvent(
-                        kind="tool_result",
-                        tool_name=str(event.part.tool_name or ""),
-                        text=(
-                            event.part.content
-                            if isinstance(event.part.content, str)
-                            else str(event.part.content or "")
-                        ),
-                    )
-                elif isinstance(event, AgentRunResultEvent):
-                    result = event.result
-
+                    elif isinstance(event, FunctionToolResultEvent):
+                        yield StreamEvent(
+                            kind="tool_result",
+                            tool_name=str(event.part.tool_name or ""),
+                            text=(
+                                event.part.content
+                                if isinstance(event.part.content, str)
+                                else str(event.part.content or "")
+                            ),
+                        )
+                    elif isinstance(event, AgentRunResultEvent):
+                        result = event.result
+                        # Set the trace output NOW, while the root span is still
+                        # open -- the settled answer is the only complete output.
+                        _span.set_attribute("langfuse.observation.output", _run_output(result))
         assert result is not None, "run_stream_events ended before AgentRunResultEvent"
         self.last_result = result
         # ACKNOWLEDGE (cli_demo): result.new_messages() is ONLY this turn; older
         # history lives in self.history. Accumulate, don't overwrite.
         self.history = [*self.history, *result.new_messages()]
-
     async def run(
         self,
         prompt: str,
@@ -317,3 +328,20 @@ def _part_leading_text(part: Any) -> str:
     if isinstance(content, list):
         return "".join(str(chunk) for chunk in content)
     return ""
+
+
+def _run_input(prompt: str, history: list) -> dict:
+    """Serialize a turn's input for the Langfuse trace root span.
+
+    ``langfuse.observation.input`` is what Langfuse's OTLP mapper shows in the
+    trace-list Input column. pydantic-ai's own ``gen_ai.input.messages`` isn't
+    mapped by Langfuse, so we capture the prompt + history here. Messages are
+    reduced to a compact, JSON-safe shape (role + one-line summary) rather than
+    the raw ``ModelRequest``/``ModelResponse`` objects, which don't serialize.
+    """
+    return {"prompt": prompt, "history": list(history)}
+
+
+def _run_output(result: Any) -> dict:
+    """Serialize a turn's settled output for the Langfuse trace root span."""
+    return {"output": result.output if result is not None else None}

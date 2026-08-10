@@ -6,9 +6,54 @@ at our self-hosted Langfuse and instrument pydantic-ai. Fully local.
 
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
 
 from paf.config import settings
+
+
+@contextmanager
+def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterator[Any]:
+    """Open the trace's ROOT span and yield it, so the caller can attach Langfuse I/O.
+
+    Langfuse's OTLP mapper reads ``langfuse.observation.input`` /
+    ``langfuse.observation.output`` for the trace/observation I/O columns -- but
+    pydantic-ai only emits ``gen_ai.input.messages`` / ``gen_ai.output.messages``
+    (which Langfuse does NOT map), so without this root span every paf trace shows
+    an EMPTY ``Input`` in the trace-list view. This is the documented "trace
+    hygiene" fix (option #1, SDK-free): wrap the whole run in one root span that
+    sets both attributes. See Portfolio-GitHub/Turn-Index-Testing#Trace hygiene.
+
+    ``name`` is the span name (convention ``paf.run.<conversation_id>``).
+    ``tracer`` lets callers inject a specific tracer (used by tests to capture
+    spans in-memory); defaults to the process-wide tracer. Attributes may be set
+    either here (known before the run) or on the yielded span later (e.g.
+    ``output`` once the settled result lands). No-op when tracing is disabled --
+    returns a null span so callers need no branch.
+    """
+    from opentelemetry import trace
+
+    tracer = tracer or trace.get_tracer("paf")
+    with tracer.start_as_current_span(name) as span:
+        for key, value in attributes.items():
+            span.set_attribute(key, _json_dumps(value))
+        yield span
+
+
+def _json_dumps(value: Any) -> str:
+    """Serialize span attribute values the way Langfuse's OTel mapper expects.
+
+    Attribute values must be JSON-encodable strings; dicts/list-scalars are sent
+    as their JSON text so Langfuse's ``langfuse.observation.*`` parser can decode
+    them back into structured input/output rather than a bare repr.
+    """
+    try:
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def setup_observability() -> bool:
