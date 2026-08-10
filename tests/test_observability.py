@@ -68,13 +68,46 @@ def test_root_span_values_are_json_serialized(captured) -> None:
     with root_span(
         "paf.run.x",
         _tracer(captured),
-        **({"langfuse.observation.input": {"prompt": "remember", "conversation_id": "x"}}),
+        **( {"langfuse.observation.input": {"prompt": "remember", "conversation_id": "x"}}),
     ):
         pass
     captured.force_flush()
     attrs = _attrs(captured.get_finished_spans()[0])
     decoded = json.loads(attrs["langfuse.observation.input"])
     assert decoded == {"prompt": "remember", "conversation_id": "x"}, decoded
+
+
+def test_root_span_non_observation_values_are_set_raw(captured) -> None:
+    """Attributes other than langfuse.observation.* must be stored RAW.
+
+    Regression guard: ``langfuse.session.id`` (and any other non-observation
+    attribute) must reach the span as the exact string given -- NOT wrapped in
+    JSON quotes. If ``root_span`` JSON-encodes every attribute, a session id
+    ``beam-lite-abc`` is stored as ``"beam-lite-abc"`` (with embedded quote
+    chars), so Langfuse stores that quoted string as the session key and
+    ``traces?sessionId=beam-lite-abc`` returns nothing -- silently breaking
+    session grouping. Only the ``langfuse.observation.*`` keys feed Langfuse's
+    structured I/O parser and need JSON encoding.
+    """
+    with root_span(
+        "paf.run.session-regression",
+        _tracer(captured),
+        **{
+            "langfuse.session.id": "beam-lite-20260810-110122",
+            "langfuse.observation.input": {"prompt": "hi", "conversation_id": "x"},
+        },
+    ):
+        pass
+    captured.force_flush()
+    attrs = _attrs(captured.get_finished_spans()[0])
+
+    # Session id must be the EXACT raw string (no JSON quotes, no escaping).
+    assert attrs["langfuse.session.id"] == "beam-lite-20260810-110122", attrs
+    # While observation input is still JSON-serialized for Langfuse's parser.
+    assert json.loads(attrs["langfuse.observation.input"]) == {
+        "prompt": "hi",
+        "conversation_id": "x",
+    }
 
 
 def test_output_attribute_must_be_json_string_not_raw_dict(captured) -> None:

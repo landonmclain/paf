@@ -39,7 +39,15 @@ def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterat
     tracer = tracer or trace.get_tracer("paf")
     with tracer.start_as_current_span(name) as span:
         for key, value in attributes.items():
-            span.set_attribute(key, _json_dumps(value))
+            # Only the langfuse.observation.* keys feed Langfuse's structured
+            # I/O parser and need JSON encoding. All OTHER attributes (notably
+            # langfuse.session.id) must be set as RAW strings -- JSON-encoding
+            # a session id would store '"foo"' (with embedded quotes) and break
+            # downstream filters/grouping on that exact value.
+            if key.startswith("langfuse.observation."):
+                span.set_attribute(key, _json_dumps(value))
+            else:
+                span.set_attribute(key, value)
         yield span
 
 
