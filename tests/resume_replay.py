@@ -186,6 +186,53 @@ def find_last_user_prompt(history: list[ModelMessage]) -> tuple[int, str]:
     return last_i, last_text
 
 
+def _run_cutoff_ordered_run_ids(
+    runs: list, question_run_id: str,
+) -> set[str]:
+    """Ordered run ids up to (excluding) the question-run -> the PAST set to keep.
+
+    Rows whose `run_id` is strictly before `question_run_id` in start-order are
+    PAST (seed, safe to retrieve). The question run and any run after it are the
+    answer/recall run(s) -> drop.
+    """
+    ordered = [r.run_id for r in sorted(runs, key=lambda r: (r.started_at or ""))]
+    if question_run_id not in ordered:
+        # Fallback: treat everything as past (no boundary known).
+        return set(ordered)
+    i = ordered.index(question_run_id)
+    return set(ordered[:i])
+
+
+def _truncate_index_to_replay(index_dir: Path, keep_run_ids: set[str]) -> int:
+    """Filter every turn_index.jsonl under `index_dir` down to rows whose run_id
+    is in `keep_run_ids` (runs strictly before the recall question).
+
+    Rows for runs NOT in the past set are future look-ahead (the recall answer
+    turn's own self-summary) and would leak the answer to `search_index`. We drop
+    them so the resumed run retrieves only what a clean pre-question run could
+    know. Rows of other conversations we aren't testing are dropped too -- they
+    were never queried anyway (`read_all` filters by conversation).
+
+    Rewrites the file in place with the surviving rows. Returns rows dropped.
+    """
+    total_dropped = 0
+    for jsonl in index_dir.rglob("turn_index.jsonl"):
+        out_lines: list[str] = []
+        for line in jsonl.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("run_id") in keep_run_ids:
+                out_lines.append(line)
+            else:
+                total_dropped += 1
+        jsonl.write_text("\n".join(out_lines) + ("\n" if out_lines else ""))
+    return total_dropped
+
+
 # ---------------------------------------------------------------------------
 # Agent construction (mirrors tiny_lmem.build_agent, correct real summarizer)
 # ---------------------------------------------------------------------------
@@ -342,6 +389,21 @@ async def run_replay(args) -> int | dict:
     for src, dst in ((run_dir / "index", scratch_index), (run_dir / "memory", scratch_memory)):
         if src.exists():
             shutil.copytree(src, dst)
+
+    # Truncate the copied TURN INDEX to just before the resume point.
+    #
+    # The turn_index.jsonl is an append-only journal ordered by wall-clock write
+    # time. The run that ASKS the recall question (and any run after it) carries
+    # the answer turn's own self-summary -- pure FUTURE look-ahead that would leak
+    # the answer to `search_index`. We keep only rows from runs that START
+    # STRICTLY BEFORE the question's run, so a resumed run retrieves only what a
+    # clean pre-question run could know. Rows of other conversations we aren't
+    # testing are dropped too -- they were never queried anyway (`read_all`
+    # filters by conversation), so cutting them is harmless.
+    question_run_id = getattr(cleaned[last_i], "run_id", None) or ""
+    runs = [r for r in await source.list_runs() if r.conversation_id == conv_id]
+    keep_run_ids = _run_cutoff_ordered_run_ids(runs, question_run_id)
+    _truncate_index_to_replay(scratch_index, keep_run_ids)
 
     agent = build_resume_agent(store, scratch_index, scratch_memory, guidance,
                                scratch_store=scratch_store)
