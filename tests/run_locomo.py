@@ -45,8 +45,6 @@ from pathlib import Path
 
 from pydantic_ai import Agent, AgentRunResultEvent
 from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
-
-from tests import locomo_scoring as scoring  # noqa: E402  (module under tests/)
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
@@ -58,7 +56,14 @@ from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 from paf.capabilities.memory import Memory
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
-from paf.observability.instrumentation import _json_dumps, root_span
+from paf.observability.instrumentation import (
+    _json_dumps,
+    root_span,
+    setup_observability,
+    shutdown_observability,
+)
+from tests import locomo_scoring as scoring  # noqa: E402  (module under tests/)
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -274,6 +279,11 @@ def main(argv: list[str] | None = None) -> dict:
     session = f"locomo-{time.strftime('%Y%m%d-%H%M%S')}"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    traced = setup_observability()
+    if not traced:
+        print("[run_locomo] WARNING: Langfuse tracing NOT configured — run will "
+              "produce JSON/artifacts but NO Langfuse traces.")
+
     # Distribute the total question budget across conversations (round-robin by
     # pool size so a big conversation doesn't starve the rest).
     per_conv_pools = []
@@ -375,6 +385,7 @@ def main(argv: list[str] | None = None) -> dict:
                 "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
                 "sw_keep": LOCOMO_SW_KEEP,
             },
+            "traced": traced,
             "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         },
         "seed": {
@@ -431,6 +442,8 @@ def main(argv: list[str] | None = None) -> dict:
     out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
     print(f"\n[written] {out}")
+    if traced:
+        shutdown_observability()  # flush buffered OTel spans before process exit
     return result
 
 

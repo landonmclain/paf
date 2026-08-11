@@ -51,7 +51,12 @@ from paf.capabilities.turn_index import (
     TurnIndexStore,
     TurnSummarizer,
 )
-from paf.observability.instrumentation import _json_dumps, root_span
+from paf.observability.instrumentation import (
+    _json_dumps,
+    root_span,
+    setup_observability,
+    shutdown_observability,
+)
 
 # ---------------------------------------------------------------- config ----
 SUBJECT_MODEL = os.environ.get(
@@ -245,6 +250,11 @@ def main() -> int:
     print(f"question_id={qid} type={q['question_type']} seed_turns={n_turns} recall='{q['question'][:60]}…'")
     print(f"wire_summarizer={WIRE_SUMMARIZER} model={SUBJECT_MODEL}")
 
+    traced = setup_observability()
+    if not traced:
+        print("[tiny_lmem] WARNING: Langfuse tracing NOT configured — run will "
+              "produce JSON/artifacts but NO Langfuse traces.")
+
     t0 = time.time()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     run_ts = time.strftime("%Y%m%d-%H%M%S")
@@ -271,6 +281,7 @@ def main() -> int:
             "sw_keep": LOCOMO_SW_KEEP,
         },
         "max_lines_index_tail": MAX_LINES,
+        "traced": traced,
         "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }, indent=2))
     cid = f"lmem-{uuid.uuid4().hex[:8]}"
@@ -320,6 +331,7 @@ def main() -> int:
         "elapsed_s": round(elapsed, 2),
         "pass": ok,
         "retrieved": retrieved,
+        "traced": traced,
     }
     out_path = RESULTS_DIR / f"tiny-lmem-{run_ts}.json"
     out_path.write_text(json.dumps(result, indent=2))
@@ -331,7 +343,9 @@ def main() -> int:
     print(f"judge: {'CORRECT' if verdict['correct'] else 'WRONG'} (raw={verdict['raw']!r}, type={q['question_type']})")
     print(f"elapsed: {elapsed:.1f}s")
 
-    print(f"\n=> {'PASS' if ok else 'FAIL'} (correct={verdict['correct']}, retrieved={'yes' if retrieved else 'no'})")
+    print(f"\n=> {'PASS' if ok else 'FAIL'} (correct={verdict['correct']}, retrieved={'yes' if retrieved else 'no'})\n")
+    if traced:
+        shutdown_observability()  # flush buffered OTel spans before process exit
     return 0 if ok else 1
 
 

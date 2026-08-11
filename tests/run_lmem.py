@@ -39,20 +39,18 @@ Outputs JSON to tests/results/lmem-<ts>.json.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
 import uuid
 from pathlib import Path
 
-from pydantic_ai import Agent, AgentRunResultEvent
-from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
+from pydantic_ai import Agent
+from pydantic_ai_harness.step_persistence import FileStepStore
 
-# Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
-from tests.run_locomo import (
-    _build_agent,
-    _run_turn,
+from paf.observability.instrumentation import (
+    setup_observability,
+    shutdown_observability,
 )
 
 # Official LongMemEval judge scaffold (verbatim prompts + label parsing).
@@ -63,17 +61,11 @@ from tests.locomo_scoring import (
     lme_parse_label,
 )
 
-from pydantic_ai_harness.compaction import (
-    ClampOversizedMessages,
-    ClearToolResults,
-    SlidingWindowCompaction,
-    TieredCompaction,
+# Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
+from tests.run_locomo import (
+    _build_agent,
+    _run_turn,
 )
-from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
-
-from paf.capabilities.memory import Memory
-from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
-from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
 
 # ---------------------------------------------------------------------------
 # Config
@@ -279,6 +271,11 @@ def main(argv: list[str] | None = None) -> dict:
     session = f"lmem-{time.strftime('%Y%m%d-%H%M%S')}"
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    traced = setup_observability()
+    if not traced:
+        print("[run_lmem] WARNING: Langfuse tracing NOT configured — run will "
+              "produce JSON/artifacts but NO Langfuse traces.")
+
     all_seed_rows: list[dict] = []
     all_recall_rows: list[dict] = []
 
@@ -391,6 +388,7 @@ def main(argv: list[str] | None = None) -> dict:
                 "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
                 "sw_keep": LOCOMO_SW_KEEP,
             },
+            "traced": traced,
             "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         },
         "seed": {
@@ -445,6 +443,8 @@ def main(argv: list[str] | None = None) -> dict:
     out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
     print(f"\n[written] {out}")
+    if traced:
+        shutdown_observability()  # flush buffered OTel spans before process exit
     return result
 
 
