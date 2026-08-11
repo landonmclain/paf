@@ -45,7 +45,12 @@ _DEFAULT_GUIDANCE = (
     'Only if rungs 1-3 came up empty.\n'
     'Skip rungs that do not apply: a "what is our convention?" goes to 2; a "what did '
     'we do [when]?" goes to 3. Do not turn a durable-fact lookup into a history dig.\n'
-    'Keep memory curated — update instead of duplicating, delete what turns out wrong. '
+    'Keep memory curated — update instead of duplicating, delete what turns out wrong. '\
+    'When the user states a figure or fact anew that conflicts with what memory already '\
+    'holds, treat the MOST RECENTLY stated value as the current truth: `write_memory` the '\
+    'newer value (and, when it clearly supersedes the old, replace/update the old entry '\
+    'rather than piling up a duplicate). Do not keep answering from a stale memory value '\
+    'after the user has given a newer one; say so when you update it. '\
         'Never claim something was remembered or saved unless you actually called '
         '`write_memory` in this turn.\n'
         'CAPTURE as you go: after answering, `write_memory` anything you are supposed to '
