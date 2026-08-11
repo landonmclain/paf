@@ -279,7 +279,7 @@ def _judge(challenge: Challenge, datum: dict, session: str) -> dict:
     """Score one answer: per-atom 0/0.5/1 + grounding tag, via the judge model."""
     from pydantic_ai import Agent
 
-    atoms = " | ".join(challenge.ground_truth_atoms)
+    atoms = " | ".join(str(a) for a in challenge.ground_truth_atoms)
     judge = Agent(
         JUDGE_MODEL,
         name="beam-lite-judge",
@@ -328,9 +328,11 @@ def _judge(challenge: Challenge, datum: dict, session: str) -> dict:
 
     atom_scores = {a.get("atom", ""): float(a.get("score", 0.0)) for a in blob.get("atoms", [])}
     # Default sensible: an atom not returned by the judge scores 0.
+    # Normalize atoms to str keys so int/label golds match the judge's str output.
     out = []
     for atom in challenge.ground_truth_atoms:
-        out.append({"atom": atom, "score": atom_scores.get(atom, 0.0)})
+        key = str(atom)
+        out.append({"atom": key, "score": atom_scores.get(key, 0.0)})
     return {
         "atoms": out,
         "grounding": blob.get("grounding", "guess"),
@@ -343,10 +345,10 @@ def _judge(challenge: Challenge, datum: dict, session: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _suite(session: str) -> list[dict]:
+def _suite(session: str, modes: tuple[str, ...] = ARMS) -> list[dict]:
     rows: list[dict] = []
     for challenge in CHALLENGES:
-        for mode in ARMS:
+        for mode in modes:
             cid = f"beam-lite-{challenge.id.lower()}-{mode}-{uuid.uuid4().hex[:8]}"
             datum = _run_challenge(challenge, mode=mode, cid=cid, session=session)
             datum["judged"] = _judge(challenge, datum, session)
@@ -357,8 +359,8 @@ def _suite(session: str) -> list[dict]:
     return rows
 
 
-def _aggregate(rows: list[dict]) -> dict:
-    by_arm = {arm: [] for arm in ARMS}
+def _aggregate(rows: list[dict], modes: tuple[str, ...] = ARMS) -> dict:
+    by_arm = {arm: [] for arm in modes}
     for r in rows:
         by_arm[r["arm"]].append(r)
 
@@ -398,27 +400,46 @@ def _aggregate(rows: list[dict]) -> dict:
             },
         }
 
-    base = arm_stats(by_arm["without"])
-    arms = {arm: arm_stats(by_arm[arm]) for arm in ARMS}
-    return {
+    base = arm_stats(by_arm["without"]) if "without" in by_arm and by_arm["without"] else None
+    arms = {arm: arm_stats(by_arm[arm]) for arm in modes}
+    out = {
         "subject": SUBJECT_MODEL,
         "judge": JUDGE_MODEL,
         "max_lines": MAX_LINES,
         "arms": arms,
-        "delta_vs_baseline": {
+    }
+    # delta_vs_baseline is only meaningful on a multi-arm run that includes
+    # 'without'. A single-arm run (--arm X, parallel shard) reports its own arm
+    # stats but no delta; merge the shards together before computing deltas.
+    delta_arms = [a for a in ARMS[1:] if a in arms]
+    if base is not None and delta_arms:
+        out["delta_vs_baseline"] = {
             arm: {
                 "tool_gate_rate": round(arms[arm]["tool_gate_rate"] - base["tool_gate_rate"], 4),
                 "atom_mean": round(arms[arm]["atom_mean"] - base["atom_mean"], 4),
                 "recall_tokens": arms[arm]["tokens"]["recall_total"] - base["tokens"]["recall_total"],
                 "total_tokens": arms[arm]["tokens"]["total"] - base["tokens"]["total"],
             }
-            for arm in ARMS[1:]
-        },
-    }
+            for arm in delta_arms
+        }
+    return out
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+
     from dotenv import load_dotenv
+
+    ap = argparse.ArgumentParser(description="Beam Lite graded runner (C1-C4 ladder + arms).")
+    ap.add_argument(
+        "--arm",
+        action="append",
+        choices=list(ARMS),
+        help=f'Run only this arm(s); repeatable. Default: all arms ("{", ".join(ARMS)}"). '
+        "Enables running each arm as its own parallel process."
+    )
+    args = ap.parse_args(argv)
+    modes = tuple(args.arm) if args.arm else ARMS
 
     load_dotenv()  # OPENROUTER_API_KEY (+ Langfuse keys/endpoint for tracing)
 
@@ -432,12 +453,13 @@ def main() -> None:
     # One Langfuse session per run: all traces in this execution share this id so
     # the whole benchmark collapses into ONE expandable session in Langfuse.
     session = f"beam-lite-{stamp}"
-    rows = _suite(session)
-    agg = _aggregate(rows)
+    rows = _suite(session, modes=modes)
+    agg = _aggregate(rows, modes)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS_DIR / f"beam-lite-{stamp}.json"
-    payload = {"meta": {"created": stamp, "elapsed_s": round(time.time() - t0, 1), "langfuse_session": session}, **agg, "rows": rows}
+    suffix = "-".join(modes) if len(modes) < len(ARMS) else "all"
+    out_path = RESULTS_DIR / f"beam-lite-{suffix}-{stamp}.json"
+    payload = {"meta": {"created": stamp, "elapsed_s": round(time.time() - t0, 1), "langfuse_session": session, "arms_run": list(modes)}, **agg, "rows": rows}
     out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
     print(f"wrote {out_path}")
     print(json.dumps(agg, indent=2, ensure_ascii=False))
