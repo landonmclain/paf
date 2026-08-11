@@ -56,9 +56,9 @@ from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 from paf.capabilities.memory import Memory
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.turn_index import (
-    TurnSummarizer,
     TurnIndexCapability,
     TurnIndexStore,
+    TurnSummarizer,
 )
 from paf.observability.instrumentation import (
     _json_dumps,

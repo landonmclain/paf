@@ -186,7 +186,7 @@ def _seed_turns(q: dict) -> tuple[list[dict], list[str]]:
     session_ids = q["haystack_session_ids"]
     # zip sessions with (date, session_id) and sort by parsed date.
     tagged = []
-    for sess, dstr, sid in zip(sessions, dates, session_ids):
+    for sess, dstr, sid in zip(sessions, dates, session_ids, strict=True):
         tagged.append((_parse_dt(dstr), dstr, sid, sess))
     tagged.sort(key=lambda x: x[0])
     turns: list[dict] = []
@@ -275,6 +275,12 @@ def main(argv: list[str] | None = None) -> dict:
     if not traced:
         print("[run_lmem] WARNING: Langfuse tracing NOT configured — run will "
               "produce JSON/artifacts but NO Langfuse traces.")
+    else:
+        print(f"[run_lmem] tracing ON → Langfuse (session={session})", flush=True)
+    print(f"[run_lmem] questions={len(questions)} subject={SUBJECT_MODEL} "
+          f"judge={JUDGE_MODEL} max_lines={MAX_LINES} "
+          f"target_tokens={LOCOMO_TARGET_TOKENS} "
+          f"real_summarizer=TurnSummarizer@{SUBJECT_MODEL}", flush=True)
 
     all_seed_rows: list[dict] = []
     all_recall_rows: list[dict] = []
@@ -312,6 +318,12 @@ def main(argv: list[str] | None = None) -> dict:
         turns, answer_sids = _seed_turns(q)
         # Cap seeding cost (LongMemEval oracle is small, but be safe).
         turns = turns[:LME_MAX_TURNS_PER_QUESTION]
+        print(
+            f"[lmem] q{qi}/{len(questions)} {q['question_type']} "
+            f"{q.get('question_id', '?')} seeding {len(turns)} turns — "
+            f"recall: {q['question'][:48]!r}",
+            flush=True,
+        )
 
         # ---- Seed the haystack sessions ------------------------------
         for i, turn in enumerate(turns, start=1):
@@ -322,6 +334,11 @@ def main(argv: list[str] | None = None) -> dict:
             row["dia_id"] = turn["dia_id"]
             row["conv_id"] = cid
             all_seed_rows.append(row)
+            if i % 5 == 0 or i == len(turns):
+                print(
+                    f"[lmem]   q{qi} seeded {i}/{len(turns)}",
+                    flush=True,
+                )
 
         # ---- Recall: cold-start the question -------------------------
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
@@ -347,6 +364,13 @@ def main(argv: list[str] | None = None) -> dict:
         row["retrieval"] = _retrieval(row, _gold_session_probes(q))
 
         all_recall_rows.append(row)
+        print(
+            f"[lmem] q{qi}/{len(questions)} DONE type={q['question_type']} "
+            f"judge={'CORRECT' if row['judged'].get('label') else 'wrong'} "
+            f"retrieved={row['retrieval'].get('tool_surfaced', '?')} "
+            f"({row['text'][:60]!r})",
+            flush=True,
+        )
 
     recall_rows = all_recall_rows
     seed_rows = all_seed_rows
