@@ -59,6 +59,10 @@ _DEFAULT_GUIDANCE = (
 _MEMORY_DATA_PREFIX = '<memory>\n'
 _MEMORY_DATA_SUFFIX = '\n</memory>'
 _MEMORY_PART_METADATA = 'pydantic-ai-harness.memory.v1'
+# Injected when the scope has no `MEMORY.md` and no topic files yet. Keeps the
+# durable-notebook surface present from turn one so the model is cued to
+# maintain it (and to make the first write) instead of never seeing it at all.
+_EMPTY_MAIN = 'No memories recorded/written yet.'
 
 
 @dataclass
@@ -229,17 +233,24 @@ class Memory(AbstractCapability[AgentDepsT]):
             content_budget = (
                 self.max_tokens * 4 - len(guidance or '') - len(_MEMORY_DATA_PREFIX) - len(_MEMORY_DATA_SUFFIX)
             )
-            if content_budget > 0 and (main_content or subfiles or files_truncated):
-                rendered = render_memory_prompt(
-                    main_content,
-                    subfiles,
-                    heading=self.heading,
-                    guidance='',
-                    max_lines=self.max_lines,
-                    max_tokens=max(1, content_budget // 4),
-                    main_truncated=main is not None and main.truncated,
-                    files_truncated=files_truncated,
-                )[:content_budget]
+            if content_budget > 0:
+                if main_content or subfiles or files_truncated:
+                    rendered = render_memory_prompt(
+                        main_content,
+                        subfiles,
+                        heading=self.heading,
+                        guidance='',
+                        max_lines=self.max_lines,
+                        max_tokens=max(1, content_budget // 4),
+                        main_truncated=main is not None and main.truncated,
+                        files_truncated=files_truncated,
+                    )[:content_budget]
+                    if not rendered.strip():
+                        rendered = _EMPTY_MAIN
+                else:
+                    # Empty scope: still show the notebook surface so the model
+                    # is cued to maintain it and make the first write.
+                    rendered = _EMPTY_MAIN
                 rendered = f'{_MEMORY_DATA_PREFIX}{rendered}{_MEMORY_DATA_SUFFIX}'
                 part = UserPromptPart([TextContent(rendered, metadata=marker)])
                 latest = request_context.messages[-1]

@@ -28,6 +28,7 @@ import asyncio
 from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, TextContent, UserPromptPart
+from pydantic_ai.models import ModelRequestContext, ModelRequestParameters
 
 from paf.capabilities.memory import (
     MAIN_FILENAME,
@@ -102,6 +103,75 @@ def test_memory_injection_never_leaks_into_search_corpus() -> None:
     # The injected memory block is gone.
     assert "scheduler was moved to its own box" not in rendered
     assert "<memory>" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Empty-scope injection -- the memory surface is present even before any memory
+# ---------------------------------------------------------------------------
+
+
+async def _run_before_model_request(cap: Memory) -> ModelRequest:
+    """Call `before_model_request` on a fresh user turn, return the mutated request."""
+    ctx = _FakeCtx(run_id="run-empty", tool_call_id="unused")
+    req = ModelRequest(parts=[UserPromptPart("first turn")])
+    mrc = ModelRequestContext(
+        model=object(),  # type: ignore[arg-type] - only threaded through, never used
+        messages=[req],
+        model_settings=None,
+        model_request_parameters=ModelRequestParameters(),
+    )
+    out = await cap.before_model_request(ctx, mrc)  # type: ignore[arg-type] - test stub ctx is duck-typed
+    return out.messages[-1]  # type: ignore[return-value] - always the user ModelRequest we passed
+
+
+def _injected_text(req: ModelRequest) -> str:
+    """Concatenate the TextContent parts (the injected memory block) of a request."""
+    return "\n".join(
+        c.content
+        for p in req.parts
+        if hasattr(p, "content") and isinstance(p.content, list)
+        for c in p.content
+        if isinstance(c, TextContent)
+    )
+
+
+def test_empty_scope_injects_placeholder_memory_block() -> None:
+    """A brand-new scope still shows the `<memory>` surface with an empty note.
+
+    Guards the cold-start deadlock: with no `MEMORY.md` and no topic files the
+    old code injected nothing, so the model never saw the durable-notebook
+    surface and had no incentive to make the first `write_memory` call. The
+    placeholder keeps the block present from turn one.
+    """
+
+    async def _t() -> None:
+        cap = Memory(store=InMemoryStore(), agent_name="locomo-subject")
+        req = await _run_before_model_request(cap)
+        text = _injected_text(req)
+        assert "<memory>" in text
+        assert "No memories recorded/written yet." in text
+
+    asyncio.run(_t())
+
+
+def test_populated_scope_renders_normally_not_placeholder() -> None:
+    """Once memory exists, the placeholder is replaced by the real notebook."""
+
+    async def _t() -> None:
+        store = InMemoryStore()
+        await store.write(
+            "locomo-subject/MEMORY.md",
+            "- the blazer is ready for pickup\n",
+            expected_version=None,
+            operation=MemoryOperation(id="op-seed", fingerprint="f"),
+        )
+        cap = Memory(store=store, agent_name="locomo-subject")
+        req = await _run_before_model_request(cap)
+        text = _injected_text(req)
+        assert "the blazer is ready for pickup" in text
+        assert "No memories recorded/written yet." not in text
+
+    asyncio.run(_t())
 
 
 # ---------------------------------------------------------------------------
