@@ -49,6 +49,8 @@ from pydantic_ai import Agent
 from pydantic_ai_harness.step_persistence import FileStepStore
 
 from paf.observability.instrumentation import (
+    _json_dumps,
+    root_span,
     setup_observability,
     shutdown_observability,
 )
@@ -92,14 +94,40 @@ LME_MAX_QUESTIONS = int(os.environ.get("LME_MAX_QUESTIONS", "15"))
 LME_MAX_TURNS_PER_QUESTION = int(os.environ.get("LME_MAX_TURNS_PER_QUESTION", "120"))  # cap seeding cost
 
 
-def _lme_judge(question_type: str, question: str, gold_answer: str, response: str, qid: str) -> dict:
+def _run_sync_under_span(agent, prompt: str, span_name: str, session: str):
+    """Run a sync agent call inside a root span (matches the seed/recall span convention)."""
+    with root_span(
+        span_name,
+        **{
+            "langfuse.observation.input": _json_dumps({"prompt": prompt}),
+            "langfuse.session.id": session,
+        },
+    ):
+        return agent.run_sync(prompt)
+
+
+def _lme_judge(question_type: str, question: str, gold_answer: str, response: str, qid: str, span_name: str = "lmem.judge", session: str = "") -> dict:
     """Official LongMemEval binary judge (gpt-4o-mini): yes/no on the ANSCHECK prompt.
 
     Uses the VERBATIM per-task prompt from evaluate_qa.py (`get_lme_anscheck_prompt`),
-    adapted to the paf Agent (judge != answerer). The paf agent pattern-matches on
-    'yes' exactly like the official `label = 'yes' in eval_response.lower()`.
-    Returns {label, correct, raw} -- a faithful binary autoeval_label.
+    adapted to the paf Agent (judge != answerer). Structured output asks the judge
+    for an explicit `reasoning` alongside the verdict, so we can audit *why* each
+    question was marked yes/no -- not just the label. `label` is kept a bool so the
+    official aggregation (`autoeval_label`, `_acc` sum) is unchanged.
+    The judge run is wrapped in a `root_span` named `span_name` (default
+    `lmem.judge`) so its Langfuse trace name matches the seed/recall convention
+    (`lmem.seed.N.M` / `lmem.recall.N` / `lmem.judge.N`) instead of defaulting to
+    the agent name `lme-judge run`.
+    Returns {label, correct, raw, reasoning, prompt}.
     """
+    from typing import Literal
+
+    from pydantic import BaseModel
+
+    class _JudgeVerdict(BaseModel):
+        label: Literal["yes", "no"]
+        reasoning: str
+
     abstention = lme_is_abstention(qid)
     prompt = get_lme_anscheck_prompt(
         question_type, question, gold_answer, response, abstention=abstention
@@ -107,15 +135,25 @@ def _lme_judge(question_type: str, question: str, gold_answer: str, response: st
     judge = Agent(
         JUDGE_MODEL,
         name="lme-judge",
+        output_type=_JudgeVerdict,
         instructions=(
             "You are the official LongMemEval answer judge. Answer the question "
-            "exactly as asked: with a single token 'yes' or 'no'."
+            "exactly as asked: with a structured verdict `label` of 'yes' or 'no' "
+            "plus a concise `reasoning` explaining why the response matches (or "
+            "fails to match) the gold answer per the task rubric. `label` must be "
+            "exactly 'yes' or 'no'."
         ),
     )
-    result = judge.run_sync(prompt)
-    raw = (result.output or "").strip()
+    result = judge.run_sync(prompt) if not session else _run_sync_under_span(judge, prompt, span_name, session)
+    verdict = result.output
+    raw = verdict.label if verdict is not None else ""
     label = lme_parse_label(raw)
-    return {"label": label, "correct": label, "raw": raw, "prompt": prompt}
+    reasoning = getattr(verdict, "reasoning", "") if verdict is not None else ""
+    if verdict is None:
+        reasoning = "ERROR: judge returned no structured verdict (fallback to raw output)"
+        raw = str(result.output or "").strip()
+        label = lme_parse_label(raw)
+    return {"label": label, "correct": label, "raw": raw, "reasoning": reasoning, "prompt": prompt}
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +394,8 @@ def main(argv: list[str] | None = None) -> dict:
 
         # Judge: official LongMemEval binary (yes/no ANSCHECK prompt).
         row["judged"] = _lme_judge(
-            q["question_type"], q["question"], q["answer"], row["text"], q.get("question_id", f"q{qi}")
+            q["question_type"], q["question"], q["answer"], row["text"], q.get("question_id", f"q{qi}"),
+            span_name=f"lmem.judge.{qi}", session=session,
         )
         row["autoeval_label"] = {"model": JUDGE_MODEL, "label": row["judged"]["label"]}
 

@@ -309,7 +309,16 @@ def main() -> int:
     if not WIRE_SUMMARIZER:
         n_with_kw = n_with_out = 0  # the stub never fills these
 
-    verdict = judge(q, r["text"])
+    with root_span(
+        "tiny.judge",
+        **{
+            "langfuse.observation.input": _json_dumps(
+                {"question": q["question"], "gold": str(q.get("answer", ""))}
+            ),
+            "langfuse.session.id": session,
+        },
+    ):
+        verdict = judge(q, r["text"])
     elapsed = time.time() - t0
     retrieved = bool(tool_surfaced or ans_surfaced)
     ok = bool(verdict["correct"]) and retrieved
