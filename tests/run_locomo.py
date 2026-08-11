@@ -55,7 +55,11 @@ from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
 from paf.capabilities.memory import Memory
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
-from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
+from paf.capabilities.turn_index import (
+    TurnSummarizer,
+    TurnIndexCapability,
+    TurnIndexStore,
+)
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -140,11 +144,19 @@ def _build_agent(store: FileStepStore, index_dir: Path, memory_dir: Path) -> Age
         ),
         # TurnIndex: injected tail index (max_lines bounds the tail), plus
         # read_turn / search_index. suppressed instructions (Memory owns ladder).
+        # ALWAYS-on real LLM summarizer (2026-08-11): the benchmark must exercise
+        # the real TurnSummarizer (sentence + key_terms + outcome), not the
+        # stub — the whole point of the summary-index feature. Matches the
+        # reference wiring in tiny_lmem.build_agent. TurnSummarizer defaults its
+        # model to SUBJECT_MODEL; explicit keeps tool/model in one place.
         TurnIndexCapability(
             source=source,
             index_store=TurnIndexStore(index_dir),
             max_lines=MAX_LINES,
             add_instructions=False,
+            summarizer=TurnSummarizer(
+                model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+            ),
         ),
         # Memory: markdown notebook, injected, durable facts. Owns the ladder.
         Memory.from_spec(
