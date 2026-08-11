@@ -143,6 +143,10 @@ class TurnSummarizer:
                 f"'Postgres' not 'the database'; 'OAuth' not 'auth'. These exist so a keyword search "
                 f"finds this turn even when the sentence phrases it abstractly.\n"
                 f"- `outcome`: the end state -- resolved / blocked / error / decided / awaiting.\n"
+                f"- Capture durable or pending-action facts the turn establishes (decisions, "
+                f"preferences, tasks, errands, pickups/returns, deadlines) in the sentence and "
+                f"key_terms so they are findable; surface counts or enumerations rather than "
+                f"abstracting to a category.\n"
                 f"- Do NOT invent facts. Only summarize what is actually in the turn."
             ),
         )

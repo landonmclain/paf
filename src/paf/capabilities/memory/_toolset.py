@@ -303,6 +303,12 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
         `MEMORY.md`, and longer or evolving topics in separate files. Update
         stale entries rather than adding contradictory duplicates.
 
+        Write anything you are supposed to keep knowing or tracking — decisions,
+        preferences, lessons, and pending actions (errands, pickups, returns,
+        deadlines, follow-ups). Persistent memory is cheap and unbounded; history
+        is not, so persist a pending item or countable fact (e.g. "3 items to
+        pick up") rather than relying on recall from past turns.
+
         Args:
             ctx: Framework-provided run context.
             content: Text to append, or replacement text for `old_text`.

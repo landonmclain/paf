@@ -46,9 +46,15 @@ _DEFAULT_GUIDANCE = (
     'Skip rungs that do not apply: a "what is our convention?" goes to 2; a "what did '
     'we do [when]?" goes to 3. Do not turn a durable-fact lookup into a history dig.\n'
     'Keep memory curated — update instead of duplicating, delete what turns out wrong. '
-    'Never claim something was remembered or saved unless you actually called '
-    '`write_memory` in this turn.'
-)
+        'Never claim something was remembered or saved unless you actually called '
+        '`write_memory` in this turn.\n'
+        'CAPTURE as you go: after answering, `write_memory` anything you are supposed to '
+        'keep knowing or tracking — decisions, preferences, lessons, and pending actions '
+        '(errands, pickups, returns, deadlines, follow-ups). Persistent memory is cheap and '
+        'unbounded, but in-context history is not: facts or todos you do not write are gone at '
+        'the next compaction. Prefer a short to-do / actions file updated in place over a '
+        'growing `MEMORY.md`.'
+    )
 
 _MEMORY_DATA_PREFIX = '<memory>\n'
 _MEMORY_DATA_SUFFIX = '\n</memory>'
