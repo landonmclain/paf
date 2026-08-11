@@ -1,5 +1,9 @@
 """LoCoMo QA scoring, ported from snap-research/locomo `task_eval/evaluation.py`.
 
+Plus: the official LongMemEval judge prompt / label helpers (ported from
+github.com/xiaowu0162/LongMemEval `src/evaluation/evaluate_qa.py`), kept here
+so the whole two-benchmark scoring surface lives in one test module.
+
 This mirrors the benchmark's own scorer as faithfully as we need, minus Porter
 stemming (nltk is not a project dep; pure normalized token-overlap F1). It is
 NOT a re-scoring of "evidence recall@k = does the answer cite the dia_id" -- that
@@ -115,6 +119,105 @@ def score_answer(prediction: str, answer: str, category: int) -> float:
         return 1.0 if any(r in low for r in _ADVERSARIAL_REFUSAL) else 0.0
     # Unknown category -- fall back to plain F1 (never silently drop a question).
     return f1_score(prediction, answer)
+
+
+# ---------------------------------------------------------------------------
+# LongMemEval official scoring (ported from xiaowu0162/LongMemEval, see above)
+# ---------------------------------------------------------------------------
+
+# LongMemEval question types (from the data + paper).
+LME_TYPES = [
+    "single-session-user",
+    "single-session-preference",
+    "single-session-assistant",
+    "multi-session",
+    "temporal-reasoning",
+    "knowledge-update",
+]
+
+
+def get_lme_anscheck_prompt(
+    task: str,
+    question: str,
+    answer: str,
+    response: str,
+    abstention: bool = False,
+) -> str:
+    """Official LongMemEval judge prompt, VERBATIM port of `get_anscheck_prompt`.
+
+    Source of truth: github.com/xiaowu0162/LongMemEval `src/evaluation/evaluate_qa.py`.
+    Yields a binary yes/no answer; 'yes' <=> correct (see `lme_parse_label`).
+    Do not paraphrase: the per-task clauses (off-by-one dates, updated-answer-wins,
+    rubric personalization, abstain-recognition) are what make the scoring faithful.
+    """
+    if not abstention:
+        if task in ("single-session-user", "single-session-assistant", "multi-session"):
+            template = (
+                "I will give you a question, a correct answer, and a response "
+                "from a model. Please answer yes if the response contains the correct answer. "
+                "Otherwise, answer no. If the response is equivalent to the correct answer or "
+                "contains all the intermediate steps to get the correct answer, you should also "
+                "answer yes. If the response only contains a subset of the information required by "
+                "the answer, answer no. \n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel "
+                "Response: {}\n\nIs the model response correct? Answer yes or no only."
+            )
+            return template.format(question, answer, response)
+        if task == "temporal-reasoning":
+            template = (
+                "I will give you a question, a correct answer, and a response "
+                "from a model. Please answer yes if the response contains the correct answer. "
+                "Otherwise, answer no. If the response is equivalent to the correct answer or "
+                "contains all the intermediate steps to get the correct answer, you should also "
+                "answer yes. If the response only contains a subset of the information required by "
+                "the answer, answer no. In addition, do not penalize off-by-one errors for the "
+                "number of days. If the question asks for the number of days/weeks/months, etc., "
+                "and the model makes off-by-one errors (e.g., predicting 19 days when the answer "
+                "is 18), the model's response is still correct. \n\nQuestion: {}\n\nCorrect "
+                "Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes "
+                "or no only."
+            )
+            return template.format(question, answer, response)
+        if task == "knowledge-update":
+            template = (
+                "I will give you a question, a correct answer, and a response "
+                "from a model. Please answer yes if the response contains the correct answer. "
+                "Otherwise, answer no. If the response contains some previous information along "
+                "with an updated answer, the response should be considered as correct as long as "
+                "the updated answer is the required answer.\n\nQuestion: {}\n\nCorrect "
+                "Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes "
+                "or no only."
+            )
+            return template.format(question, answer, response)
+        if task == "single-session-preference":
+            template = (
+                "I will give you a question, a rubric for desired personalized "
+                "response, and a response from a model. Please answer yes if the response satisfies "
+                "the desired response. Otherwise, answer no. The model does not need to reflect all "
+                "the points in the rubric. The response is correct as long as it recalls and "
+                "utilizes the user's personal information correctly.\n\nQuestion: {}\n\nRubric: "
+                "{}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+            )
+            return template.format(question, answer, response)
+        raise NotImplementedError(task)
+    template = (
+        "I will give you an unanswerable question, an explanation, and a response from "
+        "a model. Please answer yes if the model correctly identifies the question as "
+        "unanswerable. The model could say that the information is incomplete, or some other "
+        "information is given but the asked information is not.\n\nQuestion: {}\n\nExplanation: "
+        "{}\n\nModel Response: {}\n\nDoes the model correctly identify the question as "
+        "unanswerable? Answer yes or no only."
+    )
+    return template.format(question, answer, response)
+
+
+def lme_is_abstention(question_id: str | object) -> bool:
+    """LongMemEval abstention questions carry a trailing '_abs' in their id."""
+    return "_abs" in str(question_id)
+
+
+def lme_parse_label(text: str) -> bool:
+    """Official label extraction: `label = 'yes' in eval_response.lower()`."""
+    return "yes" in (text or "").lower()
 
 
 # ---------------------------------------------------------------------------

@@ -24,11 +24,13 @@ DATE HANDLING (the thing LoCoMo couldn't do):
   questions a real date anchor to resolve "yesterday"/"last week"/recency
   against -- the exact capture-fidelity gap that capped LoCoMo's answer-F1.
 
-SCORING (two columns, per LoCoMo two-metric design):
-  1. Judge      -- reuse the C1-C4 stable LLM judge (_judge in test_beam_lite).
-                    Judge model defaults to gpt-4o-mini via OpenRouter (Landon's
-                    call: no new routing, reuse the repo OPENROUTER_API_KEY).
-                    Gold `answer` is the single ground-truth atom.
+SCORING (two columns, per LongMemEval two-metric design):
+  1. Judge      -- OFFICIAL LongMemEval binary yes/no: `get_anscheck_prompt` in
+                    tests/locomo_scoring.py (VERBATIM per-task templates, incl. the
+                    abstention prompt), judged by gpt-4o-mini via OpenRouter at
+                    temperature 0; label = 'yes' in response. Gold `answer` is the
+                    reference. Reports per-task / task-averaged / overall /
+                    abstention accuracy, mirroring print_qa_metrics.py.
   2. Retrieval  -- independent of the judge: did the search tools surface the
                     content of the `answer_session_ids`/`has_answer` turns?
 
@@ -42,20 +44,23 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic_ai import Agent, AgentRunResultEvent
 from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
 
-# Reuse the C1-C4 stable LLM judge (judge != answerer). Judge model override via
-# env so we don't touch test_beam_lite's default for its own runs.
-from tests.test_beam_lite import _judge
-
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
 from tests.run_locomo import (
     _build_agent,
     _run_turn,
+)
+
+# Official LongMemEval judge scaffold (verbatim prompts + label parsing).
+from tests.locomo_scoring import (
+    LME_TYPES,
+    get_lme_anscheck_prompt,
+    lme_is_abstention,
+    lme_parse_label,
 )
 
 from pydantic_ai_harness.compaction import (
@@ -95,15 +100,30 @@ LME_MAX_QUESTIONS = int(os.environ.get("LME_MAX_QUESTIONS", "15"))
 LME_MAX_TURNS_PER_QUESTION = int(os.environ.get("LME_MAX_TURNS_PER_QUESTION", "120"))  # cap seeding cost
 
 
-@dataclass
-class _Challenge:
-    """Minimal C1-C4 Challenge-shaped wrapper for _judge's interface."""
+def _lme_judge(question_type: str, question: str, gold_answer: str, response: str, qid: str) -> dict:
+    """Official LongMemEval binary judge (gpt-4o-mini): yes/no on the ANSCHECK prompt.
 
-    id: str
-    mechanism: str
-    query: str
-    ground_truth_atoms: tuple[str, ...]
-    expected_tool: str = "none"
+    Uses the VERBATIM per-task prompt from evaluate_qa.py (`get_lme_anscheck_prompt`),
+    adapted to the paf Agent (judge != answerer). The paf agent pattern-matches on
+    'yes' exactly like the official `label = 'yes' in eval_response.lower()`.
+    Returns {label, correct, raw} -- a faithful binary autoeval_label.
+    """
+    abstention = lme_is_abstention(qid)
+    prompt = get_lme_anscheck_prompt(
+        question_type, question, gold_answer, response, abstention=abstention
+    )
+    judge = Agent(
+        JUDGE_MODEL,
+        name="lme-judge",
+        instructions=(
+            "You are the official LongMemEval answer judge. Answer the question "
+            "exactly as asked: with a single token 'yes' or 'no'."
+        ),
+    )
+    result = judge.run_sync(prompt)
+    raw = (result.output or "").strip()
+    label = lme_parse_label(raw)
+    return {"label": label, "correct": label, "raw": raw, "prompt": prompt}
 
 
 # ---------------------------------------------------------------------------
@@ -320,23 +340,11 @@ def main(argv: list[str] | None = None) -> dict:
         row["question_id"] = q.get("question_id", f"q{qi}")
         row["conv_id"] = cid
 
-        # Judge: reuse C1-C4 _judge, gold answer as the single atom.
-        ch = _Challenge(
-            id=q["question_id"],
-            mechanism=q["question_type"],
-            query=q["question"],
-            ground_truth_atoms=(q["answer"],),
+        # Judge: official LongMemEval binary (yes/no ANSCHECK prompt).
+        row["judged"] = _lme_judge(
+            q["question_type"], q["question"], q["answer"], row["text"], q.get("question_id", f"q{qi}")
         )
-        datum = {
-            "tools_invoked": row["tools"],
-            "answer": row["text"],
-            "arm": row["question_type"],
-        }
-        row["judged"] = _judge(ch, datum, session)
-        row["judge_score"] = sum(
-            a["score"] for a in row["judged"]["atoms"]
-        ) / len(row["judged"]["atoms"]) if row["judged"]["atoms"] else 0.0
-        row["grounding"] = row["judged"]["grounding"]
+        row["autoeval_label"] = {"model": JUDGE_MODEL, "label": row["judged"]["label"]}
 
         # Retrieval signal (independent of judge).
         row["retrieval"] = _retrieval(row, _gold_session_probes(q))
@@ -347,12 +355,28 @@ def main(argv: list[str] | None = None) -> dict:
     seed_rows = all_seed_rows
 
     # Abstention questions: question_id ends with _abs. Correct behaviour is to
-    # REFUSE. The C1-C4 judge compares vs the gold `answer` string (which for an
-    # abstention q is the explanation, not a fact) -- so we report these
-    # separately and don't mix them into the judge_mean for factual questions.
-    # (Faithful abstention grading is a future refinement; for now it's a flag.)
-    abstention_rows = [r for r in recall_rows if str(r.get("question_id", "")).endswith("_abs")]
-    factual_rows = [r for r in recall_rows if r not in abstention_rows]
+    # REFUSE (the official abstention prompt grades this). We keep them separate
+    # from factual questions, and report Abstention Accuracy independently --
+    # exactly as print_qa_metrics.py does (abstention is sliced out of "all_acc").
+    abstention_rows = [r for r in recall_rows if lme_is_abstention(r.get("question_id", ""))]
+    factual_rows = [r for r in recall_rows if not lme_is_abstention(r.get("question_id", ""))]
+
+    # ---- Official LongMemEval aggregation (mirrors print_qa_metrics.py) ----
+    # Per-task accuracy is the mean of the BINARY labels within each question type;
+    # abtention is sliced OUT of all_acc and reported alone. Then:
+    #   Overall Accuracy    = mean over ALL non-abstention questions
+    #   Task-averaged Acc   = mean of the 6 per-task means
+    #   Abstention Accuracy = mean over abstention questions
+    def _acc(rows: list[dict]) -> float | None:
+        if not rows:
+            return None
+        return round(sum(r["autoeval_label"]["label"] for r in rows) / len(rows), 4)
+
+    per_task = {t: _acc([r for r in factual_rows if r["question_type"] == t]) for t in LME_TYPES}
+    deline_by_task: list[float] = [v for v in (per_task[t] for t in LME_TYPES) if v is not None]
+    task_averaged = round(sum(deline_by_task) / len(deline_by_task), 4) if deline_by_task else None
+    overall = _acc(factual_rows)
+    abstention = _acc(abstention_rows)
 
     result = {
         "meta": {
@@ -393,21 +417,18 @@ def main(argv: list[str] | None = None) -> dict:
                     "tools": r["tools"],
                     "tool_outputs": r["tool_outputs"],
                     "answer_session_ids": r["answer_session_ids"],
-                    "judge_score": r["judge_score"],
-                    "grounding": r["grounding"],
                     "judged": r["judged"],
+                    "autoeval_label": r["autoeval_label"],
                     "retrieval": r["retrieval"],
                     "tokens": r["usage"],
                 }
                 for r in recall_rows
             ],
-            # Judge mean over FACTUAL questions only (abstention handled separately).
-            "judge_mean": round(
-                sum(r["judge_score"] for r in factual_rows) / len(factual_rows), 4
-            ) if factual_rows else None,
-            "abstention_judge_mean": round(
-                sum(r["judge_score"] for r in abstention_rows) / len(abstention_rows), 4
-            ) if abstention_rows else None,
+            # Official metrics: per-task accuracy, task-averaged, overall, abstention.
+            "per_task_accuracy": per_task,
+            "task_averaged_accuracy": task_averaged,
+            "overall_accuracy": overall,
+            "abstention_accuracy": abstention,
             "retrieval_recall_rate": round(
                 sum(r["retrieval"]["retrieval_recall"] for r in recall_rows) / len(recall_rows), 4
             ) if recall_rows else None,
