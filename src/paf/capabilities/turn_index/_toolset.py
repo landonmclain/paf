@@ -23,6 +23,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
+from ..search._ranking import Bm25Params, bm25_rank
 from ._markers import injected_artifact_markers
 from ._store import TurnIndexEntry, TurnIndexStore
 
@@ -47,14 +48,26 @@ turn is not enough and you need a wider picture, escalate to
 """
 
 SEARCH_INDEX_DESCRIPTION = """\
-Search the one-line turn summaries with simple substring matching.
+Search this conversation's one-line turn summaries, ranked by BM25 relevance.
 
-This is the CHEAP recall step, between the injected turn index (rung 2) and the
-wide `search_conversation_history` (last resort). Reach for it when you have NO
-ref yet and don't know which turn holds the fact — the answer isn't in context
-and no index line names the turn. It matches both the one-liner summary and its
-`key_terms`. If a hit gives you a ref, call `read_turn(ref)` for the full turn;
-don't jump straight to `search_conversation_history`.
+Reach for it when you have NO ref yet and don't know which turn holds a fact:
+a cheap, scoped probe between the injected index (rung 2) and the wide
+`search_conversation_history` (last resort). It ranks every indexed turn of the
+CURRENT conversation across the one-liner `summary` (anchored, weighted highest),
+its `key_terms` (entity/vocabulary), and its `outcome` (resolved/blocked/...).
+
+Querying: best as 1-3 concrete keywords -- real names, APIs, topics, error codes --
+not full sentences. Multi-word queries score each word independently, so a phrase
+with one distinctive term still matches. Rare terms outweigh common ones (IDF).
+
+Result: the top few matches are returned rank-ordered with a relevance `score`
+and each turn's `ref` -- call `read_turn(ref)` for the full turn. Do NOT jump
+straight to `search_conversation_history` if a ref names your turn.
+
+No match: if the index has no keyword coverage for your query, the tool says so
+explicitly and points you to `search_conversation_history` (which searches the
+full original messages, not just one-liners) -- escalate there when the index
+cannot help.
 """
 
 
@@ -195,11 +208,18 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         index_store: TurnIndexStore,
         *,
         tool_id: str = 'turn-index',
+        bm25_k1: float = 1.5,
+        bm25_b: float = 0.75,
+        max_matches: int = 5,
     ) -> None:
         super().__init__(id=tool_id)
+        if max_matches < 1:
+            raise ValueError(f'max_matches must be >= 1, got {max_matches!r}.')
         self._source = source
         self._index_store = index_store
         self._finder = _TurnFinder(source)
+        self._bm25_params = Bm25Params(k1=bm25_k1, b=bm25_b)
+        self._max_matches = max_matches
         self.add_function(self.read_turn, name='read_turn', description=READ_TURN_DESCRIPTION)
         self.add_function(self.search_index, name='search_index', description=SEARCH_INDEX_DESCRIPTION)
 
@@ -218,24 +238,67 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         ctx: RunContext[AgentDepsT],
         query: str,
     ) -> str:
-        """Return index entries matching `query` (case-insensitive substring).
+        """Rank this conversation's index entries by BM25 relevance to `query`.
 
-        Matches across BOTH the one-liner `summary` AND the structured
-        `key_terms` -- so a turn whose sentence phrases things abstractly
-        ("the database") is still found by its search vocabulary ("Postgres").
+        Each indexed turn is scored across its full record -- the one-liner
+        `summary` (anchored: the running text is weighted by being present twice,
+        so a summary term outranks a bare `key_terms`/`outcome` term), the
+        `key_terms` vocabulary, and `outcome`. Returns the top `max_matches`,
+        rank-ordered with a relevance score and each turn's `ref`. When the index
+        has no keyword coverage for the query, it says so and points to the wide
+        `search_conversation_history` fallback.
         """
+        if ctx.conversation_id is None:
+            # Fail closed: an unscoped run would otherwise search EVERY conversation's
+            # index in the shared store (same exposure the wide tool guards against).
+            return _NO_CONVERSATION_MSG
+
         entries = self._index_store.read_all(conversation_id=ctx.conversation_id)
-        q = query.lower()
-        hits = [
-            e
-            for e in entries
-            if q in e.summary.lower()
-            or any(q in kt.lower() for kt in (e.key_terms or []))
-        ]
-        if not hits:
-            return f'No memory entries matching {query!r} ({len(entries)} indexed).'
-        lines = [f'[{self._ref(e)}] {e.summary}' for e in hits[:20]]
-        return 'Index matches:\n' + '\n'.join(lines)
+        if not entries:
+            return f'No turn index entries for this conversation ({query!r}).'
+
+        scored = bm25_rank(
+            query,
+            [_searchable_text(e) for e in entries],
+            self._bm25_params,
+        )
+        if not scored:
+            return (
+                f'No turn index matches {query!r} across {len(entries)} indexed turns. '
+                "The index has no keyword coverage here -- escalate to "
+                '`search_conversation_history` (it searches the full original '
+                'messages, not just the one-liners).'
+            )
+
+        lines: list[str] = []
+        for idx, score in scored[: self._max_matches]:
+            entry = entries[idx]
+            lines.append(f'[{entry.ref}] (score {score:.2f}) {entry.summary}')
+        return 'Index matches (BM25-ranked):\n' + '\n'.join(lines)
 
     def _ref(self, entry: TurnIndexEntry) -> str:
         return entry.ref
+
+
+def _searchable_text(entry: TurnIndexEntry) -> str:
+    """Flatten one index entry into the text BM25 ranks against.
+
+    The `summary` is deliberately included TWICE so its terms carry higher
+    term-frequency than `key_terms` / `outcome`: this keeps `search_index` a
+    *summary-anchored* probe (a turn whose one-liner uses a query term outranks
+    one that only matches an incidental keyword or status), while still letting
+    keyword / outcome matches surface turns the sentence phrases abstractly.
+    """
+    parts = [entry.summary, entry.summary]
+    if entry.key_terms:
+        parts.append(' '.join(entry.key_terms))
+    if entry.outcome:
+        parts.append(entry.outcome)
+    return ' '.join(parts)
+
+
+_NO_CONVERSATION_MSG = (
+    "Search-index needs a conversation id, and this run has none. "
+    "Pass `conversation_id=` to `Agent.run(...)` so the tool can tell this "
+    "conversation's index from other conversations in the shared store."
+)

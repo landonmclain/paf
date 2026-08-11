@@ -186,7 +186,7 @@ class _FakeCtx:
 
 
 def test_search_index_matches_summary_and_key_terms(tmp_path: Path) -> None:
-    """`search_index` matches against BOTH the one-liner and key_terms."""
+    """`search_index` ranks against BOTH the one-liner summary and key_terms."""
     idx = TurnIndexStore(tmp_path / "index")
     idx.append(conversation_id="c1", run_id="r1", turn_id=0, summary="the database is slow", key_terms=["postgres"])
     idx.append(conversation_id="c1", run_id="r1", turn_id=1, summary="unrelated chat about weather")
@@ -194,15 +194,16 @@ def test_search_index_matches_summary_and_key_terms(tmp_path: Path) -> None:
     ts = TurnIndexToolset(source, idx)
 
     async def go():
-        # key_term match
+        # key_term match (summary phrases 'the database' abstractly)
         out = await ts.search_index(_FakeCtx("c1"), "postgres")
         assert "the database is slow" in out, out
-        # summary substring match
+        # summary term match
         out = await ts.search_index(_FakeCtx("c1"), "database")
         assert "the database is slow" in out, out
-        # no match
+        # no keyword coverage anywhere -> escalate signal, not a dead silent miss
         out = await ts.search_index(_FakeCtx("c1"), "nonexistent-term")
-        assert "No memory entries" in out, out
+        assert "No turn index matches" in out, out
+        assert "search_conversation_history" in out, out
 
     asyncio.run(go())
 
