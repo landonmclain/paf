@@ -202,7 +202,7 @@ def test_search_index_matches_summary_and_key_terms(tmp_path: Path) -> None:
         assert "the database is slow" in out, out
         # no match
         out = await ts.search_index(_FakeCtx("c1"), "nonexistent-term")
-        assert "No index entries" in out, out
+        assert "No memory entries" in out, out
 
     asyncio.run(go())
 

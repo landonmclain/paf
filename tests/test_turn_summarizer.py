@@ -185,4 +185,4 @@ def test_search_index_matches_key_terms(tmp_path: Path) -> None:
     hits = asyncio.run(ts.search_index(_Ctx(), "postgres"))
     assert "r1:0" in hits
     hits_neg = asyncio.run(ts.search_index(_Ctx(), "sqlite"))
-    assert "No index entries" in hits_neg
+    assert "No memory entries" in hits_neg

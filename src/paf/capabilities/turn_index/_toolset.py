@@ -233,7 +233,7 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
             or any(q in kt.lower() for kt in (e.key_terms or []))
         ]
         if not hits:
-            return f'No index entries matching {query!r} ({len(entries)} indexed).'
+            return f'No memory entries matching {query!r} ({len(entries)} indexed).'
         lines = [f'[{self._ref(e)}] {e.summary}' for e in hits[:20]]
         return 'Index matches:\n' + '\n'.join(lines)
 
