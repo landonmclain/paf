@@ -63,7 +63,6 @@ path is deliberately background-ready.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -76,17 +75,17 @@ from pydantic_ai.messages import (
     ModelRequestPart,
     ModelResponse,
     TextContent,
+    ToolCallPart,
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AgentToolset
-
 from pydantic_ai_harness.conversation_search._source import HistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore
 
-from ._generate import Turn, summarize_turn_append, this_turn_id, this_turn_slice
 from ._extract import build_turn_context
+from ._generate import Turn, summarize_turn_append, this_turn_id, this_turn_slice
 from ._markers import TURN_INDEX_MARKER
 from ._store import TurnIndexStore
 from ._summarizer import TurnSummarizer
@@ -222,7 +221,17 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         that closes it. Summarizes it, and appends one line to `index_store`,
         keyed by a STABLE `turn_id` (the ordinal of the anchor among the run's
         user prompts) so the ref never rots as the run grows.
+
+        **Terminal-response gate (2026-08-12):** a model response that carries a
+        `ToolCallPart` is an *intermediate* step in an agentic loop, not a
+        completed user turn. Indexing it pollutes the index with the agent's own
+        retrieval traffic (e.g. `"Searched turn index for ..."`), which then
+        re-retrieves and confuses later turns. We therefore skip those responses
+        entirely and only index a response that *closes* a user turn (final text
+        / structured output with no tool call).
         """
+        if any(isinstance(part, ToolCallPart) for part in response.parts):
+            return response
         try:
             messages = list(ctx.messages)
             turn_id = this_turn_id(messages)
@@ -316,7 +325,7 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         add_instructions: bool = True,
         tool_id: str = 'turn-index',
         summarizer: dict[str, Any] | None = None,
-    ) -> 'TurnIndexCapability[Any]':
+    ) -> TurnIndexCapability[Any]:
         """Reconstruct the capability from a spec-declarable store directory.
 
         `source` and `index_store` are not YAML-serializable (a `HistorySource` is

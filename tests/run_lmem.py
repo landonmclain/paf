@@ -627,7 +627,20 @@ def main(argv: list[str] | None = None) -> dict:
             q["question_id"], strict=False
         )
         live_summarizer: TurnSummarizer | None = None
-        if not precomputed:
+        if os.environ.get("PAF_FRESH_SEED"):
+            # FORCED FRESH SEED: ignore any durable cache and summarize every
+            # user-turn unit live with the subject model. Used to produce
+            # fresh-summary baselines; not for normal benchmark integrity runs.
+            precomputed = {}
+            live_summarizer = TurnSummarizer(
+                model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+            )
+            print(
+                f"[lmem]   q{qi} PAF_FRESH_SEED=1 -> live summarizer "
+                f"for EVERY turn (durable cache ignored)",
+                flush=True,
+            )
+        elif not precomputed:
             live_summarizer = TurnSummarizer(
                 model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
             )
