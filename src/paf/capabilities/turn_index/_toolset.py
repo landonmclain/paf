@@ -20,10 +20,9 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelRequest, TextContent, UserPromptPart
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
-
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
-from ..search._ranking import Bm25Params, bm25_rank
+from ..search._ranking import Bm25Params, bm25_rank, recency_boost
 from ._markers import injected_artifact_markers
 from ._store import TurnIndexEntry, TurnIndexStore
 
@@ -63,6 +62,11 @@ with one distinctive term still matches. Rare terms outweigh common ones (IDF).
 Result: the top few matches are returned rank-ordered with a relevance `score`
 and each turn's `ref` -- call `read_turn(ref)` for the full turn. Do NOT jump
 straight to `search_conversation_history` if a ref names your turn.
+
+Ranking note: ties break toward the more recent turn (a light recency nudge), so
+between two equally-relevant matches the fresher one ranks first -- but a genuine
+relevance edge still wins. When facts have since been superseded (e.g. a move or
+a changed value), prefer the more recent match; check `read_turn` if in doubt.
 
 No match: if the index has no keyword coverage for your query, the tool says so
 explicitly and points you to `search_conversation_history` (which searches the
@@ -155,12 +159,16 @@ def _is_injected_text(text) -> bool:
     memory family (`...v1:<scope_hash>`), so we match on the stable base prefix.
     """
     return getattr(text, 'metadata', None) is not None and any(
-        getattr(text, 'metadata').startswith(marker) for marker in injected_artifact_markers()
+        text.metadata.startswith(marker) for marker in injected_artifact_markers()
     )
 
 
 def _render_message(message) -> str:
-    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+    from pydantic_ai.messages import (
+        ModelResponse,
+        TextPart,
+        ToolCallPart,
+    )
 
     if isinstance(message, ModelRequest):
         lines = []
@@ -210,15 +218,25 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         tool_id: str = 'turn-index',
         bm25_k1: float = 1.5,
         bm25_b: float = 0.75,
+        recency_weight: float = 0.1,
+        recency_half_life_days: float = 30.0,
         max_matches: int = 5,
     ) -> None:
         super().__init__(id=tool_id)
         if max_matches < 1:
             raise ValueError(f'max_matches must be >= 1, got {max_matches!r}.')
+        if recency_weight < 0:
+            raise ValueError(f'recency_weight must be >= 0, got {recency_weight!r}.')
+        if recency_half_life_days <= 0:
+            raise ValueError(
+                f'recency_half_life_days must be > 0, got {recency_half_life_days!r}.'
+            )
         self._source = source
         self._index_store = index_store
         self._finder = _TurnFinder(source)
         self._bm25_params = Bm25Params(k1=bm25_k1, b=bm25_b)
+        self._recency_weight = recency_weight
+        self._recency_half_life_days = recency_half_life_days
         self._max_matches = max_matches
         self.add_function(self.read_turn, name='read_turn', description=READ_TURN_DESCRIPTION)
         self.add_function(self.search_index, name='search_index', description=SEARCH_INDEX_DESCRIPTION)
@@ -247,6 +265,13 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         rank-ordered with a relevance score and each turn's `ref`. When the index
         has no keyword coverage for the query, it says so and points to the wide
         `search_conversation_history` fallback.
+
+        Matches are additionally nudged by recency: a newer turn edges out a
+        relevance-tied older one (weighted by `recency_weight`, decayed over
+        `recency_half_life_days`). This is a conservative tie-breaker -- it never
+        overrides a meaningful relevance gap, only breaks near-equal BM25 scores
+        in favor of the more recent turn (helps the index-not-losing-updates
+        concern raised during the memory/ablation work).
         """
         if ctx.conversation_id is None:
             # Fail closed: an unscoped run would otherwise search EVERY conversation's
@@ -270,8 +295,26 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
                 'messages, not just the one-liners).'
             )
 
+        # Fold recency in as a conservative nudge. Anchor to the newest entry so
+        # ranking stays deterministic (no wall-clock): boost ∈ [0, 1], and the
+        # default `recency_weight` (0.1) keeps it well below a single BM25 IDF
+        # unit, so it only breaks genuine near-ties and never overrides a real
+        # relevance gap.
+        anchor_ts = max((e.ts for e in entries), default='')
+        blended = []
+        for idx, score in scored:
+            entry = entries[idx]
+            recency = (
+                self._recency_weight
+                * recency_boost(entry.ts, anchor_ts, self._recency_half_life_days)
+                if self._recency_weight
+                else 0.0
+            )
+            blended.append((idx, score + recency))
+        blended.sort(key=lambda item: item[1], reverse=True)
+
         lines: list[str] = []
-        for idx, score in scored[: self._max_matches]:
+        for idx, score in blended[: self._max_matches]:
             entry = entries[idx]
             lines.append(f'[{entry.ref}] (score {score:.2f}) {entry.summary}')
         return 'Index matches (BM25-ranked):\n' + '\n'.join(lines)

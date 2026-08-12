@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 _TOKENIZE_RE = re.compile(r"\w+")
 """Tokenizer regex: word runs (unicode letters, digits, underscore)."""
@@ -105,3 +106,23 @@ def bm25_rank(
 
     results.sort(key=lambda item: item[1], reverse=True)
     return results
+
+
+def recency_boost(ts: str, anchor_ts: str, half_life_days: float) -> float:
+    """Freshness multiplier in [0, 1] for one entry, relative to a newer anchor.
+
+    Returns 1.0 for the newest entry (age 0), decaying exponentially with a
+    configurable half-life toward 0 as `ts` falls behind `anchor_ts`. This is a
+    pure rank-agnostic freshness signal; callers fold it into a relevance score.
+    Unparseable timestamps degrade gracefully to 0.0 (treated as stale), and an
+    anchor older than the entry is clamped to 1.0.
+    """
+    try:
+        t = datetime.fromisoformat(ts)
+        anchor = datetime.fromisoformat(anchor_ts)
+    except (ValueError, TypeError):
+        return 0.0
+    age = (anchor - t).total_seconds() / 86400.0  # days
+    if age <= 0:
+        return 1.0
+    return 0.5 ** (age / half_life_days)
