@@ -41,6 +41,17 @@ cd /home/alice/projects/Personal/pydantic-agent-framework
 set -a && . ./.env 2>/dev/null && set +a && \
   LME_MAX_QUESTIONS=4 PYTHONPATH= .venv/bin/python -u -m tests.run_lmem
 
+# Swap the answering model (and/or judge) via CLI flag (overrides env):
+set -a && . ./.env 2>/dev/null && set +a && \
+  PYTHONPATH= .venv/bin/python -u -m tests.run_lmem \
+  --subject-model openrouter:openai/gpt-5.6-luna-pro --judge-model openrouter:openai/gpt-4o-mini
+
+# CLI flags: --subject-model / --judge-model (precede env BEAM_LITE_SUBJECT_MODEL /
+# LME_JUDGE_MODEL). Swapping the subject model does NOT invalidate the durable
+# seed store (keyed by question_id only) — but it changes the answers, so expect
+# a different score vs. the deepseek baseline. PAF_FRESH_SEED=1 forces the
+# summarizer to rebuild every seed (live, expensive) regardless of the store.
+
 # LoCoMo — eviction knobs in env: LOCOMO_TARGET_TOKENS / MAX_LINES.
 set -a && . ./.env 2>/dev/null && set +a && \
   PYTHONPATH= .venv/bin/python -u -m tests.run_locomo
