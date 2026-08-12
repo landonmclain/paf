@@ -18,9 +18,14 @@ wheels/
 
 # Persistence store — runtime state, not source. Historically a sqlite db;
 # now the harness FileStepStore writes a directory of JSON/JSONL under
-# data/paf/. Ignore the whole runtime dir.
-data/
+# data/paf/. Ignore the runtime tree, but keep committed durable benchmark
+# artifacts (generated seed summaries) tracked. `data/*` (not `data/`)
+# keeps the root traversable so the `!` exceptions can re-include a subtree.
+data/*
 !.env.example
+!data/benchmarks/
+data/benchmarks/*
+!data/benchmarks/generated/
 
 # Generated benchmark run outputs (graded runner writes JSON per full run).
 tests/results/
