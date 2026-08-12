@@ -64,6 +64,7 @@ from paf.capabilities.turn_index import (
     Turn,
     TurnIndexStore,
     TurnSummarizer,
+    TurnSummary,
     summarize_turn_append,
 )
 from paf.capabilities.turn_index._extract import build_turn_context
@@ -106,6 +107,9 @@ LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
 
 DATA = Path(__file__).parent.parent / "data" / "benchmarks" / "lme_oracle.json"
 RESULTS_DIR = Path(__file__).parent / "results"
+# Durable seed summaries (committed, see snapshot_seed_index.py). The harness
+# REQUIRES these per-question; missing = error, no silent regeneration.
+GENERATED_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "generated"
 
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
 # across all 6 types + some abstention is a good first validation.
@@ -354,10 +358,12 @@ def _user_turn_units(messages: list[ModelMessage]) -> list[tuple[int, list[Model
 async def _persist_seed_direct(
     store: FileStepStore,
     index_store: TurnIndexStore,
-    summarizer: TurnSummarizer,
+    summarizer: TurnSummarizer | None,
     raw_turns: list[dict],
     cid: str,
     run_id: str,
+    *,
+    precomputed: dict[int, TurnSummary] | None = None,
 ) -> list[dict]:
     """Persist raw LME turns directly (no agent) and index each user turn.
 
@@ -367,6 +373,13 @@ async def _persist_seed_direct(
     chat agent runs during seed -- the only model calls are the summarizer's
     (the index builder), which is the whole point: ~zero seed token burn and
     a CLEAN store (no `User: assistant:` nesting, no tool-call pollution).
+
+    `precomputed` is the REUSE seam: when a turn_id has a durable `TurnSummary`
+    in it, that summary is used instead of calling the summarizer (so re-runs
+    reproduce the exact same index with ZERO summarizer tokens). When a turn_id
+    is absent from `precomputed`, the summarizer is called as usual -- keeping
+    this function the single mechanics path for the gate (`check_direct_seed`)
+    and the live-summarizer validation (`tiny_lmem`).
     """
     messages = _transcript_messages(raw_turns, run_id, cid)
     await store.register_run(
@@ -383,7 +396,14 @@ async def _persist_seed_direct(
     )
 
     rows: list[dict] = []
-    for turn_id, msgs in _user_turn_units(messages):
+    units = _user_turn_units(messages)
+    missing = sorted(tid for tid, _ in units if tid not in (precomputed or {}))
+    if missing:
+        raise ValueError(
+            f"stale durable seed summaries: no summary for turn_id(s) {missing}. "
+            "Regenerate with snapshot_seed_index.py."
+        )
+    for turn_id, msgs in units:
         turn = Turn(
             run_id=run_id,
             conversation_id=cid,
@@ -391,7 +411,14 @@ async def _persist_seed_direct(
             messages=msgs,
         )
         rendered = build_turn_context(turn.messages)
-        summary = await summarizer.summarize(rendered)
+        if (precomputed or {}).get(turn_id) is not None:
+            summary = (precomputed or {})[turn_id]
+        elif summarizer is None:
+            raise RuntimeError(  # unreachable: missing-ids raised above
+                "_persist_seed_direct: summarizer is None with no precomputed summary"
+            )
+        else:
+            summary = await summarizer.summarize(rendered)
         appended, one_line = await summarize_turn_append(
             turn=turn, index_store=index_store, summary=summary
         )
@@ -413,9 +440,33 @@ async def _persist_seed_direct(
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Retrieval signal (independent of the judge)
-# ---------------------------------------------------------------------------
+def _load_precomputed_summaries(question_id: str) -> dict[int, TurnSummary]:
+    """Load durable seed summaries for `question_id` (STRICT: must exist).
+
+    Reads `GENERATED_DIR/<question_id>.jsonl` (committed via
+    `snapshot_seed_index.py`). Missing file raises -- there is NO silent
+    fallback to regenerating: the durable summaries are the source of truth
+    for a reproducible run. Stale/partial coverage is caught by
+    `_persist_seed_direct` (every user-turn unit must have a summary).
+    """
+    path = GENERATED_DIR / f"{question_id}.jsonl"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"durable seed summaries missing: {path}. Run "
+            "`tests/snapshot_seed_index.py` to generate them for this question."
+        )
+    out: dict[int, TurnSummary] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        out[int(rec["turn_id"])] = TurnSummary(
+            sentence=rec["summary"],
+            key_terms=rec.get("key_terms") or [],
+            outcome=rec["outcome"],
+        )
+    return out
 
 
 def _retrieval(recall: dict, gold_session_texts: list[str]) -> dict:
@@ -512,7 +563,6 @@ def main(argv: list[str] | None = None) -> dict:
     # recall agent reads: the index store and real summarizer are constructed
     # here so seed rows land exactly where read_turn/search_index will look.
     index_store = TurnIndexStore(index_dir)
-    seed_summarizer = TurnSummarizer(model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6)
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,
@@ -541,22 +591,25 @@ def main(argv: list[str] | None = None) -> dict:
 
         # ---- Seed the haystack sessions ------------------------------
         # DIRECT-PERSIST SEED (no agent loop): raw LME turns are written
-        # straight into the store + turn index with their TRUE roles, and
-        # each user turn is summarized by the real summarizer. No LLM chat
-        # agent replays the transcript -- the corrupt-seed bug (flattened
-        # `User: assistant:` turns + the seed agent's own tool calls in the
-        # store) is structurally impossible here, and seed cost drops to
-        # just the summarizer calls.
+        # straight into the store + turn index with their TRUE roles. The
+        # index summaries come from the DURABLE committed store
+        # (`data/benchmarks/generated/`, see snapshot_seed_index.py), STRICT:
+        # a missing/stale file is a hard error -- no silent regeneration, so
+        # re-runs reproduce the exact same index with ZERO summarizer tokens.
+        # The store still persists the full transcript for read_turn /
+        # search_conversation_history resolution.
         run_id = f"seed-{cid}"
+        precomputed = _load_precomputed_summaries(q["question_id"])
         seed_rows = asyncio.run(
             _persist_seed_direct(
-                store, index_store, seed_summarizer, raw_turns, cid, run_id
+                store, index_store, None, raw_turns, cid, run_id,
+                precomputed=precomputed,
             )
         )
         all_seed_rows.extend(seed_rows)
         print(
             f"[lmem]   q{qi} seeded {len(seed_rows)} user-turn units directly "
-            f"(no agent loop; summarizer-indexed)",
+            f"(durable summaries, {sum(1 for _ in precomputed)} reused, 0 summarizer)",
             flush=True,
         )
 

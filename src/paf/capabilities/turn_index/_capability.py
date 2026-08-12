@@ -106,8 +106,11 @@ _INSTRUCTIONS = (
     'or step 3 when the one-liner isn\'t enough.\n'
     '5. `search_conversation_history(query)` — wide BM25 search over persisted '
     'history. LAST RESORT; only if the above came up empty.\n'
-    'Skip rungs that aren\'t needed: if the index already names the turn, go '
-    'straight to `read_turn` — don\'t call `search_index` first.'
+    'Skip rungs that aren\'t needed: if the index already names the turn, go '\
+    'straight to `read_turn` — don\'t call `search_index` first.\n'
+    'When turns conflict on a fact (two different values for the same thing), '
+    'treat the MOST RECENTLY stated value as the current truth — answer from '
+    'the newer one, not the older.'
 )
 
 
