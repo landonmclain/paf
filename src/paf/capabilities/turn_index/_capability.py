@@ -99,8 +99,9 @@ _INSTRUCTIONS = (
     'tool-call for something you already have.\n'
     '2. TURN INDEX — a one-line summary + ref of every past turn is injected in '
     'your request. Recognize the relevant turn from it (no tool call).\n'
-    '3. `search_index(query)` — substring scan over index lines + key terms. Use '
-    'when you have NO ref and don\'t know which turn.\n'
+    '3. `search_index(query)` — BM25 over the FULL per-turn index record '\
+        '(one-liner summary, key terms, and outcome, ranked by relevance). Use '\
+        'when you have NO ref and don\'t know which turn.\n'
     '4. `read_turn(ref)` — pull the full turn for a ref you have from the index '
     'or step 3 when the one-liner isn\'t enough.\n'
     '5. `search_conversation_history(query)` — wide BM25 search over persisted '

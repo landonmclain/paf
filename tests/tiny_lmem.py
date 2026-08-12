@@ -34,29 +34,20 @@ import time
 import uuid
 from pathlib import Path
 
-from pydantic_ai import Agent, AgentRunResultEvent
-from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
-from pydantic_ai_harness.compaction import (
-    ClampOversizedMessages,
-    ClearToolResults,
-    SlidingWindowCompaction,
-    TieredCompaction,
-)
-from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
+from pydantic_ai import Agent
+from pydantic_ai_harness.step_persistence import FileStepStore
 
-from paf.capabilities.memory import Memory
-from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
-from paf.capabilities.turn_index import (
-    TurnIndexCapability,
-    TurnIndexStore,
-    TurnSummarizer,
-)
+from paf.capabilities.turn_index import TurnIndexStore
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
     setup_observability,
     shutdown_observability,
 )
+
+# Shared harness: memory-free builder + turn runner (the ONE source of truth for
+# the pipeline; tiny delegates so it can't drift from run_lmem again).
+from tests.run_locomo import _build_agent, _run_turn
 
 # ---------------------------------------------------------------- config ----
 SUBJECT_MODEL = os.environ.get(
@@ -77,101 +68,19 @@ DATA = Path(__file__).parent.parent / "data" / "benchmarks" / "lme_oracle.json"
 RESULTS_DIR = Path(__file__).parent / "results"
 
 # ------------------------------------------------ pipeline (run_locomo-faithful) ----
-def build_run_locomo_agent(store: FileStepStore, index_dir: Path, memory_dir: Path) -> Agent:
-    """EXACT mirror of `tests/run_locomo.py::_build_agent` — INCLUDING its bug.
-
-    TurnIndexCapability is constructed WITHOUT `summarizer=`, so it falls to the
-    deterministic stub. Reproduces the "raw truncated text in the index" artifact.
-    """
-    source = SnapshotHistorySource(store)
-    caps = [
-        StepPersistence(store=store),
-        ConversationSearch(source=source, scope="conversation", add_instructions=False),
-        TurnIndexCapability(
-            source=source,
-            index_store=TurnIndexStore(index_dir),
-            max_lines=MAX_LINES,
-            add_instructions=False,
-            # <-- no summarizer (the bug)
-        ),
-        Memory.from_spec(
-            backend="markdown", directory=str(memory_dir),
-            agent_name="locomo-subject", inject_memory=True,
-        ),
-        TieredCompaction(
-            target_tokens=LOCOMO_TARGET_TOKENS,
-            tiers=[
-                ClampOversizedMessages(max_part_tokens=50_000, keep_head_chars=2_000, keep_tail_chars=2_000),
-                ClearToolResults(max_tokens=1, keep_pairs=4),
-                SlidingWindowCompaction(max_messages=LOCOMO_SW_MAX_MESSAGES, keep_messages=LOCOMO_SW_KEEP),
-            ],
-        ),
-    ]
-    return Agent(SUBJECT_MODEL, name="locomo-subject", capabilities=caps)
-
-
-def build_agent(store: FileStepStore, index_dir: Path, memory_dir: Path) -> Agent:
-    """The CORRECT pipeline: `_build_agent` + the real `TurnSummarizer` wired in.
-
-    This is the reference for what the benchmark SHOULD do. When
-    `TINY_SUMMARIZER=0`, falls back to `_build_agent`'s stub for comparison.
-    """
-    if not WIRE_SUMMARIZER:
-        return build_run_locomo_agent(store, index_dir, memory_dir)
-    source = SnapshotHistorySource(store)
-    caps = [
-        StepPersistence(store=store),
-        ConversationSearch(source=source, scope="conversation", add_instructions=False),
-        # Real LLM summarizer: sentence + key_terms + outcome (160 chars, 6 terms).
-        TurnIndexCapability(
-            source=source,
-            index_store=TurnIndexStore(index_dir),
-            max_lines=MAX_LINES,
-            add_instructions=False,
-            summarizer=TurnSummarizer(model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6),
-        ),
-        Memory.from_spec(
-            backend="markdown", directory=str(memory_dir),
-            agent_name="locomo-subject", inject_memory=True,
-        ),
-        TieredCompaction(
-            target_tokens=LOCOMO_TARGET_TOKENS,
-            tiers=[
-                ClampOversizedMessages(max_part_tokens=50_000, keep_head_chars=2_000, keep_tail_chars=2_000),
-                ClearToolResults(max_tokens=1, keep_pairs=4),
-                SlidingWindowCompaction(max_messages=LOCOMO_SW_MAX_MESSAGES, keep_messages=LOCOMO_SW_KEEP),
-            ],
-        ),
-    ]
-    return Agent(SUBJECT_MODEL, name="locomo-subject", capabilities=caps)
+# Use the SHARED harness builder from tests/run_locomo (memory-free, real
+# TurnSummarizer, TurnIndex owns the ladder). Previously tiny_lmem maintained
+# its own mirrored builders, which drifted (introduced the summarizer-stub
+# "bug"). Consolidating here ensures tiny tests the same pipeline as run_lmem.
+def build_agent(store, index_dir) -> Agent:
+    """Delegate to the shared memory-free harness builder."""
+    return _build_agent(store, index_dir)
 
 
 # ------------------------------------------------ turn runner (run_locomo-faithful) ----
 def run_turn(agent: Agent, prompt: str, cid: str, name: str, session: str) -> dict:
-    tools: list[str] = []
-    tool_outputs: list[str] = []
-    text = ""
-    async def _run():
-        nonlocal text
-        with root_span(name, **{
-            "langfuse.observation.input": _json_dumps({"prompt": prompt, "conversation_id": cid}),
-            "langfuse.session.id": session,
-        }):
-            async with agent.run_stream_events(prompt, conversation_id=cid) as es:
-                async for e in es:
-                    if isinstance(e, FunctionToolCallEvent):
-                        tools.append(str(e.part.tool_name or ""))
-                    elif isinstance(e, FunctionToolResultEvent):
-                        c = getattr(getattr(e, "part", None), "content", None)
-                        if c is None:
-                            c = getattr(e, "content", None)
-                        if isinstance(c, str) and c.strip():
-                            tool_outputs.append(c)
-                    elif isinstance(e, AgentRunResultEvent):
-                        text = e.result.output
-    import asyncio
-    asyncio.run(_run())
-    return {"text": text, "tools": tools, "tool_outputs": tool_outputs}
+    """Delegate to the shared turn runner from tests/run_locomo."""
+    return _run_turn(agent, prompt, cid, name, session)
 
 
 # ------------------------------------------------ LME helpers (run_lmem-faithful) ----
@@ -260,16 +169,15 @@ def main() -> int:
     run_ts = time.strftime("%Y%m%d-%H%M%S")
     session = f"tiny-lmem-{run_ts}"
     # Persist the full evidence trail like run_lmem: step persistence (full
-    # turn history), the turn index (one-liners + key_terms), and the memory
-    # markdown, under a run-scoped artifact dir alongside the report. Without
-    # the underlying data a PASS/FAIL is unfalsifiable — and this run is
-    # exactly about auditing *what the summarizer put in the index*.
+    # turn history) + the turn index (one-liners + key_terms), under a
+    # run-scoped artifact dir alongside the report. Without the underlying data
+    # a PASS/FAIL is unfalsifiable — and this run is exactly about auditing
+    # *what the summarizer put in the index*.
     artifact_dir = RESULTS_DIR / session
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
     index_dir = artifact_dir / "index"
-    memory_dir = artifact_dir / "memory"
-    agent = build_agent(store, index_dir, memory_dir)
+    agent = build_agent(store, index_dir)
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,
         "judge": JUDGE_MODEL,

@@ -336,7 +336,7 @@ def main(argv: list[str] | None = None) -> dict:
     store = FileStepStore(directory=artifact_dir / "store")
     index_dir = artifact_dir / "index"
     memory_dir = artifact_dir / "memory"
-    agent = _build_agent(store, index_dir, memory_dir)
+    agent = _build_agent(store, index_dir)
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,

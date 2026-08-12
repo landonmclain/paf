@@ -10,16 +10,22 @@ all over ONE isolated temp store so the run is self-contained and reproducible):
 
   - StepPersistence          writes full history to a FileStepStore
   - ConversationSearch       BM25 wide fallback over that same store
-  - TurnIndexCapability      one-line injected tail index (max_lines=4 -> forces
-                             eviction/retrieval) + read_turn / search_index
-  - Memory (markdown)        durable MEMORY.md notebook, inject_memory=True
-  - TieredCompaction         the no-summary ladder (build_compaction, target 1200)
-                             -- pruning live context so old turns are NOT in
-                             context and real retrieval is required
+  - TurnIndexCapability      one-line injected tail index (max_lines bounds the
+                             injected tail) + read_turn / search_index; its
+                             _INSTRUCTIONS are the SOLE system-prompt ladder
+  - TieredCompaction         the no-summary ladder (build_compaction, target
+                             LOCOMO_TARGET_TOKENS) -- pruning live context so
+                             old turns are NOT in context and real retrieval is
+                             required
 
-When Memory is present it owns the SINGLE composite recall ladder, so TurnIndex
-and ConversationSearch get add_instructions=False (exactly what
-`build_runtime_capabilities` does) -- one ladder, not three.
+Retrieval steering comes from ONE place: `TurnIndexCapability.get_instructions()`
+(recognition -> search_index -> read_turn -> search_conversation_history).
+ConversationSearch is built with `add_instructions=False` because the index
+ladder already names it as its last rung. The durable `Memory` capability is
+**not** part of the harness (memory is not ready / not in tests as of 2026-08-11).
+
+The `_build_agent(store, index_dir)` here is the SHARED builder used by
+`run_lmem.py`, `run_lmem_memoff.py`, and `tiny_lmem.py` -- edit it in one place.
 
 Seed phase: replay each of the 18 session_1 turns as a `{speaker}: {text}` user
 message plus an instruction to persist durable facts via `write_memory` (capture
@@ -53,7 +59,6 @@ from pydantic_ai_harness.compaction import (
 )
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
-from paf.capabilities.memory import Memory
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.turn_index import (
     TurnIndexCapability,
@@ -132,38 +137,38 @@ def _gold_answer(q: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_agent(store: FileStepStore, index_dir: Path, memory_dir: Path) -> Agent:
-    """Wire the full PAF pipeline. Memory owns the ladder; others suppressed."""
+def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
+    """Wire the full PAF pipeline (memory-free; turn-index owns the ladder).
+
+    The durable `Memory` capability is intentionally NOT included ("memory is
+    not ready / not part of tests near-term" — 2026-08-11). Retrieval steering
+    lives solely in TurnIndexCapability._INSTRUCTIONS, which is the ONE
+    guidance source; ConversationSearch stays add_instructions=False because
+    the index ladder already names search_conversation_history as its last rung.
+    """
     source = SnapshotHistorySource(store)
     caps = [
         StepPersistence(store=store),
-        # ConversationSearch: BM25 wide fallback. suppressed instructions
-        # (Memory owns the composite ladder).
+        # ConversationSearch: BM25 wide fallback. No instructions — the
+        # TurnIndex ladder already names it as the LAST rung; a profile that
+        # owns the ladder suppresses this short hint.
         ConversationSearch(
             source=source, scope="conversation", add_instructions=False
         ),
         # TurnIndex: injected tail index (max_lines bounds the tail), plus
-        # read_turn / search_index. suppressed instructions (Memory owns ladder).
-        # ALWAYS-on real LLM summarizer (2026-08-11): the benchmark must exercise
-        # the real TurnSummarizer (sentence + key_terms + outcome), not the
-        # stub — the whole point of the summary-index feature. Matches the
-        # reference wiring in tiny_lmem.build_agent. TurnSummarizer defaults its
-        # model to SUBJECT_MODEL; explicit keeps tool/model in one place.
+        # read_turn / search_index. Instructions ON — this is the SOLE
+        # system-prompt retrieval ladder (memory removed). ALWAYS-on real LLM
+        # summarizer: sentence + key_terms + outcome. Matches the reference in
+        # tiny_lmem. TurnSummarizer defaults its model to SUBJECT_MODEL;
+        # explicit keeps tool/model in one place.
         TurnIndexCapability(
             source=source,
             index_store=TurnIndexStore(index_dir),
             max_lines=MAX_LINES,
-            add_instructions=False,
+            add_instructions=True,
             summarizer=TurnSummarizer(
                 model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
             ),
-        ),
-        # Memory: markdown notebook, injected, durable facts. Owns the ladder.
-        Memory.from_spec(
-            backend="markdown",
-            directory=str(memory_dir),
-            agent_name="locomo-subject",
-            inject_memory=True,
         ),
         # Context compaction: no-summary ladder, LOW target so it trips hard and
         # evicts early evidence turns out of live context -> forces retrieval.
@@ -328,8 +333,7 @@ def main(argv: list[str] | None = None) -> dict:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
     index_dir = artifact_dir / "index"
-    memory_dir = artifact_dir / "memory"
-    agent = _build_agent(store, index_dir, memory_dir)
+    agent = _build_agent(store, index_dir)
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,
