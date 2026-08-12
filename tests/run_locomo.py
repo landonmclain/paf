@@ -111,13 +111,13 @@ LOCOMO_MAX_QUESTIONS = int(os.environ.get("LOCOMO_MAX_QUESTIONS", "30"))  # acro
 ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "0") == "1"
 
 # Memory presence knob: MEMORY=1 wires the durable Memory capability into the
-# harness (inject_memory=True, writable like production so the subject captures
-# durable facts) and swaps the plain SlidingWindowCompaction tier for
-# MemoryConsolidationWindow, so the owner sub-agent folds each about-to-evict
-# slice into a run-scoped memory store. Mirrors ABLATE_TURN_INDEX: a module-level
-# env bool, default off. Every existing baseline (run_locomo / run_lmem /
-# tiny_lmem / beam-lite, which all share this builder) is byte-identical without
-# it. Turn it on for a memory-arm run: `MEMORY=1 ...`.
+# harness (inject_memory=True, subject READ-ONLY / writable=False per the M2
+# owner model) and swaps the plain SlidingWindowCompaction tier for
+# MemoryConsolidationWindow, so the owner sub-agent (writable=True) folds each
+# about-to-evict slice into a run-scoped memory store. Mirrors ABLATE_TURN_INDEX:
+# a module-level env bool, default off. Every existing baseline (run_locomo /
+# run_lmem / tiny_lmem / beam-lite, which all share this builder) is byte-identical
+# without it. Turn it on for a memory-arm run: `MEMORY=1 ...`.
 MEMORY = os.environ.get("MEMORY", "0") == "1"
 
 
@@ -178,9 +178,10 @@ def _build_agent(
     (lmem-20260812-133841: overall 0.8333, recall 0.275, 288,052 tokens).
 
     With MEMORY=1: the durable `Memory` capability is loaded (a plain capability,
-    writable like production so the subject captures durable facts) and the plain
-    SlidingWindowCompaction tier is replaced by MemoryConsolidationWindow — the
-    owner sub-agent folds each about-to-evict slice into ``memory_dir`` before
+    subject READ-ONLY / writable=False per the M2 owner model, so the subject
+    can't contaminate durable memory) and the plain SlidingWindowCompaction tier
+    is replaced by MemoryConsolidationWindow — the owner sub-agent (writable=True,
+    the sole writer) folds each about-to-evict slice into ``memory_dir`` before
     the window drops it. Default memory dir is a run-scoped sibling of
     ``index_dir``.
     """
@@ -216,12 +217,11 @@ def _build_agent(
         )
     sw_tier: SlidingWindowCompaction
     if MEMORY:
-        # Memory arm: durable notebook injected every request, matched to the
-        # production assistant (build.py `_build_memory`): writable so the
-        # subject can CAPTURE facts during the seed/recall phases (the
-        # `_SEED_INSTRUCTION` tells it to `write_memory`). The consolidation
-        # window below additionally runs the owner (writable=True) on each
-        # eviction to fold the about-to-drop slice into the same store.
+        # Memory arm: durable notebook injected every request. Per the M2 owner
+        # model (_consolidate.py, design note §2c), the subject is READ-ONLY
+        # (writable=False) — it can never contaminate durable memory. The
+        # consolidation owner (writable=True) is the sole writer, folding each
+        # about-to-evict slice into the store at the eviction boundary.
         from paf.capabilities.memory import Memory
         from paf.capabilities.memory._window import MemoryConsolidationWindow
 
@@ -232,6 +232,7 @@ def _build_agent(
                 directory=str(mem_dir),
                 agent_name="assistant",
                 inject_memory=True,
+                writable=False,
             )
         )
         # Consolidation window: same knobs as the plain sliding window, but
@@ -274,6 +275,19 @@ _SEED_INSTRUCTION = (
     "using `write_memory`. Use concise facts (e.g. 'Melanie painted a lake sunrise "
     "in 2022'). Do NOT persist transient small talk. Acknowledge briefly.]"
 )
+
+# Under MEMORY=1 the subject carries the READ-ONLY Memory surface (writable=False,
+# owner model), so it has no `write_memory` to call — pointing it at that tool
+# would be dead and confusing. The owner folds durable facts into the store at the
+# eviction boundary instead. Strip the write directive; keep the conversational
+# framing so the replay still reads naturally.
+_SEED_INSTRUCTION_MEMORY = (
+    "\n\n[This is a conversation from a chat transcript. Person names are "
+    "Caroline (trans woman) and Melanie. Reply as you naturally would, staying in "
+    "character for the chat. Do not summarize or write anything to persistent "
+    "memory — memory upkeep happens elsewhere. Acknowledge briefly.]"
+)
+_SEED_INSTRUCTION_ACTIVE = _SEED_INSTRUCTION_MEMORY if MEMORY else _SEED_INSTRUCTION
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +445,7 @@ def main(argv: list[str] | None = None) -> dict:
         # ---- Seed: replay session_1 turns for this conversation ---------
         id_to_text: dict[str, str] = {}
         for i, turn in enumerate(seed, start=1):
-            prompt = f"{turn['speaker']}: {turn['text']}{_SEED_INSTRUCTION}"
+            prompt = f"{turn['speaker']}: {turn['text']}{_SEED_INSTRUCTION_ACTIVE}"
             row = _run_turn(
                 agent, prompt, cid,
                 f"locomo.seed.{i}.session_1", session,
