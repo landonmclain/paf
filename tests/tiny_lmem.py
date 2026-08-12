@@ -27,6 +27,7 @@ evidence; non-zero otherwise. Never 10 minutes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -37,7 +38,7 @@ from pathlib import Path
 from pydantic_ai import Agent
 from pydantic_ai_harness.step_persistence import FileStepStore
 
-from paf.capabilities.turn_index import TurnIndexStore
+from paf.capabilities.turn_index import TurnIndexStore, TurnSummarizer
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -48,6 +49,13 @@ from paf.observability.instrumentation import (
 # Shared harness: memory-free builder + turn runner (the ONE source of truth for
 # the pipeline; tiny delegates so it can't drift from run_lmem again).
 from tests.run_locomo import _build_agent, _run_turn
+
+# Direct-persist seed (no agent loop): write raw LME turns straight into the
+# store + turn index, then let the real summarizer build the one-liners.
+from tests.run_lmem import (
+    _persist_seed_direct,
+    _raw_turns,
+)
 
 # ---------------------------------------------------------------- config ----
 SUBJECT_MODEL = os.environ.get(
@@ -194,9 +202,27 @@ def main() -> int:
     }, indent=2))
     cid = f"lmem-{uuid.uuid4().hex[:8]}"
 
-        # ---- seed the haystack (2 turns for the default question) ----
-    for i, turn in enumerate(seed_turns(q), start=1):
-        run_turn(agent, turn["text"], cid, f"tiny.seed.{i}", session)
+    # ---- seed the haystack DIRECTLY (no agent loop) --------------------
+    # Raw LME turns go straight into the store + turn index with TRUE roles;
+    # the real summarizer builds each one-liner. The corrupt-seed bug
+    # (flattened `User: assistant:` turns + the seed agent's own tool calls
+    # in the store) is structurally impossible here, and seed cost is just
+    # the summarizer calls -- no chat-agent replay of the transcript.
+    index_store = TurnIndexStore(index_dir)
+    seed_summarizer = TurnSummarizer(
+        model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+    )
+    raw_turns = _raw_turns(q)
+    seed_rows = asyncio.run(
+        _persist_seed_direct(
+            store, index_store, seed_summarizer, raw_turns, cid, f"seed-{cid}"
+        )
+    )
+    print(
+        f"[tiny_lmem] seeded {len(seed_rows)} user-turn units directly "
+        f"(no agent loop; real summarizer)",
+        flush=True,
+    )
 
     # ---- recall: cold-start the question (answer fell out of context) ----
     qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""

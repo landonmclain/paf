@@ -39,6 +39,7 @@ Outputs JSON to tests/results/lmem-<ts>.json.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -46,8 +47,26 @@ import uuid
 from pathlib import Path
 
 from pydantic_ai import Agent
-from pydantic_ai_harness.step_persistence import FileStepStore
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
+from pydantic_ai_harness.step_persistence import (
+    ContinuableSnapshot,
+    FileStepStore,
+    RunRecord,
+)
 
+from paf.capabilities.turn_index import (
+    Turn,
+    TurnIndexStore,
+    TurnSummarizer,
+    summarize_turn_append,
+)
+from paf.capabilities.turn_index._extract import build_turn_context
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -242,6 +261,159 @@ def _seed_turns(q: dict) -> tuple[list[dict], list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Direct-persist seed (no agent loop): write raw LME turns straight into the
+# store + turn index, then let the summarizer build the one-liners.
+# ---------------------------------------------------------------------------
+
+
+def _raw_turns(q: dict) -> list[dict]:
+    """Raw LME turns across all haystack sessions, in chronological order.
+
+    Each turn is the ORIGINAL `{role, content}` record (NOT flattened into a
+    `user: {role}: {content}` prompt -- that flattening was the corrupt-seed
+    bug: it made the store hold `User: assistant: ...` + the seed agent's own
+    tool calls, and the search tools faithfully returned the garbage).
+    """
+    sessions = q["haystack_sessions"]
+    dates = q["haystack_dates"]
+    session_ids = q["haystack_session_ids"]
+    tagged = []
+    for sess, dstr, sid in zip(sessions, dates, session_ids, strict=True):
+        tagged.append((_parse_dt(dstr), dstr, sid, sess))
+    tagged.sort(key=lambda x: x[0])
+    out: list[dict] = []
+    for _dt, dstr, sid, sess in tagged:
+        for i, turn in enumerate(sess):
+            out.append(
+                {
+                    "role": turn.get("role", "user"),
+                    "content": turn.get("content", ""),
+                    "dia_id": f"{sid}_t{i}",
+                    "date": dstr if i == 0 else "",
+                }
+            )
+    return out
+
+
+def _transcript_messages(
+    raw_turns: list[dict], run_id: str, cid: str
+) -> list[ModelMessage]:
+    """Build pydantic-ai ModelMessages with TRUE roles (user/assistant).
+
+    Each LME turn becomes a `ModelRequest` (user) or `ModelResponse`
+    (assistant) so the persisted history is a faithful transcript -- no
+    `User: assistant:` nesting, no tool-call pollution.
+    """
+    messages: list[ModelMessage] = []
+    for t in raw_turns:
+        text = t["content"]
+        if t["role"] == "assistant":
+            messages.append(
+                ModelResponse(
+                    parts=[TextPart(content=text)],
+                    run_id=run_id,
+                    conversation_id=cid,
+                )
+            )
+        else:
+            messages.append(
+                ModelRequest(
+                    parts=[UserPromptPart(content=text)],
+                    run_id=run_id,
+                    conversation_id=cid,
+                )
+            )
+    return messages
+
+
+def _user_turn_units(messages: list[ModelMessage]) -> list[tuple[int, list[ModelMessage]]]:
+    """Group transcript messages into user-turn units: (turn_id, [msgs]).
+
+    `turn_id` = ordinal of the user-prompt anchor among the run's user
+    prompts -- exactly the ref model `read_turn('{run_id}:{turn_id}')` walks
+    (`_TurnFinder._render_turn` slices from the turn_id-th anchor to the next
+    user anchor). A unit is [user ModelRequest, *following assistant
+    ModelResponses]. A leading assistant message with no preceding user
+    anchor opens the first unit so no transcript content is dropped.
+    """
+    units: list[tuple[int, list[ModelMessage]]] = []
+    pending: list[ModelMessage] = []
+    for m in messages:
+        if isinstance(m, ModelRequest):
+            units.append((len(units), [m] + pending))
+            pending = []
+        elif units:
+            units[-1][1].append(m)
+        else:
+            pending.append(m)  # leading assistant message (defensive)
+    if pending and not units:
+        units.append((0, pending))
+    return units
+
+
+async def _persist_seed_direct(
+    store: FileStepStore,
+    index_store: TurnIndexStore,
+    summarizer: TurnSummarizer,
+    raw_turns: list[dict],
+    cid: str,
+    run_id: str,
+) -> list[dict]:
+    """Persist raw LME turns directly (no agent) and index each user turn.
+
+    Writes ONE run record + ONE snapshot holding the full transcript (so
+    `read_turn` / `search_conversation_history` resolve), then summarizes
+    each user-turn unit with the REAL summarizer into the turn index. No LLM
+    chat agent runs during seed -- the only model calls are the summarizer's
+    (the index builder), which is the whole point: ~zero seed token burn and
+    a CLEAN store (no `User: assistant:` nesting, no tool-call pollution).
+    """
+    messages = _transcript_messages(raw_turns, run_id, cid)
+    await store.register_run(
+        RunRecord(run_id=run_id, conversation_id=cid, agent_name="locomo-subject")
+    )
+    await store.save_snapshot(
+        ContinuableSnapshot(
+            run_id=run_id,
+            step_index=0,
+            conversation_id=cid,
+            agent_name="locomo-subject",
+            messages=messages,
+        )
+    )
+
+    rows: list[dict] = []
+    for turn_id, msgs in _user_turn_units(messages):
+        turn = Turn(
+            run_id=run_id,
+            conversation_id=cid,
+            turn_id=turn_id,
+            messages=msgs,
+        )
+        rendered = build_turn_context(turn.messages)
+        summary = await summarizer.summarize(rendered)
+        appended, one_line = await summarize_turn_append(
+            turn=turn, index_store=index_store, summary=summary
+        )
+        rows.append(
+            {
+                "text": one_line,
+                "tools": [],
+                "tool_outputs": [],
+                "usage": {
+                    "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+                    "cache_write_tokens": 0, "total_tokens": 0, "requests": 0,
+                },
+                "dia_id": turn.ref,
+                "conv_id": cid,
+                "direct": True,
+                "appended": appended,
+            }
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Retrieval signal (independent of the judge)
 # ---------------------------------------------------------------------------
 
@@ -337,6 +509,11 @@ def main(argv: list[str] | None = None) -> dict:
     index_dir = artifact_dir / "index"
     memory_dir = artifact_dir / "memory"
     agent = _build_agent(store, index_dir)
+    # Direct-seed writes (no agent loop) share the SAME store + index the
+    # recall agent reads: the index store and real summarizer are constructed
+    # here so seed rows land exactly where read_turn/search_index will look.
+    index_store = TurnIndexStore(index_dir)
+    seed_summarizer = TurnSummarizer(model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6)
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,
@@ -353,30 +530,36 @@ def main(argv: list[str] | None = None) -> dict:
 
     for qi, q in enumerate(questions, start=1):
         cid = f"lmem-{uuid.uuid4().hex[:8]}"
-        turns, answer_sids = _seed_turns(q)
+        raw_turns = _raw_turns(q)
         # Cap seeding cost (LongMemEval oracle is small, but be safe).
-        turns = turns[:LME_MAX_TURNS_PER_QUESTION]
+        raw_turns = raw_turns[:LME_MAX_TURNS_PER_QUESTION]
         print(
             f"[lmem] q{qi}/{len(questions)} {q['question_type']} "
-            f"{q.get('question_id', '?')} seeding {len(turns)} turns — "
+            f"{q.get('question_id', '?')} seeding {len(raw_turns)} turns — "
             f"recall: {q['question'][:48]!r}",
             flush=True,
         )
 
         # ---- Seed the haystack sessions ------------------------------
-        for i, turn in enumerate(turns, start=1):
-            row = _run_turn(
-                agent, turn["text"], cid,
-                f"lmem.seed.{qi}.{i}", session,
+        # DIRECT-PERSIST SEED (no agent loop): raw LME turns are written
+        # straight into the store + turn index with their TRUE roles, and
+        # each user turn is summarized by the real summarizer. No LLM chat
+        # agent replays the transcript -- the corrupt-seed bug (flattened
+        # `User: assistant:` turns + the seed agent's own tool calls in the
+        # store) is structurally impossible here, and seed cost drops to
+        # just the summarizer calls.
+        run_id = f"seed-{cid}"
+        seed_rows = asyncio.run(
+            _persist_seed_direct(
+                store, index_store, seed_summarizer, raw_turns, cid, run_id
             )
-            row["dia_id"] = turn["dia_id"]
-            row["conv_id"] = cid
-            all_seed_rows.append(row)
-            if i % 5 == 0 or i == len(turns):
-                print(
-                    f"[lmem]   q{qi} seeded {i}/{len(turns)}",
-                    flush=True,
-                )
+        )
+        all_seed_rows.extend(seed_rows)
+        print(
+            f"[lmem]   q{qi} seeded {len(seed_rows)} user-turn units directly "
+            f"(no agent loop; summarizer-indexed)",
+            flush=True,
+        )
 
         # ---- Recall: cold-start the question -------------------------
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
@@ -388,7 +571,7 @@ def main(argv: list[str] | None = None) -> dict:
         row["question_type"] = q["question_type"]
         row["gold_answer"] = q["answer"]
         row["question_date"] = q.get("question_date")
-        row["answer_session_ids"] = answer_sids
+        row["answer_session_ids"] = q.get("answer_session_ids") or []
         row["question_id"] = q.get("question_id", f"q{qi}")
         row["conv_id"] = cid
 
