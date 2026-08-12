@@ -25,11 +25,13 @@ data/*
 !data/benchmarks/
 data/benchmarks/*
 !data/benchmarks/generated/
-# Durable seed summaries under generated/ are generated per-run and churn every
-# benchmark run (env-dependent, environmental output). Do not track them; the
-# pre-gate reference snapshot lives untracked under
-# data/benchmarks/generated/baseline-*/.
+# Durable seed summaries under generated/ are auto-persisted by run_lmem.py
+# (_persist_durable_summary) per seeded question and TRACKED so a fresh clone
+# re-runs zero-live-summarizer. They rename only when a question's seed turns
+# change. Keep any non-summary churn (e.g. transient run dumps) out via
+# explicit ignores below.
 data/benchmarks/generated/*
+!data/benchmarks/generated/*.jsonl
 
 # Generated benchmark run outputs (graded runner writes JSON per full run).
 tests/results/
