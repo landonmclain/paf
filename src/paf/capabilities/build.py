@@ -32,14 +32,16 @@ from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.turn_index import build_turn_index
-from paf.config import PROJECT_ROOT
+from paf.config import PROJECT_ROOT, settings
 
 # The profile name that gates context compaction in build_runtime_capabilities.
 _COMPACTION_CAPABILITY = "Compaction"
 
 # Where the Memory capability writes its readable `.md` bodies + `.memory-state.json`
 # CAS sidecar, anchored to the repo root (same convention as persistence/_STORE_DIR).
-_MEMORY_DIR = PROJECT_ROOT / Path("data/memory")
+# Directory comes from the shared Settings object (MEMORY_DIR / .env), so the
+# consolidation owner and the assistant always target the same store.
+_MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
 
 def _build_memory(store) -> Memory:

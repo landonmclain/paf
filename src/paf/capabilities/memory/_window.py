@@ -24,10 +24,13 @@ a no-op, so the window costs nothing on turns where it would not trim.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic_ai_harness.compaction import SlidingWindowCompaction
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
+
+from paf.config import PROJECT_ROOT, settings
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
@@ -35,8 +38,10 @@ if TYPE_CHECKING:
 
 # Same fixed store the assistant's Memory uses (build.py `_build_memory`). The
 # owner writes these plain `.md` bodies + CAS sidecar so the assistant reads the
-# exact same durable facts it would have written itself.
-DEFAULT_MEMORY_DIR = "data/memory"
+# exact same durable facts it would have written itself. Anchored to PROJECT_ROOT
+# through the shared Settings object (MEMORY_DIR / .env), so both always target
+# one canonical directory no matter where the process is launched from.
+DEFAULT_MEMORY_DIR = str(PROJECT_ROOT / Path(settings.memory_dir))
 DEFAULT_MEMORY_AGENT = "assistant"
 
 

@@ -29,6 +29,23 @@ class Settings(BaseSettings):
     # of launch CWD.
     persistence_dir: str = "data/paf"
 
+    # Where the Memory capability + pre-eviction consolidation owner write their
+    # readable `.md` bodies + `.memory-state.json` CAS sidecar. Relative paths
+    # resolve against PROJECT_ROOT like persistence_dir. Overridable via env /
+    # .env (MEMORY_DIR).
+    memory_dir: str = "data/memory"
+
+    # Pre-eviction memory consolidation: when true (CONSOLIDATE / .env), the
+    # sliding-window compaction tier folds the about-to-be-evicted slice into
+    # durable memory via the writable owner sub-agent before dropping it.
+    consolidate: bool = False
+
+    # Model for the consolidation owner sub-agent. Blank (default) → resolved to
+    # a cheap default constant (see paf.capabilities.memory._consolidate);
+    # set via CONSOL_MODEL / .env to override per run. Not the spec'd subject
+    # model — the owner is a separate leaf agent.
+    consol_model: str = ""
+
     # The derived one-line-per-turn index lives NEXT TO the step store, as its own
     # append-only JSONL surface. It is now backed by the agent-foundation
     # `StorageService` seam (M2): this value is the seam's *base directory* for the

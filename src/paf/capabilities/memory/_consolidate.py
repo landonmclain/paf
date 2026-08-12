@@ -15,20 +15,22 @@ from each evicted slice reach the store.
 
 Model selection
 ---------------
-The owner model is read from env (``CONSOL_MODEL``) with a cheap default,
-mirroring how ``SUBJECT_MODEL`` / ``JUDGE_MODEL`` are sourced in the benchmark
-harness. It is deliberately *not* hardcoded in the source and *not* the spec'd
-``assistant.yaml`` model (that model is the subject; the owner is a separate
-leaf agent). Override per run: ``CONSOL_MODEL=google/gemini-2.5-flash-lite:nitro``.
+The owner model is read from ``Settings.consol_model`` (``CONSOL_MODEL`` env /
+`.env`, aliased automatically by pydantic-settings) with a cheap default,
+mirroring how the benchmark harness sources its model knobs. It is deliberately
+*not* hardcoded in the source and *not* the spec'd ``assistant.yaml`` model
+(that model is the subject; the owner is a separate leaf agent). Override per
+run: ``CONSOL_MODEL=google/gemini-2.5-flash-lite:nitro``.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import TYPE_CHECKING
 
 from pydantic_ai import Agent
+
+from paf.config import settings
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
@@ -37,8 +39,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default: the cheap flash-lite class. Overridable via CONSOL_MODEL env —
-# see module docstring. Not the spec'd subject model.
+# Default: the cheap flash-lite class. Overridable via Settings.consol_model
+# (CONSOL_MODEL env / .env) — see module docstring. Not the spec'd subject.
 DEFAULT_CONSOL_MODEL = "google/gemini-2.5-flash-lite:nitro"
 
 CONSOLIDATION_GUIDANCE = """\
@@ -82,8 +84,8 @@ _MODULE_MEMORY: Memory | None = None
 
 
 def consolidate_model() -> str:
-    """Resolve the owner model from CONSOL_MODEL env, defaulting to flash-lite."""
-    return os.environ.get("CONSOL_MODEL", DEFAULT_CONSOL_MODEL)
+    """Resolve the owner model from Settings (CONSOL_MODEL / .env), defaulting to flash-lite."""
+    return settings.consol_model or DEFAULT_CONSOL_MODEL
 
 
 async def consolidate(

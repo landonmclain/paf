@@ -7,8 +7,8 @@ Covers the three seams locked in for the consolidation feature:
     mutate durable memory while the owner (``writable=True``) can.
 2.  ``MemoryConsolidationWindow.compact`` — fires the owner on the
     about-to-be-evicted slice and no-ops when nothing would be evicted.
-3.  ``build_compaction`` env toggle — ``CONSOLIDATE=1`` swaps the sliding-window
-    tier for the consolidation window; unset keeps the plain window.
+3.  ``build_compaction`` config toggle — ``consolidate`` on swaps the sliding-window
+    tier for the consolidation window; off keeps the plain window.
 """
 
 from __future__ import annotations
@@ -71,36 +71,33 @@ def test_compact_noop_when_nothing_evicted() -> None:
     assert find_safe_cutoff(msgs, window.keep_messages) == 0
 
 
-def test_window_swaps_into_compaction_under_env() -> None:
-    """CONSOLIDATE=1 replaces the plain sliding window in the tier list."""
-    import os
+def test_window_swaps_into_compaction_under_config(monkeypatch) -> None:
+    """consolidate config on swaps the plain sliding window for the consolidation window."""
+    from pydantic_ai_harness.compaction import SlidingWindowCompaction
 
-    import paf.capabilities.compaction as mod
+    from paf.config import settings
 
-    old = os.environ.get("CONSOLIDATE")
-    try:
-        os.environ["CONSOLIDATE"] = "0"
-        plain = build_compaction()
-        os.environ["CONSOLIDATE"] = "1"
-        gated = build_compaction()
-    finally:
-        if old is None:
-            os.environ.pop("CONSOLIDATE", None)
-        else:
-            os.environ["CONSOLIDATE"] = old
+    monkeypatch.setattr(settings, "consolidate", False)
+    plain = build_compaction()
+    monkeypatch.setattr(settings, "consolidate", True)
+    gated = build_compaction()
 
-    assert "SlidingWindowCompaction" in [type(t).__name__ for t in plain.tiers]
-    assert "MemoryConsolidationWindow" in [
-        type(t).__name__ for t in gated.tiers
-    ]
-    assert type(mod).__name__ == "module"
+    assert isinstance(plain.tiers[-1], SlidingWindowCompaction)
+    assert isinstance(gated.tiers[-1], MemoryConsolidationWindow)
 
 
-def test_window_default_store_scope(tmp_path: Path) -> None:
-    """Defaults point at the shared data/memory + assistant scope (build.py)."""
+def test_window_default_store_scope(monkeypatch) -> None:
+    """Defaults point at the anchored shared data/memory + assistant scope (build.py)."""
+    from pydantic_ai_harness.compaction import SlidingWindowCompaction
+
     w = MemoryConsolidationWindow(max_messages=4)
-    assert w.memory_directory == "data/memory"
+    # Anchored to PROJECT_ROOT through Settings.memory_dir, matching build.py.
+    from paf.config import PROJECT_ROOT
+
+    assert w.memory_directory == str(PROJECT_ROOT / Path("data/memory"))
     assert w.memory_agent == "assistant"
+    # Parent's defaults are inherited unchanged.
+    assert isinstance(w, SlidingWindowCompaction)
     assert w.keep_messages == 40  # harness default, unchanged
 
 
@@ -117,20 +114,12 @@ def test_consolidation_guidance_is_owned_by_owner() -> None:
     assert "NEWER ALWAYS WINS" in CONSOLIDATION_GUIDANCE
 
 
-def test_consolidation_model_reads_env() -> None:
-    """CONSOL_MODEL env overrides the flash-lite default (not hardcoded)."""
-    import os
-
+def test_consolidation_model_reads_config(monkeypatch) -> None:
+    """Settings.consol_model (CONSOL_MODEL / .env) overrides the flash-lite default."""
     from paf.capabilities.memory._consolidate import consolidate_model
+    from paf.config import settings
 
-    old = os.environ.get("CONSOL_MODEL")
-    try:
-        os.environ.pop("CONSOL_MODEL", None)
-        assert consolidate_model() == "google/gemini-2.5-flash-lite:nitro"
-        os.environ["CONSOL_MODEL"] = "openai:gpt-5.6-luna-pro"
-        assert consolidate_model() == "openai:gpt-5.6-luna-pro"
-    finally:
-        if old is None:
-            os.environ.pop("CONSOL_MODEL", None)
-        else:
-            os.environ["CONSOL_MODEL"] = old
+    monkeypatch.setattr(settings, "consol_model", "")
+    assert consolidate_model() == "google/gemini-2.5-flash-lite:nitro"
+    monkeypatch.setattr(settings, "consol_model", "openai:gpt-5.6-luna-pro")
+    assert consolidate_model() == "openai:gpt-5.6-luna-pro"
