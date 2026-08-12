@@ -93,24 +93,29 @@ from ._summarizer import TurnSummarizer
 from ._toolset import TurnIndexToolset
 
 _INSTRUCTIONS = (
+    'CONFLICT RULE (applies always, before retrieval): when the user states a fact '
+    'or figure and a past turn (or your own reconstruction) says something different '
+    'for the same thing, the user\'s most recent statement is the truth — treat the '
+    'MOST RECENTLY stated value as current reality, even if an older turn or your '
+    'inference seems more "accurate". Do not second-guess or re-interpret an explicit '
+    'user-stated value (e.g. a personal best, a count, an amount) into something else; '
+    'the user\'s word is authoritative over your prior-derived judgment.\n'
+    '\n'
     'To recall past turns, escalate in THIS order — use only as many rungs as '
     'needed, cheapest first:\n'
     '1. IN CONTEXT — if the answer is already in your context, answer it. Never '
     'tool-call for something you already have.\n'
     '2. TURN INDEX — a one-line summary + ref of every past turn is injected in '
     'your request. Recognize the relevant turn from it (no tool call).\n'
-    '3. `search_index(query)` — BM25 over the FULL per-turn index record '\
-        '(one-liner summary, key terms, and outcome, ranked by relevance). Use '\
+    '3. `search_index(query)` — BM25 over the FULL per-turn index record '
+        '(one-liner summary, key terms, and outcome, ranked by relevance). Use '
         'when you have NO ref and don\'t know which turn.\n'
     '4. `read_turn(ref)` — pull the full turn for a ref you have from the index '
     'or step 3 when the one-liner isn\'t enough.\n'
     '5. `search_conversation_history(query)` — wide BM25 search over persisted '
     'history. LAST RESORT; only if the above came up empty.\n'
-    'Skip rungs that aren\'t needed: if the index already names the turn, go '\
-    'straight to `read_turn` — don\'t call `search_index` first.\n'
-    'When turns conflict on a fact (two different values for the same thing), '
-    'treat the MOST RECENTLY stated value as the current truth — answer from '
-    'the newer one, not the older.'
+    'Skip rungs that aren\'t needed: if the index already names the turn, go '
+    'straight to `read_turn` — don\'t call `search_index` first.'
 )
 
 

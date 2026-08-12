@@ -398,10 +398,21 @@ async def _persist_seed_direct(
     rows: list[dict] = []
     units = _user_turn_units(messages)
     missing = sorted(tid for tid, _ in units if tid not in (precomputed or {}))
-    if missing:
+    if missing and summarizer is None:
+        # No durable summary AND no live summarizer to build one -> cannot
+        # index these turns. This is the STRICT guard: when a live summarizer
+        # is available (fallback path), missing turns are summarized on the fly
+        # instead so new questions can be indexed without a committed snapshot.
         raise ValueError(
-            f"stale durable seed summaries: no summary for turn_id(s) {missing}. "
-            "Regenerate with snapshot_seed_index.py."
+            f"stale durable seed summaries: no summary for turn_id(s) {missing} "
+            "and no live summarizer. Regenerate with snapshot_seed_index.py, "
+            "or pass a summarizer to build them live."
+        )
+    if missing and summarizer is not None:
+        print(
+            f"[lmem]   _persist_seed_direct: {len(missing)} turn(s) missing "
+            f"durable summary -> summarized live: {missing[:5]}{'...' if len(missing) > 5 else ''}",
+            flush=True,
         )
     for turn_id, msgs in units:
         turn = Turn(
@@ -414,7 +425,7 @@ async def _persist_seed_direct(
         if (precomputed or {}).get(turn_id) is not None:
             summary = (precomputed or {})[turn_id]
         elif summarizer is None:
-            raise RuntimeError(  # unreachable: missing-ids raised above
+            raise RuntimeError(  # unreachable: both guards above cover this
                 "_persist_seed_direct: summarizer is None with no precomputed summary"
             )
         else:
@@ -440,21 +451,29 @@ async def _persist_seed_direct(
     return rows
 
 
-def _load_precomputed_summaries(question_id: str) -> dict[int, TurnSummary]:
-    """Load durable seed summaries for `question_id` (STRICT: must exist).
+def _load_precomputed_summaries(
+    question_id: str, *, strict: bool = True
+) -> dict[int, TurnSummary]:
+    """Load durable seed summaries for `question_id`.
 
     Reads `GENERATED_DIR/<question_id>.jsonl` (committed via
-    `snapshot_seed_index.py`). Missing file raises -- there is NO silent
-    fallback to regenerating: the durable summaries are the source of truth
-    for a reproducible run. Stale/partial coverage is caught by
-    `_persist_seed_direct` (every user-turn unit must have a summary).
+    `snapshot_seed_index.py`). In STRICT mode (default) a missing file raises
+    -- there is NO silent fallback to regenerating: the durable summaries are
+    the source of truth for a reproducible run. With `strict=False` (new
+    questions that don't have durable summaries yet) a missing file returns
+    `{}` so `_persist_seed_direct` falls through to its live summarizer --
+    the index is built on the fly that run and can be snapshotted afterward.
+    Stale/partial coverage is caught by `_persist_seed_direct` (every
+    user-turn unit must have a summary, or it's summarized live).
     """
     path = GENERATED_DIR / f"{question_id}.jsonl"
     if not path.exists():
-        raise FileNotFoundError(
-            f"durable seed summaries missing: {path}. Run "
-            "`tests/snapshot_seed_index.py` to generate them for this question."
-        )
+        if strict:
+            raise FileNotFoundError(
+                f"durable seed summaries missing: {path}. Run "
+                "`tests/snapshot_seed_index.py` to generate them for this question."
+            )
+        return {}
     out: dict[int, TurnSummary] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -599,17 +618,34 @@ def main(argv: list[str] | None = None) -> dict:
         # The store still persists the full transcript for read_turn /
         # search_conversation_history resolution.
         run_id = f"seed-{cid}"
-        precomputed = _load_precomputed_summaries(q["question_id"])
+        # Durable summaries where they exist (strict), else FALL BACK to a
+        # live summarizer for the index. New questions (5+) have no committed
+        # summaries yet, so build their index on the fly this run, then
+        # snapshot it afterward (snapshot_seed_index.py) so next time it's
+        # durable and strictly reused. Q1-4 (committed) stay zero-token.
+        precomputed = _load_precomputed_summaries(
+            q["question_id"], strict=False
+        )
+        live_summarizer: TurnSummarizer | None = None
+        if not precomputed:
+            live_summarizer = TurnSummarizer(
+                model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+            )
+            print(
+                f"[lmem]   q{qi} NO durable summaries -> live summarizer "
+                f"(TurnSummarizer@{SUBJECT_MODEL})",
+                flush=True,
+            )
         seed_rows = asyncio.run(
             _persist_seed_direct(
-                store, index_store, None, raw_turns, cid, run_id,
+                store, index_store, live_summarizer, raw_turns, cid, run_id,
                 precomputed=precomputed,
             )
         )
         all_seed_rows.extend(seed_rows)
         print(
-            f"[lmem]   q{qi} seeded {len(seed_rows)} user-turn units directly "
-            f"(durable summaries, {sum(1 for _ in precomputed)} reused, 0 summarizer)",
+            f"[lmem]   q{qi} seeded {len(seed_rows)} user-turn units "
+            f"({'durable, 0 summarizer' if not live_summarizer else 'LIVE summarized'})",
             flush=True,
         )
 
