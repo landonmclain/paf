@@ -50,6 +50,28 @@ set -a && . ./.env 2>/dev/null && set +a && \
 keys/endpoint (tracing). `setup_observability()` returns `False` and prints a
 warning if tracing isn't configured — graded JSON still writes.
 
+### Durable seed store (replay = near-zero seed tokens) — READ BEFORE CHANGING KNOBS
+
+Each question's seed history is summarized ONCE and auto-persisted by
+`run_lmem._persist_durable_summary` to
+`data/benchmarks/generated/<question_id>.jsonl` (git-TRACKED). On the next run
+`_load_durable_seed_summaries` reads it → **"durable, 0 summarizer"** → no
+TurnSummarizer tokens for that question. A fresh clone re-runs zero-live-
+summarizer because the store is checked in.
+
+> **FOOTGUN — changing `LOCOMO_TARGET_TOKENS` / `MAX_LINES` (or any eviction /
+> index knob, `LOCOMO_SW_*`, etc.) INVALIDATES the durable cache.** The durable
+> summaries are keyed by `question_id` + the turn structure as it was summarized.
+> Re-run with different eviction thresholds → the index shape differs → the stored
+> summaries no longer match → `_persist_seed_direct` finds turns with no durable
+> summary and **falls back to the live summarizer for ALL affected questions**
+> (a real token + ~30min/time cost, one-time, then re-persisted).
+>
+> To change a knob and NOT burn tokens: kill `data/benchmarks/generated/*.jsonl`
+> FIRST and accept a full live re-summarize, OR keep the same knob values and the
+> replay stays zero-summarizer. Never tweak a knob and assume the replay is still
+> cheap — it silently isn't. Replay is only zero-cost for the SAME config.
+
 ## Run the SMOKE harness (Beam-Lite)
 
 ```bash
