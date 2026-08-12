@@ -107,6 +107,7 @@ class TurnIndexEntry:
     hash: str
     key_terms: list[str] | None = None
     outcome: str | None = None
+    session_id: str | None = None
 
     def key(self) -> tuple[str | None, str, int]:
         return (self.conversation_id, self.run_id, self.turn_id)
@@ -162,6 +163,8 @@ class TurnIndexStore:
             row['key_terms'] = entry.key_terms
         if entry.outcome:
             row['outcome'] = entry.outcome
+        if entry.session_id:
+            row['session_id'] = entry.session_id
         return row
 
     def _rows(self) -> list[TurnIndexEntry]:
@@ -178,6 +181,7 @@ class TurnIndexStore:
                     hash=data['hash'],
                     key_terms=data.get('key_terms'),
                     outcome=data.get('outcome'),
+                    session_id=data.get('session_id'),
                 )
             )
         return entries
@@ -193,6 +197,7 @@ class TurnIndexStore:
         summary: str,
         key_terms: list[str] | None = None,
         outcome: str | None = None,
+        session_id: str | None = None,
     ) -> TurnIndexEntry:
         """Append one entry atomically (via the seam's single-row append)."""
         entry = TurnIndexEntry(
@@ -204,6 +209,7 @@ class TurnIndexStore:
             hash=_content_hash(conversation_id, run_id, turn_id, summary),
             key_terms=key_terms,
             outcome=outcome,
+            session_id=session_id,
         )
         self.service.append(_KIND, self.scan_root, self._row(entry))
         return entry

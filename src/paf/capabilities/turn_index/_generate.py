@@ -127,6 +127,7 @@ async def summarize_turn_append(
     turn: Turn,
     index_store: TurnIndexStore,
     summary: TurnSummary | None = None,
+    session_id: str | None = None,
 ) -> tuple[bool, str]:
     """Summarize `turn` and append to the index iff it is not already indexed.
 
@@ -158,6 +159,7 @@ async def summarize_turn_append(
         summary=one_line,
         key_terms=key_terms,
         outcome=outcome,
+        session_id=session_id,
     )
     return True, one_line
 

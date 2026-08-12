@@ -191,8 +191,24 @@ def _load_questions(n: int | None = None) -> list[dict]:
     Reserves a small number of slots for ABSTENTION questions (question_id
     ends `_abs`) so the harness exercises the abstention-judging path, then
     fills the rest via round-robin across `question_type`.
+
+    `LME_QIDS` (space/comma-separated) overrides sampling entirely: run ONLY
+    the named question_ids, in the given order. Useful for snapshotting a
+    specific question set (e.g. `LME_QIDS="gpt4_70e84552_abs gpt4_93159ced_abs"`)
+    so their durable seed summaries get persisted without a full run.
     """
     data = json.loads(DATA.read_text())
+    qids = os.environ.get("LME_QIDS")
+    if qids:
+        want = [q.strip() for q in qids.replace(",", " ").split() if q.strip()]
+        by_id = {str(q["question_id"]): q for q in data}
+        out = []
+        for wid in want:
+            if wid in by_id:
+                out.append(by_id[wid])
+            else:
+                print(f"[run_lmem] WARNING: LME_QIDS unknown id {wid!r}, skipped", flush=True)
+        return out
     if n is None:
         n = LME_MAX_QUESTIONS
     abstention_pool = [q for q in data if str(q["question_id"]).endswith("_abs")]
@@ -308,16 +324,29 @@ def _transcript_messages(
     Each LME turn becomes a `ModelRequest` (user) or `ModelResponse`
     (assistant) so the persisted history is a faithful transcript -- no
     `User: assistant:` nesting, no tool-call pollution.
+
+    Each message carries the SOURCE SESSION's id in `metadata` under the
+    generic `source_session_id` key (derived from `dia_id` = `{sid}_t{i}`).
+    This is the provenance seam the search tools surface, so a retrieval can
+    be scored as LongMemEval ID-membership: did a surfaced ref's session id
+    appear in the retrieved set (`answer_session_ids`)? It is general -- any
+    pipeline that persists turns from a dialogue can tag them the same way.
     """
     messages: list[ModelMessage] = []
     for t in raw_turns:
         text = t["content"]
+        dia_id = t.get("dia_id", "")
+        # dia_id == "{sid}_t{i}"; the source session id is the part before the
+        # last "_t<i>" (index may itself contain '_'); strip the _t suffix.
+        sid = dia_id.rsplit("_t", 1)[0] if dia_id else None
+        metadata = {"source_session_id": sid} if sid else None
         if t["role"] == "assistant":
             messages.append(
                 ModelResponse(
                     parts=[TextPart(content=text)],
                     run_id=run_id,
                     conversation_id=cid,
+                    metadata=metadata,
                 )
             )
         else:
@@ -326,6 +355,7 @@ def _transcript_messages(
                     parts=[UserPromptPart(content=text)],
                     run_id=run_id,
                     conversation_id=cid,
+                    metadata=metadata,
                 )
             )
     return messages
@@ -433,6 +463,17 @@ async def _persist_seed_direct(
             turn_id=turn_id,
             messages=msgs,
         )
+        # The source session id rides the message metadata (set by
+        # _transcript_messages from dia_id). Pull it so the index entry can
+        # carry it and search_index can surface it for ID-membership recall.
+        session_id = next(
+            (
+                (getattr(m, "metadata", None) or {}).get("source_session_id")
+                for m in msgs
+                if (getattr(m, "metadata", None) or {}).get("source_session_id")
+            ),
+            None,
+        )
         rendered = build_turn_context(turn.messages)
         if (precomputed or {}).get(turn_id) is not None:
             summary = (precomputed or {})[turn_id]
@@ -443,7 +484,8 @@ async def _persist_seed_direct(
         else:
             summary = await summarizer.summarize(rendered)
         appended, one_line = await summarize_turn_append(
-            turn=turn, index_store=index_store, summary=summary
+            turn=turn, index_store=index_store, summary=summary,
+            session_id=session_id,
         )
         rows.append(
             {
@@ -461,6 +503,49 @@ async def _persist_seed_direct(
             }
         )
     return rows
+
+
+def _persist_durable_summary(
+    qid: str,
+    index_store: TurnIndexStore,
+    *,
+    conversation_id: str | None,
+) -> int:
+    """Auto-persist a question's seed summaries to the durable store.
+
+    After `_persist_seed_direct` seeds a question into `index_store`, dump the
+    freshly-appended `TurnIndexEntry` rows for that conversation to
+    `data/benchmarks/generated/<qid>.jsonl` -- the SAME location and exact
+    record shape `snapshot_seed_index.py` writes (see `_load_precomputed_summaries`
+    for the reader). This is what keeps the durable store current: previously
+    the snapshots were ONLY written by manually running `snapshot_seed_index.py`
+    with explicit `--qids`, so new questions (esp. abstentions) were re-
+    summarized live on every run. Wiring it into the run means every seeded
+    question persists automatically, and future runs load it durably (zero
+    summarizer tokens). Idempotent: overwrites the per-question file in place.
+    """
+    entries = [
+        e for e in index_store.read_all(conversation_id=conversation_id)
+        if e.conversation_id == conversation_id
+    ]
+    entries.sort(key=lambda e: e.turn_id)
+    if not entries:
+        return 0
+    path = GENERATED_DIR / f"{qid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {}
+    for e in entries:
+        payload[str(e.turn_id)] = {
+            "question_id": qid,
+            "turn_id": e.turn_id,
+            "summary": e.summary,
+            "key_terms": e.key_terms or [],
+            "outcome": e.outcome or "",
+        }
+    # snapshot_seed_index.py emits one JSON object per line in turn_id order.
+    lines = [json.dumps(payload[str(t)], ensure_ascii=False) for t in sorted(payload)]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(entries)
 
 
 def _load_precomputed_summaries(
@@ -500,21 +585,112 @@ def _load_precomputed_summaries(
     return out
 
 
-def _retrieval(recall: dict, gold_session_texts: list[str]) -> dict:
-    """Did the retrieval tools surface the answer sessions' content?
+def _extract_surfaced_session_ids(recall: dict) -> list[str]:
+    """Pull the source-session ids the search tools surfaced this turn.
 
-    A gold session counts as surfaced if its has_answer turn's *content*
-    reaches the model — either in a tool output or reproduced in the final
-    answer. We use token-overlap F1 (reuse locomo_scoring) rather than a raw
-    first-80-chars substring, because LongMemEval's answer often sits near the
-    END of a long evidence turn (e.g. "...I set a new PB of 25:50"). A probe
-    scores surfaced if F1(probe, any_tool_output) >= 0.30 OR
-    F1(probe, answer) >= 0.35 (same thresholds as the LoCoMo tool_surfaced).
+    Both `search_index` (``session=...``) and `search_conversation_history`
+    (``| session: ...``) tag their matched refs with the evidence session id,
+    which is the generic `source_session_id` provenance carried on the seeded
+    messages (see `_transcript_messages`). We collect the union across all tool
+    outputs — the "retrieved top-k" any ranked retriever would return -- and
+    return them in first-seen order. Empty when a run's outputs carry no such
+    tags (e.g. older artifacts), which is the fallback trigger for the text
+    probe.
     """
+    import re
+
+    ids: list[str] = []
+    seen: set[str] = set()
+    pat = re.compile(r"(?:session|session_id)[:=]\s*([A-Za-z0-9_]+)")
+    for out in recall.get("tool_outputs", []) or []:
+        if not isinstance(out, str):
+            continue
+        for m in pat.finditer(out):
+            sid = m.group(1)
+            if sid and sid not in seen:
+                seen.add(sid)
+                ids.append(sid)
+    return ids
+
+
+def _id_membership_recall(recall: dict, gold_ids: list[str]) -> dict:
+    """LongMemEval recall@k by ID-membership over the surfaced retrieval set.
+
+    Official semantics (print_retrieval_metrics.py): recall is independent of
+    the final answer and measured from the retrieval log -- whether the ground
+    truth `answer_session_ids` appear among the ids the retriever surfaced.
+    `k` = the number of ids surfaced (the analog of top-k; `search_index`
+    returns `max_matches` rank-ordered refs per call).
+
+    - `recall_all@k` = fraction of questions where ALL gold ids are surfaced
+    - `ndcg_any@k`   = any gold id surfaced, position-weighted by rank
+
+    Abstention (`_abs`) questions are excluded by the caller, matching the
+    official evaluator's `'_abs' not in question_id` filter.
+    """
+    from tests.locomo_scoring import f1_score  # noqa: F401  (text fallback below)
+
+    surfaced = _extract_surfaced_session_ids(recall)
+    if surfaced:
+        found = [g for g in gold_ids if g in surfaced]
+        k = len(surfaced)
+        recall_all = round(len(found) / len(gold_ids), 4) if gold_ids else 1.0
+        # NDCG_any@k: give any-gold-hit a position-weight; simplified (DCG of a
+        # single-query binary relevance list vs ideal). We report the recall_all
+        # primarily and ndcg_any as the "any gold surfaced" signal.
+        ndcg_any = 1.0 if found else 0.0
+        return {
+            "retrieval_recall": recall_all,
+            "ndcg_any": ndcg_any,
+            "k": k,
+            "surfaced": surfaced,
+            "method": "id-membership",
+        }
+    # Fallback: runs whose outputs carry no `session=` tags (older artifacts).
+    # Text-presence of the gold answer in tool outputs, tool-only (independent
+    # of the final answer). Kept for backward compatibility with prior results.
+    gold_texts = [recall.get("gold_answer") or ""]
+    chunks = [t for t in recall.get("tool_outputs", []) if t and t.strip()]
+    surfaced_text: list[str] = []
+    for probe in gold_texts:
+        p = probe.strip()
+        if not p:
+            continue
+        if any(f1_score(p, c) >= 0.30 for c in chunks):
+            surfaced_text.append(p)
+    return {
+        "retrieval_recall": round(len(surfaced_text) / len(gold_texts), 4)
+        if gold_texts
+        else 1.0,
+        "ndcg_any": 1.0 if surfaced_text else 0.0,
+        "k": len(chunks),
+        "surfaced": surfaced_text,
+        "method": "text-fallback",
+    }
+
+
+def _retrieval(recall: dict, gold_session_texts: list[str]) -> dict:
+    """Did the search tools surface the evidence for this question?
+
+    Primary: LongMemEval ID-membership recall@k. The question's
+    `answer_session_ids` are the ground truth; a search result counts if its
+    surfaced `session=<id>` (from `source_session_id` provenance) names an
+    evidence session. Independent of the final answer, `_abs` excluded by the
+    caller. Falls back to a text-presence probe only when the run's outputs
+    lack `session=` tags (older artifacts).
+    """
+    gold_ids = recall.get("answer_session_ids") or []
+    if gold_ids:
+        return _id_membership_recall(recall, gold_ids)
+    return _retrieval_text_fallback(recall, gold_session_texts)
+
+
+def _retrieval_text_fallback(recall: dict, gold_session_texts: list[str]) -> dict:
+    """Legacy text-probe recall (kept for gold-session records w/o ids)."""
     from tests.locomo_scoring import f1_score
 
     if not gold_session_texts:
-        return {"retrieval_recall": 1.0, "surfaced": []}
+        return {"retrieval_recall": 1.0, "surfaced": [], "method": "text-fallback"}
     chunks = [t for t in recall.get("tool_outputs", []) if t and t.strip()]
     ans = (recall.get("text") or "").strip()
     surfaced = []
@@ -529,6 +705,7 @@ def _retrieval(recall: dict, gold_session_texts: list[str]) -> dict:
     return {
         "retrieval_recall": round(len(surfaced) / len(gold_session_texts), 4),
         "surfaced": surfaced,
+        "method": "text-fallback",
     }
 
 
@@ -688,6 +865,22 @@ def main(argv: list[str] | None = None) -> dict:
             f"({'durable, 0 summarizer' if not live_summarizer else 'LIVE summarized'})",
             flush=True,
         )
+        # Auto-persist this question's seed summaries to the durable store so
+        # future runs reuse them (zero summarizer tokens) instead of
+        # regenerating. Previously this required a manual snapshot_seed_index.py
+        # call, so new questions -- especially abstentions -- were re-summarized
+        # live on every run. Skip in ablation (no index rows to persist).
+        if not ABLATE_TURN_INDEX and seed_rows:
+            n = _persist_durable_summary(
+                q.get("question_id", f"q{qi}"), index_store,
+                conversation_id=cid,
+            )
+            if n:
+                print(
+                    f"[lmem]   q{qi} persisted {n} durable seed summaries -> "
+                    f"{GENERATED_DIR / (q.get('question_id', f'q{qi}') + '.jsonl')}",
+                    flush=True,
+                )
 
         # ---- Recall: cold-start the question -------------------------
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""

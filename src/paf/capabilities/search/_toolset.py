@@ -67,6 +67,12 @@ class _RunSection:
     label: str
     index_lines: list[str]
     display_lines: list[str]
+    # Parallel to `index_lines`/`display_lines`: the source-session id of the
+    # message at each line (None when the message carries no provenance). Lets
+    # the excerpt label carry `session=<id>` so a retrieval can be scored by
+    # LongMemEval ID-membership against `answer_session_ids`. General: any
+    # message tagged with `metadata['source_session_id']` surfaces it here.
+    session_ids: list[str | None] | None = None
 
 
 class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
@@ -172,7 +178,15 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             end = min(len(section.display_lines), line_idx + self._context_lines + 1)
             shown.update((section_idx, idx) for idx in range(start, end))
             excerpt = "\n".join(section.display_lines[start:end])
-            results.append(f"[score: {score:.1f} | {section.label}]\n{excerpt}")
+            # Surface the matched message's source-session id on the label so a
+            # retrieval can be scored by ID-membership (LongMemEval recall@k).
+            sid = (
+                section.session_ids[line_idx]
+                if section.session_ids is not None and line_idx < len(section.session_ids)
+                else None
+            )
+            label = section.label + (f" | session: {sid}" if sid else "")
+            results.append(f"[score: {score:.1f} | {label}]\n{excerpt}")
 
         header = f"Found {len(results)} match(es) for '{query}' in {total_messages} persisted messages:\n\n"
         return header + "\n\n---\n\n".join(results)
@@ -198,11 +212,18 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             label = f"run: {run.run_id}"
             if run.conversation_id is not None:
                 label += f" | conversation: {run.conversation_id}"
+            sessions = [
+                (getattr(m, "metadata", None) or {}).get("source_session_id")
+                if getattr(m, "metadata", None)
+                else None
+                for m in messages
+            ]
             sections.append(
                 _RunSection(
                     label=label,
                     index_lines=format_messages(messages, truncate=False),
                     display_lines=display_lines(messages),
+                    session_ids=sessions,
                 )
             )
         return sections

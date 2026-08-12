@@ -132,6 +132,10 @@ class _TurnFinder:
         # A turn spans from its anchor to the next user-turn anchor (or the end).
         end = anchors[turn_id + 1] if turn_id + 1 < len(anchors) else len(history)
         lines = []
+        if start < len(history):
+            sid = _source_session_id(history[start])
+            if sid:
+                lines.append(f"-- session: {sid} --")
         for i in range(start, end):
             lines.append(_render_message(history[i]))
         return '\n'.join(lines)
@@ -149,6 +153,25 @@ def _is_user_turn(message) -> bool:
     return isinstance(message, ModelRequest) and any(
         isinstance(part, UserPromptPart) for part in message.parts
     )
+
+
+def _source_session_id(message) -> str | None:
+    """The source-session id a persisted message carries, if any.
+
+    Read from the generic `metadata['source_session_id']` provenance key (set
+    at persist time, see `tests/run_lmem.py::_transcript_messages`). Surfacing
+    it on `read_turn` output lets a retrieval be scored by LongMemEval
+    ID-membership (did the surfaced evidence's session id appear in
+    `answer_session_ids`) -- the same convention `search_index` and
+    `search_conversation_history` already use. Returns None when absent so the
+    turn renders unchanged for untagged pipelines.
+    """
+    md = getattr(message, "metadata", None)
+    if isinstance(md, dict):
+        sid = md.get("source_session_id")
+        if isinstance(sid, str) and sid:
+            return sid
+    return None
 
 
 def _is_injected_text(text) -> bool:
@@ -316,7 +339,8 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
         lines: list[str] = []
         for idx, score in blended[: self._max_matches]:
             entry = entries[idx]
-            lines.append(f'[{entry.ref}] (score {score:.2f}) {entry.summary}')
+            sid = f' session={entry.session_id}' if entry.session_id else ''
+            lines.append(f'[{entry.ref}] (score {score:.2f}){sid} {entry.summary}')
         return 'Index matches (BM25-ranked):\n' + '\n'.join(lines)
 
     def _ref(self, entry: TurnIndexEntry) -> str:
