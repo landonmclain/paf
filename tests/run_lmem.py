@@ -507,7 +507,6 @@ def main(argv: list[str] | None = None) -> dict:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
     index_dir = artifact_dir / "index"
-    memory_dir = artifact_dir / "memory"
     agent = _build_agent(store, index_dir)
     # Direct-seed writes (no agent loop) share the SAME store + index the
     # recall agent reads: the index store and real summarizer are constructed

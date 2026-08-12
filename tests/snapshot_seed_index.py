@@ -46,9 +46,9 @@ def _find_index_jsonl(run_dir: Path) -> Path:
     return hits[0]
 
 
-def _seed_rows_by_conversation(index_path: Path) -> "OrderedDict[str, list[dict[str, Any]]]":
+def _seed_rows_by_conversation(index_path: Path) -> OrderedDict[str, list[dict[str, Any]]]:
     """Group seed rows by conversation, preserving first-appearance order."""
-    by_conv: "OrderedDict[str, list[dict[str, Any]]]" = OrderedDict()
+    by_conv: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
     for line in index_path.read_text().splitlines():
         if not line.strip():
             continue
@@ -81,8 +81,7 @@ def main() -> int:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     written = 0
-    convs = list(by_conv.items())
-    for (conv, rows), qid in zip(convs, args.qids):
+    for (_, rows), qid in zip(by_conv.items(), args.qids, strict=True):
         assert isinstance(rows, list), "seed row group must be a list"
         # order rows by turn_id so the file reads as the transcript does
         rows.sort(key=lambda r: int(r.get("turn_id", 0)))

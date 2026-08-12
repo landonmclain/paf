@@ -35,11 +35,8 @@ from pydantic_ai_harness.step_persistence import (
 
 from paf.capabilities.turn_index import TurnIndexStore
 from paf.capabilities.turn_index._generate import summarize_turn_append
-from paf.capabilities.turn_index._store import TurnIndexEntry
 from paf.capabilities.turn_index._toolset import _TurnFinder
-
 from tests.run_lmem import (
-    _persist_seed_direct,
     _raw_turns,
     _transcript_messages,
     _user_turn_units,
