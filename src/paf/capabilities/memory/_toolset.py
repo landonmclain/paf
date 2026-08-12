@@ -280,13 +280,14 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
     step, so applications requiring DBOS durability must provide that wrapper.
     """
 
-    def __init__(self, capability: Memory[AgentDepsT]) -> None:
+    def __init__(self, capability: Memory[AgentDepsT], *, writable: bool = True) -> None:
         super().__init__(id='memory')
         self._capability = capability
-        self.add_function(self.write_memory, name='write_memory')
         self.add_function(self.read_memory, name='read_memory')
-        self.add_function(self.delete_memory, name='delete_memory')
         self.add_function(self.search_memory, name='search_memory')
+        if writable:
+            self.add_function(self.write_memory, name='write_memory')
+            self.add_function(self.delete_memory, name='delete_memory')
 
     async def write_memory(
         self,

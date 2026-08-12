@@ -130,6 +130,16 @@ class Memory(AbstractCapability[AgentDepsT]):
     injection_errors: Literal['ignore', 'raise'] = 'ignore'
     """Whether store failures during automatic injection are ignored or raised."""
 
+    writable: bool = True
+    """Whether the memory toolset exposes write/delete.
+
+    ``False`` ⇒ the toolset registers ``read_memory`` / ``search_memory`` only
+    (read-only surface). The assistant carries ``writable=False`` so it can
+    never contaminate durable memory; the consolidation owner
+    (:mod:`paf.capabilities.memory._consolidate`) carries ``writable=True``
+    and is the sole writer.
+    """
+
     _resolved_scope: tuple[MemoryStore, str] | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -164,7 +174,7 @@ class Memory(AbstractCapability[AgentDepsT]):
 
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:
         """Provide the stable `memory` toolset."""
-        return MemoryToolset(self)
+        return MemoryToolset(self, writable=self.writable)
 
     def get_instructions(self) -> AgentInstructions[AgentDepsT] | None:
         """Provide trusted static guidance about using memory.
@@ -321,6 +331,7 @@ class Memory(AbstractCapability[AgentDepsT]):
         max_search_files: int = 1_000,
         guidance: str | None = None,
         injection_errors: Literal['ignore', 'raise'] = 'ignore',
+        writable: bool = True,
     ) -> Memory[AgentDepsT]:
         """Construct a memory capability from serializable options.
 
@@ -357,6 +368,7 @@ class Memory(AbstractCapability[AgentDepsT]):
             max_search_files=max_search_files,
             guidance=guidance,
             injection_errors=injection_errors,
+            writable=writable,
         )
 
     @classmethod

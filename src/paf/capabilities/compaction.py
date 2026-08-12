@@ -22,6 +22,8 @@ clear-tool-results, sliding window) are pure context management and stay; they o
 
 from __future__ import annotations
 
+import os
+
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
@@ -43,6 +45,12 @@ def build_compaction() -> TieredCompaction:
     3. ``SlidingWindowCompaction`` — drop oldest messages, keep the recent window
        (plus the first user message) — the harness's cheap default.
 
+    When ``CONSOLIDATE=1``, the sliding-window tier is replaced by
+    :class:`~paf.capabilities.memory._window.MemoryConsolidationWindow`, which
+    folds the about-to-be-evicted slice into the durable memory store (via the
+    writable owner sub-agent) *before* dropping it. Default (env unset) keeps
+    the byte-identical plain window.
+
     The LLM rewrite (4. ``SummarizingCompaction``) is intentionally absent — it
     is mutually exclusive with the turn-index one-liner block (both are summaries).
     Context is bounded here by pruning; long-term recall is the store-backed
@@ -51,6 +59,18 @@ def build_compaction() -> TieredCompaction:
     Values are small/observable for M1 so a few turns trip the escalation; raise
     them for a longer-lived context.
     """
+    if os.environ.get("CONSOLIDATE", "0") == "1":
+        from paf.capabilities.memory._window import MemoryConsolidationWindow
+
+        window = MemoryConsolidationWindow(
+            max_messages=4,
+            keep_messages=2,
+        )
+    else:
+        window = SlidingWindowCompaction(
+            max_messages=4,
+            keep_messages=2,
+        )
     return TieredCompaction(
         target_tokens=1200,
         tiers=[
@@ -65,10 +85,7 @@ def build_compaction() -> TieredCompaction:
                 max_tokens=1,
                 keep_pairs=4,
             ),
-            # 3. Drop the oldest messages, keep the recent window + first user msg.
-            SlidingWindowCompaction(
-                max_messages=4,
-                keep_messages=2,
-            ),
+            # 3. Drop the oldest messages (or consolidate-then-drop, when enabled).
+            window,
         ],
     )
