@@ -110,6 +110,16 @@ LOCOMO_MAX_QUESTIONS = int(os.environ.get("LOCOMO_MAX_QUESTIONS", "30"))  # acro
 # baseline (0.8333 / recall 0.275, run lmem-20260812-133841).
 ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "0") == "1"
 
+# Memory presence knob: MEMORY=1 wires the durable Memory capability into the
+# harness (inject_memory=True, writable like production so the subject captures
+# durable facts) and swaps the plain SlidingWindowCompaction tier for
+# MemoryConsolidationWindow, so the owner sub-agent folds each about-to-evict
+# slice into a run-scoped memory store. Mirrors ABLATE_TURN_INDEX: a module-level
+# env bool, default off. Every existing baseline (run_locomo / run_lmem /
+# tiny_lmem / beam-lite, which all share this builder) is byte-identical without
+# it. Turn it on for a memory-arm run: `MEMORY=1 ...`.
+MEMORY = os.environ.get("MEMORY", "0") == "1"
+
 
 def _load_samples(n: int | None = None) -> list[dict]:
     """Return the first `n` LoCoMo samples (default: LOCOMO_CONV_LIMIT)."""
@@ -144,11 +154,16 @@ def _gold_answer(q: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
+def _build_agent(
+    store: FileStepStore, index_dir: Path, *, memory_dir: Path | None = None
+) -> Agent:
     """Wire the full PAF pipeline (memory-free; retrieval ladder ablatable).
 
-    The durable `Memory` capability is intentionally NOT included ("memory is
-    not ready / not part of tests near-term" — 2026-08-11).
+    The durable `Memory` capability is intentionally NOT included by default
+    ("memory is not ready / not part of tests near-term" — 2026-08-11). With
+    `MEMORY=1` it *is* included (plus the consolidation window that fires the
+    owner on each eviction), targeting ``memory_dir`` (default
+    ``index_dir.parent / "memory"``) so a run never touches repo `data/memory`.
 
     Default (ABLATE_TURN_INDEX unset): turn-index owns the ladder --
     TurnIndexCapability.add_instructions=True is the ONE retrieval steering,
@@ -161,6 +176,13 @@ def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
     `search_conversation_history` becomes the SOLE retrieval ladder. This is the
     "conversation search alone" ablation vs the 20-Q gated TurnIndex baseline
     (lmem-20260812-133841: overall 0.8333, recall 0.275, 288,052 tokens).
+
+    With MEMORY=1: the durable `Memory` capability is loaded (a plain capability,
+    writable like production so the subject captures durable facts) and the plain
+    SlidingWindowCompaction tier is replaced by MemoryConsolidationWindow — the
+    owner sub-agent folds each about-to-evict slice into ``memory_dir`` before
+    the window drops it. Default memory dir is a run-scoped sibling of
+    ``index_dir``.
     """
     source = SnapshotHistorySource(store)
     caps = [
@@ -192,6 +214,40 @@ def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
                 ),
             )
         )
+    sw_tier: SlidingWindowCompaction
+    if MEMORY:
+        # Memory arm: durable notebook injected every request, matched to the
+        # production assistant (build.py `_build_memory`): writable so the
+        # subject can CAPTURE facts during the seed/recall phases (the
+        # `_SEED_INSTRUCTION` tells it to `write_memory`). The consolidation
+        # window below additionally runs the owner (writable=True) on each
+        # eviction to fold the about-to-drop slice into the same store.
+        from paf.capabilities.memory import Memory
+        from paf.capabilities.memory._window import MemoryConsolidationWindow
+
+        mem_dir = memory_dir or (index_dir.parent / "memory")
+        caps.append(
+            Memory.from_spec(
+                backend="markdown",
+                directory=str(mem_dir),
+                agent_name="assistant",
+                inject_memory=True,
+            )
+        )
+        # Consolidation window: same knobs as the plain sliding window, but
+        # folds the about-to-evict slice into the shared run-scoped memory dir
+        # before dropping it.
+        sw_tier = MemoryConsolidationWindow(
+            max_messages=LOCOMO_SW_MAX_MESSAGES,
+            keep_messages=LOCOMO_SW_KEEP,
+            memory_directory=str(mem_dir),
+            memory_agent="assistant",
+        )
+    else:
+        sw_tier = SlidingWindowCompaction(
+            max_messages=LOCOMO_SW_MAX_MESSAGES,
+            keep_messages=LOCOMO_SW_KEEP,
+        )
     caps.append(
         # Context compaction: no-summary ladder, LOW target so it trips hard and
         # evicts early evidence turns out of live context -> forces retrieval.
@@ -204,10 +260,7 @@ def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
                     keep_tail_chars=2_000,
                 ),
                 ClearToolResults(max_tokens=1, keep_pairs=4),
-                SlidingWindowCompaction(
-                    max_messages=LOCOMO_SW_MAX_MESSAGES,
-                    keep_messages=LOCOMO_SW_KEEP,
-                ),
+                sw_tier,
             ],
         ),
     )
