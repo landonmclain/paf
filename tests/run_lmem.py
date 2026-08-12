@@ -733,6 +733,33 @@ def _gold_session_probes(q: dict) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> dict:
+    import argparse
+
+    global SUBJECT_MODEL, JUDGE_MODEL
+    # CLI overrides for the live-LLM subjects/judges — mirror of test_beam_lite.
+    # Flags take precedence over env (BEAM_LITE_SUBJECT_MODEL / LME_JUDGE_MODEL);
+    # the module globals are rebound here so the whole run uses them.
+    _ap = argparse.ArgumentParser(
+        description="LongMemEval graded runner (official binary judge + aggregation)."
+    )
+    _ap.add_argument(
+        "--subject-model",
+        default=None,
+        help="Agent model for answering/recall (REQUIRED prefix 'openrouter:', e.g. "
+        "openrouter:openai/gpt-5.6-luna-pro). Default=env BEAM_LITE_SUBJECT_MODEL.",
+    )
+    _ap.add_argument(
+        "--judge-model",
+        default=None,
+        help="Grading model (default env LME_JUDGE_MODEL). "
+        "Note: '--' before later flags guards against model strings starting with '-'.",
+    )
+    _args = _ap.parse_args(argv)
+    if _args.subject_model:
+        SUBJECT_MODEL = _args.subject_model
+    if _args.judge_model:
+        JUDGE_MODEL = _args.judge_model
+
     questions = _load_questions()
     if not questions:
         raise RuntimeError("No questions loaded from LongMemEval data")
