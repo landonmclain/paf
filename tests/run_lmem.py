@@ -85,6 +85,7 @@ from tests.locomo_scoring import (
 
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
 from tests.run_locomo import (
+    ABLATE_TURN_INDEX,
     _build_agent,
     _run_turn,
 )
@@ -364,15 +365,16 @@ async def _persist_seed_direct(
     run_id: str,
     *,
     precomputed: dict[int, TurnSummary] | None = None,
+    skip_index: bool = False,
 ) -> list[dict]:
-    """Persist raw LME turns directly (no agent) and index each user turn.
+    """Persist raw LME turns directly (no agent) and optionally index each turn.
 
     Writes ONE run record + ONE snapshot holding the full transcript (so
-    `read_turn` / `search_conversation_history` resolve), then summarizes
-    each user-turn unit with the REAL summarizer into the turn index. No LLM
-    chat agent runs during seed -- the only model calls are the summarizer's
-    (the index builder), which is the whole point: ~zero seed token burn and
-    a CLEAN store (no `User: assistant:` nesting, no tool-call pollution).
+    `search_conversation_history`/BM25 resolve), then summarizes each user-turn
+    unit with the REAL summarizer into the turn index. No LLM chat agent runs
+    during seed -- the only model calls are the summarizer's (the index
+    builder), which is the whole point: ~zero seed token burn and a CLEAN store
+    (no `User: assistant:` nesting, no tool-call pollution).
 
     `precomputed` is the REUSE seam: when a turn_id has a durable `TurnSummary`
     in it, that summary is used instead of calling the summarizer (so re-runs
@@ -380,6 +382,12 @@ async def _persist_seed_direct(
     is absent from `precomputed`, the summarizer is called as usual -- keeping
     this function the single mechanics path for the gate (`check_direct_seed`)
     and the live-summarizer validation (`tiny_lmem`).
+
+    `skip_index=True` is the ABLATE_TURN_INDEX path: persist ONLY the raw run +
+    transcript for `search_conversation_history`/BM25 and skip the turn-index
+    summary work entirely (no summary calls, no index rows, `index_store`
+    untouched). Used when the pipeline has no TurnIndex to consume the index
+    (Landon: under ablation "we just don't need them at all").
     """
     messages = _transcript_messages(raw_turns, run_id, cid)
     await store.register_run(
@@ -394,6 +402,10 @@ async def _persist_seed_direct(
             messages=messages,
         )
     )
+    if skip_index:
+        # Ablation: no TurnIndex in the pipeline, so nothing reads the index.
+        # Persist raw store only; zero summarizer tokens, no index rows.
+        return []
 
     rows: list[dict] = []
     units = _user_turn_units(messages)
@@ -618,41 +630,56 @@ def main(argv: list[str] | None = None) -> dict:
         # The store still persists the full transcript for read_turn /
         # search_conversation_history resolution.
         run_id = f"seed-{cid}"
-        # Durable summaries where they exist (strict), else FALL BACK to a
-        # live summarizer for the index. New questions (5+) have no committed
-        # summaries yet, so build their index on the fly this run, then
-        # snapshot it afterward (snapshot_seed_index.py) so next time it's
-        # durable and strictly reused. Q1-4 (committed) stay zero-token.
-        precomputed = _load_precomputed_summaries(
-            q["question_id"], strict=False
-        )
-        live_summarizer: TurnSummarizer | None = None
-        if os.environ.get("PAF_FRESH_SEED"):
-            # FORCED FRESH SEED: ignore any durable cache and summarize every
-            # user-turn unit live with the subject model. Used to produce
-            # fresh-summary baselines; not for normal benchmark integrity runs.
-            precomputed = {}
-            live_summarizer = TurnSummarizer(
-                model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
-            )
+        # Ablation (ABLATE_TURN_INDEX=1): no TurnIndex in the pipeline, so the
+        # turn-index summaries are not needed at all (Landon: "we just don't
+        # need them"). Persist the RAW turns only -- no precomputed read, no
+        # live summarizer, no index rows. search_conversation_history (BM25)
+        # reads the raw store directly.
+        if ABLATE_TURN_INDEX:
+            precomputed: dict[int, TurnSummary] | None = None
+            live_summarizer: TurnSummarizer | None = None
             print(
-                f"[lmem]   q{qi} PAF_FRESH_SEED=1 -> live summarizer "
-                f"for EVERY turn (durable cache ignored)",
+                f"[lmem]   q{qi} ABLATE_TURN_INDEX=1 -> raw seed only, "
+                f"NO index / NO summarizer",
                 flush=True,
             )
-        elif not precomputed:
-            live_summarizer = TurnSummarizer(
-                model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+        else:
+            # Durable summaries where they exist (strict), else FALL BACK to a
+            # live summarizer for the index. New questions (5+) have no committed
+            # summaries yet, so build their index on the fly this run, then
+            # snapshot it afterward (snapshot_seed_index.py) so next time it's
+            # durable and strictly reused. Q1-4 (committed) stay zero-token.
+            precomputed = _load_precomputed_summaries(
+                q["question_id"], strict=False
             )
-            print(
-                f"[lmem]   q{qi} NO durable summaries -> live summarizer "
-                f"(TurnSummarizer@{SUBJECT_MODEL})",
-                flush=True,
-            )
+            live_summarizer: TurnSummarizer | None = None
+            if os.environ.get("PAF_FRESH_SEED"):
+                # FORCED FRESH SEED: ignore any durable cache and summarize every
+                # user-turn unit live with the subject model. Used to produce
+                # fresh-summary baselines; not for normal benchmark integrity runs.
+                precomputed = {}
+                live_summarizer = TurnSummarizer(
+                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                )
+                print(
+                    f"[lmem]   q{qi} PAF_FRESH_SEED=1 -> live summarizer "
+                    f"for EVERY turn (durable cache ignored)",
+                    flush=True,
+                )
+            elif not precomputed:
+                live_summarizer = TurnSummarizer(
+                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                )
+                print(
+                    f"[lmem]   q{qi} NO durable summaries -> live summarizer "
+                    f"(TurnSummarizer@{SUBJECT_MODEL})",
+                    flush=True,
+                )
         seed_rows = asyncio.run(
             _persist_seed_direct(
                 store, index_store, live_summarizer, raw_turns, cid, run_id,
                 precomputed=precomputed,
+                skip_index=ABLATE_TURN_INDEX,
             )
         )
         all_seed_rows.extend(seed_rows)

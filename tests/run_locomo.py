@@ -103,6 +103,13 @@ RESULTS_DIR = Path(__file__).parent / "results"
 LOCOMO_CONV_LIMIT = int(os.environ.get("LOCOMO_CONV_LIMIT", "3"))
 LOCOMO_MAX_QUESTIONS = int(os.environ.get("LOCOMO_MAX_QUESTIONS", "30"))  # across all convs
 
+# Ablation knob: with ABLATE_TURN_INDEX=1 the TurnIndexCapability block is removed
+# from the pipeline and ConversationSearch flips to add_instructions=True so the
+# plain BM25 search_conversation_history becomes the SOLE retrieval ladder.
+# Baseline (unset) = the TurnIndex-owned ladder we benchmarked at the 20-Q gated
+# baseline (0.8333 / recall 0.275, run lmem-20260812-133841).
+ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "0") == "1"
+
 
 def _load_samples(n: int | None = None) -> list[dict]:
     """Return the first `n` LoCoMo samples (default: LOCOMO_CONV_LIMIT)."""
@@ -138,38 +145,54 @@ def _gold_answer(q: dict) -> str:
 
 
 def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
-    """Wire the full PAF pipeline (memory-free; turn-index owns the ladder).
+    """Wire the full PAF pipeline (memory-free; retrieval ladder ablatable).
 
     The durable `Memory` capability is intentionally NOT included ("memory is
-    not ready / not part of tests near-term" — 2026-08-11). Retrieval steering
-    lives solely in TurnIndexCapability._INSTRUCTIONS, which is the ONE
-    guidance source; ConversationSearch stays add_instructions=False because
-    the index ladder already names search_conversation_history as its last rung.
+    not ready / not part of tests near-term" — 2026-08-11).
+
+    Default (ABLATE_TURN_INDEX unset): turn-index owns the ladder --
+    TurnIndexCapability.add_instructions=True is the ONE retrieval steering,
+    and ConversationSearch stays add_instructions=False so the two don't
+    double-announce `search_conversation_history` (the index ladder names it as
+    its last rung).
+
+    With ABLATE_TURN_INDEX=1: the TurnIndexCapability block is dropped entirely
+    and ConversationSearch flips to add_instructions=True, so the plain BM25
+    `search_conversation_history` becomes the SOLE retrieval ladder. This is the
+    "conversation search alone" ablation vs the 20-Q gated TurnIndex baseline
+    (lmem-20260812-133841: overall 0.8333, recall 0.275, 288,052 tokens).
     """
     source = SnapshotHistorySource(store)
     caps = [
         StepPersistence(store=store),
-        # ConversationSearch: BM25 wide fallback. No instructions — the
-        # TurnIndex ladder already names it as the LAST rung; a profile that
-        # owns the ladder suppresses this short hint.
+        # ConversationSearch: BM25 wide fallback. By default add_instructions=False
+        # because the TurnIndex ladder names search_conversation_history as its LAST
+        # rung; under ablation it flips to True -- it IS the ladder now.
         ConversationSearch(
-            source=source, scope="conversation", add_instructions=False
+            source=source,
+            scope="conversation",
+            add_instructions=ABLATE_TURN_INDEX,
         ),
+    ]
+    if not ABLATE_TURN_INDEX:
         # TurnIndex: injected tail index (max_lines bounds the tail), plus
         # read_turn / search_index. Instructions ON — this is the SOLE
         # system-prompt retrieval ladder (memory removed). ALWAYS-on real LLM
         # summarizer: sentence + key_terms + outcome. Matches the reference in
         # tiny_lmem. TurnSummarizer defaults its model to SUBJECT_MODEL;
         # explicit keeps tool/model in one place.
-        TurnIndexCapability(
-            source=source,
-            index_store=TurnIndexStore(index_dir),
-            max_lines=MAX_LINES,
-            add_instructions=True,
-            summarizer=TurnSummarizer(
-                model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
-            ),
-        ),
+        caps.append(
+            TurnIndexCapability(
+                source=source,
+                index_store=TurnIndexStore(index_dir),
+                max_lines=MAX_LINES,
+                add_instructions=True,
+                summarizer=TurnSummarizer(
+                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                ),
+            )
+        )
+    caps.append(
         # Context compaction: no-summary ladder, LOW target so it trips hard and
         # evicts early evidence turns out of live context -> forces retrieval.
         TieredCompaction(
@@ -187,7 +210,7 @@ def _build_agent(store: FileStepStore, index_dir: Path) -> Agent:
                 ),
             ],
         ),
-    ]
+    )
     return Agent(SUBJECT_MODEL, name="locomo-subject", capabilities=caps)
 
 
