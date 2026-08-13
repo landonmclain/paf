@@ -20,6 +20,10 @@ from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory import Memory
+from paf.capabilities.memory._consolidate import (
+    CONSOLIDATION_GUIDANCE,
+    consolidate_model,
+)
 from paf.capabilities.memory._toolset import MemoryToolset
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 
@@ -108,18 +112,66 @@ def test_window_default_store_scope(monkeypatch) -> None:
 
 def test_consolidation_guidance_is_owned_by_owner() -> None:
     """The owner guidance enforces sole-writer + newer-always-wins semantics."""
-    from paf.capabilities.memory._consolidate import CONSOLIDATION_GUIDANCE
-
     assert "only writer" in CONSOLIDATION_GUIDANCE
     assert "NEWER ALWAYS WINS" in CONSOLIDATION_GUIDANCE
 
 
 def test_consolidation_model_reads_config(monkeypatch) -> None:
     """Settings.consol_model (CONSOL_MODEL / .env) overrides the flash-lite default."""
-    from paf.capabilities.memory._consolidate import consolidate_model
     from paf.config import settings
 
     monkeypatch.setattr(settings, "consol_model", "")
     assert consolidate_model() == "google/gemini-2.5-flash-lite:nitro"
     monkeypatch.setattr(settings, "consol_model", "openai:gpt-5.6-luna-pro")
     assert consolidate_model() == "openai:gpt-5.6-luna-pro"
+
+
+# ---------------------------------------------------------------------------
+# owner construction + the seed-time full-conversation variant
+# ---------------------------------------------------------------------------
+
+
+def test_build_owner_is_single_writer_and_read_via_tools() -> None:
+    """The owner's Memory capability is writable=True, inject_memory=False, guided.
+
+    The hard-won ownership invariants (sole writer, no injected context, fixed
+    operating manual) live in :func:`_build_owner_memory` and apply to BOTH
+    consolidation paths — the eviction slice and the seed-time full-conversation
+    variant. Tested on the capability directly (no Agent construction, so no
+    model provider / API key needed).
+    """
+    from paf.capabilities.memory import Memory
+    from paf.capabilities.memory._consolidate import _build_owner_memory
+
+    cap = _build_owner_memory(None, agent_name="assistant", namespace="")
+    assert isinstance(cap, Memory)
+    assert cap.writable is True
+    assert cap.inject_memory is False
+    assert cap.guidance == CONSOLIDATION_GUIDANCE
+
+
+def test_resident_consolidate_text_none_when_empty() -> None:
+    """No messages → resident_consolidate_text returns None (owner never fires)."""
+    import asyncio
+
+    from paf.capabilities.memory._consolidate import resident_consolidate_text
+
+    out = asyncio.run(resident_consolidate_text([]))
+    assert out is None
+
+
+def test_resident_consolidate_text_renders_every_segment() -> None:
+    """Every message segment is folded into the owner prompt (no eviction cut)."""
+    import asyncio
+
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    from paf.capabilities.memory._consolidate import resident_consolidate_text
+
+    msgs = [
+        ModelRequest(parts=[UserPromptPart(content=f"turn {i}")]) for i in range(4)
+    ]
+    out = asyncio.run(resident_consolidate_text(msgs))
+    assert out is not None
+    for i in range(4):
+        assert f"turn {i}" in out

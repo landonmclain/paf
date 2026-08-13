@@ -88,6 +88,60 @@ def consolidate_model() -> str:
     return settings.consol_model or DEFAULT_CONSOL_MODEL
 
 
+def _build_owner_memory(store, *, agent_name: str, namespace: str) -> Memory:
+    """Build the single-writer Memory capability the owner carries.
+
+    ``writable=True`` (sole writer), ``inject_memory=False`` (reads the store
+    through tools, never injected context), fixed ``CONSOLIDATION_GUIDANCE``.
+    Extracted so the ownership invariants are testable WITHOUT constructing an
+    ``Agent`` (which resolves the model/provider and requires an API key).
+    """
+    from ._capability import Memory  # deferred to avoid circular import
+
+    return Memory(
+        store=store,
+        agent_name=agent_name,
+        namespace=namespace,
+        inject_memory=False,
+        guidance=CONSOLIDATION_GUIDANCE,
+        writable=True,
+    )
+
+
+def _build_owner(store, *, agent_name: str, namespace: str):
+    """Construct the single-writer owner agent (writable=True, read-via-tools).
+
+    Returns ``(owner, owner_memory)`` — the owner ``Agent`` plus its writable
+    ``Memory`` capability (see :func:`_build_owner_memory`).
+
+    Shared by the eviction-slice consolidation (:func:`consolidate`) and the
+    full-conversation seed variant (:func:`consolidate_conversation`) so the
+    ownership invariants live in ONE place: the owner is ``writable=True``
+    (the sole memory writer) with ``inject_memory=False`` (it reads the store
+    through tools, never via injected context) and carries the fixed
+    ``CONSOLIDATION_GUIDANCE`` operating manual.
+    """
+    owner_memory = _build_owner_memory(
+        store, agent_name=agent_name, namespace=namespace
+    )
+    owner = Agent(
+        consolidate_model(),
+        name="memory-owner",
+        capabilities=[owner_memory],
+    )
+    return owner, owner_memory
+
+
+async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
+    """Render a message list for the owner prompt; None if there's nothing to fold."""
+    from pydantic_ai_harness.compaction._shared import _collect_text
+
+    segments = list(_collect_text(messages))
+    if not segments:
+        return None
+    return "\n".join(f"- {seg}" for seg in segments)
+
+
 async def consolidate(
     messages: list[ModelMessage],
     *,
@@ -103,33 +157,53 @@ async def consolidate(
     drop, so consolidation is always *on* the eviction boundary. When nothing
     is about to be evicted, this is a no-op.
     """
-    from pydantic_ai_harness.compaction._shared import _collect_text, find_safe_cutoff
+    from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
     cutoff = find_safe_cutoff(messages, keep_tail)
     if cutoff <= 0:
         return  # nothing about to be evicted
 
     evicted = messages[:cutoff]
-    if not evicted:
+    owner, _owner_memory = _build_owner(
+        store, agent_name=agent_name, namespace=namespace
+    )
+    evicted_text = await resident_consolidate_text(evicted)
+    if not evicted_text:
         return
-
-    from ._capability import Memory  # deferred to avoid circular import
-
-    owner_memory = Memory(
-        store=store,
-        agent_name=agent_name,
-        namespace=namespace,
-        inject_memory=False,
-        guidance=CONSOLIDATION_GUIDANCE,
-        writable=True,
-    )
-    owner = Agent(
-        consolidate_model(),
-        name="memory-owner",
-        capabilities=[owner_memory],
-    )
-    evicted_text = "\n".join(f"- {seg}" for seg in _collect_text(evicted))
     result = await owner.run(
         CONSOLIDATION_PROMPT.format(evicted_text=evicted_text),
     )
     logger.info("consolidated %d evicted msgs: %s", len(evicted), result.output)
+
+
+async def consolidate_conversation(
+    messages: list[ModelMessage],
+    *,
+    store,
+    agent_name: str,
+    namespace: str = "",
+) -> None:
+    """Fold a *full given* conversation into memory via the owner agent.
+
+    Seed-time variant of :func:`consolidate`: it runs the owner over the
+    ENTIRE ``messages`` list (no eviction-cutoff no-op) so a seeded haystack
+    conversation can be consolidated into memory *before* a recall question,
+    regardless of live sliding-window state (which never sees direct-seeded
+    history). The call site is responsible for passing only pre-question
+    content (honest-memory guard) — this function folds exactly what it is
+    handed.
+    """
+    owner, _owner_memory = _build_owner(
+        store, agent_name=agent_name, namespace=namespace
+    )
+    text = await resident_consolidate_text(messages)
+    if not text:
+        return
+    result = await owner.run(
+        CONSOLIDATION_PROMPT.format(evicted_text=text),
+    )
+    logger.info(
+        "consolidated %d msgs (full conversation): %s",
+        len(messages),
+        result.output,
+    )

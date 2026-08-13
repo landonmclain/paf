@@ -213,7 +213,7 @@ def main() -> int:
         model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
     )
     raw_turns = _raw_turns(q)
-    seed_rows = asyncio.run(
+    seed_rows, _seed_msgs = asyncio.run(
         _persist_seed_direct(
             store, index_store, seed_summarizer, raw_turns, cid, f"seed-{cid}"
         )

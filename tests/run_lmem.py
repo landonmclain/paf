@@ -86,6 +86,7 @@ from tests.locomo_scoring import (
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
 from tests.run_locomo import (
     ABLATE_TURN_INDEX,
+    MEMORY,
     _build_agent,
     _run_turn,
 )
@@ -396,8 +397,15 @@ async def _persist_seed_direct(
     *,
     precomputed: dict[int, TurnSummary] | None = None,
     skip_index: bool = False,
-) -> list[dict]:
+) -> tuple[list[dict], list[ModelMessage]]:
     """Persist raw LME turns directly (no agent) and optionally index each turn.
+
+    Returns ``(rows, messages)`` where ``rows`` is the per-user-turn seed-row
+    list (as before) and ``messages`` is the full `ModelMessage` transcript
+    that was persisted (``raw_turns`` flattened). ``messages`` is returned so
+    callers can hand the *same* haystack to downstream consumers (e.g. the
+    memory-owner consolidation) without rebuilding it — and, importantly, so
+    they can assert it contains only pre-question content.
 
     Writes ONE run record + ONE snapshot holding the full transcript (so
     `search_conversation_history`/BM25 resolve), then summarizes each user-turn
@@ -435,7 +443,7 @@ async def _persist_seed_direct(
     if skip_index:
         # Ablation: no TurnIndex in the pipeline, so nothing reads the index.
         # Persist raw store only; zero summarizer tokens, no index rows.
-        return []
+        return [], messages
 
     rows: list[dict] = []
     units = _user_turn_units(messages)
@@ -502,7 +510,7 @@ async def _persist_seed_direct(
                 "appended": appended,
             }
         )
-    return rows
+    return rows, messages
 
 
 def _persist_durable_summary(
@@ -879,7 +887,7 @@ def main(argv: list[str] | None = None) -> dict:
                     f"(TurnSummarizer@{SUBJECT_MODEL})",
                     flush=True,
                 )
-        seed_rows = asyncio.run(
+        seed_rows, seed_msgs = asyncio.run(
             _persist_seed_direct(
                 store, index_store, live_summarizer, raw_turns, cid, run_id,
                 precomputed=precomputed,
@@ -908,6 +916,50 @@ def main(argv: list[str] | None = None) -> dict:
                     f"{GENERATED_DIR / (q.get('question_id', f'q{qi}') + '.jsonl')}",
                     flush=True,
                 )
+
+        # ---- Memory consolidation (MEMORY=1): owner folds the haystack ----
+        # The live MemoryConsolidationWindow.compact() is DEAD on seeded data:
+        # direct-persist never flows through the live agent window, so the
+        # sliding window never overflows and the owner never fires. Instead,
+        # run the owner over the FULL seeded haystack (`seed_msgs`) HERE, before
+        # recall, so the recall turn's <memory> injection (which re-reads the
+        # store every request) renders a POPULATED notebook.
+        #   - HONEST-MEMORY GUARD: seed_msgs is built from q["haystack_sessions"]
+        #     ONLY (see _raw_turns). The recall question/answer turn is asked
+        #     AFTER seeding (_run_turn) and is NOT in this list — assert that so
+        #     a future refactor can't leak the answer turn into the owner.
+        #   - Owner writes into mem_dir = index_dir.parent/"memory" — the same
+        #     store _build_agent(MEMORY=1) reads (matches its default).
+        if MEMORY:
+            from paf.capabilities.memory._consolidate import consolidate_conversation
+            from paf.capabilities.memory._markdown import MarkdownStorage
+
+            # HONEST-MEMORY GUARD (Landon: owner reads up to the question, not
+            # further). raw_turns is built purely from q["haystack_sessions"]
+            # (see _raw_turns), so the recall question/answer turn is asked
+            # AFTER seeding and must NOT appear in the seed. Assert that so a
+            # future refactor can't leak the answer turn into the owner.
+            _seed_content = "\n".join(
+                (t.get("content") or "") for t in raw_turns if isinstance(t, dict)
+            )
+            assert q["question"] not in _seed_content, (
+                "seed turns must not contain the recall question (look-ahead leak)"
+            )
+            mem_dir = index_dir.parent / "memory"
+            store_mem = MarkdownStorage(mem_dir)
+            asyncio.run(
+                consolidate_conversation(
+                    seed_msgs,
+                    store=store_mem,
+                    agent_name="assistant",
+                    namespace="",
+                )
+            )
+            print(
+                f"[lmem]   q{qi} consolidated {len(seed_msgs)} seed msgs "
+                f"(up to question) into {mem_dir}",
+                flush=True,
+            )
 
         # ---- Recall: cold-start the question -------------------------
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
