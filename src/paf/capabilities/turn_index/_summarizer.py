@@ -132,6 +132,7 @@ class TurnSummarizer:
             model,
             output_type=TurnSummary,
             retries=retries,  # schema/validation retries (builtin)
+            model_settings={"temperature": 0},
             system_prompt=(
                 "You write ONE-LINE summaries of a single agent turn for a searchable turn index. "
                 f"Rules:\n"

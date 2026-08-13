@@ -302,7 +302,12 @@ def _build_agent(
             ],
         ),
     )
-    return Agent(SUBJECT_MODEL, name="locomo-subject", capabilities=caps)
+    return Agent(
+        SUBJECT_MODEL,
+        name="locomo-subject",
+        capabilities=caps,
+        model_settings={"temperature": 0},
+    )
 
 
 _SEED_INSTRUCTION = (

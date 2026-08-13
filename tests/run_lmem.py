@@ -170,6 +170,7 @@ def _lme_judge(question_type: str, question: str, gold_answer: str, response: st
         JUDGE_MODEL,
         name="lme-judge",
         output_type=_JudgeVerdict,
+        model_settings={"temperature": 0},
         instructions=(
             "You are the official LongMemEval answer judge. Answer the question "
             "exactly as asked: with a structured verdict `label` of 'yes' or 'no' "

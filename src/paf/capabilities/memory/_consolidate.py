@@ -153,6 +153,7 @@ def _build_owner(store, *, agent_name: str, namespace: str):
         consolidate_model(),
         name="memory-owner",
         capabilities=[owner_memory],
+        model_settings={"temperature": 0},
     )
     return owner, owner_memory
 
