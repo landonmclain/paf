@@ -141,6 +141,10 @@ _READONLY_MEMORY_GUIDANCE = (
     "never write or delete from it — memory upkeep happens elsewhere (the "
     "consolidation owner is the only writer). Recall from it; do not maintain "
     "it. For recall use the turn-index ladder (search_memory is read-only).\n"
+    "When the notebook (MEMORY.md) conflicts with a raw turn or earlier "
+    "statement you recalled, MEMORY WINS: the durable store is the consolidated, "
+    "most-recently-stated record. Prefer it over inconsistent one-off turns "
+    "(e.g. a stale count or an earlier figure the user later corrected).\n"
 )
 
 
@@ -178,7 +182,12 @@ def _gold_answer(q: dict) -> str:
 
 
 def _build_agent(
-    store: FileStepStore, index_dir: Path, *, memory_dir: Path | None = None
+    store: FileStepStore,
+    index_dir: Path,
+    *,
+    memory_dir: Path | None = None,
+    enable_summarizer: bool = True,
+    use_memory_owner: bool = True,
 ) -> Agent:
     """Wire the full PAF pipeline (memory-free; retrieval ladder ablatable).
 
@@ -187,6 +196,15 @@ def _build_agent(
     `MEMORY=1` it *is* included (plus the consolidation window that fires the
     owner on each eviction), targeting ``memory_dir`` (default
     ``index_dir.parent / "memory"``) so a run never touches repo `data/memory`.
+
+    Per-question gating (used by run_lmem): when a question already has durable
+    turn-index summaries (`enable_summarizer=False`) the `TurnIndexCapability`
+    is wired with ``summarizer=None`` so `after_model_request` never calls the
+    LLM summarizer — the index is already populated for that question. When it
+    has a durable memory snapshot (`use_memory_owner=False`) the plain
+    `SlidingWindowCompaction` replaces `MemoryConsolidationWindow` so the owner
+    sub-agent never fires. Building the agent per-question is cheap (both are
+    config-only dataclasses — no model init at build time).
 
     Default (ABLATE_TURN_INDEX unset): turn-index owns the ladder --
     TurnIndexCapability.add_instructions=True is the ONE retrieval steering,
@@ -233,8 +251,12 @@ def _build_agent(
                 index_store=TurnIndexStore(index_dir),
                 max_lines=MAX_LINES,
                 add_instructions=True,
-                summarizer=TurnSummarizer(
-                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                summarizer=(
+                    TurnSummarizer(
+                        model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                    )
+                    if enable_summarizer
+                    else None
                 ),
             )
         )
@@ -275,12 +297,22 @@ def _build_agent(
         # Consolidation window: same knobs as the plain sliding window, but
         # folds the about-to-evict slice into the shared run-scoped memory dir
         # before dropping it.
-        sw_tier = MemoryConsolidationWindow(
-            max_messages=LOCOMO_SW_MAX_MESSAGES,
-            keep_messages=LOCOMO_SW_KEEP,
-            memory_directory=str(mem_dir),
-            memory_agent="assistant",
-        )
+        # Consolidation window: same knobs as the plain sliding window, but
+        # folds the about-to-evict slice into the shared run-scoped memory dir
+        # before dropping it. `use_memory_owner=False` (durable memory exists
+        # for the question) keeps the plain window so the owner never fires.
+        if use_memory_owner:
+            sw_tier = MemoryConsolidationWindow(
+                max_messages=LOCOMO_SW_MAX_MESSAGES,
+                keep_messages=LOCOMO_SW_KEEP,
+                memory_directory=str(mem_dir),
+                memory_agent="assistant",
+            )
+        else:
+            sw_tier = SlidingWindowCompaction(
+                max_messages=LOCOMO_SW_MAX_MESSAGES,
+                keep_messages=LOCOMO_SW_KEEP,
+            )
     else:
         sw_tier = SlidingWindowCompaction(
             max_messages=LOCOMO_SW_MAX_MESSAGES,

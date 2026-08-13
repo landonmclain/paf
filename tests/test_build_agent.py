@@ -174,3 +174,93 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     # A profile WITHOUT "Compaction" gets no compaction at all.
     no_compaction = _runtime_capabilities_for(("StepPersistence", "TurnIndex"))
     assert TieredCompaction not in {type(c) for c in no_compaction}
+
+
+def _find_summarizer(root: Any):
+    """Return the TurnIndexCapability's `summarizer` seam anywhere in the root."""
+    if isinstance(root, TurnIndexCapability):
+        return getattr(root, "summarizer", None)
+    if dataclasses.is_dataclass(root) and not isinstance(root, type):
+        for field in dataclasses.fields(root):
+            found = _find_summarizer(getattr(root, field.name, None))
+            if found is not None:
+                return found
+    if isinstance(root, (list, tuple, dict)):
+        items = root.values() if isinstance(root, dict) else root
+        for item in items:
+            found = _find_summarizer(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _build_recall_agent(enable_summarizer, use_memory_owner):
+    """Drive tests.run_locomo._build_agent (the recall-agent builder) both ways.
+
+    Returns (root, summarizer): the composed root capability and the
+    TurnIndexCapability's summarizer seam (None when gated off).
+    """
+    import tests.run_locomo as _rl
+
+    old_mem, old_abl = _rl.MEMORY, _rl.ABLATE_TURN_INDEX
+    _rl.MEMORY = use_memory_owner  # owner path only exists under MEMORY=1
+    _rl.ABLATE_TURN_INDEX = False
+    try:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from pydantic_ai_harness.step_persistence import FileStepStore
+
+        with TemporaryDirectory() as td:
+            store = FileStepStore(directory=Path(td) / "store")
+            agent = _rl._build_agent(
+                store,
+                Path(td) / "index",
+                enable_summarizer=enable_summarizer,
+                use_memory_owner=use_memory_owner,
+            )
+            root = getattr(agent, "_root_capability", None) or getattr(
+                agent, "root_capability", None
+            )
+            return root, _find_summarizer(root)
+    finally:
+        _rl.MEMORY, _rl.ABLATE_TURN_INDEX = old_mem, old_abl
+
+
+def test_recall_agent_gates_summarizer_off_when_durable() -> None:
+    """Durable turn-index summaries => the recall agent wires summarizer=None.
+
+    run_lmem builds a per-question recall agent; when that question has durable
+    seed summaries (no PAF_FRESH_SEED), it must NOT carry an LLM summarizer so
+    `after_model_request` never calls the model on the recall turn.
+    """
+    root_on, summ_on = _build_recall_agent(enable_summarizer=True, use_memory_owner=True)
+    assert _collect_capabilities(root_on) >= {TurnIndexCapability}
+    assert summ_on is not None, "summarizer present when not gated off"
+
+    root_off, summ_off = _build_recall_agent(enable_summarizer=False, use_memory_owner=True)
+    assert summ_off is None, "summarizer gated OFF for durable qid"
+
+
+def test_recall_agent_gates_memory_owner_off_when_durable() -> None:
+    """Durable memory snapshot => the recall agent uses the plain sliding window.
+
+    `MemoryConsolidationWindow` fires the owner sub-agent on eviction. When a
+    question already has a durable memory snapshot (use_memory_owner=False) the
+    recall agent must use the plain `SlidingWindowCompaction` so the owner never
+    fires on the (read-only) recall turn.
+    """
+    from pydantic_ai_harness.compaction import SlidingWindowCompaction
+
+    from paf.capabilities.memory._window import MemoryConsolidationWindow
+
+    root_owner, _ = _build_recall_agent(enable_summarizer=True, use_memory_owner=True)
+    comp_owner = _find_compaction(root_owner)
+    assert comp_owner is not None
+    assert any(type(t) is MemoryConsolidationWindow for t in comp_owner.tiers)
+
+    root_plain, _ = _build_recall_agent(enable_summarizer=True, use_memory_owner=False)
+    comp_plain = _find_compaction(root_plain)
+    assert comp_plain is not None
+    assert not any(type(t) is MemoryConsolidationWindow for t in comp_plain.tiers)
+    assert any(type(t) is SlidingWindowCompaction for t in comp_plain.tiers)

@@ -875,10 +875,13 @@ def main(argv: list[str] | None = None) -> dict:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
     index_dir = artifact_dir / "index"
-    agent = _build_agent(store, index_dir)
+    # The recall agent is built PER-QUESTION (inside the loop below) so its
+    # summarizer + memory-owner can be gated off when that question already
+    # has durable snapshots -- never call a model when the durable store
+    # already has the answer.
     # Direct-seed writes (no agent loop) share the SAME store + index the
-    # recall agent reads: the index store and real summarizer are constructed
-    # here so seed rows land exactly where read_turn/search_index will look.
+    # recall agent reads: the index store is constructed here so seed rows
+    # land exactly where read_turn/search_index will look.
     index_store = TurnIndexStore(index_dir)
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
@@ -1004,6 +1007,11 @@ def main(argv: list[str] | None = None) -> dict:
         #     a future refactor can't leak the answer turn into the owner.
         #   - Owner writes into mem_dir = index_dir.parent/"memory" — the same
         #     store _build_agent(MEMORY=1) reads (matches its default).
+        # Pre-declare the per-question durable-memory state so the recall-agent
+        # gating below always sees `restored` / `fresh_memory` bound, even when
+        # MEMORY is off (then no durable memory exists -> owner enabled).
+        fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
+        restored = 0
         if MEMORY:
             from paf.capabilities.memory._consolidate import consolidate_conversation
             from paf.capabilities.memory._markdown import MarkdownStorage
@@ -1027,7 +1035,6 @@ def main(argv: list[str] | None = None) -> dict:
             # snapshot is the source of truth for a reproducible run; refresh
             # it via PAF_FRESH_MEMORY=1 (all) or LME_QIDS=<qid> PAF_FRESH_MEMORY=1
             # (specific), mirroring the turn-index PAF_FRESH_SEED idiom.
-            fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
             restored = (
                 _restore_durable_memory(q["question_id"], mem_dir)
                 if not fresh_memory
@@ -1068,9 +1075,25 @@ def main(argv: list[str] | None = None) -> dict:
         # consolidated ("memory/<question_id>"). Set on the run_locomo module
         # global (a `from ... import` local alias would NOT update the module
         # global the store_resolver closure reads).
+        # The recall agent is built per-question, gating its summarizer +
+        # memory-owner on this question's durable state so no model fires when
+        # the durable store already has the answer (recall is read-only).
         if MEMORY:
             import tests.run_locomo as _rl
             _rl._CURRENT_MEMORY_DIR = index_dir.parent / "memory" / q["question_id"]
+        if ABLATE_TURN_INDEX:
+            enable_summarizer = False
+        else:
+            enable_summarizer = bool(
+                os.environ.get("PAF_FRESH_SEED") or not precomputed
+            )
+        use_memory_owner = not (MEMORY and restored and not fresh_memory)
+        agent = _build_agent(
+            store,
+            index_dir,
+            enable_summarizer=enable_summarizer,
+            use_memory_owner=use_memory_owner,
+        )
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
         row = _run_turn(
             agent, qctx + q["question"], cid,
