@@ -91,42 +91,22 @@ from ._store import TurnIndexStore
 from ._summarizer import TurnSummarizer
 from ._toolset import TurnIndexToolset
 
-_INSTRUCTIONS = (
-    'CONFLICT RULE (applies always, before retrieval): when the user states a fact '
-    'or figure and a past turn (or your own reconstruction) says something different '
-    'for the same thing, the user\'s most recent statement is the truth — treat the '
-    'MOST RECENTLY stated value as current reality, even if an older turn or your '
-    'inference seems more "accurate". Do not second-guess or re-interpret an explicit '
-    'user-stated value (e.g. a personal best, a count, an amount) into something else; '
-    'the user\'s word is authoritative over your prior-derived judgment.\n'
-    '\n'
-    'UNANSWERABLE RULE (applies always, before giving an answer): if the question '
-    'cannot be answered from the evidence you actually have — you searched and the '
-    'facts are not in history, the information is missing, or it describes an event '
-    'that did not happen — say so EXPLICITLY FIRST (e.g. "This information is not in '
-    'our history" / "I can\'t answer this from what\'s available"), THEN, and only '
-    'then, you may note what you did find or reason about it. Do NOT lead with your '
-    'own guess, reconstruction, or interpretation as if it were the answer; the '
-    'refusal/insufficiency must come first, before you explain what you think. '
-    'Concisely: answer only what the evidence supports; when it doesn\'t, say so up '
-    'front rather than guessing first.\n'
-    '\n'
-    'To recall past turns, escalate in THIS order — use only as many rungs as '
-    'needed, cheapest first:\n'
-    '1. IN CONTEXT — if the answer is already in your context, answer it. Never '
-    'tool-call for something you already have.\n'
-    '2. TURN INDEX — a one-line summary + ref of every past turn is injected in '
-    'your request. Recognize the relevant turn from it (no tool call).\n'
-    '3. `search_index(query)` — BM25 over the FULL per-turn index record '
-        '(one-liner summary, key terms, and outcome, ranked by relevance). Use '
-        'when you have NO ref and don\'t know which turn.\n'
-    '4. `read_turn(ref)` — pull the full turn for a ref you have from the index '
-    'or step 3 when the one-liner isn\'t enough.\n'
-    '5. `search_conversation_history(query)` — wide BM25 search over persisted '
-    'history. LAST RESORT; only if the above came up empty.\n'
-    'Skip rungs that aren\'t needed: if the index already names the turn, go '
-    'straight to `read_turn` — don\'t call `search_index` first.'
-)
+_INSTRUCTIONS = r"""
+CONFLICT RULE (applies always, before retrieval): when the user states a fact or figure and a past turn (or your own reconstruction) says something different for the same thing, the user's most recent statement is the truth — treat the MOST RECENTLY stated value as current reality, even if an older turn or your inference seems more "accurate". Do not second-guess or re-interpret an explicit user-stated value (e.g. a personal best, a count, an amount) into something else; the user's word is authoritative over your prior-derived judgment.
+
+UNANSWERABLE RULE (applies always, before giving an answer): if the question cannot be answered from the evidence you actually have — you searched and the facts are not in history, the information is missing, or it describes an event that did not happen — say so EXPLICITLY FIRST (e.g. "This information is not in our history" / "I can't answer this from what's available"), THEN, and only then, you may note what you did find or reason about it. Do NOT lead with your own guess, reconstruction, or interpretation as if it were the answer; the refusal/insufficiency must come first, before you explain what you think.
+Concisely: answer only what the evidence supports; when it doesn't, say so up front rather than guessing first.
+
+INFERENCE RULE (softens the UNANSWERABLE RULE, still before giving an answer): when the retrieved context does NOT name the asked-for fact explicitly, but the history strongly and single-mindedly implies one specific answer (e.g. every relevant turn is about Target/the Cartwheel app and no other retailer appears, or the entire session establishes one unambiguous context), do NOT stop at "that's not on record". Give the implied answer in hedged form — "Most likely Target, but you never told me the exact location" — so the user gets the useful answer while you stay honest about the uncertainty. Reserve a flat "not in our history" refusal for when the history is genuinely ambiguous or empty. The hedged inference is preferred over a bare refusal whenever the evidence points at a single answer.
+
+To recall past turns, escalate in THIS order — use only as many rungs as needed, cheapest first:
+1. IN CONTEXT — if the answer is already in your context, answer it. Never tool-call for something you already have.
+2. TURN INDEX — a bounded recent tail of the one-line index (summary + ref per turn) is injected in your request. Recognize the relevant turn from it if present (no tool call). If the turn you need is NOT in the injected list, it is an OLDER turn that was trimmed — use `search_index` to find it.
+3. `search_index(query)` — BM25 over the FULL per-turn index record (one-liner summary, key terms, and outcome, ranked by relevance). Use when you have NO ref and don't know which turn.
+4. `read_turn(ref)` — pull the full turn for a ref you have from the index or step 3 when the one-liner isn't enough.
+5. `search_conversation_history(query)` — wide BM25 search over persisted history. LAST RESORT; only if the above came up empty.
+Skip rungs that aren't needed: if the index already names the turn, go straight to `read_turn` — don't call `search_index` first.
+"""
 
 
 @dataclass
@@ -206,10 +186,20 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
         entries = self.index_store.read_all(conversation_id=conversation_id)
         if not entries:
             return ''
+        total = len(entries)
         entries = entries[-self.max_lines :] if self.max_lines else entries
         lines = []
         for e in entries:
             lines.append(f'- [{e.ref}] {e.summary}')
+        # When the injected tail is a truncated view (older turns exist), say so
+        # explicitly so the model reaches for `search_index` for the trimmed turns
+        # instead of assuming the list is complete.
+        if self.max_lines and total > self.max_lines:
+            hidden = total - len(entries)
+            lines.append(
+                f'... {hidden} older turn'
+                f'{"s" if hidden != 1 else ""} not shown — use `search_index` to reach them.'
+            )
         return '\n'.join(lines)
 
     async def after_model_request(

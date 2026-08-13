@@ -1,12 +1,15 @@
 """Regression tests for the retrieval scorer in ``tests.run_lmem``.
 
 Covers the crash where a NON-string ``gold_answer`` (e.g. a count like ``3``
-for a multi-session question) with no ``session=`` tags in the tool outputs
-fell into the text-fallback branch and called ``.strip()`` on an ``int``
-(``AttributeError: 'int' object has no attribute 'strip'``).
+for a multi-session question) was scored at all. The retrieval metric is now
+**ID-membership recall@k** only: it compares the surfaced ``session=<id>`` set
+against the gold ``answer_session_ids`` and needs no token-overlap text probe.
 
-See LongMemEval-Testing.md "Memory-consolidation owner A/B" — q2's official
-grade was lost to this crash even though the memory write succeeded.
+The old text-presence fallback (which called ``.strip()`` on a ``gold_answer``
+and crashed on an int) was removed when LoCoMo was retired (2026-08). These
+tests pin the surviving ID-membership path against regressions like q2's.
+
+See LongMemEval-Testing.md "Memory-consolidation owner A/B".
 """
 
 import pytest
@@ -24,11 +27,12 @@ def _recall_row(*, gold_answer, answer_session_ids, tool_outputs, text="answer")
     }
 
 
-def test_int_gold_answer_with_no_session_tags_does_not_crash():
-    """q2 shape: count gold (int), truthy answer_session_ids, but no session= tags.
+def test_int_gold_answer_scored_safely():
+    """q2 shape: count gold (int), truthy answer_session_ids, no session= tags.
 
-    This used to raise ``AttributeError: 'int' object has no attribute 'strip'``
-    in the text-fallback branch inside ``_id_membership_recall``.
+    The old text-fallback raised ``AttributeError: 'int' object has no
+    attribute 'strip'``. With the fallback gone, this must still not raise and
+    must report recall 0 (no evidence surfaced).
     """
     row = _recall_row(
         gold_answer=3,  # the count; not a string
@@ -39,21 +43,26 @@ def test_int_gold_answer_with_no_session_tags_does_not_crash():
         ],
     )
     # Must not raise.
-    result = _retrieval(row, [])  # gold_session_texts ignored: answer_session_ids present
+    result = _retrieval(row)
     assert "retrieval_recall" in result
-    assert result["method"] in ("id-membership", "text-fallback")
+    assert result["method"] == "id-membership"
+    assert result["retrieval_recall"] == 0.0  # no session= tags surfaced
 
 
-def test_string_gold_answer_no_tags_uses_text_fallback():
-    """String gold with no session= tags matches via text-presence fallback."""
+def test_no_surfaced_tags_scores_zero():
+    """String gold with no session= tags -> id-membership, recall 0.
+
+    The text-presence fallback that used to match the probe against tool output
+    was removed; retrieval is scored purely on surfaced session ids.
+    """
     row = _recall_row(
         gold_answer="Zara boots",
         answer_session_ids=["a"],
         tool_outputs=["pick up new pair of Zara boots"],
     )
-    result = _id_membership_recall(row, ["a"])  # id-membership path (gold ids present)
-    # surfaced empty -> falls to text fallback; the probe "Zara boots" appears
-    assert result["method"] == "text-fallback"
+    result = _id_membership_recall(row, ["a"])
+    assert result["method"] == "id-membership"
+    assert result["retrieval_recall"] == 0.0
 
 
 def test_id_membership_path_preferred_when_tags_present():

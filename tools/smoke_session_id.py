@@ -2,7 +2,7 @@
 
 Fires ONE real agent turn wrapped in root_span with a fresh session id, then
 queries Langfuse for traces?sessionId=<clean> and asserts the id matches the
-clean value (no JSON quotes). Mirrors exactly what test_beam_lite's _run_turn
+clean value (no JSON quotes). Mirrors exactly what the harness `_run_turn`
 does, but for a single cheap turn.
 
 Usage: PYTHONPATH=. .venv/bin/python tools/smoke_session_id.py

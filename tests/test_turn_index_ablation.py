@@ -25,7 +25,7 @@ from pydantic_ai_harness.step_persistence import FileStepStore
 
 from paf.capabilities.search._capability import ConversationSearch
 from paf.capabilities.turn_index._capability import TurnIndexCapability
-from tests import run_locomo as R
+from tests import framework as R
 
 
 def _root(agent: Agent) -> Any:

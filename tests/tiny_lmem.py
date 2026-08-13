@@ -9,7 +9,7 @@ type: 2 seed turns) whose answer sits in a long assistant turn, so by design
 it falls out of context and must be retrieved via tools.
 
 Crucially, [this runner wires the REAL `TurnSummarizer` into TurnIndexCapability],
-which `tests/run_locomo.py::_build_agent` does NOT (it hits the deterministic
+which `tests/framework.py::_build_agent` does NOT (it hits the deterministic
 stub). That missing wire is why prior LME/LoCoMo runs indexed raw truncated
 turn text instead of real `sentence + key_terms + outcome`. This script is
 both the fast smoke check AND the reference for the correct build.
@@ -55,7 +55,7 @@ from tests.run_lmem import (
 
 # Shared harness: memory-free builder + turn runner (the ONE source of truth for
 # the pipeline; tiny delegates so it can't drift from run_lmem again).
-from tests.run_locomo import _build_agent, _run_turn
+from tests.framework import _build_agent, _run_turn
 
 # ---------------------------------------------------------------- config ----
 SUBJECT_MODEL = os.environ.get(
@@ -75,8 +75,8 @@ LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "2"))
 DATA = Path(__file__).parent.parent / "data" / "benchmarks" / "lme_oracle.json"
 RESULTS_DIR = Path(__file__).parent / "results"
 
-# ------------------------------------------------ pipeline (run_locomo-faithful) ----
-# Use the SHARED harness builder from tests/run_locomo (memory-free, real
+# ------------------------------------------------ pipeline (framework-faithful) ----
+# Use the SHARED harness builder from tests/framework (memory-free, real
 # TurnSummarizer, TurnIndex owns the ladder). Previously tiny_lmem maintained
 # its own mirrored builders, which drifted (introduced the summarizer-stub
 # "bug"). Consolidating here ensures tiny tests the same pipeline as run_lmem.
@@ -85,9 +85,9 @@ def build_agent(store, index_dir) -> Agent:
     return _build_agent(store, index_dir)
 
 
-# ------------------------------------------------ turn runner (run_locomo-faithful) ----
+# ------------------------------------------------ turn runner (framework-faithful) ----
 def run_turn(agent: Agent, prompt: str, cid: str, name: str, session: str) -> dict:
-    """Delegate to the shared turn runner from tests/run_locomo."""
+    """Delegate to the shared turn runner from tests/framework."""
     return _run_turn(agent, prompt, cid, name, session)
 
 

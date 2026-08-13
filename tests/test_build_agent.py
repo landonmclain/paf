@@ -195,12 +195,12 @@ def _find_summarizer(root: Any):
 
 
 def _build_recall_agent(enable_summarizer, use_memory_owner):
-    """Drive tests.run_locomo._build_agent (the recall-agent builder) both ways.
+    """Drive tests.framework._build_agent (the recall-agent builder) both ways.
 
     Returns (root, summarizer): the composed root capability and the
     TurnIndexCapability's summarizer seam (None when gated off).
     """
-    import tests.run_locomo as _rl
+    import tests.framework as _rl
 
     old_mem, old_abl = _rl.MEMORY, _rl.ABLATE_TURN_INDEX
     _rl.MEMORY = use_memory_owner  # owner path only exists under MEMORY=1

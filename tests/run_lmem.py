@@ -1,12 +1,13 @@
 """LongMemEval sample run — full PAF memory pipeline.
 
-Analogue of `run_locomo.py`, but for LongMemEval's `lme_oracle.json` (the
+Uses the shared harness builder in `tests/framework.py`, pointed at LongMemEval's
+`lme_oracle.json` (the
 "oracle" config = evidence-bearing sessions only, ~1-6 sessions / ~24 msgs per
 question). Each question's `haystack_sessions` are seeded into ONE isolated
 store through the FULL enabled PAF pipeline, then the question is asked
 cold-start and scored.
 
-Pipeline (mirrors run_locomo.py / ASSISTANT_PROFILE, one isolated temp store):
+Pipeline (mirrors tests/framework.py / ASSISTANT_PROFILE, one isolated temp store):
 
   - StepPersistence          full history to a FileStepStore
   - ConversationSearch       BM25 wide fallback over that store
@@ -26,7 +27,7 @@ DATE HANDLING (the thing LoCoMo couldn't do):
 
 SCORING (two columns, per LongMemEval two-metric design):
   1. Judge      -- OFFICIAL LongMemEval binary yes/no: `get_anscheck_prompt` in
-                    tests/locomo_scoring.py (VERBATIM per-task templates, incl. the
+                    tests/lme_scoring.py (VERBATIM per-task templates, incl. the
                     abstention prompt), judged by gpt-4o-mini via OpenRouter at
                     temperature 0; label = 'yes' in response. Gold `answer` is the
                     reference. Reports per-task / task-averaged / overall /
@@ -76,7 +77,7 @@ from paf.observability.instrumentation import (
 )
 
 # Official LongMemEval judge scaffold (verbatim prompts + label parsing).
-from tests.locomo_scoring import (
+from tests.lme_scoring import (
     LME_TYPES,
     get_lme_anscheck_prompt,
     lme_is_abstention,
@@ -84,7 +85,7 @@ from tests.locomo_scoring import (
 )
 
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
-from tests.run_locomo import (
+from tests.framework import (
     ABLATE_TURN_INDEX,
     MEMORY,
     _build_agent,
@@ -100,14 +101,21 @@ SUBJECT_MODEL = os.environ.get("BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/d
 JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
 
 MAX_LINES = int(os.environ.get("LOCOMO_MAX_LINES", "10"))
-# Same middle dial as the LoCoMo sweep finding (see run_locomo.py docstring):
+# Same middle dial as the eviction sweep finding (see tests/framework.py docstring):
 # wide enough to keep ordinary exchanges in-context, tight enough that old
 # evidence sessions are evicted -> retrieval pressure stays ON.
 LOCOMO_TARGET_TOKENS = int(os.environ.get("LOCOMO_TARGET_TOKENS", "5000"))
 LOCOMO_SW_MAX_MESSAGES = int(os.environ.get("LOCOMO_SW_MAX_MESSAGES", "6"))
 LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
 
-DATA = Path(__file__).parent.parent / "data" / "benchmarks" / "lme_oracle.json"
+# Benchmark data file. Default = the oracle variant (evidence-only sessions,
+# ~1.9 sessions / ~22 turns per question). Set `LME_DATA_FILE` to point at a
+# different LongMemEval split (e.g. `longmemeval_s_cleaned.json` for the strict
+# paper configuration — same 500 questions but ~48 sessions / ~493 turns with
+# distractor haystacks mixed in, which actually exercises search/retrieval).
+DATA = Path(__file__).parent.parent / "data" / "benchmarks" / os.environ.get(
+    "LME_DATA_FILE", "lme_oracle.json"
+)
 RESULTS_DIR = Path(__file__).parent / "results"
 # Durable seed summaries (committed, see snapshot_seed_index.py). The harness
 # REQUIRES these per-question; missing = error, no silent regeneration.
@@ -706,107 +714,34 @@ def _id_membership_recall(recall: dict, gold_ids: list[str]) -> dict:
     Abstention (`_abs`) questions are excluded by the caller, matching the
     official evaluator's `'_abs' not in question_id` filter.
     """
-    from tests.locomo_scoring import f1_score  # noqa: F401  (text fallback below)
-
     surfaced = _extract_surfaced_session_ids(recall)
-    if surfaced:
-        found = [g for g in gold_ids if g in surfaced]
-        k = len(surfaced)
-        recall_all = round(len(found) / len(gold_ids), 4) if gold_ids else 1.0
-        # NDCG_any@k: give any-gold-hit a position-weight; simplified (DCG of a
-        # single-query binary relevance list vs ideal). We report the recall_all
-        # primarily and ndcg_any as the "any gold surfaced" signal.
-        ndcg_any = 1.0 if found else 0.0
-        return {
-            "retrieval_recall": recall_all,
-            "ndcg_any": ndcg_any,
-            "k": k,
-            "surfaced": surfaced,
-            "method": "id-membership",
-        }
-    # Fallback: runs whose outputs carry no `session=` tags (older artifacts).
-    # Text-presence of the gold answer in tool outputs, tool-only (independent
-    # of the final answer). Kept for backward compatibility with prior results.
-    # Gold answers are not guaranteed strings (e.g. a count like 3), so coerce
-    # and skip empties rather than assume `.strip()` on a str.
-    gold_texts = [recall.get("gold_answer") or ""]
-    chunks = [t for t in recall.get("tool_outputs", []) if t and t.strip()]
-    surfaced_text: list[str] = []
-    for probe in gold_texts:
-        if isinstance(probe, (int, float)):
-            probe = str(probe)
-        p = str(probe).strip()
-        if not p:
-            continue
-        if any(f1_score(p, c) >= 0.30 for c in chunks):
-            surfaced_text.append(p)
+    found = [g for g in gold_ids if g in surfaced]
+    k = len(surfaced)
+    recall_all = round(len(found) / len(gold_ids), 4) if gold_ids else 1.0
+    # NDCG_any@k: give any-gold-hit a position-weight; simplified (DCG of a
+    # single-query binary relevance list vs ideal). We report the recall_all
+    # primarily and ndcg_any as the "any gold surfaced" signal.
+    ndcg_any = 1.0 if found else 0.0
     return {
-        "retrieval_recall": round(len(surfaced_text) / len(gold_texts), 4)
-        if gold_texts
-        else 1.0,
-        "ndcg_any": 1.0 if surfaced_text else 0.0,
-        "k": len(chunks),
-        "surfaced": surfaced_text,
-        "method": "text-fallback",
+        "retrieval_recall": recall_all,
+        "ndcg_any": ndcg_any,
+        "k": k,
+        "surfaced": surfaced,
+        "method": "id-membership",
     }
 
 
-def _retrieval(recall: dict, gold_session_texts: list[str]) -> dict:
+def _retrieval(recall: dict, gold_session_texts: list[str] | None = None) -> dict:
     """Did the search tools surface the evidence for this question?
 
-    Primary: LongMemEval ID-membership recall@k. The question's
-    `answer_session_ids` are the ground truth; a search result counts if its
-    surfaced `session=<id>` (from `source_session_id` provenance) names an
-    evidence session. Independent of the final answer, `_abs` excluded by the
-    caller. Falls back to a text-presence probe only when the run's outputs
-    lack `session=` tags (older artifacts).
+    LongMemEval ID-membership recall@k. The question's `answer_session_ids` are
+    the ground truth; a search result counts if its surfaced `session=<id>`
+    (from `source_session_id` provenance) names an evidence session. Independent
+    of the final answer, `_abs` excluded by the caller. When a run carries no
+    `answer_session_ids` there is nothing to score -> recall 0.
     """
     gold_ids = recall.get("answer_session_ids") or []
-    if gold_ids:
-        return _id_membership_recall(recall, gold_ids)
-    return _retrieval_text_fallback(recall, gold_session_texts)
-
-
-def _retrieval_text_fallback(recall: dict, gold_session_texts: list[str]) -> dict:
-    """Legacy text-probe recall (kept for gold-session records w/o ids)."""
-    from tests.locomo_scoring import f1_score
-
-    if not gold_session_texts:
-        return {"retrieval_recall": 1.0, "surfaced": [], "method": "text-fallback"}
-    chunks = [t for t in recall.get("tool_outputs", []) if t and t.strip()]
-    ans = (recall.get("text") or "").strip()
-    surfaced = []
-    for probe in gold_session_texts:
-        p = probe.strip()
-        if not p:
-            continue
-        best_tool = max((f1_score(p, c) for c in chunks), default=0.0)
-        ans_f1 = f1_score(p, ans) if ans else 0.0
-        if best_tool >= 0.30 or ans_f1 >= 0.35:
-            surfaced.append(p)
-    return {
-        "retrieval_recall": round(len(surfaced) / len(gold_session_texts), 4),
-        "surfaced": surfaced,
-        "method": "text-fallback",
-    }
-
-
-def _gold_session_probes(q: dict) -> list[str]:
-    """Distinctive text per answer session (has_answer turn, else first user turn)."""
-    out = []
-    sessions = q["haystack_sessions"]
-    for sess in sessions:
-        for turn in sess:
-            if turn.get("has_answer") and turn.get("content"):
-                out.append(turn["content"])
-                break
-        else:
-            # no has_answer flag in this session -> first user turn
-            for turn in sess:
-                if turn.get("role") == "user" and turn.get("content"):
-                    out.append(turn["content"])
-                    break
-    return out
+    return _id_membership_recall(recall, gold_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -818,7 +753,7 @@ def main(argv: list[str] | None = None) -> dict:
     import argparse
 
     global SUBJECT_MODEL, JUDGE_MODEL
-    # CLI overrides for the live-LLM subjects/judges — mirror of test_beam_lite.
+    # CLI overrides for the live-LLM subjects/judges — mirror of the harness env.
     # Flags take precedence over env (BEAM_LITE_SUBJECT_MODEL / LME_JUDGE_MODEL);
     # the module globals are rebound here so the whole run uses them.
     _ap = argparse.ArgumentParser(
@@ -1072,14 +1007,14 @@ def main(argv: list[str] | None = None) -> dict:
         # ---- Recall: cold-start the question -------------------------
         # Point the subject's Memory store at THIS question's notebook so
         # search_memory/read_memory/inject read exactly what the owner just
-        # consolidated ("memory/<question_id>"). Set on the run_locomo module
+        # consolidated (memory/<question_id>). Set on the framework module
         # global (a `from ... import` local alias would NOT update the module
         # global the store_resolver closure reads).
         # The recall agent is built per-question, gating its summarizer +
         # memory-owner on this question's durable state so no model fires when
         # the durable store already has the answer (recall is read-only).
         if MEMORY:
-            import tests.run_locomo as _rl
+            import tests.framework as _rl
             _rl._CURRENT_MEMORY_DIR = index_dir.parent / "memory" / q["question_id"]
         if ABLATE_TURN_INDEX:
             enable_summarizer = False
@@ -1128,7 +1063,7 @@ def main(argv: list[str] | None = None) -> dict:
                 "method": "skipped-no-tools",
             }
         else:
-            row["retrieval"] = _retrieval(row, _gold_session_probes(q))
+            row["retrieval"] = _retrieval(row)
 
         all_recall_rows.append(row)
         print(
