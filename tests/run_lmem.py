@@ -657,11 +657,15 @@ def _id_membership_recall(recall: dict, gold_ids: list[str]) -> dict:
     # Fallback: runs whose outputs carry no `session=` tags (older artifacts).
     # Text-presence of the gold answer in tool outputs, tool-only (independent
     # of the final answer). Kept for backward compatibility with prior results.
+    # Gold answers are not guaranteed strings (e.g. a count like 3), so coerce
+    # and skip empties rather than assume `.strip()` on a str.
     gold_texts = [recall.get("gold_answer") or ""]
     chunks = [t for t in recall.get("tool_outputs", []) if t and t.strip()]
     surfaced_text: list[str] = []
     for probe in gold_texts:
-        p = probe.strip()
+        if isinstance(probe, (int, float)):
+            probe = str(probe)
+        p = str(probe).strip()
         if not p:
             continue
         if any(f1_score(p, c) >= 0.30 for c in chunks):
