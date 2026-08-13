@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 
     from ._capability import Memory
 
+from ._format import MEMORY_FORMAT
+
 logger = logging.getLogger(__name__)
 
 # Default: the cheap flash-lite class. Overridable via Settings.consol_model
@@ -57,9 +59,15 @@ contradicts what memory already records, update memory to the newest value —
 do not re-assert the older one, and do not leave conflicting entries. Produce
 the single current value.
 
-Update in place; prefer a targeted edit over a duplicate append. Move entries
-into the right files; keep MEMORY.md a small curated notebook. Take the time
-to be complete and well-organized.
+Update in place; prefer a targeted edit over a duplicate append. Delete an
+entry when it is done or superseded.
+
+Write bias — record EVERYTHING durable and every user-stated somatic
+(preferences, names, plans, decisions, pending actions); skip only truly
+incidental small talk. Pruning a kept entry is cheaper than missing it at
+compaction, so err toward writing it.
+
+{format_spec}
 
 Deletion is permitted when an entry is done, superseded, or stale. Update is
 the default, but do not hoard dead entries. Do not delete on age alone if the
@@ -103,7 +111,7 @@ def _build_owner_memory(store, *, agent_name: str, namespace: str) -> Memory:
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=False,
-        guidance=CONSOLIDATION_GUIDANCE,
+        guidance=CONSOLIDATION_GUIDANCE.format(format_spec=MEMORY_FORMAT),
         writable=True,
     )
 

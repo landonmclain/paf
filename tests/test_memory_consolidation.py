@@ -24,6 +24,7 @@ from paf.capabilities.memory._consolidate import (
     CONSOLIDATION_GUIDANCE,
     consolidate_model,
 )
+from paf.capabilities.memory._format import MEMORY_FORMAT, extract_sections
 from paf.capabilities.memory._toolset import MemoryToolset
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 
@@ -114,6 +115,40 @@ def test_consolidation_guidance_is_owned_by_owner() -> None:
     """The owner guidance enforces sole-writer + newer-always-wins semantics."""
     assert "only writer" in CONSOLIDATION_GUIDANCE
     assert "NEWER ALWAYS WINS" in CONSOLIDATION_GUIDANCE
+    assert "{format_spec}" in CONSOLIDATION_GUIDANCE  # format embedded at build time
+
+
+def test_memory_format_pinned_sections_and_order() -> None:
+    """The canonical MEMORY.md format declares exactly four sections, in order.
+
+    Both the subject's default guidance and the owner's consolidation manual
+    must embed the exact same MEMORY_FORMAT so the writer and reader agree on
+    the notebook shape by construction — if either stops carrying the format,
+    this test fails.
+    """
+    from paf.capabilities.memory._capability import _DEFAULT_GUIDANCE
+
+    # The raw format pins the four sections, in the canonical order.
+    assert extract_sections(MEMORY_FORMAT) == [
+        "Facts",
+        "Preferences",
+        "Pending",
+        "Notes",
+    ]
+    # No stray sections beyond the four.
+    assert len(extract_sections(MEMORY_FORMAT)) == 4
+    # Write bias is explicit ("write too much") in the format.
+    assert "WHEN IN DOUBT, RECORD IT" in MEMORY_FORMAT
+    assert "## Pending" in MEMORY_FORMAT and "- [ ]" in MEMORY_FORMAT
+    # Both guidance strings carry the exact section block (single source of truth).
+    from paf.capabilities.memory._consolidate import _build_owner_memory
+
+    assert extract_sections(
+        _DEFAULT_GUIDANCE.format(format_spec=MEMORY_FORMAT)
+    ) == extract_sections(MEMORY_FORMAT)
+    built_owner = _build_owner_memory(None, agent_name="assistant", namespace="")
+    assert built_owner.guidance is not None
+    assert extract_sections(built_owner.guidance) == extract_sections(MEMORY_FORMAT)
 
 
 def test_consolidation_model_reads_config(monkeypatch) -> None:
@@ -147,7 +182,7 @@ def test_build_owner_is_single_writer_and_read_via_tools() -> None:
     assert isinstance(cap, Memory)
     assert cap.writable is True
     assert cap.inject_memory is False
-    assert cap.guidance == CONSOLIDATION_GUIDANCE
+    assert cap.guidance == CONSOLIDATION_GUIDANCE.format(format_spec=MEMORY_FORMAT)
 
 
 def test_resident_consolidate_text_none_when_empty() -> None:
