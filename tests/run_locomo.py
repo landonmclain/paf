@@ -120,6 +120,19 @@ ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "0") == "1"
 # without it. Turn it on for a memory-arm run: `MEMORY=1 ...`.
 MEMORY = os.environ.get("MEMORY", "0") == "1"
 
+# Read-only guidance for the subject's Memory surface (writable=False). The
+# subject can recall from MEMORY.md but never writes to it (the consolidation
+# owner is the sole writer), so it must NOT be told to `write_memory` / CAPTURE.
+# TurnIndex already owns the CONFLICT/UNANSWERABLE rules and the recall ladder,
+# so this is deliberately minimal and read-only. Kept harness-local (an env
+# constant) rather than a source change: `guidance=` overrides the default.
+_READONLY_MEMORY_GUIDANCE = (
+    "You carry a read-only durable notebook (MEMORY.md) injected below. You "
+    "never write or delete from it — memory upkeep happens elsewhere (the "
+    "consolidation owner is the only writer). Recall from it; do not maintain "
+    "it. For recall use the turn-index ladder (search_memory is read-only).\n"
+)
+
 
 def _load_samples(n: int | None = None) -> list[dict]:
     """Return the first `n` LoCoMo samples (default: LOCOMO_CONV_LIMIT)."""
@@ -233,6 +246,7 @@ def _build_agent(
                 agent_name="assistant",
                 inject_memory=True,
                 writable=False,
+                guidance=_READONLY_MEMORY_GUIDANCE,
             )
         )
         # Consolidation window: same knobs as the plain sliding window, but

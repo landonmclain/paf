@@ -152,11 +152,11 @@ def test_memory_format_pinned_sections_and_order() -> None:
 
 
 def test_consolidation_model_reads_config(monkeypatch) -> None:
-    """Settings.consol_model (CONSOL_MODEL / .env) overrides the flash-lite default."""
+    """Settings.consol_model (CONSOL_MODEL / .env) overrides the deepseek default."""
     from paf.config import settings
 
     monkeypatch.setattr(settings, "consol_model", "")
-    assert consolidate_model() == "google/gemini-2.5-flash-lite:nitro"
+    assert consolidate_model() == "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
     monkeypatch.setattr(settings, "consol_model", "openai:gpt-5.6-luna-pro")
     assert consolidate_model() == "openai:gpt-5.6-luna-pro"
 

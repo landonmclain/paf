@@ -20,7 +20,7 @@ The owner model is read from ``Settings.consol_model`` (``CONSOL_MODEL`` env /
 mirroring how the benchmark harness sources its model knobs. It is deliberately
 *not* hardcoded in the source and *not* the spec'd ``assistant.yaml`` model
 (that model is the subject; the owner is a separate leaf agent). Override per
-run: ``CONSOL_MODEL=google/gemini-2.5-flash-lite:nitro``.
+run: ``CONSOL_MODEL=openrouter:deepseek/deepseek-v4-flash-0731:nitro``.
 """
 
 from __future__ import annotations
@@ -41,9 +41,12 @@ from ._format import MEMORY_FORMAT
 
 logger = logging.getLogger(__name__)
 
-# Default: the cheap flash-lite class. Overridable via Settings.consol_model
-# (CONSOL_MODEL env / .env) — see module docstring. Not the spec'd subject.
-DEFAULT_CONSOL_MODEL = "google/gemini-2.5-flash-lite:nitro"
+# Default: the subject feed model (deepseek, OpenRouter-qualified). Overridable
+# via Settings.consol_model (CONSOL_MODEL env / .env) — see module docstring.
+# Not the spec'd subject, but the same provider form so it resolves without a
+# bare-name inference. Must be `openrouter:`-prefixed (a bare `model:variant`
+# string can't resolve to a provider).
+DEFAULT_CONSOL_MODEL = "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
 
 CONSOLIDATION_GUIDANCE = """\
 You maintain this user's memory and are its only writer. You create, update,
@@ -69,6 +72,20 @@ compaction, so err toward writing it.
 
 {format_spec}
 
+AFTER YOU WRITE — self-check the format. Re-read MEMORY.md as it now stands and
+verify it still conforms to the format above before you consider the consolidation
+done:
+- exactly ONE of each section header (## Facts, ## Preferences, ## Pending, ## Notes)
+  in that order, and nothing after the last one;
+- any lingering fact/pending from a PRIOR consolidation that the new merge
+  displaced is folded back under the correct section header — never leave a fact
+  stranded under a dangling or duplicate section header, never nest a second
+  header mid-file;
+- one fact per line, no stray blank prose under Facts/Preferences/Pending.
+If the file does not conform, fix it now with a memory write. Do not finish until
+the file matches the format exactly. Your final one-line reply should state what
+you changed (or \"no changes\") — and if you had to repair the structure, say so.
+
 Deletion is permitted when an entry is done, superseded, or stale. Update is
 the default, but do not hoard dead entries. Do not delete on age alone if the
 fact is still true.
@@ -92,7 +109,7 @@ _MODULE_MEMORY: Memory | None = None
 
 
 def consolidate_model() -> str:
-    """Resolve the owner model from Settings (CONSOL_MODEL / .env), defaulting to flash-lite."""
+    """Resolve the owner model from Settings (CONSOL_MODEL / .env), defaulting to deepseek."""
     return settings.consol_model or DEFAULT_CONSOL_MODEL
 
 
