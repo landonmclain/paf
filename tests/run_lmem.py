@@ -113,6 +113,15 @@ RESULTS_DIR = Path(__file__).parent / "results"
 # REQUIRES these per-question; missing = error, no silent regeneration.
 GENERATED_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "generated"
 
+# Durable per-question MEMORY snapshots (committed, mirroring generated/ so a
+# fresh clone re-runs with ZERO owner/consolidation tokens). The owner writes
+# memory/<qid>/ at seed time; _persist_durable_memory snapshots the result here
+# and _restore_durable_memory copies it back to skip re-consolidation on later
+# runs. PAF_FRESH_MEMORY=1 forces re-consolidation (and re-persists); combining
+# with LME_QIDS narrows the refresh to specific questions — same shape as the
+# PAF_FRESH_SEED / LME_QIDS turn-index idiom.
+MEMORY_DURABLE_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "memory"
+
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
 # across all 6 types + some abstention is a good first validation.
 LME_MAX_QUESTIONS = int(os.environ.get("LME_MAX_QUESTIONS", "15"))
@@ -593,6 +602,66 @@ def _load_precomputed_summaries(
     return out
 
 
+def _copy_tree(src: Path, dst: Path) -> int:
+    """Recursively copy all files under ``src`` into ``dst`` (idempotent)."""
+    if not src.is_dir():
+        return 0
+    n = 0
+    for item in src.rglob("*"):
+        if item.is_file():
+            rel = item.relative_to(src)
+            target = dst / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(item.read_bytes())
+            n += 1
+    return n
+
+
+def _persist_durable_memory(qid: str, live_dir: Path) -> int:
+    """Snapshot a question's freshly-consolidated memory store to the durable dir.
+
+    Copies every file under ``live_dir`` (the ``memory/<qid>/`` the owner just
+    wrote — ``MEMORY.md``, any topic files, and the ``.memory-state.json`` CAS
+    sidecar) into ``data/benchmarks/memory/<qid>/``. Idempotent overwrite, so
+    re-running on unchanged input just re-stamps the same bytes. Call it only
+    after a REAL owner consolidation (never after a restore-skip), otherwise it
+    would duplicate what was already durable. Returns files copied.
+    """
+    snap = MEMORY_DURABLE_DIR / qid
+    if not live_dir.is_dir():
+        return 0
+    n = _copy_tree(live_dir, snap)
+    if n:
+        print(
+            f"[lmem]     persisted {n} durable memory files -> {snap}",
+            flush=True,
+        )
+    return n
+
+
+def _restore_durable_memory(qid: str, live_dir: Path) -> int:
+    """Copy a durable memory snapshot back into the live store; 0 if none.
+
+    With no snapshot (fresh question, or `PAF_FRESH_MEMORY` forced) returns 0
+    so the caller falls through to a real owner consolidation. Otherwise the
+    durable snapshot IS the source of truth for a reproducible run: copy all
+    files (MD bodies + the CAS sidecar) back into ``memory/<qid>/`` so the
+    subject's normal ``store_resolver`` path reads the exact consolidated
+    notebook — ZERO owner tokens for the question.
+    """
+    snap = MEMORY_DURABLE_DIR / qid
+    if not snap.is_dir():
+        return 0
+    n = _copy_tree(snap, live_dir)
+    if n:
+        print(
+            f"[lmem]     REUSED {n} durable memory files -> {live_dir} "
+            "(0 owner tokens)",
+            flush=True,
+        )
+    return n
+
+
 def _extract_surfaced_session_ids(recall: dict) -> list[str]:
     """Pull the source-session ids the search tools surfaced this turn.
 
@@ -950,20 +1019,47 @@ def main(argv: list[str] | None = None) -> dict:
                 "seed turns must not contain the recall question (look-ahead leak)"
             )
             mem_dir = index_dir.parent / "memory" / q["question_id"]
-            store_mem = MarkdownStorage(mem_dir)
-            asyncio.run(
-                consolidate_conversation(
-                    seed_msgs,
-                    store=store_mem,
-                    agent_name="assistant",
-                    namespace="",
+
+            # DURABLE MEMORY REUSE: if a committed snapshot exists for this
+            # question (and we're not forcing fresh), copy it into the live
+            # store and SKIP the owner entirely -- 0 owner tokens. The durable
+            # snapshot is the source of truth for a reproducible run; refresh
+            # it via PAF_FRESH_MEMORY=1 (all) or LME_QIDS=<qid> PAF_FRESH_MEMORY=1
+            # (specific), mirroring the turn-index PAF_FRESH_SEED idiom.
+            fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
+            restored = (
+                _restore_durable_memory(q["question_id"], mem_dir)
+                if not fresh_memory
+                else 0
+            )
+            if restored:
+                print(
+                    f"[lmem]   q{qi} memory REUSED from durable snapshot "
+                    f"(skipped owner)",
+                    flush=True,
                 )
-            )
-            print(
-                f"[lmem]   q{qi} consolidated {len(seed_msgs)} seed msgs "
-                f"(up to question) into {mem_dir}",
-                flush=True,
-            )
+            else:
+                if fresh_memory:
+                    print(
+                        f"[lmem]   q{qi} PAF_FRESH_MEMORY=1 -> re-consolidating "
+                        f"(durable snapshot overwritten)",
+                        flush=True,
+                    )
+                store_mem = MarkdownStorage(mem_dir)
+                asyncio.run(
+                    consolidate_conversation(
+                        seed_msgs,
+                        store=store_mem,
+                        agent_name="assistant",
+                        namespace="",
+                    )
+                )
+                print(
+                    f"[lmem]   q{qi} consolidated {len(seed_msgs)} seed msgs "
+                    f"(up to question) into {mem_dir}",
+                    flush=True,
+                )
+                _persist_durable_memory(q["question_id"], mem_dir)
 
         # ---- Recall: cold-start the question -------------------------
         # Point the subject's Memory store at THIS question's notebook so
