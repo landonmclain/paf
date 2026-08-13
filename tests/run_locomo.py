@@ -126,7 +126,10 @@ MEMORY = os.environ.get("MEMORY", "0") == "1"
 # TurnIndex already owns the CONFLICT/UNANSWERABLE rules and the recall ladder,
 # so this is deliberately minimal and read-only. Kept harness-local (an env
 # constant) rather than a source change: `guidance=` overrides the default.
+# Opens with a separator so, once concatenated with the turn-index ladder, the
+# memory instructions read as a visually distinct section (NOT another rung).
 _READONLY_MEMORY_GUIDANCE = (
+    "\n"
     "You carry a read-only durable notebook (MEMORY.md) injected below. You "
     "never write or delete from it — memory upkeep happens elsewhere (the "
     "consolidation owner is the only writer). Recall from it; do not maintain "
