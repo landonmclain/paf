@@ -949,7 +949,7 @@ def main(argv: list[str] | None = None) -> dict:
             assert q["question"] not in _seed_content, (
                 "seed turns must not contain the recall question (look-ahead leak)"
             )
-            mem_dir = index_dir.parent / "memory"
+            mem_dir = index_dir.parent / "memory" / q["question_id"]
             store_mem = MarkdownStorage(mem_dir)
             asyncio.run(
                 consolidate_conversation(
@@ -966,6 +966,14 @@ def main(argv: list[str] | None = None) -> dict:
             )
 
         # ---- Recall: cold-start the question -------------------------
+        # Point the subject's Memory store at THIS question's notebook so
+        # search_memory/read_memory/inject read exactly what the owner just
+        # consolidated ("memory/<question_id>"). Set on the run_locomo module
+        # global (a `from ... import` local alias would NOT update the module
+        # global the store_resolver closure reads).
+        if MEMORY:
+            import tests.run_locomo as _rl
+            _rl._CURRENT_MEMORY_DIR = index_dir.parent / "memory" / q["question_id"]
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
         row = _run_turn(
             agent, qctx + q["question"], cid,
@@ -987,7 +995,20 @@ def main(argv: list[str] | None = None) -> dict:
         row["autoeval_label"] = {"model": JUDGE_MODEL, "label": row["judged"]["label"]}
 
         # Retrieval signal (independent of judge).
-        row["retrieval"] = _retrieval(row, _gold_session_probes(q))
+        if not row.get("tools"):
+            # No tool calls => the answer came from in-context context (injected
+            # <memory>, system scaffold, or the seed itself). That is NOT a failed
+            # retrieval -- retrieval was never attempted because it wasn't needed.
+            # Skip scoring (exclude from the aggregate) rather than scoring 0.0,
+            # which would conflate "didn't need to look" with "couldn't find".
+            row["retrieval"] = {
+                "retrieval_recall": None,
+                "k": 0,
+                "surfaced": [],
+                "method": "skipped-no-tools",
+            }
+        else:
+            row["retrieval"] = _retrieval(row, _gold_session_probes(q))
 
         all_recall_rows.append(row)
         print(
@@ -1077,9 +1098,16 @@ def main(argv: list[str] | None = None) -> dict:
             "task_averaged_accuracy": task_averaged,
             "overall_accuracy": overall,
             "abstention_accuracy": abstention,
-            "retrieval_recall_rate": round(
-                sum(r["retrieval"]["retrieval_recall"] for r in recall_rows) / len(recall_rows), 4
-            ) if recall_rows else None,
+            "retrieval_recall_rate": (
+                round(
+                    sum(r["retrieval"]["retrieval_recall"] for r in recall_rows
+                        if r["retrieval"].get("retrieval_recall") is not None)
+                    / len([r for r in recall_rows if r["retrieval"].get("retrieval_recall") is not None]),
+                    4,
+                )
+                if any(r["retrieval"].get("retrieval_recall") is not None for r in recall_rows)
+                else None
+            ),
             "tokens": {
                 "input": sum(r["usage"]["input_tokens"] for r in recall_rows),
                 "output": sum(r["usage"]["output_tokens"] for r in recall_rows),

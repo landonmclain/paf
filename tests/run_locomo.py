@@ -120,6 +120,13 @@ ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "0") == "1"
 # without it. Turn it on for a memory-arm run: `MEMORY=1 ...`.
 MEMORY = os.environ.get("MEMORY", "0") == "1"
 
+# Per-question memory store for the running question (run_lmem only). The
+# subject agent is built once but must read the SAME per-question notebook the
+# consolidation owner writes. run_lmem sets this to `index_dir.parent /
+# "memory" / <question_id>` before each recall; run_locomo (single
+# conversation) leaves it None so the subject defaults to `mem_dir`.
+_CURRENT_MEMORY_DIR: Path | None = None
+
 # Read-only guidance for the subject's Memory surface (writable=False). The
 # subject can recall from MEMORY.md but never writes to it (the consolidation
 # owner is the sole writer), so it must NOT be told to `write_memory` / CAPTURE.
@@ -242,10 +249,23 @@ def _build_agent(
         from paf.capabilities.memory._window import MemoryConsolidationWindow
 
         mem_dir = memory_dir or (index_dir.parent / "memory")
+        # Per-question isolation (run_lmem): the subject's memory store must
+        # track the SAME dir the consolidation owner writes. run_lmem sets
+        # `_CURRENT_MEMORY_DIR` to `memory/<question_id>` before each recall
+        # turn; a store_resolver (resolved per-run, unlike the static store)
+        # lets one agent serve every question's notebook without a rebuild.
+        # For run_locomo (single conversation) `_CURRENT_MEMORY_DIR` stays
+        # None so the store defaults to `mem_dir` as before.
+        from paf.capabilities.memory import MarkdownStorage as _MarkdownStorage
+
+        def _mem_store(_ctx):
+            root = _CURRENT_MEMORY_DIR or mem_dir
+            return _MarkdownStorage(root)
+
         caps.append(
-            Memory.from_spec(
-                backend="markdown",
-                directory=str(mem_dir),
+            Memory(
+                store=_MarkdownStorage(mem_dir),
+                store_resolver=_mem_store,
                 agent_name="assistant",
                 inject_memory=True,
                 writable=False,

@@ -394,8 +394,13 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
                 memory_file = await store.read(f'{scope}/{name}', max_chars=self._capability.max_memory_size)
                 if memory_file is None:
                     _set_span_result(span, 'not_found')
-                    raise ModelRetry(
-                        f'There is no memory file named {name!r} -- use `search_memory` to find existing memory.'
+                    # Not an error: a missing file on a fresh store is the expected
+                    # initial state (e.g. the owner reading before its first write).
+                    # Return an informative message the model can act on (create it)
+                    # rather than a ModelRetry round-trip.
+                    return (
+                        f'There is no memory file named {name!r} yet. '
+                        f'Create it with `write_memory`. Use `search_memory` to find existing memory.'
                     )
                 _set_span_result(span, 'ok', chars=len(memory_file.content))
                 return memory_file.content + (_READ_TRUNCATION_MARKER if memory_file.truncated else '')
