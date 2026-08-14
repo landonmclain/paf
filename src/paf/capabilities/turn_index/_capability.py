@@ -188,10 +188,13 @@ class TurnIndexCapability(AbstractCapability[AgentDepsT]):
             return ''
         total = len(entries)
         entries = entries[-self.max_lines :] if self.max_lines else entries
-        # State the sort order EXPLICITLY so the model (and the CONFLICT RULE,
-        # which treats the most recent user statement as truth) can tell which
-        # line is freshest without inferring it from the ref ordinal.
-        lines = ['(listed OLDEST → NEWEST; the LAST line is the MOST RECENT turn)']
+        # Render NEWEST-FIRST and say so explicitly: the most recent turn is at
+        # the TOP, where the model pays most attention — directly feeding the
+        # CONFLICT RULE (most recently stated user value wins). Reverse the
+        # ascending slice so the freshest turn leads; the header states the order
+        # so the model never has to infer recency from the ref ordinal.
+        entries = list(reversed(entries))
+        lines = ['(listed NEWEST → OLDEST; the FIRST line is the MOST RECENT turn)']
         for e in entries:
             lines.append(f'- [{e.ref}] {e.summary}')
         # When the injected tail is a truncated view (older turns exist), say so
