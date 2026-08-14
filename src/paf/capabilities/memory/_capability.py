@@ -105,7 +105,7 @@ _READONLY_GUIDANCE = (
     'read it; only the owner persists facts.\n'
 )
 
-_MEMORY_DATA_PREFIX = '<memory>\n'
+_MEMORY_DATA_PREFIX = '\n\n<memory>\n'
 _MEMORY_DATA_SUFFIX = '\n</memory>'
 _MEMORY_PART_METADATA = 'pydantic-ai-harness.memory.v1'
 # Injected when the scope has no `MEMORY.md` and no topic files yet. Keeps the
