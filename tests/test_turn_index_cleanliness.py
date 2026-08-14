@@ -27,7 +27,8 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore
 
-from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore, TurnIndexToolset
+from paf.capabilities.search._reader import TurnFinder
+from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
 
 FIRST_FACT = "the company picnic is on September 14"
 SECOND_ASK = "what day is the picnic?"
@@ -48,9 +49,8 @@ def _picnic_model() -> FunctionModel:
 
 
 def _recall_finder(store: FileStepStore, index_dir: Path, run_id: str):
-    return TurnIndexToolset(
-        SnapshotHistorySource(store), TurnIndexStore(index_dir)
-    )._finder  # type: ignore[attr-defined]
+    # read_turn is owned by search; the index only emits refs into it.
+    return TurnFinder(SnapshotHistorySource(store))
 
 
 def test_render_strips_injected_and_keeps_real_content() -> None:

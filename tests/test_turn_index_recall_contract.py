@@ -33,7 +33,8 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
-from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore, TurnIndexToolset
+from paf.capabilities.search._reader import TurnFinder
+from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
 
 SEED = "staging ftp host is sftp-mars.example.com"
 CONV = "conv-recall"
@@ -96,13 +97,12 @@ def test_recall_contract_end_to_end() -> None:
                 f"run-id mismatch: store keys {store_run_id!r}, index records {index_run_id!r}"
             )
 
-        # 3. The recall: resolve the index's ref through read_turn. If store and
-        #    index already diverge, or the anchor resolution fails, the seeded
-        #    content will not be reproduced and we flag it here.
-        ts = TurnIndexToolset(
-            SnapshotHistorySource(store), TurnIndexStore(index_dir)
-        )
-        recalled = await ts._finder.resolve(  # type: ignore[attr-defined]
+        # 3. The recall: resolve the index's ref through read_turn. read_turn is
+        #    owned by `search` (TurnFinder); the index only emits refs into it.
+        #    If store and index already diverge, or the anchor resolution fails,
+        #    the seeded content will not be reproduced and we flag it here.
+        finder = TurnFinder(SnapshotHistorySource(store))
+        recalled = await finder.resolve(
             f"{index_run_id}:0", run_id=index_run_id, conversation_id=CONV
         )
         if "No persisted history" in recalled:

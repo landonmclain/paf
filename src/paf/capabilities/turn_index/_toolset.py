@@ -6,15 +6,12 @@
       -> read_turn (one round-trip, gated behind *detected* relevance)
         -> conversation_search (expensive wide fallback)
 
-`read_turn` itself now LIVES in the `search` capability (`search._reader.ReadTurnToolset`):
-search is the permanent retrieval layer and owns the shared full-content read
-primitive. This toolset imports and re-exposes it (back-compat: same `read_turn`
-tool, same ref format) alongside the index's own `search_index` (BM25 over the
-one-line summaries), which is the index's real job.
+`search_index` is the index's own probe (BM25 over the one-line summaries) —
+the index's real job. Full-content reads (`read_turn`) belong to `search` and are
+ALWAYS composed alongside, so this toolset registers only `search_index`.
 
 It does NOT store or copy full turns. It owns only the one-line index; it holds
-the ref into pydantic-ai persistence and, on demand, resolves that ref through
-the shared `TurnFinder`.
+the ref into pydantic-ai persistence. Resolving that ref is `search`'s job.
 """
 
 from __future__ import annotations
@@ -25,7 +22,6 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
 from ..search._ranking import Bm25Params, bm25_rank, recency_boost
-from ..search._reader import READ_TURN_DESCRIPTION, TurnFinder
 from ._store import TurnIndexEntry, TurnIndexStore
 
 __all__ = ["SEARCH_INDEX_DESCRIPTION", "TurnIndexToolset"]
@@ -60,10 +56,10 @@ cannot help.
 
 
 class TurnIndexToolset(FunctionToolset[AgentDepsT]):
-    """`read_turn` (full-content read, from `search`) + `search_index` (BM25 over one-liners).
+    """`search_index` (BM25 over one-liners) — the index's own recognition layer.
 
-    `read_turn` is provided by composing the shared `ReadTurnToolset` (owned by
-    `search`); `search_index` is the index's own probe over the one-line summaries.
+    Full-content reads (`read_turn`) are owned by `search` and always present
+    alongside, so this toolset does NOT register it (avoiding a toolname collision).
     """
 
     def __init__(
@@ -89,27 +85,15 @@ class TurnIndexToolset(FunctionToolset[AgentDepsT]):
             )
         self._source = source
         self._index_store = index_store
-        self._finder = TurnFinder(source)
         self._bm25_params = Bm25Params(k1=bm25_k1, b=bm25_b)
         self._recency_weight = recency_weight
         self._recency_half_life_days = recency_half_life_days
         self._max_matches = max_matches
-        # Provide `read_turn` from the shared search reader: register it directly
-        # on this toolset (same tool name/description the index always exposed).
-        # `search_index` is registered below via the index's own method.
-        self._finder = TurnFinder(source)
-        self.add_function(self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION)
+        # `read_turn` is owned by `search` (ConversationSearchToolset) and is
+        # ALWAYS present when this index toolset is composed — do NOT register it
+        # here or the combined toolset collides on the name and hard-errors.
+        # This toolset is the index's own probe layer only: `search_index`.
         self.add_function(self.search_index, name="search_index", description=SEARCH_INDEX_DESCRIPTION)
-
-    async def read_turn(
-        self,
-        ctx: RunContext[AgentDepsT],
-        ref: str,
-    ) -> str:
-        """Resolve one turn's index ref into its full durable turn via pydantic-ai persistence."""
-        run_id, _, _ = ref.partition(":")
-        conversation_id = ctx.conversation_id
-        return await self._finder.resolve(ref, run_id=run_id, conversation_id=conversation_id)
 
     async def search_index(
         self,

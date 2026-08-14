@@ -27,10 +27,10 @@ from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import ContinuableSnapshot, FileStepStore
 
 from paf.capabilities.registry import CAPABILITY_TYPES
+from paf.capabilities.search._reader import TurnFinder
 from paf.capabilities.turn_index import (
     TurnIndexCapability,
     TurnIndexStore,
-    TurnIndexToolset,
     TurnSummarizer,
 )
 from paf.specs import build_agent
@@ -158,8 +158,9 @@ def test_read_turn_resolves_ref_through_persistence(tmp_path: Path) -> None:
             turn_id=0,
             summary="auth header fix",
         )
-        ts = TurnIndexToolset(source, index)
-        return await ts._finder.resolve(
+        # read_turn is owned by search; the index only emits refs into it.
+        finder = TurnFinder(source)
+        return await finder.resolve(
             f"{run_id}:0", run_id=run_id, conversation_id="conv-t"
         )
 

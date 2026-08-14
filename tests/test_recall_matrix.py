@@ -39,7 +39,13 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import FileStepStore
 
-from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore, TurnIndexToolset
+from paf.capabilities.search import ConversationSearch
+from paf.capabilities.search._reader import TurnFinder
+from paf.capabilities.turn_index import (
+    TurnIndexCapability,
+    TurnIndexStore,
+    TurnIndexToolset,
+)
 
 
 def _toolcall_model(tool_name: str, args: dict | None = None):
@@ -241,11 +247,12 @@ def test_read_turn_resolves_and_renders_turn(tmp_path: Path) -> None:
             ContinuableSnapshot(run_id="run-abc", step_index=0, messages=msgs, conversation_id="c1")
         )
         source = SnapshotHistorySource(store)
-        ts = TurnIndexToolset(source, idx)
-        out = await ts._finder.resolve("run-abc:0", run_id="run-abc", conversation_id="c1")
+        # read_turn is owned by search; the index only emits refs into it.
+        finder = TurnFinder(source)
+        out = await finder.resolve("run-abc:0", run_id="run-abc", conversation_id="c1")
         assert "the deploy port is 8080" in out, out
         # malformed ref
-        out = await ts._finder.resolve("run-abc:nope", run_id="run-abc", conversation_id="c1")
+        out = await finder.resolve("run-abc:nope", run_id="run-abc", conversation_id="c1")
         assert "Malformed" in out, out
 
     asyncio.run(go())
@@ -285,6 +292,8 @@ def test_c3_read_turn_escalation_forces_read(tmp_path: Path) -> None:
 
     The FunctionModel is scripted to call read_turn (it must, per geometry, since
     search_index alone can't surface the value stored only in the full turn).
+    `read_turn` is owned by `search` (`ReadTurnToolset`) — always composed
+    alongside, so it's the layer the index's `search_index` escalates into.
     """
     store = FileStepStore(directory=tmp_path / "steps")
     idx = TurnIndexStore(tmp_path / "index")
@@ -292,7 +301,10 @@ def test_c3_read_turn_escalation_forces_read(tmp_path: Path) -> None:
     agent = Agent(
         model=_toolcall_model("read_turn", {"ref": "r1:0"}),
         name="tier1-c3",
-        capabilities=[TurnIndexCapability(source=SnapshotHistorySource(store), index_store=idx, max_lines=4)],
+        capabilities=[
+            ConversationSearch(SnapshotHistorySource(store), scope="conversation"),
+            TurnIndexCapability(source=SnapshotHistorySource(store), index_store=idx, max_lines=4),
+        ],
     )
     r = agent.run_sync("what is the token value?", conversation_id="c3")
     called = _called_tools(r)
