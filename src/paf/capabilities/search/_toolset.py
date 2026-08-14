@@ -24,7 +24,9 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
 from ._ranking import Bm25Params, bm25_rank
+from ._reader import READ_TURN_DESCRIPTION, ReadTurnToolset, TurnFinder
 from ._render import display_lines, format_messages, is_summary_artifact
+from ..turn_index._generate import user_anchor_indices
 
 SearchScope = Literal["all", "conversation"]
 """How much of the store one search may reach (mirrors the harness type)."""
@@ -40,8 +42,10 @@ tool to find specific details the live context no longer carries.
 
 Results are ranked by relevance using BM25 -- rare terms and exact matches \
 score higher. Multi-word queries search each word independently. Each result \
-names the run it came from; pass `run_id` to search only one run, e.g. a run a \
-compaction receipt references as its full transcript.
+names the run it came from and carries a `turn: <run_id>:<turn_id>` ref; pass \
+that ref to `read_turn` to pull the FULL matched turn (do not re-search for a \
+detail -- a hit's ref expands to the original content). Pass `run_id` to search \
+only one run, e.g. a run a compaction receipt references as its full transcript.
 
 When to use:
 - You need to recall exact details from earlier in the conversation
@@ -73,6 +77,12 @@ class _RunSection:
     # LongMemEval ID-membership against `answer_session_ids`. General: any
     # message tagged with `metadata['source_session_id']` surfaces it here.
     session_ids: list[str | None] | None = None
+    # Parallel to `display_lines`: the `{run_id}:{turn_id}` ref of the TURN each
+    # line belongs to (turn_id = ordinal of the message's user-prompt anchor, the
+    # same stable ref the turn index emits). Lets a search hit hand `read_turn`
+    # the same pointer format the index uses, so a hit can be expanded to its
+    # full turn via the shared read tool.
+    turn_refs: list[str | None] | None = None
 
 
 class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
@@ -109,6 +119,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         self._context_lines = context_lines
         self._params = Bm25Params(k1=bm25_k1, b=bm25_b)
         self._scope: SearchScope = scope
+        self._finder = TurnFinder(source)
 
         description = SEARCH_HISTORY_DESCRIPTION
         if scope == "conversation":
@@ -117,6 +128,22 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             self.search_conversation_history,
             name="search_conversation_history",
             description=description,
+        )
+        # Expose the shared full-content read tool (owned by `search`). Because
+        # search is the permanent retrieval layer, its search hits can hand the
+        # model a `run_id:turn_id` ref to expand -- the model reaches the full
+        # turn without any index. Same tool/ref format as the index uses.
+        self.add_function(self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION)
+
+    async def read_turn(
+        self,
+        ctx: RunContext[AgentDepsT],
+        ref: str,
+    ) -> str:
+        """Resolve a `run_id:turn_id` ref into its full durable turn via pydantic-ai persistence."""
+        run_id, _, _ = ref.partition(":")
+        return await self._finder.resolve(
+            ref, run_id=run_id, conversation_id=ctx.conversation_id
         )
 
     async def search_conversation_history(
@@ -186,7 +213,21 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 else None
             )
             label = section.label + (f" | session: {sid}" if sid else "")
-            results.append(f"[score: {score:.1f} | {label}]\n{excerpt}")
+            # Surface the matched message's turn ref so the model can expand it to
+            # the FULL turn via `read_turn` -- the same `run_id:turn_id` format the
+            # index emits. This is the "expand a search hit to full content" path
+            # that was missing (and caused non-terminating retrieval loops on
+            # full-content questions like LongMemEval's "children's book" item).
+            tref = (
+                section.turn_refs[line_idx]
+                if section.turn_refs is not None and line_idx < len(section.turn_refs)
+                else None
+            )
+            label += (f" | turn: {tref}" if tref else "")
+            header_line = f"[score: {score:.1f} | {label}]"
+            # Give the model an explicit, copy-paste-able ref for the shared tool.
+            hint = f'\n  -> read_turn("{tref}") for the full turn' if tref else ""
+            results.append(f"{header_line}{hint}\n{excerpt}")
 
         header = f"Found {len(results)} match(es) for '{query}' in {total_messages} persisted messages:\n\n"
         return header + "\n\n---\n\n".join(results)
@@ -218,12 +259,32 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 else None
                 for m in messages
             ]
+            # Map each message to the `{run_id}:{turn_id}` ref of the TURN it
+            # belongs to (turn_id = ordinal of the message's user-prompt anchor,
+            # the SAME stable ref the turn index emits). format_messages is
+            # one-line-per-message and message-aligned, so turn_refs[i] reaches
+            # messages[i]'s turn. Non-user-query messages (assistant responses,
+            # tool traffic) inherit their containing turn. Messages before any
+            # anchor have no turn ref (None).
+            run_ref = run.run_id
+            anchors = user_anchor_indices(messages)
+            turn_refs: list[str | None] = []
+            for idx, _m in enumerate(messages):
+                # Find the greatest anchor index <= idx; that anchor's ordinal is
+                # the turn_id.
+                tid = None
+                for a in range(len(anchors) - 1, -1, -1):
+                    if anchors[a] <= idx:
+                        tid = a
+                        break
+                turn_refs.append(f"{run_ref}:{tid}" if tid is not None else None)
             sections.append(
                 _RunSection(
                     label=label,
                     index_lines=format_messages(messages, truncate=False),
                     display_lines=display_lines(messages),
                     session_ids=sessions,
+                    turn_refs=turn_refs,
                 )
             )
         return sections

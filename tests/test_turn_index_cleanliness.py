@@ -55,7 +55,7 @@ def _recall_finder(store: FileStepStore, index_dir: Path, run_id: str):
 
 def test_render_strips_injected_and_keeps_real_content() -> None:
     """Deterministic unit guard: a persisted User msg with an injected block renders clean."""
-    from paf.capabilities.turn_index._toolset import (
+    from paf.capabilities.search._reader import (
         _is_injected_text,
         _render_message,
     )

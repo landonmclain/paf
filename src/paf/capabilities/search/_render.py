@@ -30,7 +30,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from paf.capabilities.turn_index._markers import injected_artifact_markers
+from paf.capabilities._markers import injected_artifact_markers
 
 
 def is_summary_artifact(message: ModelMessage) -> bool:

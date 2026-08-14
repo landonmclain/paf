@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ._markers import injected_artifact_markers
+from .._markers import injected_artifact_markers
 
 # NOTE: part types are imported lazily inside the narrowers to match the rest
 # of this package (see _toolset._render_message) -- pydantic-ai exposes no

@@ -86,7 +86,7 @@ from pydantic_ai_harness.step_persistence import FileStepStore
 
 from ._extract import build_turn_context
 from ._generate import Turn, summarize_turn_append, this_turn_id, this_turn_slice
-from ._markers import TURN_INDEX_MARKER
+from .._markers import TURN_INDEX_MARKER
 from ._store import TurnIndexStore
 from ._summarizer import TurnSummarizer
 from ._toolset import TurnIndexToolset

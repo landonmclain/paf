@@ -86,9 +86,13 @@ def test_ablation_removes_turn_index_entirely() -> None:
     # No TurnIndex instance at all -> no <turn-index> injection, no hooks.
     assert _turn_index_caps(agent) == [], "TurnIndex must be fully absent when ablated"
     tools = _tool_names(agent)
-    assert "read_turn" not in tools
+    # `search_index` (the index's own probe) is gone with the index.
     assert "search_index" not in tools
     assert "search_conversation_history" in tools
+    # ...but `read_turn` REMAINS: it belongs to `search` (the permanent
+    # retrieval layer), so an ablated run still gets full-content reads of a
+    # search hit. The old index-only coupling would have dropped it here.
+    assert "read_turn" in tools
     # ConversationSearch inherits the ladder.
     assert all(c.add_instructions for c in _conversation_caps(agent))
 

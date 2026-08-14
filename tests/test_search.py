@@ -317,3 +317,86 @@ def test_run_scoped_unknown_run_message(tmp_path: Path) -> None:
         assert "No persisted history" in out, out
 
     asyncio.run(go())
+
+
+# ---------------------------------------------------------------------------
+# Read tool: search hits carry a `run_id:turn_id` ref and `read_turn` expands it
+# ---------------------------------------------------------------------------
+
+
+def test_search_hit_carries_turn_ref_for_read_turn(tmp_path: Path) -> None:
+    """A `search_conversation_history` hit now surfaces the `run_id:turn_id` ref
+    of the TURN it landed in, so the model can hand it to `read_turn` and pull
+    the full content -- the "expand a search hit" path that was missing (and
+    caused non-terminating retrieval loops on full-content questions).
+
+    The ref uses the SAME `run:...:turn_id` format the turn index emits, so the
+    one `read_turn` tool works whether the ref came from search or the index.
+    """
+    store = _mk_store(
+        tmp_path,
+        {
+            "c1": [
+                *_msg(
+                    user="write a children's book about dinosaurs",
+                    assistant="Chapter 1: The Mighty T-Rex ...",
+                ),
+                *_msg(
+                    user="please describe the Plesiosaur image in detail",
+                    assistant="::Plesiosaur Image:: == The Plesiosaur has a BLUE scaly body ...",
+                ),
+            ]
+        },
+    )
+    source = SnapshotHistorySource(store)
+    ts = ConversationSearchToolset(
+        source,
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=2,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        scope="conversation",
+    )
+
+    async def go():
+        out = await ts.search_conversation_history(_FakeCtx("c1"), "Plesiosaur BLUE")
+        assert "run:" in out, out
+        # The second user message is the turn anchor at ordinal 1 (0-based).
+        assert "turn: run-c1:1" in out, out
+        assert "read_turn" in out, out
+
+        # The shared full-content read tool resolves that ref to the full turn.
+        full = await ts.read_turn(_FakeCtx("c1"), "run-c1:1")
+        assert "Plesiosaur" in full, full
+        assert "BLUE scaly body" in full, full
+        # Reading must return the durable content, NOT an injected artifact.
+        assert "<turn-index>" not in full, full
+
+    asyncio.run(go())
+
+
+def test_read_turn_bad_ref_is_graceful(tmp_path: Path) -> None:
+    """`read_turn` on the search toolset degrades gracefully on a bad ref --
+    same behavior as the index's read_turn (a shared primitive means one code path)."""
+    store = _mk_store(
+        tmp_path, {"c1": [*_msg(user="hello", assistant="hi there")]}
+    )
+    source = SnapshotHistorySource(store)
+    ts = ConversationSearchToolset(
+        source,
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=1,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        scope="all",
+    )
+
+    async def go():
+        out = await ts.read_turn(_FakeCtx("c1"), "run-c1:99")
+        assert "No turn at index 99" in out, out
+        out = await ts.read_turn(_FakeCtx("c1"), "run-missing:0")
+        assert "No persisted history" in out, out
+
+    asyncio.run(go())

@@ -1,10 +1,14 @@
-"""Injected-prompt markers for the turn-index + sibling capabilities.
+"""Injected-prompt markers for capabilities that strip transient artifacts.
 
 Capabilities that inject into the live prompt as a ``UserPromptPart`` tag the
 injected ``TextContent`` with a ``metadata`` marker. That marker is invisible to
 the model but lets any downstream reader (read_turn render, a search corpus,
 StepPersistence) *recognize and strip* the injected artifact so it never leaks
 into durable turns or recalled history.
+
+Lives in the shared `capabilities` package (not under `turn_index`) because BOTH
+the turn index (injection) and the `search` read primitive (rendering/stripping a
+recalled turn) depend on it -- `search` must not depend on `turn_index`.
 
 Mirrors the pattern `pydantic_ai_harness.memory` established (`_MEMORY_PART_METADATA`
 on its injected `TextContent`). When we render a persisted User message back to

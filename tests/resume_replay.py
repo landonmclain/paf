@@ -65,7 +65,7 @@ from paf.capabilities.turn_index import (  # noqa: E402
     TurnIndexStore,
     TurnSummarizer,
 )
-from paf.capabilities.turn_index._markers import injected_artifact_markers  # noqa: E402
+from paf.capabilities._markers import injected_artifact_markers  # noqa: E402
 
 SUBJECT_MODEL = os.environ.get(
     "BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
