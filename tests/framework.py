@@ -75,24 +75,57 @@ MEMORY = os.environ.get("MEMORY", "1") == "1"
 # conversation) leaves it None so the subject defaults to `mem_dir`.
 _CURRENT_MEMORY_DIR: Path | None = None
 
-# Read-only guidance for the subject's Memory surface (writable=False). The
-# subject can recall from MEMORY.md but never writes to it (the consolidation
-# owner is the sole writer), so it must NOT be told to `write_memory` / CAPTURE.
-# TurnIndex already owns the CONFLICT/UNANSWERABLE rules and the recall ladder,
-# so this is deliberately minimal and read-only. Kept harness-local (an env
-# constant) rather than a source change: `guidance=` overrides the default.
-# Opens with a separator so, once concatenated with the turn-index ladder, the
-# memory instructions read as a visually distinct section (NOT another rung).
-_READONLY_MEMORY_GUIDANCE = (
-    "\n"
-    "You carry a read-only durable notebook (MEMORY.md) injected below. You "
-    "never write or delete from it — memory upkeep happens elsewhere (the "
-    "consolidation owner is the only writer). Recall from it; do not maintain "
-    "it. For recall use the turn-index ladder (search_memory is read-only).\n"
-    "When the notebook (MEMORY.md) conflicts with a raw turn or earlier "
-    "statement you recalled, MEMORY WINS: the durable store is the consolidated, "
-    "most-recently-stated record. Prefer it over inconsistent one-off turns "
-    "(e.g. a stale count or an earlier figure the user later corrected).\n"
+# Single system prompt owns ALL static guidance — identity, answer rules
+# (CONFLICT/INFERENCE), and the retrieval ladder. Capability `get_instructions`
+# blocks are OFF (ConversationSearch add_instructions=False, Memory
+# guidance="") so this STRING is the one source of recall steering. The only
+# thing outside it is the dynamic `MEMORY.md` body, injected as user-role
+# context per-request by `before_model_request` (can't live in a static
+# system_prompt because it changes per-question).
+#
+# Design rules baked in:
+# - MEMORY > RECENT > inference ordering (CONFLICT).
+# - INFERENCE softens refusing: hedge when context strongly implies one answer.
+# - Ladder is 2 rungs (in-context, then search_conversation_history) plus
+#   read_turn to expand a hit's full turn. `search_memory` is deliberately NOT
+#   mentioned: the notebook is always injected in-context, so pointing at a
+#   separate notebook tool only muddies the waters.
+# - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
+SUBJECT_SYSTEM_PROMPT = (
+    "You are an assistant with access to your full conversational history "
+    "through a retrieval ladder. Answer from the evidence you actually have — "
+    "the message history in context and anything you retrieve. "
+    "CONFLICT — memory is the source of truth for any fact it covers. Your "
+    "durable notebook is the consolidated, most-recently-stated record; trust "
+    "it over any raw past turn or your inference. Do not second-guess a "
+    "user-stated value (a personal best, a count, an amount). Only when the "
+    "notebook is silent on the fact does a recent turn's statement stand as "
+    "evidence — and prefer the user's own most recent word over your "
+    "reconstruction. "
+    "INFERENCE — when the retrieved context does not name the asked-for fact "
+    "explicitly, but the history strongly and single-mindedly implies one "
+    "specific answer — or the entire session establishes one unambiguous "
+    "context — do not stop at \"that's not on record\". Give the implied answer "
+    "in hedged form — \"Most likely X, but you never told me the exact Y\" — so "
+    "the user gets the useful answer while you stay honest about the "
+    "uncertainty. Reserve a flat \"not in our history\" refusal for when the "
+    "history is genuinely ambiguous or empty. The hedged inference is preferred "
+    "over a bare refusal whenever the evidence points at a single answer. "
+    "RETRIEVAL — work cheapest-first; never tool-call for what you already "
+    "have: "
+    "1. IN CONTEXT — a durable-fact notebook and the conversation so far are "
+    "injected into every request. Answer from them if present; never tool-call "
+    "for something already in front of you. "
+    "2. PAST TURN — call `search_conversation_history` (a wide search over the "
+    "raw transcript of past turns) when the answer is NOT already in context. "
+    "Search returns a `run_id:turn_id` ref for each hit. "
+    "3. READ FULL TURN — when a search hit gives you a ref but not the full "
+    "detail, call `read_turn` on that ref to pull the turn's complete content. "
+    "Skip rungs that don't apply. "
+    "MEMORY — you carry a read-only durable notebook injected in your context. "
+    "You never write to or delete from it; a separate consolidation owner is "
+    "the sole writer. Never claim something was remembered just because you "
+    "read it; only the owner persists facts."
 )
 
 
@@ -104,13 +137,12 @@ def _build_agent(
     enable_summarizer: bool = True,
     use_memory_owner: bool = True,
 ) -> Agent:
-    """Wire the full PAF pipeline (memory-free; retrieval ladder ablatable).
+    """Wire the full PAF pipeline (retrieval ladder ablatable).
 
-    The durable `Memory` capability is intentionally NOT included by default
-    ("memory is not ready / not part of tests near-term" — 2026-08-11). With
-    `MEMORY=1` it *is* included (plus the consolidation window that fires the
-    owner on each eviction), targeting ``memory_dir`` (default
-    ``index_dir.parent / "memory"``) so a run never touches repo `data/memory`.
+    The durable `Memory` capability is included by default (`MEMORY=1`), plus
+    the consolidation window that fires the owner on each eviction, targeting
+    ``memory_dir`` (default ``index_dir.parent / "memory"``) so a run never
+    touches repo `data/memory`. Set `MEMORY=0` for a no-memory ablation.
 
     Per-question gating (used by run_lmem): when a question already has durable
     turn-index summaries (`enable_summarizer=False`) the `TurnIndexCapability`
@@ -121,17 +153,19 @@ def _build_agent(
     sub-agent never fires. Building the agent per-question is cheap (both are
     config-only dataclasses — no model init at build time).
 
-    Default (ABLATE_TURN_INDEX unset): turn-index owns the ladder --
-    TurnIndexCapability.add_instructions=True is the ONE retrieval steering,
-    and ConversationSearch stays add_instructions=False so the two don't
-    double-announce `search_conversation_history` (the index ladder names it as
-    its last rung).
+    Default: a single `system_prompt=` (SUBJECT_SYSTEM_PROMPT) owns ALL static
+    guidance — identity, the CONFLICT/INFERENCE answer rules, and the retrieval
+    ladder (in-context -> search_conversation_history -> read_turn). Every
+    capability instruction block is OFF: ConversationSearch has
+    add_instructions=False and Memory uses guidance="" (only the dynamic
+    MEMORY.md body still injects), so the prompt IS the one source of recall
+    steering. `search_memory` is deliberately not mentioned in the prompt (the
+    notebook is always injected in-context).
 
-    With ABLATE_TURN_INDEX=1: the TurnIndexCapability block is dropped entirely
-    and ConversationSearch flips to add_instructions=True, so the plain BM25
-    `search_conversation_history` becomes the SOLE retrieval ladder. This is the
-    "conversation search alone" ablation vs the 20-Q gated TurnIndex baseline
-    (lmem-20260812-133841: overall 0.8333, recall 0.275, 288,052 tokens).
+    ABLATE_TURN_INDEX (default 1): the TurnIndexCapability block is omitted
+    entirely; the ladder is purely ConversationSearch/search per the prompt.
+    Set ABLATE_TURN_INDEX=0 to include the index tail + search_index/read_turn
+    tools (instructions still off; the prompt names read_turn as rung 3).
 
     With MEMORY=1: the durable `Memory` capability is loaded (a plain capability,
     subject READ-ONLY / writable=False per the M2 owner model, so the subject
@@ -150,7 +184,9 @@ def _build_agent(
         ConversationSearch(
             source=source,
             scope="conversation",
-            add_instructions=ABLATE_TURN_INDEX,
+            # Instructions ALWAYS off — the single system prompt (SUBJECT_SYSTEM_PROMPT)
+            # owns the retrieval ladder. This tool is just registered; the prompt names it.
+            add_instructions=False,
         ),
     ]
     if not ABLATE_TURN_INDEX:
@@ -165,7 +201,8 @@ def _build_agent(
                 source=source,
                 index_store=TurnIndexStore(index_dir),
                 max_lines=MAX_LINES,
-                add_instructions=True,
+                # Instructions off — SUBJECT_SYSTEM_PROMPT owns the ladder.
+                add_instructions=False,
                 summarizer=(
                     TurnSummarizer(
                         model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
@@ -206,7 +243,10 @@ def _build_agent(
                 agent_name="assistant",
                 inject_memory=True,
                 writable=False,
-                guidance=_READONLY_MEMORY_GUIDANCE,
+                # guidance="" disables the Memory instruction block entirely —
+                # the single system prompt owns all static guidance. Only the
+                # dynamic MEMORY.md body still injects (before_model_request).
+                guidance="",
             )
         )
         # Consolidation window: same knobs as the plain sliding window, but
@@ -252,6 +292,9 @@ def _build_agent(
     return Agent(
         SUBJECT_MODEL,
         name="locomo-subject",
+        # Single system prompt owns all retrieval guidance (ladder + answer
+        # rules + read-only memory contract). Capability instructions are off.
+        system_prompt=SUBJECT_SYSTEM_PROMPT,
         capabilities=caps,
         model_settings={"temperature": 0},
     )

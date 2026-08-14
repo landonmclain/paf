@@ -93,8 +93,13 @@ def test_ablation_removes_turn_index_entirely() -> None:
     # retrieval layer), so an ablated run still gets full-content reads of a
     # search hit. The old index-only coupling would have dropped it here.
     assert "read_turn" in tools
-    # ConversationSearch inherits the ladder.
-    assert all(c.add_instructions for c in _conversation_caps(agent))
+    # The single system prompt owns the ladder, so the search capability is
+    # instructions-silent even under full search-only ablation.
+    assert all(not c.add_instructions for c in _conversation_caps(agent))
+    # And the system prompt actually carries the retrieval guidance.
+    assert any(
+        "RETRIEVAL" in p and "read_turn" in p for p in agent._system_prompts
+    ), "SUBJECT_SYSTEM_PROMPT must own the retrieval ladder (search -> read_turn)"
 
 
 def test_baseline_still_carries_turn_index() -> None:
