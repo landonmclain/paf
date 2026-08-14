@@ -28,6 +28,7 @@ from pathlib import Path
 
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory import Memory
+from paf.capabilities.memory._capability import _READONLY_GUIDANCE
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
@@ -45,18 +46,24 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
 
 def _build_memory(store) -> Memory:
-    """Markdown-backed durable memory (flat, diffable `.md` files + CAS sidecar).
+    """Markdown-backed durable memory (flat, diffable `.md` files + CAS sidecar),
+    READ-ONLY for the assistant.
 
     ``store`` (the shared persistence store) is accepted for a uniform builder
     signature but unused: memory owns its own ``MarkdownStorage`` rather than
-    writing into the run-events store. Un-gated for the M2 live-test beat so the
-    model can persist facts as inspectable files under ``data/memory/``.
+    writing into the run-events store. The assistant's surface is read-only
+    (``writable=False`` + ``_READONLY_GUIDANCE``): it recalls from the injected
+    ``MEMORY.md`` / ``search_memory`` but NEVER writes or deletes — the
+    consolidation owner sub-agent is the sole writer. This prevents drift /
+    contamination of the canonical notebook during ordinary turns.
     """
     return Memory.from_spec(
         backend="markdown",
         directory=str(_MEMORY_DIR),
         agent_name="assistant",
         inject_memory=True,
+        writable=False,
+        guidance=_READONLY_GUIDANCE,
     )
 
 
@@ -109,9 +116,13 @@ def build_runtime_capabilities(profile: AgentProfile) -> list:
     recall ladder. When ``Memory`` is allowlisted it owns it (durable-fact +
     past-turn + last-rung history, in ``_DEFAULT_GUIDANCE``), so ``TurnIndex`` and
     ``ConversationSearch`` get ``add_instructions=False`` here to keep that single
-    ladder the ONLY recall guidance the model sees. When ``Memory`` is absent but
-    ``TurnIndex`` is present, ``TurnIndex`` owns it (recognition → search_index →
-    read_turn → search_conversation_history), and ``ConversationSearch`` alone is
+    ladder the ONLY recall guidance the model sees. The current assistant profile
+    allowlists ``Memory`` and NOT ``TurnIndex`` (BEAM+gated benchmark: index
+    summaries are a ±7/−5 wash vs memory's reliable +0.146 lift), so the
+    ``TurnIndex``-owns path below is a fallback only reached by a custom profile
+    that re-adds it. When ``Memory`` is absent but ``TurnIndex`` is present,
+    ``TurnIndex`` owns it (recognition → search_index → read_turn →
+    search_conversation_history), and ``ConversationSearch`` alone is
     suppressed. The suppression gates live here (build time) because capabilities
     cannot see each other; ``add_instructions=False`` never disables tool
     registration.

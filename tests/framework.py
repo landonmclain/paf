@@ -51,21 +51,21 @@ LOCOMO_TARGET_TOKENS = int(os.environ.get("LOCOMO_TARGET_TOKENS", "5000"))
 LOCOMO_SW_MAX_MESSAGES = int(os.environ.get("LOCOMO_SW_MAX_MESSAGES", "6"))
 LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
 
-# Ablation knob: with ABLATE_TURN_INDEX=1 the TurnIndexCapability block is removed
-# from the pipeline and ConversationSearch flips to add_instructions=True so the
-# plain BM25 search_conversation_history becomes the SOLE retrieval ladder.
-# Baseline (unset) = the TurnIndex-owned ladder we benchmarked at the 20-Q gated
-# baseline (0.8333 / recall 0.275, run lmem-20260812-133841).
-ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "0") == "1"
+# Retrieval-ladder knob. DEFAULT (unset) = NO turn index: the TurnIndexCapability
+# block is removed from the pipeline and ConversationSearch flips to
+# add_instructions=True so the plain BM25 search_conversation_history (plus the
+# read-only Memory notebook) is the retrieval ladder. This is the current intended
+# default. Set ABLATE_TURN_INDEX=0 to OPT BACK IN to the TurnIndex-owned ladder
+# (the 20-Q gated baseline, 0.8333 / recall 0.275, run lmem-20260812-133841).
+ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "1") == "1"
 
 # Memory presence knob: MEMORY=1 wires the durable Memory capability into the
 # harness (inject_memory=True, subject READ-ONLY / writable=False per the M2
 # owner model) and swaps the plain SlidingWindowCompaction tier for
 # MemoryConsolidationWindow, so the owner sub-agent (writable=True) folds each
-# about-to-evict slice into a run-scoped memory store. Mirrors ABLATE_TURN_INDEX:
-# a module-level env bool, default ON now (memory is the intended standard arm).
-# Every runner that shares this builder (run_lmem / tiny_lmem) is byte-identical
-# without it. Turn it OFF for a no-memory ablation run: `MEMORY=0 ...`.
+# about-to-evict slice into a run-scoped memory store.
+# DEFAULT (unset) = ON: SEARCH + MEMORY (no turn index) is the intended standard
+# arm. Set MEMORY=0 for a no-memory ablation run (`MEMORY=0 ...`).
 MEMORY = os.environ.get("MEMORY", "1") == "1"
 
 # Per-question memory store for the running question (run_lmem only). The

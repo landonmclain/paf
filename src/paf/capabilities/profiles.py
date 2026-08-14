@@ -7,9 +7,11 @@ resolves a profile to the ``custom_capability_types`` it passes to
 ``Agent.from_file``; the spec YAML then selects concrete capability instances from
 that allowlisted set.
 
-M1 has exactly one real profile: **assistant** (allowlists ``StepPersistence`` and
-the compaction tier types — M1's core storage point + context management). There
-is no ``summary`` profile: compaction's summarizing tier is not an agent, so its
+The only real profile: **assistant** (allowlists ``StepPersistence``, lossless
+recall over that persisted history (``ConversationSearch``), the durable-facts
+``Memory`` notebook (recall-ladder owner), and the compaction tier types — M1's
+core storage point + recall + context management). There is no ``summary``
+profile: compaction's summarizing tier is not an agent, so its
 model and prompt are configured in ``compaction.py`` (the summarizer inherits the
 assistant's model by default). Per the M1 plan, do not scaffold a blank summary
 profile until summary earns a capability of its own (YAGNI).
@@ -56,11 +58,12 @@ ASSISTANT_PROFILE = AgentProfile(
     capability_names=(
         "StepPersistence",
         "ConversationSearch",
-        "TurnIndex",
-        # Durable-facts notebook. AVAILABLE via a spec `- Memory: {...}` entry but
-        # NOT attached by default -- gated until BEAM shows it adds recall value
-        # (toggle it off/on per-beat without touching the ladder). Near-copy of the
-        # harness Memory; its injected block is marker-stripped by the shared convention.
+        # Durable-facts notebook (MEMORY.md + topic files). Recall-ladder OWNER
+        # for the assistant: its composite guidance (durable-fact -> past-turn ->
+        # history) is the single recall ladder, so TurnIndex is NOT allowlisted
+        # here (BEAM+gated benchmark showed the truncation-index summaries are a
+        # ±7/−5 wash vs. memory's reliable +0.146 lift → memory + BM25 search is
+        # the proven stack). Re-add "TurnIndex" to restore the index rung.
         "Memory",
         # Context compaction WITHOUT the summarizing tier (the LLM rewrite is
         # mutually exclusive with the <turn-index> one-liner block). Clamp /

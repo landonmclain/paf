@@ -55,7 +55,8 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     "TurnIndex": TurnIndexCapability,
     # Durable-facts notebook (MEMORY.md + topic files). Near-copy of the harness
     # Memory capability; paf-owned so its injected block shares the one marker
-    # convention. GATED: allowlisted so a spec can opt-in, but NOT attached by
-    # default. Has `from_spec`, so it resolves declaratively (`- Memory: {...}`).
+    # convention. Built by build.py whenever the profile allowlists it; for the
+    # assistant profile it IS the recall-ladder owner (see profiles.py). Has
+    # `from_spec`, so it ALSO resolves declaratively (`- Memory: {...}`).
     "Memory": Memory,
 }

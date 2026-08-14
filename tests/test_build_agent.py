@@ -27,6 +27,7 @@ from pydantic_ai_harness.step_persistence import StepPersistence
 
 from paf.capabilities.profiles import ASSISTANT_PROFILE
 from paf.capabilities.search import ConversationSearch
+from paf.capabilities.memory import Memory
 from paf.capabilities.turn_index import TurnIndexCapability
 from paf.specs import build_agent
 
@@ -42,7 +43,7 @@ def _collect_capabilities(node: Any, seen: set[type] | None = None) -> set[type]
     seen = seen if seen is not None else set()
     if node is None:
         return seen
-    if isinstance(node, (StepPersistence, TieredCompaction, TurnIndexCapability)):
+    if isinstance(node, (StepPersistence, TieredCompaction, TurnIndexCapability, Memory)):
         seen.add(type(node))
         return seen
     if isinstance(node, (list, tuple)):
@@ -95,10 +96,12 @@ def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
 
     caps = _collect_capabilities(root)
 
-    # Persistence leg (spec-declared) + turn-index leg (Python runtime seam) +
-    # the no-summary compaction ladder (profile-gated "Compaction").
+    # Persistence leg (spec-declared) + memory + recall legs (Python runtime seam) +
+    # the no-summary compaction ladder (profile-gated "Compaction"). TurnIndex is
+    # intentionally NOT in the assistant profile (index summaries were a ±7/−5 wash
+    # vs memory's +0.146 lift — memory + BM25 search is the proven stack).
     assert StepPersistence in caps
-    assert TurnIndexCapability in caps
+    assert Memory in caps
     assert TieredCompaction in caps
     # The summarizing tier is the one mutually exclusive with the turn-index block.
     compaction = _find_compaction(root)
@@ -148,13 +151,14 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     used to hardcode a fixed set and ignore the profile — so every agent got
     everything regardless of its allowlist. Now it is the resolution of the profile.
     """
-    # The real assistant profile: persistence + recall + turn-index + compaction
-    # (the no-summary ladder). Everything the profile lists is present.
+    # The real assistant profile: persistence + recall + memory + compaction
+    # (the no-summary ladder). Everything the profile lists is present. TurnIndex
+    # is deliberately absent (memory + BM25 is the proven stack).
     assistant = _runtime_capabilities_for(ASSISTANT_PROFILE.capability_names)
     types = {type(c) for c in assistant}
     assert StepPersistence in types
     assert ConversationSearch in types
-    assert TurnIndexCapability in types
+    assert Memory in types
     assert TieredCompaction in types
     # ...and the compaction ladder excludes the summarizing tier (mutex with index).
     compaction = next(c for c in assistant if isinstance(c, TieredCompaction))

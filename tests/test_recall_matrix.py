@@ -84,11 +84,15 @@ def _called_tools(result) -> list[str]:
 
 
 def test_all_retrieval_tools_exposed_on_built_agent() -> None:
-    """The three retrieval mechanisms must be reachable from a built agent.
+    """The retrieval mechanisms must be reachable from a built agent.
 
     This is the deterministic guard that would have caught the "search_index isn't
     registered" wiring scare (doc §Problem): assert the FunctionTools are present
-    on the toolset the agent actually runs with.
+    on the toolset the agent actually runs with. The assistant profile now uses the
+    memory + BM25 stack (TurnIndex removed), and its memory surface is READ-ONLY
+    (the consolidation owner is the sole writer), so the exposed recall tools are
+    `read_memory`/`search_memory`/`search_conversation_history`/`read_turn` — and
+    crucially NOT `write_memory`/`delete_memory`.
     """
     from paf.specs import build_agent
 
@@ -98,12 +102,22 @@ def test_all_retrieval_tools_exposed_on_built_agent() -> None:
     for ts in combined.toolsets:
         wrapped = getattr(ts, "wrapped", ts)
         names.update(wrapped.tools.keys())
-    # The escalation ladder's named tools must all be exposed.
-    assert "read_turn" in names, f"read_turn missing; got {sorted(names)}"
-    assert "search_index" in names, f"search_index missing; got {sorted(names)}"
+    # The memory + BM25 stack's read tools must all be exposed.
+    assert "search_memory" in names, f"search_memory missing; got {sorted(names)}"
+    assert "read_memory" in names, f"read_memory missing; got {sorted(names)}"
     assert "search_conversation_history" in names, (
         f"search_conversation_history missing; got {sorted(names)}"
     )
+    # Read-only assistant: it must NEVER carry the write/delete surface (the
+    # consolidation owner is the sole writer). Prevents drift/contamination of the
+    # canonical MEMORY.md during ordinary turns.
+    assert "write_memory" not in names, f"write_memory should be absent; got {sorted(names)}"
+    assert "delete_memory" not in names, f"delete_memory should be absent; got {sorted(names)}"
+    # `read_turn` is owned by the search capability (ConversationSearch -> ReadTurn),
+    # NOT by TurnIndex, so it survives the index removal and stays reachable.
+    assert "read_turn" in names, f"read_turn missing; got {sorted(names)}"
+    # `search_index` was the TurnIndex-only tool and is gone with the profile change.
+    assert "search_index" not in names, f"search_index should be absent; got {sorted(names)}"
 
 
 def test_single_recall_ladder_when_memory_owns_instructions() -> None:
@@ -136,13 +150,19 @@ def test_single_recall_ladder_when_memory_owns_instructions() -> None:
     )
     ladder = instructions[0]
     # Memory's composite ladder names the durable-fact rung first and the last-rung
-    # history search last — that is the branch-by-intent ordering.
+    # history search last — that is the branch-by-intent ordering. The archive's
+    # turn-index rung (`search_index`/`read_turn`) is gone: memory + BM25 only.
     assert "search_memory" in ladder, "Memory ladder must name search_memory"
-    assert "search_index" in ladder, "Memory ladder must name search_index"
     assert "search_conversation_history" in ladder, (
         "Memory ladder must name search_conversation_history as the last rung"
     )
     assert "LAST RUNG" in ladder, "search_conversation_history must be marked last rung"
+    assert "search_index" not in ladder, "index rung removed from the memory ladder"
+    assert "read_turn" not in ladder, "index rung removed from the memory ladder"
+    # The assistant's memory surface is READ-ONLY (consolidation owner is the sole
+    # writer): the ladder must NOT instruct the model to write/delete or CAPTURE.
+    assert "write_memory" not in ladder, "read-only ladder must not name write_memory"
+    assert ("CAPTURE" not in ladder.upper()), "read-only ladder must not name CAPTURE"
     # The suppressed capabilities must not leak a second, conflicting ladder.
     assert "TO RECALL PAST TURNS" not in ladder.upper()
 

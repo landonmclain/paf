@@ -92,20 +92,33 @@ def test_from_spec_flat_summarizer_dict(tmp_path: Path) -> None:
 # ---- build_agent integration: the capability lands on the assistant ---------
 
 
-def test_build_agent_includes_turn_index() -> None:
+def test_build_agent_includes_memory_not_turn_index() -> None:
+    """The assistant profile retired TurnIndex in favor of memory + BM25.
+
+    Per the BEAM + gated-benchmark finding (index summaries were a ±7/−5 wash vs
+    memory's reliable +0.146 lift), the assistant no longer carries the turn-index
+    capability. It carries the durable Memory capability (the recall-ladder owner)
+    instead, sharing the single persistence store for lossless recall.
+    """
+    from paf.capabilities.memory import Memory
+
     agent = build_agent("assistant")
     root = getattr(agent, "root_capability", None) or getattr(
         agent, "_root_capability", None
     )
     assert root is not None
 
-    found: list[Any] = []
+    found_mem: list[Any] = []
+    found_index: list[Any] = []
 
     def walk(node: Any) -> None:
         if node is None:
             return
         if isinstance(node, TurnIndexCapability):
-            found.append(node)
+            found_index.append(node)
+            return
+        if isinstance(node, Memory):
+            found_mem.append(node)
             return
         if isinstance(node, (list, tuple)):
             for item in node:
@@ -118,10 +131,8 @@ def test_build_agent_includes_turn_index() -> None:
                 walk(getattr(node, f.name, None))
 
     walk(root)
-    assert found, "assistant should carry the TurnIndex capability"
-    cap = found[0]
-    # Shared-store invariant: source reads the same persistence as StepPersistence.
-    assert isinstance(cap.source, SnapshotHistorySource)
+    assert found_mem, "assistant should carry the Memory capability"
+    assert not found_index, "assistant should NOT carry the retired TurnIndex capability"
 
 
 # ---- read_turn resolution (the retrieval mechanic) ---------------------------
