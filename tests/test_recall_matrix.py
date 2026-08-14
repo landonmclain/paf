@@ -120,53 +120,6 @@ def test_all_retrieval_tools_exposed_on_built_agent() -> None:
     assert "search_index" not in names, f"search_index should be absent; got {sorted(names)}"
 
 
-def test_single_recall_ladder_when_memory_owns_instructions() -> None:
-    """Memory owns the ONE composite recall ladder when co-present; TurnIndex and
-    ConversationSearch suppress their instruction scraps so the model sees a single
-    ladder, while all recall tools stay registered (suppressing instructions never
-    suppresses tools).
-
-    This is the regression guard for the unified-ladder change: the live assistant
-    profile builds StepPersistence + ConversationSearch + TurnIndex + Memory +
-    Compaction, and `CombinedCapability.get_instructions()` concatenates every
-    capability's instructions. Exactly one must be non-empty, and it must be Memory's.
-    """
-    from paf.capabilities.build import build_runtime_capabilities
-    from paf.capabilities.profiles import ASSISTANT_PROFILE
-
-    caps = build_runtime_capabilities(ASSISTANT_PROFILE)
-    instructions: list[str] = []
-    for c in caps:
-        inst = c.get_instructions()
-        if not inst:
-            continue
-        parts = list(inst) if isinstance(inst, (list, tuple)) else [inst]
-        for p in parts:
-            if not callable(p):
-                instructions.append(str(p))
-
-    assert len(instructions) == 1, (
-        f"expected exactly ONE recall ladder; got {len(instructions)}: {instructions!r}"
-    )
-    ladder = instructions[0]
-    # Memory's composite ladder names the durable-fact rung first and the last-rung
-    # history search last — that is the branch-by-intent ordering. The archive's
-    # turn-index rung (`search_index`/`read_turn`) is gone: memory + BM25 only.
-    assert "search_memory" in ladder, "Memory ladder must name search_memory"
-    assert "search_conversation_history" in ladder, (
-        "Memory ladder must name search_conversation_history as the last rung"
-    )
-    assert "LAST RUNG" in ladder, "search_conversation_history must be marked last rung"
-    assert "search_index" not in ladder, "index rung removed from the memory ladder"
-    assert "read_turn" not in ladder, "index rung removed from the memory ladder"
-    # The assistant's memory surface is READ-ONLY (consolidation owner is the sole
-    # writer): the ladder must NOT instruct the model to write/delete or CAPTURE.
-    assert "write_memory" not in ladder, "read-only ladder must not name write_memory"
-    assert ("CAPTURE" not in ladder.upper()), "read-only ladder must not name CAPTURE"
-    # The suppressed capabilities must not leak a second, conflicting ladder.
-    assert "TO RECALL PAST TURNS" not in ladder.upper()
-
-
 def test_turn_index_owns_ladder_without_memory() -> None:
     """Back-compat: when Memory is NOT in the profile, TurnIndex still emits its own
     self-contained ladder (recognition -> search_index -> read_turn ->

@@ -13,6 +13,7 @@ from pydantic_ai_harness.step_persistence import StepPersistence
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.capabilities.compaction import build_compaction
+from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.profiles import PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 
@@ -70,11 +71,15 @@ def test_compaction_builds_real_strategy_objects() -> None:
 
     # `CompactionStrategy` is a bare Protocol (not runtime_checkable), so we can't
     # isinstance against it. Assert each tier is a real concrete strategy (a class,
-    # not a raw dict) drawn from the no-summary ladder's known types.
+    # not a raw dict) drawn from the no-summary ladder's known types. The sliding
+    # window may be the plain `SlidingWindowCompaction` or, when consolidation is
+    # enabled (Settings.consolidate / CONSOLIDATE=1), its subclass
+    # `MemoryConsolidationWindow` — both are real strategy objects.
     strategy_types = (
         ClampOversizedMessages,
         ClearToolResults,
         SlidingWindowCompaction,
+        MemoryConsolidationWindow,
     )
     assert len(compaction.tiers) == 3
     assert all(type(tier) in strategy_types for tier in compaction.tiers)

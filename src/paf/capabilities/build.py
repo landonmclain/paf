@@ -28,7 +28,6 @@ from pathlib import Path
 
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory import Memory
-from paf.capabilities.memory._capability import _READONLY_GUIDANCE
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
@@ -52,10 +51,18 @@ def _build_memory(store) -> Memory:
     ``store`` (the shared persistence store) is accepted for a uniform builder
     signature but unused: memory owns its own ``MarkdownStorage`` rather than
     writing into the run-events store. The assistant's surface is read-only
-    (``writable=False`` + ``_READONLY_GUIDANCE``): it recalls from the injected
-    ``MEMORY.md`` / ``search_memory`` but NEVER writes or deletes — the
-    consolidation owner sub-agent is the sole writer. This prevents drift /
-    contamination of the canonical notebook during ordinary turns.
+    (``writable=False``): it recalls from the injected ``MEMORY.md`` /
+    ``search_memory`` but NEVER writes or deletes — the consolidation owner
+    sub-agent is the sole writer. This prevents drift / contamination of the
+    canonical notebook during ordinary turns.
+
+    ``guidance=""`` (not ``_READONLY_GUIDANCE``) matches the benchmark/reference
+    assembly in `tests/framework.py`: the spec `instructions` (the single
+    ``system_prompt``) owns ALL static guidance — identity, the CONFLICT /
+    INFERENCE answer rules, the retrieval ladder, and the read-only memory
+    contract — so the model sees exactly one source of recall steering. Only the
+    dynamic ``MEMORY.md`` body still injects (via ``before_model_request``); the
+    capability's own instruction block is off.
     """
     return Memory.from_spec(
         backend="markdown",
@@ -63,7 +70,7 @@ def _build_memory(store) -> Memory:
         agent_name="assistant",
         inject_memory=True,
         writable=False,
-        guidance=_READONLY_GUIDANCE,
+        guidance="",
     )
 
 

@@ -28,6 +28,7 @@ from pydantic_ai_harness.compaction import (
 from pydantic_ai_harness.step_persistence import StepPersistence
 
 from paf.capabilities.memory import Memory
+from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.turn_index import TurnIndexCapability
 
@@ -44,6 +45,9 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     "ClampOversizedMessages": ClampOversizedMessages,
     "ClearToolResults": ClearToolResults,
     "SlidingWindowCompaction": SlidingWindowCompaction,
+    # Consolidation-on swap for the sliding-window tier (Settings.consolidate /
+    # CONSOLIDATE=1): folds the about-to-evict slice into durable memory first.
+    "MemoryConsolidationWindow": MemoryConsolidationWindow,
     "SummarizingCompaction": SummarizingCompaction,
     # Lossless recall over the persistence store. Built in Python (build.py) because
     # its `source` needs a real SnapshotHistorySource object; cataloged so the

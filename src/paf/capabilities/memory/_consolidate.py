@@ -159,13 +159,77 @@ def _build_owner(store, *, agent_name: str, namespace: str):
 
 
 async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
-    """Render a message list for the owner prompt; None if there's nothing to fold."""
-    from pydantic_ai_harness.compaction._shared import _collect_text
+    """Render a message list for the owner prompt; None if there's nothing to fold.
 
-    segments = list(_collect_text(messages))
-    if not segments:
+    Deliberately a *dedicated* owner view rather than reusing the search / read_turn
+    renderers (`_render.py` / `_reader.py`) or the harness token estimator
+    (`_collect_text`): the owner extracts durable facts, so it sees ONLY the
+    durable User and Assistant text — labeled, in order. Everything that is not a
+    fact source is dropped: assistant thinking/reasoning, tool calls AND tool
+    results (their I/O is transient, and results can echo memory content back),
+    system prompts (the instruction channel, not conversation), retries, native /
+    tool-search / capability-load traffic, files, and compaction artifacts.
+
+    Injected artifacts (`<memory>` / `<turn-index>` user-prompt blocks tag their
+    ``TextContent`` with a marker) are stripped via
+    :func:`paf.capabilities._markers.injected_artifact_markers` so a snapshotted
+    memory or index block never reaches the owner.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextContent,
+        TextPart,
+        UserPromptPart,
+    )
+
+    from paf.capabilities._markers import injected_artifact_markers
+
+    markers = injected_artifact_markers()
+
+    def _is_injected(item: object) -> bool:
+        metadata = getattr(item, "metadata", None)
+        return metadata is not None and any(
+            str(metadata).startswith(marker) for marker in markers
+        )
+
+    def _user_text(part: UserPromptPart) -> str | None:
+        """The durable text of a user prompt, stripped of injected blocks.
+
+        Returns None when nothing durable remains (e.g. an all-injected ``<memory>``
+        snapshot), so the message is omitted rather than shown empty.
+        """
+        if isinstance(part.content, str):
+            return part.content or None
+        texts: list[str] = []
+        for item in part.content:
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, TextContent) and not _is_injected(item):
+                texts.append(item.content)
+        joined = " ".join(texts).strip()
+        return joined or None
+
+    lines: list[str] = []
+    for message in messages:
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if isinstance(part, UserPromptPart):
+                    content = _user_text(part)
+                    if content:
+                        lines.append(f"User: {content}")
+                # Everything else a request can carry (system prompt, tool return,
+                # retry, thinking, native / tool-search / capability-load traffic,
+                # file) is not durable user text — dropped.
+        elif isinstance(message, ModelResponse):
+            for part in message.parts:
+                if isinstance(part, TextPart):
+                    lines.append(f"Assistant: {part.content}")
+                # Tool calls, thinking, compaction — all dropped.
+
+    if not lines:
         return None
-    return "\n".join(f"- {seg}" for seg in segments)
+    return "\n".join(lines)
 
 
 async def consolidate(
