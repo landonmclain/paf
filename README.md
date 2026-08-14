@@ -30,9 +30,12 @@ The full recall/memory stack — `turn_index`, `search`, and `memory` — is now
 
 ```
 src/paf/capabilities/
-  turn_index/   episodic index: one-line-per-turn + key_terms, read_turn + search_index
-  search/       paf-owned BM25 ConversationSearch (search_conversation_history tool)
+  turn_index/   episodic index: one-line-per-turn + key_terms, injected tail + search_index
+  search/       paf-owned BM25 ConversationSearch (search_conversation_history)
+                + the SHARED full-content read (read_turn) — search is the
+                permanent retrieval layer, read_turn lives here
   memory/       paf-owned Memory capability, markdown backend (readable .md + CAS sidecar)
+  _markers.py   shared injected-prompt markers (turn-index injection + memory strip)
   registry.py   allowlisted catalog;  profiles.py named profiles;  build.py assembles
   compaction.py tiered compaction (sliding window + summary);  persistence.py StepPersistence
 ```
@@ -113,6 +116,27 @@ capabilities:
 (`search_index`, `read_turn`, `search_conversation_history`). This is what makes
 **ID-membership** benchmark scoring possible — see LongMemEval below.
 
+## The shared full-content read (`read_turn` owns search)
+
+The read primitive **lives in `search`** (`paf.capabilities.search._reader`),
+not the index. Search is the *permanent* retrieval layer (never ablated); the
+index is an optional *producer of refs* on top of it. Both ladders therefore
+expose the **same `read_turn` tool** with the **same `run_id:turn_id` ref
+format**:
+
+- `search_index` (index ladder) hands a turn's ref → `read_turn` expands it.
+- `search_conversation_history` (search ladder) now **also carries a
+  `turn: <run_id>:<turn_id>` ref** on every hit, with a
+  `-> read_turn("<run_id>:<turn_id>")` hint — so a BM25 hit can be expanded to
+  its **full original turn**, not just a truncated snippet.
+
+The two ladders share no duplicate reader: `TurnIndexToolset` imports the read
+primitive from `search`. This is what lets an **ablated (no-index) run** still
+answer full-content questions — e.g. LongMemEval's "children's book" item, which
+previously sent the model into a non-terminating retrieval loop (BM25 could
+*find* the right message but never *show* its full text). A hit's ref now opens
+the whole turn, so the model resolves it in one `read_turn` call.
+
 ## Memory (`paf.capabilities.memory`)
 
 The memory arm is **paf-owned and live**, un-gated as a capability. It runs with
@@ -179,6 +203,7 @@ src/paf/
   capabilities/   extension seam — registry, profiles, builders
     turn_index/   episodic index (write gate + inject/recall tools + summarizer)
     search/       paf-owned BM25 ConversationSearch (search_conversation_history)
+                  + shared full-content read (read_turn) — search-owned, both ladders use it
     memory/       paf-owned Memory, markdown backend (atomics inlined)
   observability/  Langfuse OTLP instrumentation (setup/shutdown)
   runtime.py      Session — UI-agnostic run lifecycle (build + trace + stream +
@@ -236,9 +261,12 @@ profiles, tiered compaction, durable flat-file `StepPersistence` + BM25
 M2 (`feature/m2`), feature 1 — the **episodic turn index** — is shipped and
 mature: per-turn synchronous indexing gated to terminal responses, a real
 structured-output LLM summarizer with char-budget retry, one-line index
-injected into context (recognition beats recall), `read_turn` back into
-persistence, and `search_index` (BM25 over summaries + key terms, with a
-conservative recency nudge).
+injected into context (recognition beats recall), and `search_index` (BM25
+over summaries + key terms, with a conservative recency nudge). `read_turn`
+(the full-content read) now **lives in `search`** — the permanent retrieval
+layer — and is shared by both the index and raw search: search hits carry a
+`run_id:turn_id` ref, so a no-index run can still expand a hit to its full
+turn (fixes the q17 no-index retrieval loop).
 
 The recall/memory stack is now **entirely paf-owned**:
 - `ConversationSearch` is paf-local BM25 (`paf.capabilities.search`,
@@ -290,6 +318,7 @@ queue lands.
    for eviction).
 
 **Secondary / deferred:** tuning the in-context read path (index-line injection
-budget, eviction/ordering, composition with `Memory`); extracting turn-index into
-a standalone installable package; M3 multi-agent (`Runner` over the same `Agent`
-units); M4 security toolkit.
+budget, eviction/ordering, composition with `Memory`); packaging — `read_turn`
+stays owned by `search`, so a future standalone turn-index package would depend
+on `search` for the read primitive (search is the base layer); M3 multi-agent
+(`Runner` over the same `Agent` units); M4 security toolkit.
