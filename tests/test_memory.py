@@ -282,6 +282,29 @@ def test_toolset_roundtrip_innem() -> None:
     asyncio.run(_toolset_roundtrip(cap))
 
 
+async def _empty_scope_search(capability: Memory) -> None:
+    """A fresh scope with no memory files returns an actionable string, not a bare empty match list.
+
+    A bare `{'matches': [], 'scanned': 0}` sent earlier memory-owner runs into a
+    search-the-emptiness loop (search_memory was called repeatedly with nothing
+    to find). Returning a plain string tells the model the notebook is empty and
+    to create memory instead of searching.
+    """
+    ts = MemoryToolset(capability)
+    out = await ts.search_memory(_FakeCtx(run_id="run-0", tool_call_id="call-0"), query="anything")
+    assert isinstance(out, str), f"expected a string on empty scope, got {type(out)!r}: {out!r}"
+    assert "no memory files" in out.lower()
+    assert MAIN_FILENAME in out
+
+
+def test_search_empty_scope_innem() -> None:
+    asyncio.run(_empty_scope_search(Memory(store=InMemoryStore(), agent_name="test-agent")))
+
+
+def test_search_empty_scope_file(tmp_path: Path) -> None:
+    asyncio.run(_empty_scope_search(Memory(store=FileStore(tmp_path), agent_name="test-agent")))
+
+
 def test_toolset_roundtrip_file(tmp_path: Path) -> None:
     cap = Memory(store=FileStore(tmp_path), agent_name="test-agent")
     asyncio.run(_toolset_roundtrip(cap))

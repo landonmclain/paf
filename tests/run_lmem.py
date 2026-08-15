@@ -147,7 +147,6 @@ MEMORY_DURABLE_DIR = (
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
 # across all 6 types + some abstention is a good first validation.
 LME_MAX_QUESTIONS = int(os.environ.get("LME_MAX_QUESTIONS", "15"))
-LME_MAX_TURNS_PER_QUESTION = int(os.environ.get("LME_MAX_TURNS_PER_QUESTION", "120"))  # cap seeding cost
 
 
 def _run_sync_under_span(agent, prompt: str, span_name: str, session: str):
@@ -863,8 +862,11 @@ def main(argv: list[str] | None = None) -> dict:
     for qi, q in enumerate(questions, start=1):
         cid = f"lmem-{uuid.uuid4().hex[:8]}"
         raw_turns = _raw_turns(q)
-        # Cap seeding cost (LongMemEval oracle is small, but be safe).
-        raw_turns = raw_turns[:LME_MAX_TURNS_PER_QUESTION]
+        # NO per-question turn cap: seed the FULL haystack so the owner sees
+        # every session and can distill facts that live later in the stack
+        # (e.g. a gold answer dated late in a long single-session-user run).
+        # A cap truncated the owner context mid-haystack and silently dropped
+        # late facts from durable memory.
         print(
             f"[lmem] q{qi}/{len(questions)} {q['question_type']} "
             f"{q.get('question_id', '?')} seeding {len(raw_turns)} turns — "

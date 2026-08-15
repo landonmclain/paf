@@ -457,7 +457,7 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
                 _set_span_error(span, exc)
                 raise
 
-    async def search_memory(self, ctx: RunContext[AgentDepsT], query: str) -> MemorySearchResponse:
+    async def search_memory(self, ctx: RunContext[AgentDepsT], query: str) -> str | MemorySearchResponse:
         """Search memory files in the current tenant and agent scope.
 
         Results contain bounded snippets; call `read_memory` when a larger
@@ -471,6 +471,17 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
         capability = self._capability
         store, scope = capability.resolve_scope(ctx)
         prefix = f'{scope}/'
+        # No memory files yet in this scope: don't run an empty search loop.
+        # Return a direct, actionable message so the owner knows the notebook
+        # is empty and stops searching (a bare `{'matches': []}` made earlier
+        # runs repeat `search_memory` with nothing to find).
+        existing = await store.list_paths(prefix, limit=1)
+        if not existing:
+            return (
+                f'There are no memory files in this scope yet. Create them '
+                f'with `write_memory` (start with `{MAIN_FILENAME}`). There is '
+                f'nothing to search until memory has been written.'
+            )
         with ctx.tracer.start_as_current_span(
             'memory.search', record_exception=False, set_status_on_exception=False
         ) as span:
