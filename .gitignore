@@ -33,16 +33,17 @@ data/benchmarks/*
 data/benchmarks/generated/*
 !data/benchmarks/generated/*.jsonl
 
-# Durable per-question memory snapshots under memory/ are auto-persisted by
-# run_lmem.py (_persist_durable_memory) per seeded question and TRACKED so a
-# fresh clone re-runs with ZERO owner/consolidation tokens (mirrors
-# generated/ above). Each <qid>/ holds the owner-produced memory store
-# (assistant/MEMORY.md + assistant/.memory-state.json). The two negations below
-# simply re-include the memory/ dir that `data/benchmarks/*` would ignore; once
-# the dir is included git descends and tracks everything under it. Refresh via
+# Durable per-question memory snapshots are auto-persisted by run_lmem.py
+# (_persist_durable_memory) per seeded question and TRACKED so a fresh clone
+# re-runs with ZERO owner/consolidation tokens. Each <qid>/ holds the
+# owner-produced memory store (assistant/MEMORY.md + assistant/.memory-state.json).
+# The split (oracle vs _s/_m) is namespaced by the LME data-file stem:
+# memory-lme_oracle/ , memory-longmemeval_s_cleaned/ , etc. The negation below
+# re-includes the memory-*/ dir that `data/benchmarks/*` would ignore; once the
+# dir is included git descends and tracks everything under it. Refresh via
 # PAF_FRESH_MEMORY=1 (or LME_QIDS=<qid> PAF_FRESH_MEMORY=1), which re-consolidates
 # and overwrites the snapshot.
-!data/benchmarks/memory/
+!data/benchmarks/memory-*/
 
 # Generated benchmark run outputs (graded runner writes JSON per full run).
 tests/results/
