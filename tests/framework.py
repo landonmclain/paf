@@ -4,8 +4,9 @@ import asyncio
 import os
 import time
 from pathlib import Path
+from typing import cast
 
-from pydantic_ai import Agent, AgentRunResultEvent, UsageLimits
+from pydantic_ai import Agent, AgentRunResultEvent, ModelSettings, UsageLimits
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
@@ -86,6 +87,85 @@ LME_RETRY_MAX_BACKOFF = float(os.environ.get("LME_RETRY_MAX_BACKOFF", "60.0"))
 LME_RETRYABLE_STATUSES = frozenset(
     int(x) for x in os.environ.get("LME_RETRYABLE_STATUSES", "408,429,500,502,503,504").split(",") if x.strip()
 )
+
+# ---------------------------------------------------------------------------
+# OpenRouter provider-pinning + sampler determinism (2026-08-15).
+# The same `deepseek-v4-flash:nitro` slug scores differently run-to-run
+# (0.9043 vs 0.9468) because `:nitro` = throughput routing that silently
+# switches upstream providers, and providers serve the SAME checkpoint at
+# different quantization levels (fp8 vs fp4) -> real output diff at temp 0.
+# Fix (vault OpenRouter-Provider-Quantization-Nondeterminism.md):
+#   * pin the provider order so there's zero routing bounce,
+#   * hard-filter `quantizations: ["fp8"]` so an unexpected failure can't hit
+#     an fp4 box,
+#   * `top_p: 1.0` + a fixed `seed` for sampler determinism.
+# We ride the OpenRouter `provider` object through pydantic-ai's `extra_body`
+# (openai_chat passes `extra_body=model_settings.get('extra_body')` verbatim to
+# the HTTP request body — verified in pydantic-ai 2.22 source).
+# Env-overridable per-run; defaults are the FINAL chosen set for the DeepSeek
+# subject (DeepInfra primary, Parasail/CoreWeave fp8 fallbacks, Novita EXCLUDED).
+# ---------------------------------------------------------------------------
+# Default subject provider chain (fp8). Empty string disables the pin.
+SUBJECT_PROVIDER_ORDER = [
+    p for p in os.environ.get(
+        "LME_SUBJECT_PROVIDER_ORDER", "deepinfra,parasail,coreweave"
+    ).split(",") if p
+]
+SUBJECT_PROVIDER_QUANTIZATIONS = [
+    q for q in os.environ.get(
+        "LME_SUBJECT_PROVIDER_QUANTIZATIONS", "fp8"
+    ).split(",") if q
+]
+# Judge chain (gpt-4o-mini): OpenAI first-party is the canonical host. Pin keeps
+# the judge from flapping while we measure the subject. Empty disables.
+JUDGE_PROVIDER_ORDER = [
+    p for p in os.environ.get(
+        "LME_JUDGE_PROVIDER_ORDER", "openai"
+    ).split(",") if p
+]
+JUDGE_PROVIDER_QUANTIZATIONS = [
+    q for q in os.environ.get(
+        "LME_JUDGE_PROVIDER_QUANTIZATIONS", ""
+    ).split(",") if q
+]
+# Fixed sampler determinism seed (use a stable constant unless overridden).
+LME_SAMPLER_SEED = int(os.environ.get("LME_SAMPLER_SEED", "20260815"))
+
+
+def _openrouter_model_settings(
+    provider_order: list[str] | None,
+    quantizations: list[str],
+    seed: int | None = None,
+    extra: dict | None = None,
+    base: dict | None = None,
+) -> ModelSettings:
+    """Build a `model_settings` dict that pins OpenRouter routing + sampler.
+
+    Returns a dict combining sampling determinism (`top_p: 1.0` + fixed seed)
+    with the OpenRouter `provider` object passed via `extra_body`. When
+    `provider_order` is empty/None, no routing pin is applied (plain request).
+    `base` supplies default sampling params (temperature/max_tokens etc.);
+    `extra` are extra plain settings added verbatim.
+    """
+    out: dict = dict(base or {"temperature": 0})
+    out["top_p"] = 1.0
+    if seed is not None:
+        out["seed"] = seed
+    if extra:
+        out.update(extra)
+    pinned_quantizations = [q for q in quantizations if q]
+    if provider_order:
+        provider: dict = {"order": list(provider_order)}
+        if pinned_quantizations:
+            provider["quantizations"] = pinned_quantizations
+        # allow_fallbacks defaults True on OpenRouter — keep, so a pinned
+        # primary dropping still fails over to the listed fallbacks (never to
+        # an out-of-quantization fp4 box thanks to the hard filter above).
+        extra_body: dict = dict(out.get("extra_body") or {})
+        extra_body["provider"] = provider
+        out["extra_body"] = extra_body
+    return cast(ModelSettings, out)
+
 
 # Memory presence knob: MEMORY=1 wires the durable Memory capability into the
 # harness (inject_memory=True, subject READ-ONLY / writable=False per the M2
@@ -327,7 +407,12 @@ def _build_agent(
         # rules + read-only memory contract). Capability instructions are off.
         system_prompt=SUBJECT_SYSTEM_PROMPT,
         capabilities=caps,
-        model_settings={"temperature": 0, "max_tokens": 12288},
+        model_settings=_openrouter_model_settings(
+            SUBJECT_PROVIDER_ORDER,
+            SUBJECT_PROVIDER_QUANTIZATIONS,
+            seed=LME_SAMPLER_SEED,
+            base={"temperature": 0, "max_tokens": 12288},
+        ),
     )
 
 def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:

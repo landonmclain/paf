@@ -76,20 +76,24 @@ from paf.observability.instrumentation import (
     shutdown_observability,
 )
 
+# Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
+from tests.framework import (
+    ABLATE_TURN_INDEX,
+    JUDGE_PROVIDER_ORDER,
+    JUDGE_PROVIDER_QUANTIZATIONS,
+    LME_SAMPLER_SEED,
+    MEMORY,
+    _build_agent,
+    _openrouter_model_settings,
+    _run_turn,
+)
+
 # Official LongMemEval judge scaffold (verbatim prompts + label parsing).
 from tests.lme_scoring import (
     LME_TYPES,
     get_lme_anscheck_prompt,
     lme_is_abstention,
     lme_parse_label,
-)
-
-# Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
-from tests.framework import (
-    ABLATE_TURN_INDEX,
-    MEMORY,
-    _build_agent,
-    _run_turn,
 )
 
 # ---------------------------------------------------------------------------
@@ -178,7 +182,12 @@ def _lme_judge(question_type: str, question: str, gold_answer: str, response: st
         JUDGE_MODEL,
         name="lme-judge",
         output_type=_JudgeVerdict,
-        model_settings={"temperature": 0},
+        model_settings=_openrouter_model_settings(
+            JUDGE_PROVIDER_ORDER,
+            JUDGE_PROVIDER_QUANTIZATIONS,
+            seed=LME_SAMPLER_SEED,
+            base={"temperature": 0},
+        ),
         instructions=(
             "You are the official LongMemEval answer judge. Answer the question "
             "exactly as asked: with a structured verdict `label` of 'yes' or 'no' "

@@ -233,3 +233,63 @@ Kept as historical reasoning:
   ablation can't see).
 - Full reasoning trail: vault note
   `Documents/notes/Personal/Portfolio-GitHub/Turn-Index-Testing.md`.
+
+## Cross-run variance: same-config runs differ by ~4.5pt (findings, 2026-08-15)
+
+Two full 472-Q gate runs, **identical params** (same 472 qids, subject
+`openrouter:deepseek/deepseek-v4-flash-0731:nitro`, judge `gpt-4o-mini`,
+`ABLATE_TURN_INDEX=1`, eviction 5000/6/3, max_lines=10, same oracle data file),
+recorded **0.9043** (`lmem-20260814-230559.json`) and **0.9468**
+(`lmem-20260815-121016.json`). Net +0.045 is answer-side judgment, not
+retrieval: recall held (0.9964→0.9923), and 27 qids flipped wrong→right / 7
+right→wrong, gains spread across types (multi-session +9, single-session-
+assistant +7) with bilateral regression elsewhere. Honest band: **~91–95% on
+this setup; a single run carries ±2pt variance.**
+
+**Root cause = provider routing, not code.** Subject is pinned
+`temperature: 0, max_tokens: 12288` (`tests/framework.py:330`, confirmed in
+ClickHouse `model_parameters={"temperature":0}`), but **no `top_p`/`top_k` is
+sent** — so the selected provider's own sampler defaults apply and can differ
+per provider. `:nitro` = `provider.sort:"throughput"` (OpenRouter routing
+shortcut), so routing can bounce between upstream providers (Together /
+Fireworks / DeepInfra / ...) across runs/requests. OpenRouter explicitly
+allows providers to serve the **same model slug at different quantization**
+(`int4`/`fp8`/`fp16`/`bf16`/`fp32`) — FP4 vs FP16 of identical weights is
+enough to change argmax outputs at temperature 0, especially on a small
+"flash"-class model. This is documented as "the hidden quality variable" by
+OpenRouter and is the likely driver of the 27-flip scramble. Reference (the
+exact scenario): LessWrong, "Not Pinning Your OpenRouter Provider Might
+Invalidate Your Research."
+
+**Traces do NOT capture the provider.** Confirmed in ClickHouse
+(`langfuse-clickhouse-1`): `internal_model_id` is **NULL on all ~14,849 deepseek
+GENERATION spans** (only the gpt-4o-mini judge path records it). No column
+records which provider/precision served each deepseek call; the `:nitro`
+suffix is stripped from `provided_model_name`. So routing/provider bounce is
+**invisible retroactively** in Langfuse — provider attribution would require
+capturing the OpenRouter response `provider`/`host` fields into traced metadata
+(a harness change) going forward.
+
+### Fix (decided 2026-08-15) — pin provider + quantization, add sampler knobs
+
+To collapse the same-config variance to near-zero for future runs, the agreed
+change (pending application to `tests/framework.py` model settings):
+
+```python
+provider={"order": ["DeepInfra", "Parasail", "CoreWeave"],
+          "quantizations": ["fp8"],
+          "allow_fallbacks": True}
+# + sampler determinism: top_p=1.0, fixed seed (v4-flash-0731 also supports top_k/min_p/repetition_penalty)
+```
+
+- **fp8 is the recommended precision** (no fp16 provider for this model; bf16 = Morph only = niche
+  host). DeepInfra primary (cheap + solid), Parasail + CoreWeave as precision-identical fp8
+  fallbacks (Landon vouches for both). **Novita explicitly excluded** (unsure of it; no price edge).
+- `quantizations: ["fp8"]` is the safety net — even with fallbacks, OpenRouter can never route to
+  an fp4 box. Also pin the `gpt-4o-mini` judge to a single provider so the *judge* doesn't flap
+  while measuring the *subject*.
+- Full provider × quantization map (28 providers) + rationale in the vault note
+  `.../Portfolio-GitHub/OpenRouter-Provider-Quantization-Nondeterminism.md`.
+
+**Caveat:** pinning a single provider trades uptime for determinism (a pinned host down = run fails,
+no graceful route). For a reproducibility benchmark that is the correct tradeoff.
