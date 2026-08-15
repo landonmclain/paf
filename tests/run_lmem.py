@@ -355,6 +355,15 @@ def _transcript_messages(
     for t in raw_turns:
         text = t["content"]
         dia_id = t.get("dia_id", "")
+        # The session's datetime rides on the FIRST turn of each session
+        # (set by `_raw_turns` as a `date` key). Prefix it into the persisted
+        # content so `search_conversation_history` / `read_turn` re-surface the
+        # time anchor the model needs to resolve "how long ago"/"which first"
+        # against. Without this the dates exist only in the separate
+        # `haystack_dates` array and are dropped before the store is written.
+        date_prefix = t.get("date")
+        if date_prefix:
+            text = f"[date: {date_prefix}] {text}"
         # dia_id == "{sid}_t{i}"; the source session id is the part before the
         # last "_t<i>" (index may itself contain '_'); strip the _t suffix.
         sid = dia_id.rsplit("_t", 1)[0] if dia_id else None
