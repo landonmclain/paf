@@ -25,12 +25,12 @@ name: demo_assistant
 model: openrouter:deepseek/deepseek-v4-flash-0731:nitro
 
 instructions: |
-  You are a demo assistant for poking at capabilities. Answer helpfully, use
+  You are an assistant with certain capabilities. Answer helpfully, use
   whichever tool or capability is relevant to the user's request, and be
   concise unless asked otherwise.
 
 model_settings:
-  temperature: 0.2
+  temperature: 0
 
   # OpenRouter prompt caching — same defaults as the assistant spec. See
   # specs/assistant.yaml for the full comments.
