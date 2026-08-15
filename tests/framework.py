@@ -6,7 +6,11 @@ import time
 from pathlib import Path
 
 from pydantic_ai import Agent, AgentRunResultEvent, UsageLimits
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.exceptions import (
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
@@ -58,6 +62,30 @@ LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
 # default. Set ABLATE_TURN_INDEX=0 to OPT BACK IN to the TurnIndex-owned ladder
 # (the 20-Q gated baseline, 0.8333 / recall 0.275, run lmem-20260812-133841).
 ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "1") == "1"
+
+# Transient network-error retry knobs (bender-adjacent resilience). A single
+# OpenRouter/provider 5xx/429/408 blip should NOT kill a long graded run
+# (2026-08-15: a 502 "Network connection lost" on deepseek-v4-flash aborted a
+# 472-Q run at q328/472, discarding 327 completed questions — no JSON written).
+# `_run_turn` retries retryable ModelHTTPError statuses up to
+# LME_RETRY_MAX_ATTEMPTS total attempts, sleeping LME_RETRY_BASE_BACKOFF seconds
+# between attempts (default constant; see LME_RETRY_BACKOFF_EXPONENTIAL), and
+# honoring the provider's `Retry-After` header when present. Auth/validation
+# 4xx (400/401/403/404/422) and 5xx-class codes NOT in the retryable set stay
+# fatal. Tunable per-run. Defaults (Landon 2026-08-15: "30s sleep with 5
+# retries") = 6 total attempts (initial + 5 retries) at a constant 30s.
+LME_RETRY_MAX_ATTEMPTS = int(os.environ.get("LME_RETRY_MAX_ATTEMPTS", "6"))
+LME_RETRY_BASE_BACKOFF = float(os.environ.get("LME_RETRY_BASE_BACKOFF", "30.0"))
+# Constant (default) vs exponential backoff. Exponential doubles the base each
+# retry, capped at LME_RETRY_MAX_BACKOFF; constant just repeats the base.
+LME_RETRY_BACKOFF_EXPONENTIAL = os.environ.get("LME_RETRY_BACKOFF_EXPONENTIAL", "0") == "1"
+LME_RETRY_MAX_BACKOFF = float(os.environ.get("LME_RETRY_MAX_BACKOFF", "60.0"))
+# Retryable=device error HTTP statuses. 5xx = server/upstream blips (502 is what
+# OpenRouter surfaces as "Network connection lost"); 429 = rate-limited; 408 =
+# provider-side request timeout. Everything else is left for the caller to see.
+LME_RETRYABLE_STATUSES = frozenset(
+    int(x) for x in os.environ.get("LME_RETRYABLE_STATUSES", "408,429,500,502,503,504").split(",") if x.strip()
+)
 
 # Memory presence knob: MEMORY=1 wires the durable Memory capability into the
 # harness (inject_memory=True, subject READ-ONLY / writable=False per the M2
@@ -111,6 +139,9 @@ SUBJECT_SYSTEM_PROMPT = (
     "uncertainty. Reserve a flat \"not in our history\" refusal for when the "
     "history is genuinely ambiguous or empty. The hedged inference is preferred "
     "over a bare refusal whenever the evidence points at a single answer.\n"
+    "ORDER — when asked what happened first, answer by the date the event "
+    "actually occurred, and state the dates you're comparing before giving "
+    "the order.\n"
     "RETRIEVAL — work cheapest-first; never tool-call for what you already "
     "have:\n"
     "1. IN CONTEXT — a durable-fact notebook and the conversation so far are "
@@ -296,7 +327,7 @@ def _build_agent(
         # rules + read-only memory contract). Capability instructions are off.
         system_prompt=SUBJECT_SYSTEM_PROMPT,
         capabilities=caps,
-        model_settings={"temperature": 0},
+        model_settings={"temperature": 0, "max_tokens": 12288},
     )
 
 def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
@@ -346,15 +377,12 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
 
     async def run():
         nonlocal text, bailed
-        with root_span(
-            name,
-            **{
-                "langfuse.observation.input": _json_dumps(
-                    {"prompt": prompt, "conversation_id": cid}
-                ),
-                "langfuse.session.id": session,
-            },
-        ) as _span:
+
+        # A single agent pass over the prompt: stream events, collect the
+        # tool names/outputs and usage, set `text`. Returns after the run
+        # completes or a bender guard fires. Raises on fatal errors.
+        async def _attempt() -> None:
+            nonlocal text
             with capture_run_messages() as history:
                 try:
                     async with agent.run_stream_events(
@@ -399,6 +427,86 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     )
                     text = res.output
                     usage["requests"] = len(history) if history else 1
+
+                except UnexpectedModelBehavior as umb:
+                    # Bender, output-token variant: the subject hit its
+                    # max_tokens ceiling before producing a response (the
+                    # "Model token limit ... exceeded" crash that killed full
+                    # runs at a pathological question). Like UsageLimitExceeded,
+                    # do NOT let one question kill the whole pool — hand the
+                    # captured context to the zero-tool fallback for a graceful
+                    # best-effort answer. Repair dangling calls first so the
+                    # fallback can be fed a valid history.
+                    bailed = True
+                    try:
+                        from pydantic_ai._agent_graph import _repair_dangling_tool_calls
+                        repaired = _repair_dangling_tool_calls(
+                            history, repair_last_response=True
+                        )
+                    except Exception:
+                        repaired = history
+                    res = await cutoff_agent.run(
+                        "Conclude your answer now, based only on the context above.",
+                        message_history=repaired,
+                    )
+                    text = res.output
+                    usage["requests"] = len(history) if history else 1
+                    usage["token_limit"] = getattr(umb, "model", None)
+                    # note: fallback sets usage.requests but may not set total_tokens
+
+        with root_span(
+            name,
+            **{
+                "langfuse.observation.input": _json_dumps(
+                    {"prompt": prompt, "conversation_id": cid}
+                ),
+                "langfuse.session.id": session,
+            },
+        ) as _span:
+            # Retry transient provider/network failures (bender-adjacent
+            # resilience). A single 5xx/429/408 blip should NOT kill a long
+            # graded run — retry the WHOLE turn on the same prompt, sleeping
+            # LME_RETRY_BASE_BACKOFF (constant) between attempts and honoring
+            # the provider's `Retry-After` header when present. Auth/validation
+            # 4xx and any other status stay fatal and propagate to the caller.
+            attempt = 0
+            while True:
+                attempt += 1
+                # Clear residue from a prior failed attempt so we don't
+                # double-count tool calls / usage if this retry succeeds.
+                tools.clear()
+                tool_outputs.clear()
+                for _k in ("input_tokens", "output_tokens", "cache_read_tokens",
+                           "cache_write_tokens", "total_tokens", "requests"):
+                    usage[_k] = 0
+                text = ""
+                try:
+                    await _attempt()
+                    return  # succeeded (or bender guard produced an answer)
+                except ModelHTTPError as exc:
+                    retryable = exc.status_code in LME_RETRYABLE_STATUSES
+                    if not retryable or attempt >= LME_RETRY_MAX_ATTEMPTS:
+                        raise  # fatal status or out of attempts
+                    delay = exc.retry_after
+                    if delay is None:
+                        if LME_RETRY_BACKOFF_EXPONENTIAL:
+                            # exponential, capped (no jitter: sleep is a
+                            # predictable, tunable knob, not a thundering-herd
+                            # concern for a single-run benchmark)
+                            delay = min(
+                                LME_RETRY_BASE_BACKOFF * (2 ** (attempt - 1)),
+                                LME_RETRY_MAX_BACKOFF,
+                            )
+                        else:
+                            # constant 30s between retries (Landon's default)
+                            delay = LME_RETRY_BASE_BACKOFF
+                    print(
+                        f"[_run_turn] retryable ModelHTTPError {exc.status_code} "
+                        f"(attempt {attempt}/{LME_RETRY_MAX_ATTEMPTS}) on {name!r} — "
+                        f"waiting {delay:.1f}s before retrying",
+                        flush=True,
+                    )
+                    await asyncio.sleep(delay)
 
     asyncio.run(run())
     out = {"text": text, "tools": tools, "tool_outputs": tool_outputs, "usage": usage, "bailed": bailed}
