@@ -57,23 +57,26 @@ def build_compaction() -> TieredCompaction:
     Context is bounded here by pruning; long-term recall is the store-backed
     ``ConversationSearch`` / ``read_turn`` instead of a compacted summary.
 
-    Values are small/observable for M1 so a few turns trip the escalation; raise
-    them for a longer-lived context.
+    Values target ~4000 tokens of live history (raise/lower to taste):
+    ``target_tokens=4000``; tool results are cleared only when history is
+    genuinely bulky (``ClearToolResults(max_tokens=500)``) and the 4 most-recent
+    pairs always survive; the eviction window keeps the last 10 messages and
+    pins the first 5 (``MemoryConsolidationWindow`` when consolidation is on).
     """
     if settings.consolidate:
         from paf.capabilities.memory._window import MemoryConsolidationWindow
 
         window = MemoryConsolidationWindow(
-            max_messages=4,
-            keep_messages=2,
+            max_messages=10,
+            keep_messages=5,
         )
     else:
         window = SlidingWindowCompaction(
-            max_messages=4,
-            keep_messages=2,
+            max_messages=10,
+            keep_messages=5,
         )
     return TieredCompaction(
-        target_tokens=1200,
+        target_tokens=4000,
         tiers=[
             # 1. Clamp any single oversized part (rare, but cheap when it fires).
             ClampOversizedMessages(
@@ -81,9 +84,11 @@ def build_compaction() -> TieredCompaction:
                 keep_head_chars=2_000,
                 keep_tail_chars=2_000,
             ),
-            # 2. Wipe tool-call/result pairs (token-heavy, low value) to placeholders.
+            # 2. Clear old tool results, keeping the most recent pairs intact.
+            #    Fires only when the live history is genuinely bulky (≥ ~500 tok);
+            #    keeps the 4 most-recent tool-call/result pairs untouched.
             ClearToolResults(
-                max_tokens=1,
+                max_tokens=500,
                 keep_pairs=4,
             ),
             # 3. Drop the oldest messages (or consolidate-then-drop, when enabled).
