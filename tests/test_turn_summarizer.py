@@ -79,7 +79,7 @@ def test_summarize_runs_and_builds_turn_summary(monkeypatch) -> None:
         key_terms=["postgres", "RLS", "auth"],
         outcome="resolved",
     )
-    s = TurnSummarizer("openrouter:deepseek/deepseek-v4-flash-0731:nitro")
+    s = TurnSummarizer("openrouter:deepseek/deepseek-v4-flash-0731")
     monkeypatch.setattr(s._agent, "run", _fake_run([done]))
     out = asyncio.run(s.summarize("context text"))
     assert out.sentence == done.sentence
@@ -108,7 +108,7 @@ def test_summarize_shortens_over_budget_sentence(monkeypatch) -> None:
         key_terms=["postgres"],
         outcome="resolved",
     )
-    s = TurnSummarizer("openrouter:deepseek/deepseek-v4-flash-0731:nitro", budget_chars=160)
+    s = TurnSummarizer("openrouter:deepseek/deepseek-v4-flash-0731", budget_chars=160)
     # Base `_agent.run` returns the over-budget one; `_shorten` creates a fresh
     # agent -- we stub the module-level `_extract_output`+agent path by patching
     # `s._agent.run` for BOTH calls is not possible (shorten's agent is new).
@@ -131,7 +131,7 @@ def test_key_terms_clamped_to_max(monkeypatch) -> None:
         key_terms=[f"term{i}" for i in range(30)],
         outcome="decided",
     )
-    s = TurnSummarizer("openrouter:deepseek/deepseek-v4-flash-0731:nitro")
+    s = TurnSummarizer("openrouter:deepseek/deepseek-v4-flash-0731")
     monkeypatch.setattr(s._agent, "run", _fake_run([many]))
     out = asyncio.run(s.summarize("ctx"))
     assert len(out.key_terms) <= s.max_key_terms

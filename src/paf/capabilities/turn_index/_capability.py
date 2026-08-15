@@ -39,7 +39,7 @@ from turn_index import TurnIndexCapability
 
 store = FileStepStore('.step-persistence')
 agent = Agent(
-    'openrouter:deepseek/deepseek-v4-flash-0731:nitro',
+    'openrouter:deepseek/deepseek-v4-flash-0731',
     capabilities=[
         StepPersistence(store=store),                        # pydantic-ai owns writing full history
         TurnIndexCapability(

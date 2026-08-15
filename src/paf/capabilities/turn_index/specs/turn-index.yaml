@@ -52,7 +52,7 @@ capabilities:
       # Real LLM summarizer (enabled). Uses OpenRouter DeepSeek, independent of
       # the chat model, so a cheap/fast summary model can be swapped in later.
       summarizer:
-        model: openrouter:deepseek/deepseek-v4-flash-0731:nitro
+        model: openrouter:deepseek/deepseek-v4-flash-0731
         budget_chars: 160
         max_key_terms: 6
         retries: 2

@@ -59,7 +59,7 @@ from tests.framework import _build_agent, _run_turn
 
 # ---------------------------------------------------------------- config ----
 SUBJECT_MODEL = os.environ.get(
-    "BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
+    "BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
 )
 JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
 

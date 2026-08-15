@@ -20,15 +20,16 @@ The owner model is read from ``Settings.consol_model`` (``CONSOL_MODEL`` env /
 mirroring how the benchmark harness sources its model knobs. It is deliberately
 *not* hardcoded in the source and *not* the spec'd ``assistant.yaml`` model
 (that model is the subject; the owner is a separate leaf agent). Override per
-run: ``CONSOL_MODEL=openrouter:deepseek/deepseek-v4-flash-0731:nitro``.
+run: ``CONSOL_MODEL=openrouter:deepseek/deepseek-v4-flash-0731`` (routing is
+pinned via :func:`_consolidation_model_settings`, not a ``:nitro`` suffix).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 
 from paf.config import settings
 
@@ -45,8 +46,11 @@ logger = logging.getLogger(__name__)
 # via Settings.consol_model (CONSOL_MODEL env / .env) — see module docstring.
 # Not the spec'd subject, but the same provider form so it resolves without a
 # bare-name inference. Must be `openrouter:`-prefixed (a bare `model:variant`
-# string can't resolve to a provider).
-DEFAULT_CONSOL_MODEL = "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
+# string can't resolve to a provider). Routing (which provider serves it) is
+# pinned via the `_consolidation_model_settings` provider object, NOT the
+# `:nitro` suffix — the suffix means OpenRouter `provider.sort: throughput`,
+# which bounces across providers and gives run-to-run nondeterminism.
+DEFAULT_CONSOL_MODEL = "openrouter:deepseek/deepseek-v4-flash-0731"
 
 CONSOLIDATION_GUIDANCE = """\
 You maintain this user's memory and are its only writer. You create, update,
@@ -113,6 +117,39 @@ def consolidate_model() -> str:
     return settings.consol_model or DEFAULT_CONSOL_MODEL
 
 
+def _consolidation_model_settings() -> ModelSettings:
+    """Build the owner's `model_settings`, pinning OpenRouter routing + sampler.
+
+    Mirrors the benchmark's `_openrouter_model_settings` (`tests/framework.py`)
+    exactly (deliberately duplicated, not imported — paf must not depend on the
+    test harness): sampling determinism (`top_p: 1.0` + optional fixed seed)
+    combined with the OpenRouter `provider` object via `extra_body`. When
+    `settings.consol_provider_order` is empty/None, no routing pin is applied
+    (plain request). The provider-order + quantization hard filter resolves the
+    owner off deepseek fp8 boxes deterministically instead of OpenRouter's
+    default throughput sort, which bounces across providers and gives
+    run-to-run nondeterminism (the bug this pin closes).
+    """
+    out: dict = {"temperature": 0}
+    out["top_p"] = 1.0
+    if settings.consol_seed is not None:
+        out["seed"] = settings.consol_seed
+    pinned_quantizations = [
+        q for q in settings.consol_provider_quantizations if q
+    ]
+    if settings.consol_provider_order:
+        provider: dict = {"order": list(settings.consol_provider_order)}
+        if pinned_quantizations:
+            provider["quantizations"] = pinned_quantizations
+        # allow_fallbacks defaults True on OpenRouter — keep, so a pinned
+        # primary dropping still fails over to the listed fallbacks (never to
+        # an out-of-quantization box thanks to the hard filter above).
+        extra_body: dict = dict(out.get("extra_body") or {})
+        extra_body["provider"] = provider
+        out["extra_body"] = extra_body
+    return cast(ModelSettings, out)
+
+
 def _build_owner_memory(store, *, agent_name: str, namespace: str) -> Memory:
     """Build the single-writer Memory capability the owner carries.
 
@@ -153,7 +190,7 @@ def _build_owner(store, *, agent_name: str, namespace: str):
         consolidate_model(),
         name="memory-owner",
         capabilities=[owner_memory],
-        model_settings={"temperature": 0},
+        model_settings=_consolidation_model_settings(),
     )
     return owner, owner_memory
 

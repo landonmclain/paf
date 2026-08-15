@@ -156,9 +156,40 @@ def test_consolidation_model_reads_config(monkeypatch) -> None:
     from paf.config import settings
 
     monkeypatch.setattr(settings, "consol_model", "")
-    assert consolidate_model() == "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
+    assert consolidate_model() == "openrouter:deepseek/deepseek-v4-flash-0731"
     monkeypatch.setattr(settings, "consol_model", "openai:gpt-5.6-luna-pro")
     assert consolidate_model() == "openai:gpt-5.6-luna-pro"
+
+
+def test_consolidation_model_settings_pins_provider(monkeypatch) -> None:
+    """The owner's model_settings pin routing to deepinfra/fp8 by default.
+
+    Regression guard for the run-to-run nondeterminism fix: the owner must NOT
+    ship OpenRouter's default throughput sort (``:nitro``), and must carry the
+    provider `order` + `quantizations` hard-filter plus sampler determinism
+    (top_p=1.0, fixed seed) exactly like the benchmark subject/judge agents.
+    """
+    from paf.capabilities.memory._consolidate import _consolidation_model_settings
+    from paf.config import settings
+
+    # restore defaults (avoid leaking env overrides into the test)
+    monkeypatch.setattr(settings, "consol_provider_order", ["deepinfra", "parasail", "coreweave"])
+    monkeypatch.setattr(settings, "consol_provider_quantizations", ["fp8"])
+    monkeypatch.setattr(settings, "consol_seed", 20260815)
+
+    ms = _consolidation_model_settings()
+    assert ms["top_p"] == 1.0
+    assert ms["seed"] == 20260815
+    provider = ms["extra_body"]["provider"]
+    assert provider["order"] == ["deepinfra", "parasail", "coreweave"]
+    assert provider["quantizations"] == ["fp8"]
+
+    # Empty order → no routing pin (plain request), seed/top_p still applied.
+    monkeypatch.setattr(settings, "consol_provider_order", [])
+    ms2 = _consolidation_model_settings()
+    assert "extra_body" not in ms2
+    assert ms2["top_p"] == 1.0
+    assert ms2["seed"] == 20260815
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from pathlib import Path
 from typing import cast
 
@@ -38,7 +37,7 @@ from paf.observability.instrumentation import (
 
 SUBJECT_MODEL = os.environ.get(
     "BEAM_LITE_SUBJECT_MODEL",
-    "openrouter:deepseek/deepseek-v4-flash-0731:nitro",
+    "openrouter:deepseek/deepseek-v4-flash-0731",
 )
 MAX_LINES = int(os.environ.get("LOCOMO_MAX_LINES", "10"))  # injected index tail budget
 

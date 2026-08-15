@@ -86,7 +86,7 @@ def test_from_spec_flat_summarizer_dict(tmp_path: Path) -> None:
     assert cap.summarizer.budget_chars == 200
     assert cap.summarizer.max_key_terms == 8
     # Unspecified knob falls through to the constructor default.
-    assert cap.summarizer.model == "openrouter:deepseek/deepseek-v4-flash-0731:nitro"
+    assert cap.summarizer.model == "openrouter:deepseek/deepseek-v4-flash-0731"
 
 
 # ---- build_agent integration: the capability lands on the assistant ---------

@@ -54,7 +54,7 @@ def _build_agent(*, store: FileStepStore, index_dir: Path, max_lines: int = 4):
     from pydantic_ai import Agent
 
     return Agent(
-        "openrouter:deepseek/deepseek-v4-flash-0731:nitro",
+        "openrouter:deepseek/deepseek-v4-flash-0731",
         name="tier2-live",
         capabilities=[
             StepPersistence(store=store),

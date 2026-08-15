@@ -46,6 +46,18 @@ class Settings(BaseSettings):
     # model — the owner is a separate leaf agent.
     consol_model: str = ""
 
+    # OpenRouter routing pin for the consolidation owner (provider-order +
+    # quantization hard filter). Mirrors the benchmark's SUBJECT_*/JUDGE_* knobs
+    # so the owner resolves off deepseek fp8 boxes deterministically instead of
+    # OpenRouter's default throughput sort (which bounces across providers and
+    # gives run-to-run nondeterminism). Defaults to the subject's provider order
+    # + fp8; set empty (CONSOL_PROVIDER_ORDER='') to disable the routing pin.
+    # Set via CONSOL_PROVIDER_ORDER / CONSOL_PROVIDER_QUANTIZATIONS /
+    # CONSOL_SEED / .env.
+    consol_provider_order: list[str] = ["deepinfra", "parasail", "coreweave"]
+    consol_provider_quantizations: list[str] = ["fp8"]
+    consol_seed: int | None = None
+
     # The derived one-line-per-turn index lives NEXT TO the step store, as its own
     # append-only JSONL surface. It is now backed by the agent-foundation
     # `StorageService` seam (M2): this value is the seam's *base directory* for the

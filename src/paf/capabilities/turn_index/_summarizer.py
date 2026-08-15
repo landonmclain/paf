@@ -31,12 +31,10 @@ extractable alongside the rest of the `turn_index` subtree.
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
-
-from ._extract import build_turn_context
+from pydantic_ai import Agent, ModelSettings
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +47,39 @@ MAX_KEY_TERMS = 6
 # The one-line-in-context budget. Deterministic char cap, not token cap: LLMs are
 # bad at self-estimating tokens but broadly OK at "N characters". Retried against.
 DEFAULT_BUDGET_CHARS = 160
+
+
+def _summarizer_model_settings(
+    provider_order: list[str] | None = None,
+    quantizations: list[str] | None = None,
+    seed: int | None = None,
+) -> ModelSettings:
+    """Build `model_settings` that pins sampling determinism + OpenRouter routing.
+
+    Mirrors the benchmark's `_openrouter_model_settings` (tests/framework.py),
+    deliberately self-contained (this module is pydantic-ai + stdlib only, zero
+    `paf` coupling per its extractability constraint). Sampling determinism
+    (`top_p: 1.0` + optional fixed `seed`) combined with the OpenRouter
+    `provider` object via `extra_body`. When `provider_order` is empty/None, no
+    routing pin is applied (plain request, temperature 0 only) — configurable in
+    specs / construction.
+    """
+    out: dict = {"temperature": 0}
+    out["top_p"] = 1.0
+    if seed is not None:
+        out["seed"] = seed
+    pinned_quantizations = [q for q in (quantizations or []) if q]
+    if provider_order:
+        provider: dict = {"order": list(provider_order)}
+        if pinned_quantizations:
+            provider["quantizations"] = pinned_quantizations
+        # allow_fallbacks defaults True on OpenRouter — keep, so a pinned
+        # primary dropping still fails over to the listed fallbacks (never to
+        # an out-of-quantization box thanks to the hard filter above).
+        extra_body: dict = dict(out.get("extra_body") or {})
+        extra_body["provider"] = provider
+        out["extra_body"] = extra_body
+    return cast(ModelSettings, out)
 
 
 class TurnSummary(BaseModel):
@@ -115,13 +146,16 @@ class TurnSummarizer:
 
     def __init__(
         self,
-        model: str = 'openrouter:deepseek/deepseek-v4-flash-0731:nitro',
+        model: str = "openrouter:deepseek/deepseek-v4-flash-0731",
         *,
         budget_chars: int = DEFAULT_BUDGET_CHARS,
         max_key_terms: int = MAX_KEY_TERMS,
         retries: int = 2,
         max_shorten_retries: int = 2,
         max_output_tokens: int = 400,
+        provider_order: list[str] | None = None,
+        quantizations: list[str] | None = None,
+        seed: int | None = None,
     ) -> None:
         self.model = model
         self.budget_chars = budget_chars
@@ -132,7 +166,11 @@ class TurnSummarizer:
             model,
             output_type=TurnSummary,
             retries=retries,  # schema/validation retries (builtin)
-            model_settings={"temperature": 0},
+            model_settings=_summarizer_model_settings(
+                provider_order=provider_order,
+                quantizations=quantizations,
+                seed=seed,
+            ),
             system_prompt=(
                 "You write ONE-LINE summaries of a single agent turn for a searchable turn index. "
                 f"Rules:\n"

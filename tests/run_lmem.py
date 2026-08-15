@@ -83,6 +83,8 @@ from tests.framework import (
     JUDGE_PROVIDER_QUANTIZATIONS,
     LME_SAMPLER_SEED,
     MEMORY,
+    SUBJECT_PROVIDER_ORDER,
+    SUBJECT_PROVIDER_QUANTIZATIONS,
     _build_agent,
     _openrouter_model_settings,
     _run_turn,
@@ -100,7 +102,7 @@ from tests.lme_scoring import (
 # Config
 # ---------------------------------------------------------------------------
 
-SUBJECT_MODEL = os.environ.get("BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731:nitro")
+SUBJECT_MODEL = os.environ.get("BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731")
 # Landon's call: gpt-4o-mini on OpenRouter, reuse the repo OPENROUTER_API_KEY.
 JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
 
@@ -901,7 +903,10 @@ def main(argv: list[str] | None = None) -> dict:
                 # fresh-summary baselines; not for normal benchmark integrity runs.
                 precomputed = {}
                 live_summarizer = TurnSummarizer(
-                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6,
+                    provider_order=SUBJECT_PROVIDER_ORDER,
+                    quantizations=SUBJECT_PROVIDER_QUANTIZATIONS,
+                    seed=LME_SAMPLER_SEED,
                 )
                 print(
                     f"[lmem]   q{qi} PAF_FRESH_SEED=1 -> live summarizer "
@@ -910,7 +915,10 @@ def main(argv: list[str] | None = None) -> dict:
                 )
             elif not precomputed:
                 live_summarizer = TurnSummarizer(
-                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
+                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6,
+                    provider_order=SUBJECT_PROVIDER_ORDER,
+                    quantizations=SUBJECT_PROVIDER_QUANTIZATIONS,
+                    seed=LME_SAMPLER_SEED,
                 )
                 print(
                     f"[lmem]   q{qi} NO durable summaries -> live summarizer "
