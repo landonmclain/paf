@@ -6,8 +6,10 @@ This is a drop-in alternative until it's liked, then it becomes cli.py. No
 slash commands. Resume is surfaced as a banner (no viewing of old sessions).
 
 Usage:
-    python ui/cli2.py
-    # defaults to conversation_id "cli-primary"
+    python ui/cli2.py [agent_name]
+    # default agent_name "assistant" (specs/assistant.yaml); use "demo_assistant"
+    # (specs/demo_assistant.yaml) to poke at the lean demo profile's capabilities.
+    # conversation_id defaults to cli-{agent_name}.
 
 Needs OPENAI_API_KEY (live model). Run twice with the same conversation_id to
 see the "resumed N prior messages" banner.
@@ -26,9 +28,13 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
+from paf.capabilities import PROFILES
 from paf.runtime import Session, StreamEvent
 
-CONVERSATION_ID = "cli-primary"
+DEFAULT_AGENT = "assistant"
+
+# conversation_id derived per agent so each agent keeps its own history lane
+# (cli-assistant, cli-demo_assistant, ...).
 
 console = Console()
 
@@ -188,7 +194,24 @@ def main() -> int:
         console.print("  export OPENAI_API_KEY=sk-...")
         return 2
 
-    with Session("assistant", conversation_id=CONVERSATION_ID) as session:
+    # Usage: python ui/cli2.py [agent_name] [profile]
+    #   agent_name — spec base name (default "assistant" → specs/assistant.yaml);
+    #                "demo_assistant" → specs/demo_assistant.yaml (lean demo).
+    #   profile    — profile name (default: the agent's own profile by convention;
+    #                demo_assistant → "demo"). The spec name and profile name
+    #                differ, so they're resolved independently here.
+    argv = sys.argv[1:]
+    agent_name = argv[0] if argv else DEFAULT_AGENT
+    profile_name = argv[1] if len(argv) > 1 else None
+    if profile_name is None:
+        profile_name = "demo" if agent_name == "demo_assistant" else "assistant"
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        console.print(f"unknown profile {profile_name!r}; known: {sorted(PROFILES)}")
+        return 2
+    conversation_id = f"cli-{agent_name}"
+
+    with Session(agent_name, profile=profile, conversation_id=conversation_id) as session:
         _startup_banner(session)
         console.print("type a message, or \"quit\" to exit")
 

@@ -58,8 +58,14 @@ def test_capability_types_resolves_and_raises_on_missing() -> None:
 
 
 def test_only_one_real_profile_for_m1() -> None:
-    """M1 has exactly one agent kind: assistant (YAGNI — don't scaffold blanks)."""
-    assert set(PROFILES) == {"assistant"}
+    """M1 has exactly one agent kind: assistant (YAGNI — don't scaffold blanks).
+
+    M2 adds one more: the lean ``demo`` profile for CLI/live capability poking
+    (specs/demo_assistant.yaml). Its allowlist is deliberately tiny so it does
+    NOT drag in the assistant's persistence/recall/compaction stack. This is
+    the complete, intentional set — no further blank profile scaffolding.
+    """
+    assert set(PROFILES) == {"assistant", "demo"}
     assert PROFILES["assistant"] is ASSISTANT_PROFILE
 
 

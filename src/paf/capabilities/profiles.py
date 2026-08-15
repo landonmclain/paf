@@ -74,8 +74,23 @@ ASSISTANT_PROFILE = AgentProfile(
 )
 
 
+# The demo/live-testing profile — deliberately LEAN. Its job is a surface to
+# poke at capabilities in the CLI (ui/cli2.py <agent>) WITHOUT dragging in the
+# assistant's persistence/recall/compaction stack. Capabilities that resolve
+# natively from a spec's YAML `capabilities:` (WebSearch, WebFetch, XSearch,
+# Thinking, MCP, ToolSearch, ImageGeneration — pydantic-ai's own CAPABILITY_TYPES)
+# do NOT belong here: they need no builder and no allowlist row. This allowlist
+# should only grow with harness capabilities that need a Python build step
+# (e.g. ToolOutputLimits, FileSystem, Shell) as we wire them in. Empty for now —
+# the first demo pokes are all native, spec-declarable capabilities.
+DEMO_PROFILE = AgentProfile(
+    name="demo",
+    capability_names=(),
+)
+
+
 # Name lookup so a spec/CLI can reference a profile by a string that resolves
 # to the allowlist. Only used by spec-driven loaders; keep small.
 PROFILES: dict[str, AgentProfile] = {
-    profile.name: profile for profile in (ASSISTANT_PROFILE,)
+    profile.name: profile for profile in (ASSISTANT_PROFILE, DEMO_PROFILE)
 }

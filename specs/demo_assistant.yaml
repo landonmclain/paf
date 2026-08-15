@@ -1,0 +1,73 @@
+# Demo/live-testing agent spec (M2).
+#
+# The surface for poking at capabilities in the CLI (`python ui/cli2.py
+# demo_assistant`) WITHOUT dragging in the assistant's persistence/recall/
+# compaction stack. The profile `demo` (src/paf/capabilities/profiles.py) is
+# deliberately LEAN — its allowlist only holds harness capabilities that need a
+# Python build step. Everything here is NATIVE pydantic-ai, so it resolves
+# purely from YAML via `Agent.from_file`/`Agent.from_spec` (pydantic-ai's own
+# CAPABILITY_TYPES), with no catalog row and no builder.
+#
+# The 7 headline native capabilities are below, COMMENTED OUT. Uncomment one
+# (or a few) to poke at it in the CLI — each row shows the common knobs. Most
+# accept `defer_loading: true` to keep them out of the prompt until the model
+# calls `load_capability` (the "ready-but-cold" seam).
+#
+# Reference: `building-pydantic-ai-agents` skill → references/ON-DEMAND-
+# CAPABILITIES.md (defer_loading), NATIVE-TOOLS.md (WebSearch/WebFetch),
+# CAPABILITIES-AND-HOOKS.md (Thinking/MCP/ToolSearch). Native capability
+# constructors: pydantic_ai.capabilities (v2.22.0).
+
+name: demo_assistant
+
+# Provider-qualified model string. Same default as the assistant: DeepSeek V4
+# Flash via OpenRouter. Requires OPENROUTER_API_KEY in .env (gitignored).
+model: openrouter:deepseek/deepseek-v4-flash-0731:nitro
+
+instructions: |
+  You are a demo assistant for poking at capabilities. Answer helpfully, use
+  whichever tool or capability is relevant to the user's request, and be
+  concise unless asked otherwise.
+
+model_settings:
+  temperature: 0.2
+
+  # OpenRouter prompt caching — same defaults as the assistant spec. See
+  # specs/assistant.yaml for the full comments.
+  openrouter_cache_instructions: true
+  openrouter_cache_messages: true
+  openrouter_cache_tool_definitions: true
+
+# Native capabilities — all resolve from YAML, no Python needed. The
+# `capabilities:` list is intentionally ABSENT when every entry is commented
+# out (an empty list is invalid). Uncomment the `capabilities:` line AND the
+# rows you want to poke at.
+#
+# capabilities:
+#   # Web search over the open web. `defer_loading` keeps it out of the prompt
+#   # until the model asks for it.
+#   - WebSearch:
+#       defer_loading: true
+#   - WebFetch:
+#       defer_loading: true
+#   - XSearch:
+#       defer_loading: true
+#
+#   # Extended reasoning. Effort: low | medium | high (or true/false).
+#   - Thinking:
+#       effort: high
+#
+#   # Connect to an MCP server (streamable HTTP). `server` is the URL; pairs
+#   # with `allowed_tools` to scope which tools the model sees.
+#   - MCP:
+#       server: http://localhost:8000/mcp
+#
+#   # On-demand tool discovery over a large/flexible tool catalog via
+#   # `search_tools`. `max_results` caps how many results per search.
+#   - ToolSearch:
+#       max_results: 10
+#       defer_loading: true
+#
+#   # Provider-native image generation (or a local `image_model`).
+#   - ImageGeneration:
+#       size: 1024x1024

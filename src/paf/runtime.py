@@ -84,7 +84,12 @@ class Session:
     Parameters
     ----------
     agent_name:
-        Spec base name to build (``"assistant"`` → ``specs/assistant.yaml``).
+        Spec base name to build (`"assistant"` → `specs/assistant.yaml`).
+    profile:
+        Capability allowlist for this agent kind, resolved to
+        ``custom_capability_types``. Defaults to ``ASSISTANT_PROFILE``. Pass
+        ``DEMO_PROFILE`` for the lean demo/live-testing agent
+        (``specs/demo_assistant.yaml``).
     conversation_id:
         Stable id for cross-turn history. ``StepPersistence`` keys off this, so
         two turns with the same id share stored history. Defaults to ``None``
@@ -100,12 +105,14 @@ class Session:
         self,
         agent_name: str = "assistant",
         *,
+        profile=None,
         conversation_id: str | None = None,
         trace: bool = True,
         resume: bool = True,
         store=None,
     ) -> None:
         self.agent_name = agent_name
+        self.profile = profile
         self.conversation_id = conversation_id
         self.trace = trace
         # ``resume``: seed ``self.history`` from durable storage on the first run
@@ -122,7 +129,7 @@ class Session:
         self._store = store if store is not None else _build_store()
         if trace:
             setup_observability()
-        self._agent: Agent[Any, Any] = build_agent(agent_name)
+        self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
         # Running message history for cross-turn persistence. Populated by
         # ``_ensure_resumed`` from durable storage on the first run (if resume)
         # and then accumulated per-turn.
