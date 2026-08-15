@@ -129,12 +129,20 @@ GENERATED_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "generate
 
 # Durable per-question MEMORY snapshots (committed, mirroring generated/ so a
 # fresh clone re-runs with ZERO owner/consolidation tokens). The owner writes
-# memory/<qid>/ at seed time; _persist_durable_memory snapshots the result here
-# and _restore_durable_memory copies it back to skip re-consolidation on later
-# runs. PAF_FRESH_MEMORY=1 forces re-consolidation (and re-persists); combining
-# with LME_QIDS narrows the refresh to specific questions — same shape as the
-# PAF_FRESH_SEED / LME_QIDS turn-index idiom.
-MEMORY_DURABLE_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "memory"
+# <memory-<stem>/<qid>/ at seed time; _persist_durable_memory snapshots the
+# result here and _restore_durable_memory copies it back to skip
+# re-consolidation on later runs. The dir is namespaced by the LME data-file
+# stem (memory-lme_oracle/, memory-longmemeval_s_cleaned/) so separate splits
+# never clobber each other's durable memory. PAF_FRESH_MEMORY=1 forces
+# re-consolidation (and re-persists); combining with LME_QIDS narrows the
+# refresh to specific questions — same shape as the PAF_FRESH_SEED / LME_QIDS
+# turn-index idiom.
+MEMORY_DURABLE_DIR = (
+    Path(__file__).parent.parent
+    / "data"
+    / "benchmarks"
+    / f"memory-{DATA.stem}"
+)
 
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
 # across all 6 types + some abstention is a good first validation.
