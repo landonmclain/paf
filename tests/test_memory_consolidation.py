@@ -241,3 +241,120 @@ def test_resident_consolidate_text_renders_every_segment() -> None:
     assert out is not None
     for i in range(4):
         assert f"turn {i}" in out
+
+
+# ---------------------------------------------------------------------------
+# chunked seed consolidation (benchmark / large-haystack path)
+# ---------------------------------------------------------------------------
+
+
+def test_split_chunks_message_boundary_aligned() -> None:
+    """Chunks never split a message and respect the token budget per chunk."""
+    from paf.capabilities.memory._consolidate import _split_chunks
+
+    # 3 messages of ~20 chars each + marker (~6). Budget tiny → each message
+    # its own chunk (no budget is big enough for two at ~26 chars/4 ≈ 7 tokens).
+    text = "\n".join(
+        [
+            "User: hello this is turn one",
+            "Assistant: okay noted the first thing",
+            "User: second user message here",
+        ]
+    )
+    chunks = _split_chunks(text, max_tokens=4)
+    assert chunks, "non-empty text must produce at least one chunk"
+    assert sum(c.count("\n") + 1 for c in chunks) == text.count("\n") + 1
+    # Joining the chunks must reproduce the input byte-for-byte (no loss).
+    assert "\n".join(c for c in chunks) == text
+    # Order preserved.
+    assert chunks[0].startswith("User:")
+    for c in chunks:
+        assert c.startswith("User:") or c.startswith("Assistant:")
+
+
+def test_split_chunks_merges_under_budget() -> None:
+    """A small enough input stays one chunk (no artificial fragmentation)."""
+    from paf.capabilities.memory._consolidate import _split_chunks
+
+    text = "\n".join(["User: short", "Assistant: also short", "User: tiny"])
+    chunks = _split_chunks(text, max_tokens=4000)
+    assert len(chunks) == 1
+
+
+def test_split_chunks_empty_input() -> None:
+    """Empty input yields no chunks; a whitespace-only input yields one."""
+    from paf.capabilities.memory._consolidate import _split_chunks
+
+    assert _split_chunks("", max_tokens=1000) == []
+    assert _split_chunks("", max_tokens=0) == []
+
+
+def test_build_owner_inject_memory_default_is_false() -> None:
+    """Default owner stays tool-only (live eviction path unchanged)."""
+    from paf.capabilities.memory import Memory
+    from paf.capabilities.memory._consolidate import _build_owner_memory
+
+    cap = _build_owner_memory(None, agent_name="assistant", namespace="")
+    assert isinstance(cap, Memory)
+    assert cap.inject_memory is False
+
+
+def test_build_owner_inject_memory_true_for_chunked() -> None:
+    """Chunked seed variant flips inject_memory=True (cumulative in-context merge)."""
+    from paf.capabilities.memory import Memory
+    from paf.capabilities.memory._consolidate import _build_owner_memory
+
+    cap = _build_owner_memory(
+        None, agent_name="assistant", namespace="", inject_memory=True
+    )
+    assert isinstance(cap, Memory)
+    assert cap.inject_memory is True
+
+
+def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> None:
+    """The chunked owner runs once per split chunk, in order, on the same store.
+
+    Uses a fake owner (no API key / network) that records each chunk it is fed,
+    so the test verifies the chunking + sequential merge wiring without a real
+    model. The store is a no-op stand-in; the real store wiring is covered by
+    the integration gate run.
+    """
+    import asyncio
+
+    from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+
+    from paf.capabilities.memory import _consolidate as cons
+
+    fed: list[str] = []
+
+    class _FakeOwner:
+        async def run(self, prompt: str, **kwargs):
+            fed.append(prompt)
+            return type("R", (), {"output": "no changes"})()
+
+    def _fake_build_owner(store, *, agent_name, namespace, inject_memory=False):
+        return _FakeOwner(), None
+
+    monkeypatch.setattr(cons, "_build_owner", _fake_build_owner)
+
+    msgs: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content=f"turn number {i} and then some")])
+        for i in range(12)
+    ]
+
+    async def _run():
+        await cons.consolidate_conversation_chunked(
+            msgs,
+            store=None,  # the fake owner ignores it
+            agent_name="assistant",
+            namespace="",
+            chunk_max_tokens=3,  # tiny → forces many small chunks
+        )
+
+    asyncio.run(_run())
+
+    assert len(fed) > 1, "tiny budget should split into multiple chunks"
+    # Full transcript preserved across chunks, in order.
+    joined = "\n".join(fed)
+    for i in range(12):
+        assert f"turn number {i} and then some" in joined

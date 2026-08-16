@@ -1025,8 +1025,24 @@ def main(argv: list[str] | None = None) -> dict:
                         flush=True,
                     )
                 store_mem = MarkdownStorage(mem_dir)
+                # Chunked seed consolidation (default): folds the haystack in
+                # token-bounded, message-boundary-aligned chunks into durable
+                # memory so single-mention thematic clusters survive the owner's
+                # single-shot budget. Opt out with LME_CONSOL_CHUNK=0 to restore
+                # the original one-shot consolidate_conversation.
+                use_chunked = os.environ.get("LME_CONSOL_CHUNK", "1") != "0"
+                if use_chunked:
+                    from paf.capabilities.memory._consolidate import (
+                        consolidate_conversation_chunked,
+                    )
+
+                    consolidation = consolidate_conversation_chunked
+                    chunk_label = "chunked"
+                else:
+                    consolidation = consolidate_conversation
+                    chunk_label = "one-shot"
                 asyncio.run(
-                    consolidate_conversation(
+                    consolidation(
                         seed_msgs,
                         store=store_mem,
                         agent_name="assistant",
@@ -1035,7 +1051,7 @@ def main(argv: list[str] | None = None) -> dict:
                 )
                 print(
                     f"[lmem]   q{qi} consolidated {len(seed_msgs)} seed msgs "
-                    f"(up to question) into {mem_dir}",
+                    f"({chunk_label}) (up to question) into {mem_dir}",
                     flush=True,
                 )
                 _persist_durable_memory(q["question_id"], mem_dir)

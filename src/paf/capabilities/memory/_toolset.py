@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -35,18 +36,22 @@ _MAX_CAS_ATTEMPTS = 16
 _MAX_SEARCH_QUERY_CHARS = 1_000
 _MAX_SEARCH_TERMS = 32
 _MIN_FILENAME_LIST_CHARS = 6
+_DIFF_MAX = 8_000  # cap the write-echo diff so a large file can't blow model context
 _READ_TRUNCATION_MARKER = (
     '\n\n[Truncated: this file exceeds `max_memory_size`; edit it externally before using `write_memory`.]'
 )
 
 
 class MemoryWriteResult(TypedDict):
-    """Content-free result from `write_memory`."""
+    """Result from `write_memory` — includes the applied diff so the model can
+    confirm its edit landed (and detect a mangled structure), mirroring how the
+    Hermes `patch` tool returns a diff rather than forcing a re-read."""
 
     file: str
     version: str
     replayed: bool
     status: Literal['created', 'appended', 'updated']
+    diff: str | None
 
 
 class MemoryDeleteResult(TypedDict):
@@ -269,6 +274,13 @@ def _apply_write(existing: str | None, content: str, old_text: str | None, name:
             f'`old_text` appears {occurrences} times in {name!r}; it must match exactly once. '
             'Add surrounding context to make it unique.'
         )
+    if old_text == content:
+        raise ModelRetry(
+            'Replacing a passage with identical text is a no-op and cannot move '
+            'it between sections/headers. To relocate a fact, include it in the '
+            'correct section within a larger replace, or rewrite the whole file '
+            '(in one write, so its old wording is gone).'
+        )
     return existing.replace(old_text, content, 1), 'updated'
 
 
@@ -366,7 +378,18 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
                                 'Memory changed repeatedly while writing; retry the operation.'
                             ) from None
                         continue
-                    result = _write_result(name, mutation, old_text, status=status)
+                    result = _write_result(
+                        name,
+                        mutation,
+                        old_text,
+                        status=status,
+                        diff=_build_write_diff(
+                            name,
+                            None if current is None else current.content,
+                            updated,
+                            status,
+                        ),
+                    )
                     _set_span_result(span, 'ok', chars=len(updated), replayed=mutation.replayed)
                     return result
                 raise RuntimeError('unreachable CAS retry state')  # pragma: no cover
@@ -551,12 +574,39 @@ def _digest(value: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _build_write_diff(name: str, before: str | None, after: str, status: str) -> str | None:
+    """Return a compact unified diff of a write so the model can confirm it landed.
+
+    Mirrors the Hermes `patch` tool's contract (return the change back to the
+    caller) — the model should never have to guess whether its edit applied, or
+    whether it mangled a section. For a brand-new file (`created`) there is no
+    `before`, so the "diff" is the full new content. Capped ``_DIFF_MAX`` chars
+    so a very large file can't blow the model context budget.
+    """
+    if before is None or not before:
+        diff = after if after else status
+    else:
+        diff = ''.join(
+            difflib.unified_diff(
+                before.splitlines(keepends=True),
+                after.splitlines(keepends=True),
+                fromfile=f'a/{name}',
+                tofile=f'b/{name}',
+                n=1,
+            )
+        )
+    if not diff.strip():
+        return None
+    return diff[:_DIFF_MAX]
+
+
 def _write_result(
     name: str,
     mutation: MemoryMutation,
     old_text: str | None,
     *,
     status: str | None = None,
+    diff: str | None = None,
 ) -> MemoryWriteResult:
     if mutation.version is None:
         raise RuntimeError('memory write returned no version')  # pragma: no cover
@@ -568,7 +618,13 @@ def _write_result(
         typed_status = 'appended'
     else:
         typed_status = 'updated'
-    return {'file': name, 'version': mutation.version, 'replayed': mutation.replayed, 'status': typed_status}
+    return {
+        'file': name,
+        'version': mutation.version,
+        'replayed': mutation.replayed,
+        'status': typed_status,
+        'diff': diff,
+    }
 
 
 def _delete_result(name: str, mutation: MemoryMutation) -> MemoryDeleteResult:

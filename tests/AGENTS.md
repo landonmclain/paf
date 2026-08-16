@@ -83,6 +83,21 @@ recall/answer phase reads the same durable memory and a fresh consolidation is
 unneeded overhead (and an extra fragile live-LLM step). Only force fresh memory
 when the consolidation output itself is the thing under test.
 
+**Chunked seed consolidation (2026-08-16, DEFAULTS ON):** the owner now
+consolidates the seed in **token-bounded, message-boundary-aligned chunks**
+(`consolidate_conversation_chunked`, `src/paf/capabilities/memory/_consolidate.py`)
+instead of one giant pass, so single-mention thematic clusters (e.g. a "video
+editing / Premiere" preference dropped when a dense "photography" theme
+dominates) survive the owner's single-shot output budget. Each chunk pass runs
+against the SAME store with `inject_memory=True`, so later chunks merge into
+accumulated memory (append / newest-wins) rather than re-derive. Cut on whole
+message `User:`/`Assistant:` boundaries only — never mid-message — so multi-turn
+threads aren't bisected. Knobs (env):
+- `LME_CONSOL_CHUNK=0` → restore the original one-shot `consolidate_conversation`.
+- `LME_CONSOL_CHUNK_TOKENS` → chars/4 token budget per chunk (default `4000`).
+The live/eviction `consolidate()` path is UNCHANGED (still `inject_memory=False`,
+tool-read owner).
+
 **`MEMORY` is ON by default now** — no need to pass `MEMORY=1`. Every harness
 that shares the builder defaults to the memory arm, so a bare invocation is the
 fast baseline. Pass `MEMORY=0` for a no-memory ablation arm. If a multi-session

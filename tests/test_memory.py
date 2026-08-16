@@ -282,6 +282,45 @@ def test_toolset_roundtrip_innem() -> None:
     asyncio.run(_toolset_roundtrip(cap))
 
 
+def test_write_identity_replace_rejected() -> None:
+    """Passing content == old_text is a no-op that cannot move a fact between
+    sections; it must raise ModelRetry so the owner can't loop on it (the
+    2026-08-16 chunk-8 runaway: 48 identical write_memory calls burned the
+    request budget)."""
+
+    async def _t() -> None:
+        cap = Memory(store=InMemoryStore(), agent_name="test-agent")
+        ts = MemoryToolset(cap)
+
+        def ctx_for(i: int) -> _FakeCtx:
+            return _FakeCtx(run_id="run-id", tool_call_id=f"call-id-{i}")
+
+        line = '- User has an outdoor clothing line called "Viowear"...\n'
+        await ts.write_memory(ctx_for(1), content=line)
+
+        # Identical replace would silently "succeed" as a no-op under str.replace
+        try:
+            await ts.write_memory(ctx_for(2), content=line, old_text=line)
+            raise AssertionError("expected ModelRetry on identity no-op replace")
+        except Exception as exc:  # noqa: BLE001
+            assert type(exc).__name__ == "ModelRetry", exc
+            assert "no-op" in str(exc), exc
+
+        # A genuine relocation (edited content) still works — and the result must
+        # echo the applied diff so the model can confirm it landed (the _apply_guard
+        # + diff is the fix for the ownership loop; see MemoryWriteResult.diff).
+        moved = '# under Facts\n' + line
+        r = await ts.write_memory(ctx_for(3), content=moved, old_text=line)
+        assert r["status"] == "updated"
+        assert r["diff"] is not None, "write_memory must echo the applied diff"
+        assert "# under Facts" in r["diff"], r["diff"]
+        assert "- User has an outdoor clothing line" in r["diff"], r["diff"]
+        out = await ts.read_memory(ctx_for(4), file=MAIN_FILENAME)
+        assert "# under Facts" in out
+
+    asyncio.run(_t())
+
+
 async def _empty_scope_search(capability: Memory) -> None:
     """A fresh scope with no memory files returns an actionable string, not a bare empty match list.
 
