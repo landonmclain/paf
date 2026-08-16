@@ -5,6 +5,23 @@ working on the graded memory/retrieval benchmarks in this directory. These are
 **live LLM benchmarks** — they cost real OpenRouter tokens and write real Langfuse
 traces. Read before running.
 
+> **When unsure, lean on the traces, not the logs.** A run's stdout/log is the
+> harness's *narrative*; the Langfuse ClickHouse data is what actually happened
+> (which tool calls fired, in what order, how many LLM generations, what the model
+> actually saw in its input, error/retry deltas). When a log line and the traces
+> disagree — or the log is ambiguous (e.g. a wrapped/backgrounded process, an
+> interrupted tail, a `bash &` that detached the real child) — the **traces win**:
+> query `langfuse-clickhouse-1` for the run's `memory-owner run` / `lmem.recall.1` /
+> `lmem.judge.1` traces and read the `observations` for generation counts and tool
+> calls before trusting any log. Hermes agents can load the
+> `hermes-local-observability` skill (`references/clickhouse-trace-query.md`) for the
+> exact query patterns; non-Hermes agents should clickhouse-query
+> `langfuse-clickhouse-1` directly (`docker exec langfuse-clickhouse-1 clickhouse-client`)
+> filtering `traces` by `name`/`session_id`/timestamp window. A trace showing a
+> normal 1–3 generation-call owner is a *sane* consolidation; a run that spiked to
+> ~50 identical writes is the old chunk-loop — the traces distinguish them
+> instantly where the flat log cannot.
+
 ## What this is (2026-08 — grading pivot)
 
 The **graded gate** for M2 is **LongMemEval** only. LoCoMo and Beam-Lite are
