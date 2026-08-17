@@ -44,8 +44,6 @@ if TYPE_CHECKING:
 
     from ._capability import Memory
 
-from ._format import MEMORY_FORMAT
-
 logger = logging.getLogger(__name__)
 
 # Default: the subject feed model (deepseek, OpenRouter-qualified). Overridable
@@ -59,61 +57,47 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONSOL_MODEL = "openrouter:deepseek/deepseek-v4-flash-0731"
 
 CONSOLIDATION_GUIDANCE = """\
-You maintain this user's memory and are its only writer. You create, update,
-delete, and organize memory files. Nothing else does.
+You are the consolidation owner for this user's durable memory. You append
+records to an append-only journal — you never edit, move, or delete an existing
+record.
 
-Your input is a slice of recent conversation messages. Persist what is genuinely
-worth remembering long-term: decisions, preferences, conventions, lessons,
-commitments and pending actions, and stable facts about the user or project.
-Skip ordinary small talk and single-use instructions.
+Your input is a slice of conversation messages, each labeled with its turn
+address (`run_id:turn_id`) and the date it was said. As you read, persist what is
+genuinely worth remembering long-term: decisions, preferences, conventions,
+lessons, commitments and pending actions, and stable facts about the user or
+project. Skip ordinary small talk and single-use instructions.
 
-NEWER ALWAYS WINS: memory holds the current truth. When an older message
-contradicts what memory already records, update memory to the newest value —
-do not re-assert the older one, and do not leave conflicting entries. Produce
-the single current value. If a more precise value turns up in the input than
-memory currently holds (an exact figure where a vaguer one sits), update memory
-to the more precise value rather than keeping the vague one.
+APPEND AS YOU SEE IT. Read the chunk top to bottom. The moment you identify a
+durable fact, call `append_memory` for it — do not collect facts and dump them
+at the end, and do not make multiple passes over the text. Capture each fact in
+order as you encounter it, so the journal stays faithful to the conversation's
+sequence.
 
-Update in place; prefer a targeted edit over a duplicate append. Delete an
-entry when it is done or superseded.
+For each durable fact, call `append_memory(type, fact, born_on, source_ref)`
+exactly as the tool describes:
+- `type` — one of the six semantic kinds (`identity`, `preference`, `fact`,
+  `event`, `task`, `current`); pick the kind that best fits.
+- `fact` — a plain, self-contained statement, subject inline ("user prefers X",
+  "project uses Y").
+- `born_on` — the ISO date the fact was stated, from the message's label.
+- `source_ref` — the message's `{run_id}:{turn_id}` label, so the fact can be
+  traced and verified.
 
-Write bias — record EVERYTHING durable and every user-stated somatic
-(preferences, names, plans, decisions, pending actions); skip only truly
-incidental small talk. Pruning a kept entry is cheaper than missing it at
-compaction, so err toward writing it.
+You do not dedupe, merge, update, or delete — the journal is append-only. If the
+same subject appears again (even with a newer value), append a new record;
+newest-wins and dedup are resolved by the render pass, never by you. There is no
+bulk or multi-append tool; you write exactly one fact per call.
 
-{format_spec}
+Write bias — when in doubt, record it. Record EVERYTHING durable and every
+user-stated preference, name, plan, decision, and pending action; skip only
+incidental small talk.
 
-AFTER YOU WRITE — self-check the format. Re-read MEMORY.md as it now stands and
-verify it still conforms to the format above before you consider the consolidation
-done:
-- exactly ONE of each section header (## Facts, ## Preferences, ## Pending, ## Notes)
-  in that order, and nothing after the last one;
-- any lingering fact/pending from a PRIOR consolidation that the new merge
-  displaced is folded back under the correct section header — never leave a fact
-  stranded under a dangling or duplicate section header, never nest a second
-  header mid-file;
-- one fact per line, no stray blank prose under Facts/Preferences/Pending.
-If the file does not conform, fix it now with a memory write. Do not finish until
-the file matches the format exactly. Your final one-line reply should state what
-you changed (or "no changes") — and if you had to repair the structure, say so.
+Never invent facts not present in the messages. Record them plainly, with no
+notes about how or when you recorded them. Never claim you remembered something
+unless you actually appended it this turn.
 
-TOOL SEMANTICS — `write_memory(old_text, content)` REPLACES text in place. It
-CANNOT move a fact between sections/headers. To relocate a line from one section
-to another, pass the CORRECT section's whole block as `content` (replace that
-block), or rewrite the entire file in ONE write so the line appears under its
-right header. Never pass `content` that equals `old_text` — that is a no-op and
-will be rejected. Repairing structure back into shape is done with one full-file
-write, never many tiny edits.
-
-Deletion is permitted when an entry is done, superseded, or stale. Update is
-the default, but do not hoard dead entries. Do not delete on age alone if the
-fact is still true.
-
-Never invent facts not present in the messages or memory you were given.
-Record facts plainly — no notes about how or when you recorded them.
-
-Reply with one short line: what you changed, or "no changes" if nothing was durable.
+Reply with one short line: what you appended, or "no changes" if nothing was
+durable.
 """
 
 CONSOLIDATION_PROMPT = """\
@@ -189,7 +173,7 @@ def _build_owner_memory(
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=inject_memory,
-        guidance=CONSOLIDATION_GUIDANCE.format(format_spec=MEMORY_FORMAT),
+        guidance=CONSOLIDATION_GUIDANCE,
         writable=True,
     )
 

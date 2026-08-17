@@ -112,19 +112,24 @@ def test_window_default_store_scope(monkeypatch) -> None:
 
 
 def test_consolidation_guidance_is_owned_by_owner() -> None:
-    """The owner guidance enforces sole-writer + newer-always-wins semantics."""
-    assert "only writer" in CONSOLIDATION_GUIDANCE
-    assert "NEWER ALWAYS WINS" in CONSOLIDATION_GUIDANCE
-    assert "{format_spec}" in CONSOLIDATION_GUIDANCE  # format embedded at build time
+    """The owner guidance enforces append-only journal semantics."""
+    assert "append-only journal" in CONSOLIDATION_GUIDANCE
+    assert "append_memory" in CONSOLIDATION_GUIDANCE
+    assert "never edit, move, or delete" in CONSOLIDATION_GUIDANCE
+    assert "APPEND AS YOU SEE IT" in CONSOLIDATION_GUIDANCE
+    # The old in-place section-surgery contract must be gone.
+    assert "write_memory" not in CONSOLIDATION_GUIDANCE
+    assert "## Facts" not in CONSOLIDATION_GUIDANCE
+    assert "NEWER ALWAYS WINS" not in CONSOLIDATION_GUIDANCE
 
 
 def test_memory_format_pinned_sections_and_order() -> None:
     """The canonical MEMORY.md format declares exactly four sections, in order.
 
-    Both the subject's default guidance and the owner's consolidation manual
-    must embed the exact same MEMORY_FORMAT so the writer and reader agree on
-    the notebook shape by construction — if either stops carrying the format,
-    this test fails.
+    The subject's default guidance must embed the exact same MEMORY_FORMAT so
+    the writer and reader agree on the rendered notebook shape by construction.
+    The consolidation OWNER is append-only and does NOT carry the notebook
+    format — the render pass produces it.
     """
     from paf.capabilities.memory._capability import _DEFAULT_GUIDANCE
 
@@ -140,15 +145,18 @@ def test_memory_format_pinned_sections_and_order() -> None:
     # Write bias is explicit ("write too much") in the format.
     assert "WHEN IN DOUBT, RECORD IT" in MEMORY_FORMAT
     assert "## Pending" in MEMORY_FORMAT and "- [ ]" in MEMORY_FORMAT
-    # Both guidance strings carry the exact section block (single source of truth).
-    from paf.capabilities.memory._consolidate import _build_owner_memory
-
+    # The assistant's default guidance carries the exact section block
+    # (single source of truth for the rendered notebook).
     assert extract_sections(
         _DEFAULT_GUIDANCE.format(format_spec=MEMORY_FORMAT)
     ) == extract_sections(MEMORY_FORMAT)
+    # The consolidation owner is append-only — it does NOT carry the
+    # 4-section notebook format (the render produces it, not the owner).
+    from paf.capabilities.memory._consolidate import _build_owner_memory
+
     built_owner = _build_owner_memory(None, agent_name="assistant", namespace="")
     assert built_owner.guidance is not None
-    assert extract_sections(built_owner.guidance) == extract_sections(MEMORY_FORMAT)
+    assert extract_sections(built_owner.guidance) == []
 
 
 def test_consolidation_model_reads_config(monkeypatch) -> None:
@@ -213,7 +221,7 @@ def test_build_owner_is_single_writer_and_read_via_tools() -> None:
     assert isinstance(cap, Memory)
     assert cap.writable is True
     assert cap.inject_memory is False
-    assert cap.guidance == CONSOLIDATION_GUIDANCE.format(format_spec=MEMORY_FORMAT)
+    assert cap.guidance == CONSOLIDATION_GUIDANCE
 
 
 def test_resident_consolidate_text_none_when_empty() -> None:
