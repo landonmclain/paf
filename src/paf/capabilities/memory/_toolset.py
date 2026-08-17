@@ -41,6 +41,45 @@ _READ_TRUNCATION_MARKER = (
     '\n\n[Truncated: this file exceeds `max_memory_size`; edit it externally before using `write_memory`.]'
 )
 
+# Consecutive-identical tool-call guard, scoped to the memory-owner consolidation
+# agent. The owner (and only the owner) has been observed to get stuck in a
+# `read_memory`/`search_memory` loop — calling the same tool with the same args
+# over and over while the memory content is unchanged, burning model requests
+# until the pydantic-ai default `request_limit=50` trips a `UsageLimitExceeded`.
+# Same root failure as the identity-write no-op (`old_text == content`), but on
+# the read path where nothing raises — every `read_memory` *succeeds*, so the
+# built-in ModelRetry/max-retries machinery never engages (it only triggers on
+# tool *failure*). This guard tracks the identical-call streak per `Agent.run()`
+# (`ctx.run_id`) and, once a streak repeats the same tool+args:
+#   * at streak 3–4 it returns a plain *result* (a NUDGE telling the model to
+#     call a different tool or finish) — no retry budget is consumed, so the
+#     model gets graceful direction instead of a silent death;
+#   * at streak >= 5 it raises `ModelRetry`, whose cap is raised to
+#     `_OWNER_TOOL_MAX_RETRIES` for these read tools, so pydantic-ai escalates
+#     to `UnexpectedModelBehavior` after that many retries and the chunk loop in
+#     `_consolidate.py` aborts the chunk as a graceful partial consolidation.
+# The streak resets on any different tool call and on each new `Agent.run()`, so
+# a legitimate "read the two files once each" / different call is never punished.
+_OWNER_AGENT_NAME = 'memory-owner'
+# No-progress read-window guard thresholds. The owner consolidates by WRITING;
+# reads (`read_memory`/`search_memory`) are only preparation and never change
+# state. Once the owner has issued `_OWNER_NUDGE_READS` consecutive read-only
+# calls with NO write in between, it is stalling (not converging) — send it a
+# redirect nudge. If it keeps reading to `_OWNER_RETRY_READS`, raise ModelRetry
+# so pydantic-ai escalates and the chunk loop aborts gracefully.
+#
+# Escalation math (pydantic-ai semantics): the FIRST ModelRetry raised by the
+# guard records the ERROR in the trace; the tool's `retries=_OWNER_TOOL_MAX_RETRIES`
+# budget then admits `_OWNER_TOOL_MAX_RETRIES` FURTHER re-invocations before
+# pydantic-ai raises `UnexpectedModelBehavior`. So the hard exit lands at
+# `_OWNER_RETRY_READS + _OWNER_TOOL_MAX_RETRIES` reads. The soft nudge threads
+# (the `_OWNER_NUDGE_READS`..`_OWNER_RETRY_READS` window) are largely cosmetic —
+# a stalling model ignores them — the real stop is the ModelRetry + retry tail.
+_OWNER_NUDGE_READS = 3  # consecutive reads with no write -> redirect nudge
+_OWNER_RETRY_READS = 5  # consecutive reads with no write -> raise ModelRetry
+_OWNER_TOOL_MAX_RETRIES = 5  # per-tool `max_retries` for these read tools in the owner
+# => hard `UnexpectedModelBehavior` exit at read #10 (5 + 5).
+
 
 class MemoryWriteResult(TypedDict):
     """Result from `write_memory` — includes the applied diff so the model can
@@ -295,11 +334,112 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
     def __init__(self, capability: Memory[AgentDepsT], *, writable: bool = True) -> None:
         super().__init__(id='memory')
         self._capability = capability
-        self.add_function(self.read_memory, name='read_memory')
-        self.add_function(self.search_memory, name='search_memory')
+        # Per-run no-progress read-window guard state (see `_guard_repeat`).
+        # Counts consecutive read-only calls (`read_memory`/`search_memory`)
+        # with no intervening write, reset on each `Agent.run()` and on any
+        # `write_memory`/`delete_memory`.
+        self._guard_run: str | None = None
+        self._reads: list[str] = []  # sig of each consecutive read since last write/reset
+        self._guard_wrote: bool = False
+        # The read tools get a raised per-tool retry cap in the owner so the
+        # `ModelRetry` the guard raises at streak >= 5 has room to redirect
+        # before pydantic-ai escalates to `UnexpectedModelBehavior` (aborting the
+        # chunk). Per-tool `max_retries` wins over the owner agent's global retry
+        # setting (tool_manager derives it from `tool.max_retries` first).
+        self.add_function(self.read_memory, name='read_memory', retries=_OWNER_TOOL_MAX_RETRIES)
+        self.add_function(
+            self.search_memory,
+            name='search_memory',
+            retries=_OWNER_TOOL_MAX_RETRIES,
+        )
         if writable:
             self.add_function(self.write_memory, name='write_memory')
             self.add_function(self.delete_memory, name='delete_memory')
+
+    def _note_memory_write(self, ctx: RunContext[AgentDepsT]) -> None:
+        """Reset the no-progress read-window after a write/delete.
+
+        A write is the only *progress* a consolidation owner makes — it mutates
+        durable memory. Any `write_memory`/`delete_memory` clears the consecutive
+        read count so a healthy read-then-write rhythm is never mistaken for a
+        stall.
+        """
+        run_id = ctx.run_id
+        if run_id != self._guard_run:
+            self._guard_run = run_id
+        self._reads = []
+        self._guard_wrote = True
+
+    def _guard_repeat(
+        self, ctx: RunContext[AgentDepsT], tool_name: str, *, sig: str
+    ) -> str | None:
+        """Redirect the memory-owner agent out of a read-only stall.
+
+        The owner (built with ``name=_OWNER_AGENT_NAME``) consolidates by
+        WRITING — reads (`read_memory`/`search_memory`) are only preparation and
+        never change state. If the owner issues `_OWNER_NUDGE_READS` consecutive
+        read-only calls with NO intervening write, it is stalling: the content
+        it keeps re-reading is unchanged, and because those calls *succeed*,
+        none of pydantic-ai's built-in retry logic fires (it only triggers on
+        tool failure). Left alone this burns requests up to the run's
+        `request_limit` tripwire — the exact pathology that crashed chunk 8 of
+        the seed consolidation. This guard keys on *progress* (writes), not on
+        identical args, so it catches every non-converging loop shape —
+        identical reads, alternating `read`/`search`, and different-arg churn:
+
+          * at `_OWNER_NUDGE_READS` consecutive reads returns a **nudge** (a plain
+            result string) telling the model it is time to write and to stop
+            reading. Returning a result costs no retry budget, so the model gets
+            graceful direction rather than a silent partial-chunk death;
+          * at `_OWNER_RETRY_READS` consecutive reads raises `ModelRetry`.
+            Because these read tools are registered with
+            `retries=_OWNER_TOOL_MAX_RETRIES`, pydantic-ai escalates the retry
+            budget to `UnexpectedModelBehavior` after that many retries, and the
+            chunk loop in `_consolidate.py` catches it as a graceful partial
+            consolidation.
+
+        Returns ``None`` to let the tool run normally, or a nudge string to
+        short-circuit the tool with a redirect. Raises `ModelRetry` to start the
+        bounded escalation when the model ignores the nudges.
+
+        The read window resets on each `Agent.run()` (`ctx.run_id`), on any write
+        (via `_note_memory_write`), and the sig list keeps the nudge message
+        informative about *what* was re-read — but a different sig does NOT reset
+        the count, because alternating `read`/`search` is itself a stall.
+        """
+        # Guard is specific to the consolidation owner; anonymous / recall / live
+        # agents never use it.
+        owner = getattr(ctx.agent, 'name', None)
+        if owner != _OWNER_AGENT_NAME:
+            return None
+        run_id = ctx.run_id
+        if run_id != self._guard_run:
+            self._guard_run = run_id
+            self._reads = []
+            self._guard_wrote = False
+        if self._guard_wrote:
+            # A write already happened this run; don't punish a fresh read after it.
+            self._guard_wrote = False
+            self._reads = [sig]
+            return None
+        self._reads.append(sig)
+        n = len(self._reads)
+        repeated = any(self._reads.count(s) >= 2 for s in set(self._reads))
+        if n >= _OWNER_RETRY_READS:
+            raise ModelRetry(
+                f'You have made {n} read-only calls ({", ".join(dict.fromkeys(self._reads))}) '
+                'with NO write in between. Consolidation only makes progress by WRITING. '
+                'You must stop reading and call `write_memory` now (write the fact, update '
+                'the notebook, or finish this consolidation chunk).'
+            )
+        if n >= _OWNER_NUDGE_READS and repeated:
+            return (
+                f'You have made {n} read-only calls with no write in between, and you '
+                f'keep seeing the same content — it is {" / ".join(dict.fromkeys(self._reads))}. '
+                'It is time to write. No more reads: call `write_memory` to record the '
+                'fact (or the final notebook), or finish this consolidation chunk.'
+            )
+        return None
 
     async def write_memory(
         self,
@@ -329,6 +469,7 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
             old_text: Exact passage to replace, which must occur once.
         """
         capability = self._capability
+        self._note_memory_write(ctx)
         name = normalize_filename(file)
         if old_text is None and not content.strip():
             raise ModelRetry('Nothing to write -- pass the text to append, or `old_text` to replace.')
@@ -408,6 +549,9 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
             file: Memory filename returned by injection or search.
         """
         name = normalize_filename(file)
+        nudge = self._guard_repeat(ctx, 'read_memory', sig=f'read_memory:{name}')
+        if nudge is not None:
+            return nudge
         store, scope = self._capability.resolve_scope(ctx)
         with ctx.tracer.start_as_current_span(
             'memory.read', record_exception=False, set_status_on_exception=False
@@ -441,6 +585,7 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
             ctx: Framework-provided run context.
             file: Memory filename to delete.
         """
+        self._note_memory_write(ctx)
         name = normalize_filename(file)
         if name == MAIN_FILENAME:
             raise ModelRetry(f'{MAIN_FILENAME} is the main notebook; edit it with `write_memory` instead.')
@@ -491,6 +636,9 @@ class MemoryToolset(FunctionToolset[AgentDepsT]):
             query: Terms to find in memory filenames and content.
         """
         query = _normalize_search_query(query)
+        nudge = self._guard_repeat(ctx, 'search_memory', sig=f'search_memory:{query}')
+        if nudge is not None:
+            return nudge
         capability = self._capability
         store, scope = capability.resolve_scope(ctx)
         prefix = f'{scope}/'

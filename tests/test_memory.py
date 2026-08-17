@@ -63,10 +63,16 @@ class _NullTracer:
         return _NullSpan()
 
 
+class _FakeAgent:
+    def __init__(self, name: str | None) -> None:
+        self.name = name
+
+
 class _FakeCtx:
-    def __init__(self, run_id: str, tool_call_id: str) -> None:
+    def __init__(self, run_id: str, tool_call_id: str, *, agent: _FakeAgent | None = None) -> None:
         self.run_id = run_id
         self.tool_call_id = tool_call_id
+        self.agent = agent
         self.tracer = _NullTracer()  # type: ignore[assignment]
 
 
@@ -317,6 +323,122 @@ def test_write_identity_replace_rejected() -> None:
         assert "- User has an outdoor clothing line" in r["diff"], r["diff"]
         out = await ts.read_memory(ctx_for(4), file=MAIN_FILENAME)
         assert "# under Facts" in out
+
+    asyncio.run(_t())
+
+
+def test_owner_identical_read_guard() -> None:
+    """The memory-owner's repeated read-only `read_memory`/`search_memory`
+    calls with no intervening write must not run to the request-limit tripwire —
+    the no-progress read-window guard returns a redirect nudge at 3 consecutive
+    reads, then raises ModelRetry at 5 (2026-08-16 chunk-8 runaway: 50 reads
+    burned the request budget; hard `UnexpectedModelBehavior` exit lands at
+    5 + 5, i.e. read #10, after pydantic-ai's retry tail). The guard keys on
+    *progress* (writes), not identical args, so alternating `read`/`search` is
+    caught too.
+
+    Guarded paths are scoped to the *owner agent only*; a non-owner (None-name)
+    agent is never affected, and the window resets on a write and on a new run.
+    """
+
+    async def _t() -> None:
+        cap = Memory(store=InMemoryStore(), agent_name="memory-owner")
+        ts = MemoryToolset(cap)
+        owner = _FakeAgent("memory-owner")
+
+        def owner_ctx(i: int) -> _FakeCtx:
+            # Same run, same file → consecutive reads; only the tool_call_id changes
+            return _FakeCtx(run_id="run-1", tool_call_id=f"call-{i}", agent=owner)
+
+        # Reads 1–2: normal read result (not a nudge)
+        r1 = await ts.read_memory(owner_ctx(1), file=MAIN_FILENAME)
+        r2 = await ts.read_memory(owner_ctx(2), file=MAIN_FILENAME)
+        assert not r1.startswith("You have made"), r1
+        assert r1 == r2  # unchanged memory
+
+        # Read 3: the guard returns a plain redirect nudge (no ModelRetry)
+        r3 = await ts.read_memory(owner_ctx(3), file=MAIN_FILENAME)
+        assert r3.startswith("You have made"), r3
+        assert "It is time to write" in r3 and "3 read-only calls" in r3, r3
+
+        # Read 4: still nudging (not yet ModelRetry)
+        r4 = await ts.read_memory(owner_ctx(4), file=MAIN_FILENAME)
+        assert r4.startswith("You have made"), r4
+
+        # Read 5: ModelRetry (pydantic-ai escalates it against max_retries)
+        try:
+            await ts.read_memory(owner_ctx(5), file=MAIN_FILENAME)
+            raise AssertionError("expected ModelRetry on read 5")
+        except Exception as exc:  # noqa: BLE001
+            assert type(exc).__name__ == "ModelRetry", exc
+            assert "write in between" in str(exc), exc
+
+    asyncio.run(_t())
+
+
+def test_owner_guard_resets_and_is_scoped() -> None:
+    """The no-progress read guard only fires for the memory-owner agent, resets
+    on a write and on a new run — so a legitimate read-then-write rhythm and
+    fresh consolidation chunks are never penalized. A different sig does NOT
+    reset the window (alternating read/search is itself a stall)."""
+
+    async def _t() -> None:
+        cap = Memory(store=InMemoryStore(), agent_name="memory-owner")
+        ts = MemoryToolset(cap)
+        owner = _FakeAgent("memory-owner")
+        stranger = _FakeAgent("recall-agent")
+
+        # A non-owner agent: many reads are never nudged or retried.
+        for i in range(1, 8):
+            out = await ts.read_memory(
+                _FakeCtx(run_id="r", tool_call_id=f"c-{i}", agent=stranger),
+                file=MAIN_FILENAME,
+            )
+            assert not out.startswith("You have made"), (i, out)
+
+        # Owner: 2 reads normal, 3rd nudges.
+        for i in range(1, 4):
+            out = await ts.read_memory(
+                _FakeCtx(run_id="r-run", tool_call_id=f"a-{i}", agent=owner), file=MAIN_FILENAME
+            )
+            if i <= 2:
+                assert not out.startswith("You have made"), (i, out)
+            else:
+                assert out.startswith("You have made"), out
+        # A WRITE resets the window: next read is fresh (no nudge), even of the same file.
+        await ts.write_memory(
+            _FakeCtx(run_id="r-run", tool_call_id="w-1", agent=owner),
+            content="# Memory\n\n- new fact",
+            old_text=None,
+        )
+        after_write = await ts.read_memory(
+            _FakeCtx(run_id="r-run", tool_call_id="a-4", agent=owner), file=MAIN_FILENAME
+        )
+        assert not after_write.startswith("You have made"), after_write
+
+        # Alternating read/search (different sigs) still accumulates and fires:
+        # search(fact) -> read(MEMORY) -> search(fact) is 3 read-only calls with
+        # no write and a repeated sig (the observed read/search runaway shape).
+        await ts.search_memory(
+            _FakeCtx(run_id="r-run2", tool_call_id="s-1", agent=owner), query="fact one"
+        )
+        await ts.read_memory(
+            _FakeCtx(run_id="r-run2", tool_call_id="s-2", agent=owner), file=MAIN_FILENAME
+        )
+        mixed = await ts.search_memory(
+            _FakeCtx(run_id="r-run2", tool_call_id="s-3", agent=owner), query="fact one"
+        )
+        assert isinstance(mixed, str) and mixed.startswith("You have made"), mixed
+
+        # A fresh run resets everything: identical reads from run-3 start over.
+        for i in range(1, 4):
+            out = await ts.search_memory(
+                _FakeCtx(run_id="run-3", tool_call_id=f"s-{i}", agent=owner), query="durable fact"
+            )
+            if i <= 2:
+                assert not (isinstance(out, str) and out.startswith("You have made")), (i, out)
+            else:
+                assert isinstance(out, str) and out.startswith("You have made"), out
 
     asyncio.run(_t())
 
