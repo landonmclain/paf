@@ -10,8 +10,7 @@ cold-start and scored.
 Pipeline (mirrors tests/framework.py / ASSISTANT_PROFILE, one isolated temp store):
 
   - StepPersistence          full history to a FileStepStore
-  - ConversationSearch       BM25 wide fallback over that store
-  - TurnIndexCapability      injected tail index + read_turn / search_index
+  - ConversationSearch       BM25 wide fallback + read_turn over that store
   - Memory (markdown)        durable notebook, inject_memory=True
   - TieredCompaction         the no-summary ladder (target_tokens default 5000)
                              -- prunes live context so old sessions must be
@@ -61,14 +60,6 @@ from pydantic_ai_harness.step_persistence import (
     RunRecord,
 )
 
-from paf.capabilities.turn_index import (
-    Turn,
-    TurnIndexStore,
-    TurnSummarizer,
-    TurnSummary,
-    summarize_turn_append,
-)
-from paf.capabilities.turn_index._extract import build_turn_context
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -78,13 +69,10 @@ from paf.observability.instrumentation import (
 
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
 from tests.framework import (
-    ABLATE_TURN_INDEX,
     JUDGE_PROVIDER_ORDER,
     JUDGE_PROVIDER_QUANTIZATIONS,
     LME_SAMPLER_SEED,
     MEMORY,
-    SUBJECT_PROVIDER_ORDER,
-    SUBJECT_PROVIDER_QUANTIZATIONS,
     _build_agent,
     _openrouter_model_settings,
     _run_turn,
@@ -106,7 +94,6 @@ SUBJECT_MODEL = os.environ.get("BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/d
 # Landon's call: gpt-4o-mini on OpenRouter, reuse the repo OPENROUTER_API_KEY.
 JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
 
-MAX_LINES = int(os.environ.get("LOCOMO_MAX_LINES", "10"))
 # Same middle dial as the eviction sweep finding (see tests/framework.py docstring):
 # wide enough to keep ordinary exchanges in-context, tight enough that old
 # evidence sessions are evicted -> retrieval pressure stays ON.
@@ -123,9 +110,6 @@ DATA = Path(__file__).parent.parent / "data" / "benchmarks" / os.environ.get(
     "LME_DATA_FILE", "lme_oracle.json"
 )
 RESULTS_DIR = Path(__file__).parent / "results"
-# Durable seed summaries (committed, see snapshot_seed_index.py). The harness
-# REQUIRES these per-question; missing = error, no silent regeneration.
-GENERATED_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "generated"
 
 # Durable per-question MEMORY snapshots (committed, mirroring generated/ so a
 # fresh clone re-runs with ZERO owner/consolidation tokens). The owner writes
@@ -135,8 +119,7 @@ GENERATED_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / "generate
 # stem (memory-lme_oracle/, memory-longmemeval_s_cleaned/) so separate splits
 # never clobber each other's durable memory. PAF_FRESH_MEMORY=1 forces
 # re-consolidation (and re-persists); combining with LME_QIDS narrows the
-# refresh to specific questions — same shape as the PAF_FRESH_SEED / LME_QIDS
-# turn-index idiom.
+# refresh to specific questions.
 MEMORY_DURABLE_DIR = (
     Path(__file__).parent.parent
     / "data"
@@ -407,70 +390,24 @@ def _transcript_messages(
     return messages
 
 
-def _user_turn_units(messages: list[ModelMessage]) -> list[tuple[int, list[ModelMessage]]]:
-    """Group transcript messages into user-turn units: (turn_id, [msgs]).
-
-    `turn_id` = ordinal of the user-prompt anchor among the run's user
-    prompts -- exactly the ref model `read_turn('{run_id}:{turn_id}')` walks
-    (`_TurnFinder._render_turn` slices from the turn_id-th anchor to the next
-    user anchor). A unit is [user ModelRequest, *following assistant
-    ModelResponses]. A leading assistant message with no preceding user
-    anchor opens the first unit so no transcript content is dropped.
-    """
-    units: list[tuple[int, list[ModelMessage]]] = []
-    pending: list[ModelMessage] = []
-    for m in messages:
-        if isinstance(m, ModelRequest):
-            units.append((len(units), [m] + pending))
-            pending = []
-        elif units:
-            units[-1][1].append(m)
-        else:
-            pending.append(m)  # leading assistant message (defensive)
-    if pending and not units:
-        units.append((0, pending))
-    return units
-
-
 async def _persist_seed_direct(
     store: FileStepStore,
-    index_store: TurnIndexStore,
-    summarizer: TurnSummarizer | None,
     raw_turns: list[dict],
     cid: str,
     run_id: str,
-    *,
-    precomputed: dict[int, TurnSummary] | None = None,
-    skip_index: bool = False,
 ) -> tuple[list[dict], list[ModelMessage]]:
-    """Persist raw LME turns directly (no agent) and optionally index each turn.
+    """Persist raw LME turns directly into the store (no agent, no index).
 
-    Returns ``(rows, messages)`` where ``rows`` is the per-user-turn seed-row
-    list (as before) and ``messages`` is the full `ModelMessage` transcript
-    that was persisted (``raw_turns`` flattened). ``messages`` is returned so
-    callers can hand the *same* haystack to downstream consumers (e.g. the
-    memory-owner consolidation) without rebuilding it — and, importantly, so
-    they can assert it contains only pre-question content.
+    Returns ``(rows, messages)`` — ``rows`` is empty (there is no turn-index
+    seed-row list anymore) and ``messages`` is the full `ModelMessage`
+    transcript that was persisted (``raw_turns`` flattened). ``messages`` is
+    returned so callers can hand the *same* haystack to downstream consumers
+    (the memory-owner consolidation) without rebuilding it — and, importantly,
+    so they can assert it contains only pre-question content.
 
-    Writes ONE run record + ONE snapshot holding the full transcript (so
-    `search_conversation_history`/BM25 resolve), then summarizes each user-turn
-    unit with the REAL summarizer into the turn index. No LLM chat agent runs
-    during seed -- the only model calls are the summarizer's (the index
-    builder), which is the whole point: ~zero seed token burn and a CLEAN store
-    (no `User: assistant:` nesting, no tool-call pollution).
-
-    `precomputed` is the REUSE seam: when a turn_id has a durable `TurnSummary`
-    in it, that summary is used instead of calling the summarizer (so re-runs
-    reproduce the exact same index with ZERO summarizer tokens). When a turn_id
-    is absent from `precomputed`, the summarizer is called as usual -- keeping
-    this function the single mechanics path for the gate (`check_direct_seed`)
-    and the live-summarizer validation (`tiny_lmem`).
-
-    `skip_index=True` is the ABLATE_TURN_INDEX path: persist ONLY the raw run +
-    transcript for `search_conversation_history`/BM25 and skip the turn-index
-    summary work entirely (no summary calls, no index rows, `index_store`
-    untouched). Used when the pipeline has no TurnIndex to consume the index
-    (Landon: under ablation "we just don't need them at all").
+    Writes ONE run record + ONE snapshot holding the full transcript so
+    `search_conversation_history`/BM25 and `read_turn('{run_id}:{turn_id}')`
+    resolve — no LLM chat agent runs and no summarizer is called during seed.
     """
     messages = _transcript_messages(raw_turns, run_id, cid)
     await store.register_run(
@@ -485,157 +422,7 @@ async def _persist_seed_direct(
             messages=messages,
         )
     )
-    if skip_index:
-        # Ablation: no TurnIndex in the pipeline, so nothing reads the index.
-        # Persist raw store only; zero summarizer tokens, no index rows.
-        return [], messages
-
-    rows: list[dict] = []
-    units = _user_turn_units(messages)
-    missing = sorted(tid for tid, _ in units if tid not in (precomputed or {}))
-    if missing and summarizer is None:
-        # No durable summary AND no live summarizer to build one -> cannot
-        # index these turns. This is the STRICT guard: when a live summarizer
-        # is available (fallback path), missing turns are summarized on the fly
-        # instead so new questions can be indexed without a committed snapshot.
-        raise ValueError(
-            f"stale durable seed summaries: no summary for turn_id(s) {missing} "
-            "and no live summarizer. Regenerate with snapshot_seed_index.py, "
-            "or pass a summarizer to build them live."
-        )
-    if missing and summarizer is not None:
-        print(
-            f"[lmem]   _persist_seed_direct: {len(missing)} turn(s) missing "
-            f"durable summary -> summarized live: {missing[:5]}{'...' if len(missing) > 5 else ''}",
-            flush=True,
-        )
-    for turn_id, msgs in units:
-        turn = Turn(
-            run_id=run_id,
-            conversation_id=cid,
-            turn_id=turn_id,
-            messages=msgs,
-        )
-        # The source session id rides the message metadata (set by
-        # _transcript_messages from dia_id). Pull it so the index entry can
-        # carry it and search_index can surface it for ID-membership recall.
-        session_id = next(
-            (
-                (getattr(m, "metadata", None) or {}).get("source_session_id")
-                for m in msgs
-                if (getattr(m, "metadata", None) or {}).get("source_session_id")
-            ),
-            None,
-        )
-        rendered = build_turn_context(turn.messages)
-        if (precomputed or {}).get(turn_id) is not None:
-            summary = (precomputed or {})[turn_id]
-        elif summarizer is None:
-            raise RuntimeError(  # unreachable: both guards above cover this
-                "_persist_seed_direct: summarizer is None with no precomputed summary"
-            )
-        else:
-            summary = await summarizer.summarize(rendered)
-        appended, one_line = await summarize_turn_append(
-            turn=turn, index_store=index_store, summary=summary,
-            session_id=session_id,
-        )
-        rows.append(
-            {
-                "text": one_line,
-                "tools": [],
-                "tool_outputs": [],
-                "usage": {
-                    "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
-                    "cache_write_tokens": 0, "total_tokens": 0, "requests": 0,
-                },
-                "dia_id": turn.ref,
-                "conv_id": cid,
-                "direct": True,
-                "appended": appended,
-            }
-        )
-    return rows, messages
-
-
-def _persist_durable_summary(
-    qid: str,
-    index_store: TurnIndexStore,
-    *,
-    conversation_id: str | None,
-) -> int:
-    """Auto-persist a question's seed summaries to the durable store.
-
-    After `_persist_seed_direct` seeds a question into `index_store`, dump the
-    freshly-appended `TurnIndexEntry` rows for that conversation to
-    `data/benchmarks/generated/<qid>.jsonl` -- the SAME location and exact
-    record shape `snapshot_seed_index.py` writes (see `_load_precomputed_summaries`
-    for the reader). This is what keeps the durable store current: previously
-    the snapshots were ONLY written by manually running `snapshot_seed_index.py`
-    with explicit `--qids`, so new questions (esp. abstentions) were re-
-    summarized live on every run. Wiring it into the run means every seeded
-    question persists automatically, and future runs load it durably (zero
-    summarizer tokens). Idempotent: overwrites the per-question file in place.
-    """
-    entries = [
-        e for e in index_store.read_all(conversation_id=conversation_id)
-        if e.conversation_id == conversation_id
-    ]
-    entries.sort(key=lambda e: e.turn_id)
-    if not entries:
-        return 0
-    path = GENERATED_DIR / f"{qid}.jsonl"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {}
-    for e in entries:
-        payload[str(e.turn_id)] = {
-            "question_id": qid,
-            "turn_id": e.turn_id,
-            "summary": e.summary,
-            "key_terms": e.key_terms or [],
-            "outcome": e.outcome or "",
-        }
-    # snapshot_seed_index.py emits one JSON object per line in turn_id order.
-    lines = [json.dumps(payload[str(t)], ensure_ascii=False) for t in sorted(payload)]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return len(entries)
-
-
-def _load_precomputed_summaries(
-    question_id: str, *, strict: bool = True
-) -> dict[int, TurnSummary]:
-    """Load durable seed summaries for `question_id`.
-
-    Reads `GENERATED_DIR/<question_id>.jsonl` (committed via
-    `snapshot_seed_index.py`). In STRICT mode (default) a missing file raises
-    -- there is NO silent fallback to regenerating: the durable summaries are
-    the source of truth for a reproducible run. With `strict=False` (new
-    questions that don't have durable summaries yet) a missing file returns
-    `{}` so `_persist_seed_direct` falls through to its live summarizer --
-    the index is built on the fly that run and can be snapshotted afterward.
-    Stale/partial coverage is caught by `_persist_seed_direct` (every
-    user-turn unit must have a summary, or it's summarized live).
-    """
-    path = GENERATED_DIR / f"{question_id}.jsonl"
-    if not path.exists():
-        if strict:
-            raise FileNotFoundError(
-                f"durable seed summaries missing: {path}. Run "
-                "`tests/snapshot_seed_index.py` to generate them for this question."
-            )
-        return {}
-    out: dict[int, TurnSummary] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        rec = json.loads(line)
-        out[int(rec["turn_id"])] = TurnSummary(
-            sentence=rec["summary"],
-            key_terms=rec.get("key_terms") or [],
-            outcome=rec["outcome"],
-        )
-    return out
+    return [], messages
 
 
 def _copy_tree(src: Path, dst: Path) -> int:
@@ -701,10 +488,10 @@ def _restore_durable_memory(qid: str, live_dir: Path) -> int:
 def _extract_surfaced_session_ids(recall: dict) -> list[str]:
     """Pull the source-session ids the search tools surfaced this turn.
 
-    Both `search_index` (``session=...``) and `search_conversation_history`
-    (``| session: ...``) tag their matched refs with the evidence session id,
-    which is the generic `source_session_id` provenance carried on the seeded
-    messages (see `_transcript_messages`). We collect the union across all tool
+    Both `search_conversation_history` (``| session: ...``) and `read_turn`
+    tag their matched refs with the evidence session id, which is the generic
+    `source_session_id` provenance carried on the seeded messages (see
+    `_transcript_messages`). We collect the union across all tool
     outputs — the "retrieved top-k" any ranked retriever would return -- and
     return them in first-seen order. Empty when a run's outputs carry no such
     tags (e.g. older artifacts), which is the fallback trigger for the text
@@ -732,8 +519,8 @@ def _id_membership_recall(recall: dict, gold_ids: list[str]) -> dict:
     Official semantics (print_retrieval_metrics.py): recall is independent of
     the final answer and measured from the retrieval log -- whether the ground
     truth `answer_session_ids` appear among the ids the retriever surfaced.
-    `k` = the number of ids surfaced (the analog of top-k; `search_index`
-    returns `max_matches` rank-ordered refs per call).
+    `k` = the number of ids surfaced (the analog of top-k; `search_conversation_history`
+    returns rank-ordered refs per call).
 
     - `recall_all@k` = fraction of questions where ALL gold ids are surfaced
     - `ndcg_any@k`   = any gold id surfaced, position-weighted by rank
@@ -818,9 +605,8 @@ def main(argv: list[str] | None = None) -> dict:
     else:
         print(f"[run_lmem] tracing ON → Langfuse (session={session})", flush=True)
     print(f"[run_lmem] questions={len(questions)} subject={SUBJECT_MODEL} "
-          f"judge={JUDGE_MODEL} max_lines={MAX_LINES} "
-          f"target_tokens={LOCOMO_TARGET_TOKENS} "
-          f"real_summarizer=TurnSummarizer@{SUBJECT_MODEL}", flush=True)
+          f"judge={JUDGE_MODEL} "
+          f"target_tokens={LOCOMO_TARGET_TOKENS}", flush=True)
 
     all_seed_rows: list[dict] = []
     all_recall_rows: list[dict] = []
@@ -836,15 +622,10 @@ def main(argv: list[str] | None = None) -> dict:
     artifact_dir = RESULTS_DIR / session
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
-    index_dir = artifact_dir / "index"
     # The recall agent is built PER-QUESTION (inside the loop below) so its
-    # summarizer + memory-owner can be gated off when that question already
-    # has durable snapshots -- never call a model when the durable store
-    # already has the answer.
-    # Direct-seed writes (no agent loop) share the SAME store + index the
-    # recall agent reads: the index store is constructed here so seed rows
-    # land exactly where read_turn/search_index will look.
-    index_store = TurnIndexStore(index_dir)
+    # memory-owner can be gated off when that question already has a durable
+    # snapshot -- never call a model when the durable store already has the
+    # answer.
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,
@@ -855,7 +636,6 @@ def main(argv: list[str] | None = None) -> dict:
             "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
             "sw_keep": LOCOMO_SW_KEEP,
         },
-        "max_lines_index_tail": MAX_LINES,
         "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }, indent=2))
 
@@ -876,94 +656,22 @@ def main(argv: list[str] | None = None) -> dict:
 
         # ---- Seed the haystack sessions ------------------------------
         # DIRECT-PERSIST SEED (no agent loop): raw LME turns are written
-        # straight into the store + turn index with their TRUE roles. The
-        # index summaries come from the DURABLE committed store
-        # (`data/benchmarks/generated/`, see snapshot_seed_index.py), STRICT:
-        # a missing/stale file is a hard error -- no silent regeneration, so
-        # re-runs reproduce the exact same index with ZERO summarizer tokens.
-        # The store still persists the full transcript for read_turn /
-        # search_conversation_history resolution.
+        # straight into the store with their TRUE roles. The store persists
+        # the full transcript for `read_turn('{run_id}:{turn_id}')` /
+        # `search_conversation_history` resolution. No summarizer runs; no
+        # turn index exists anymore.
         run_id = f"seed-{cid}"
-        # Ablation (ABLATE_TURN_INDEX=1): no TurnIndex in the pipeline, so the
-        # turn-index summaries are not needed at all (Landon: "we just don't
-        # need them"). Persist the RAW turns only -- no precomputed read, no
-        # live summarizer, no index rows. search_conversation_history (BM25)
-        # reads the raw store directly.
-        if ABLATE_TURN_INDEX:
-            precomputed: dict[int, TurnSummary] | None = None
-            live_summarizer: TurnSummarizer | None = None
-            print(
-                f"[lmem]   q{qi} ABLATE_TURN_INDEX=1 -> raw seed only, "
-                f"NO index / NO summarizer",
-                flush=True,
-            )
-        else:
-            # Durable summaries where they exist (strict), else FALL BACK to a
-            # live summarizer for the index. New questions (5+) have no committed
-            # summaries yet, so build their index on the fly this run, then
-            # snapshot it afterward (snapshot_seed_index.py) so next time it's
-            # durable and strictly reused. Q1-4 (committed) stay zero-token.
-            precomputed = _load_precomputed_summaries(
-                q["question_id"], strict=False
-            )
-            live_summarizer: TurnSummarizer | None = None
-            if os.environ.get("PAF_FRESH_SEED"):
-                # FORCED FRESH SEED: ignore any durable cache and summarize every
-                # user-turn unit live with the subject model. Used to produce
-                # fresh-summary baselines; not for normal benchmark integrity runs.
-                precomputed = {}
-                live_summarizer = TurnSummarizer(
-                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6,
-                    provider_order=SUBJECT_PROVIDER_ORDER,
-                    quantizations=SUBJECT_PROVIDER_QUANTIZATIONS,
-                    seed=LME_SAMPLER_SEED,
-                )
-                print(
-                    f"[lmem]   q{qi} PAF_FRESH_SEED=1 -> live summarizer "
-                    f"for EVERY turn (durable cache ignored)",
-                    flush=True,
-                )
-            elif not precomputed:
-                live_summarizer = TurnSummarizer(
-                    model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6,
-                    provider_order=SUBJECT_PROVIDER_ORDER,
-                    quantizations=SUBJECT_PROVIDER_QUANTIZATIONS,
-                    seed=LME_SAMPLER_SEED,
-                )
-                print(
-                    f"[lmem]   q{qi} NO durable summaries -> live summarizer "
-                    f"(TurnSummarizer@{SUBJECT_MODEL})",
-                    flush=True,
-                )
         seed_rows, seed_msgs = asyncio.run(
             _persist_seed_direct(
-                store, index_store, live_summarizer, raw_turns, cid, run_id,
-                precomputed=precomputed,
-                skip_index=ABLATE_TURN_INDEX,
+                store, raw_turns, cid, run_id,
             )
         )
         all_seed_rows.extend(seed_rows)
         print(
-            f"[lmem]   q{qi} seeded {len(seed_rows)} user-turn units "
-            f"({'durable, 0 summarizer' if not live_summarizer else 'LIVE summarized'})",
+            f"[lmem]   q{qi} seeded {len(raw_turns)} raw turns (raw persist, "
+            f"no index / no summarizer)",
             flush=True,
         )
-        # Auto-persist this question's seed summaries to the durable store so
-        # future runs reuse them (zero summarizer tokens) instead of
-        # regenerating. Previously this required a manual snapshot_seed_index.py
-        # call, so new questions -- especially abstentions -- were re-summarized
-        # live on every run. Skip in ablation (no index rows to persist).
-        if not ABLATE_TURN_INDEX and seed_rows:
-            n = _persist_durable_summary(
-                q.get("question_id", f"q{qi}"), index_store,
-                conversation_id=cid,
-            )
-            if n:
-                print(
-                    f"[lmem]   q{qi} persisted {n} durable seed summaries -> "
-                    f"{GENERATED_DIR / (q.get('question_id', f'q{qi}') + '.jsonl')}",
-                    flush=True,
-                )
 
         # ---- Memory consolidation (MEMORY=1): owner folds the haystack ----
         # The live MemoryConsolidationWindow.compact() is DEAD on seeded data:
@@ -976,7 +684,7 @@ def main(argv: list[str] | None = None) -> dict:
         #     ONLY (see _raw_turns). The recall question/answer turn is asked
         #     AFTER seeding (_run_turn) and is NOT in this list — assert that so
         #     a future refactor can't leak the answer turn into the owner.
-        #   - Owner writes into mem_dir = index_dir.parent/"memory" — the same
+        #   - Owner writes into mem_dir = artifact_dir/"memory" — the same
         #     store _build_agent(MEMORY=1) reads (matches its default).
         # Pre-declare the per-question durable-memory state so the recall-agent
         # gating below always sees `restored` / `fresh_memory` bound, even when
@@ -998,14 +706,14 @@ def main(argv: list[str] | None = None) -> dict:
             assert q["question"] not in _seed_content, (
                 "seed turns must not contain the recall question (look-ahead leak)"
             )
-            mem_dir = index_dir.parent / "memory" / q["question_id"]
+            mem_dir = artifact_dir / "memory" / q["question_id"]
 
             # DURABLE MEMORY REUSE: if a committed snapshot exists for this
             # question (and we're not forcing fresh), copy it into the live
             # store and SKIP the owner entirely -- 0 owner tokens. The durable
             # snapshot is the source of truth for a reproducible run; refresh
             # it via PAF_FRESH_MEMORY=1 (all) or LME_QIDS=<qid> PAF_FRESH_MEMORY=1
-            # (specific), mirroring the turn-index PAF_FRESH_SEED idiom.
+            # (specific).
             restored = (
                 _restore_durable_memory(q["question_id"], mem_dir)
                 if not fresh_memory
@@ -1062,23 +770,16 @@ def main(argv: list[str] | None = None) -> dict:
         # consolidated (memory/<question_id>). Set on the framework module
         # global (a `from ... import` local alias would NOT update the module
         # global the store_resolver closure reads).
-        # The recall agent is built per-question, gating its summarizer +
-        # memory-owner on this question's durable state so no model fires when
-        # the durable store already has the answer (recall is read-only).
+        # The recall agent is built per-question, gating its memory-owner on
+        # this question's durable state so no model fires when the durable
+        # store already has the answer (recall is read-only).
         if MEMORY:
             import tests.framework as _rl
-            _rl._CURRENT_MEMORY_DIR = index_dir.parent / "memory" / q["question_id"]
-        if ABLATE_TURN_INDEX:
-            enable_summarizer = False
-        else:
-            enable_summarizer = bool(
-                os.environ.get("PAF_FRESH_SEED") or not precomputed
-            )
+            _rl._CURRENT_MEMORY_DIR = artifact_dir / "memory" / q["question_id"]
         use_memory_owner = not (MEMORY and restored and not fresh_memory)
         agent = _build_agent(
             store,
-            index_dir,
-            enable_summarizer=enable_summarizer,
+            memory_dir=artifact_dir / "memory",
             use_memory_owner=use_memory_owner,
         )
         qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
@@ -1160,7 +861,6 @@ def main(argv: list[str] | None = None) -> dict:
             "session": session,
             "n_questions": len(recall_rows),
             "data": str(DATA),
-            "max_lines_index_tail": MAX_LINES,
             "eviction": {
                 "target_tokens": LOCOMO_TARGET_TOKENS,
                 "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,

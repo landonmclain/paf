@@ -70,7 +70,7 @@ def test_id_membership_path_preferred_when_tags_present():
     row = _recall_row(
         gold_answer="anything",  # text not relevant; ids do the work
         answer_session_ids=["answer_abc_1"],
-        tool_outputs=["search_index -> session=answer_abc_1"],
+        tool_outputs=["search_conversation_history -> session=answer_abc_1"],
     )
     result = _id_membership_recall(row, ["answer_abc_1"])
     assert result["method"] == "id-membership"

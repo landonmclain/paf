@@ -25,9 +25,9 @@ import pytest
 from pydantic_ai_harness.compaction import TieredCompaction
 from pydantic_ai_harness.step_persistence import StepPersistence
 
+from paf.capabilities.memory import Memory
 from paf.capabilities.profiles import ASSISTANT_PROFILE
 from paf.capabilities.search import ConversationSearch
-from paf.capabilities.memory import Memory
 from paf.capabilities.turn_index import TurnIndexCapability
 from paf.specs import build_agent
 
@@ -198,17 +198,17 @@ def _find_summarizer(root: Any):
     return None
 
 
-def _build_recall_agent(enable_summarizer, use_memory_owner):
+def _build_recall_agent(use_memory_owner):
     """Drive tests.framework._build_agent (the recall-agent builder) both ways.
 
-    Returns (root, summarizer): the composed root capability and the
-    TurnIndexCapability's summarizer seam (None when gated off).
+    Returns (root, None): the composed root capability and a turn-index
+    summarizer seam (always None now — the benchmark builder no longer wires a
+    TurnIndex summarizer; see _build_agent).
     """
     import tests.framework as _rl
 
-    old_mem, old_abl = _rl.MEMORY, _rl.ABLATE_TURN_INDEX
-    _rl.MEMORY = use_memory_owner  # owner path only exists under MEMORY=1
-    _rl.ABLATE_TURN_INDEX = False
+    old_mem = _rl.MEMORY
+    _rl.MEMORY = True  # owner path only exists under MEMORY=1
     try:
         from pathlib import Path
         from tempfile import TemporaryDirectory
@@ -219,8 +219,7 @@ def _build_recall_agent(enable_summarizer, use_memory_owner):
             store = FileStepStore(directory=Path(td) / "store")
             agent = _rl._build_agent(
                 store,
-                Path(td) / "index",
-                enable_summarizer=enable_summarizer,
+                memory_dir=Path(td) / "memory",
                 use_memory_owner=use_memory_owner,
             )
             root = getattr(agent, "_root_capability", None) or getattr(
@@ -228,22 +227,39 @@ def _build_recall_agent(enable_summarizer, use_memory_owner):
             )
             return root, _find_summarizer(root)
     finally:
-        _rl.MEMORY, _rl.ABLATE_TURN_INDEX = old_mem, old_abl
+        _rl.MEMORY = old_mem
 
 
-def test_recall_agent_gates_summarizer_off_when_durable() -> None:
-    """Durable turn-index summaries => the recall agent wires summarizer=None.
+def test_turn_index_summarizer_seam_is_source_owned() -> None:
+    """The TurnIndex summarizer seam lives on the (intact) source capability.
 
-    run_lmem builds a per-question recall agent; when that question has durable
-    seed summaries (no PAF_FRESH_SEED), it must NOT carry an LLM summarizer so
-    `after_model_request` never calls the model on the recall turn.
+    Turn-index wiring was removed from the benchmark `_build_agent`, but the
+    source `TurnIndexCapability` still exposes its `summarizer` seam. A bare
+    capability keeps it when a summarizer is supplied and drops it when None —
+    pinning the intact source package's gating (the benchmark no longer drives
+    this, so it is validated against the source class directly).
     """
-    root_on, summ_on = _build_recall_agent(enable_summarizer=True, use_memory_owner=True)
-    assert _collect_capabilities(root_on) >= {TurnIndexCapability}
-    assert summ_on is not None, "summarizer present when not gated off"
+    import tempfile
+    from pathlib import Path
 
-    root_off, summ_off = _build_recall_agent(enable_summarizer=False, use_memory_owner=True)
-    assert summ_off is None, "summarizer gated OFF for durable qid"
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.capabilities.search import SnapshotHistorySource
+    from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
+
+    class _FakeSummarizer:  # any non-None object works for the seam check
+        pass
+
+    with tempfile.TemporaryDirectory() as td:
+        src = SnapshotHistorySource(FileStepStore(directory=Path(td) / "steps"))
+        idx = TurnIndexStore(Path(td) / "index")
+        cap_on = TurnIndexCapability(
+            source=src, index_store=idx, summarizer=_FakeSummarizer(),
+        )
+        assert _find_summarizer(cap_on) is not None, "summarizer present when supplied"
+
+        cap_off = TurnIndexCapability(source=src, index_store=idx, summarizer=None)
+        assert _find_summarizer(cap_off) is None, "summarizer absent when None"
 
 
 def test_recall_agent_gates_memory_owner_off_when_durable() -> None:
@@ -258,12 +274,12 @@ def test_recall_agent_gates_memory_owner_off_when_durable() -> None:
 
     from paf.capabilities.memory._window import MemoryConsolidationWindow
 
-    root_owner, _ = _build_recall_agent(enable_summarizer=True, use_memory_owner=True)
+    root_owner, _ = _build_recall_agent(use_memory_owner=True)
     comp_owner = _find_compaction(root_owner)
     assert comp_owner is not None
     assert any(type(t) is MemoryConsolidationWindow for t in comp_owner.tiers)
 
-    root_plain, _ = _build_recall_agent(enable_summarizer=True, use_memory_owner=False)
+    root_plain, _ = _build_recall_agent(use_memory_owner=False)
     comp_plain = _find_compaction(root_plain)
     assert comp_plain is not None
     assert not any(type(t) is MemoryConsolidationWindow for t in comp_plain.tiers)

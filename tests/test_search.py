@@ -1,13 +1,13 @@
 """Tests for the paf-owned `ConversationSearch` / `search_conversation_history`.
 
-Covers (a) the injected-artifact strip so marker-tagged `<turn-index>` /
-`<memory>` blocks never leak into the BM25 corpus -- the gap the harness version
-had -- and (b) the tool's BM25 mechanics (ranking, conversation scoping,
-run scoping, empty/N.C. fallbacks) that it inherited from the harness core.
+Covers (a) the injected-artifact strip so marker-tagged `<memory>` blocks
+never leak into the BM25 corpus -- the gap the harness version had -- and (b)
+the tool's BM25 mechanics (ranking, conversation scoping, run scoping,
+empty/N.C. fallbacks) that it inherited from the harness core.
 
 "Own the whole context search" means the corpus is built with the SAME strip
-convention as `read_turn` / `search_index`, so a search never surfaces an
-injected block. These tests pin that.
+convention as `read_turn`, so a search never surfaces an injected block.
+These tests pin that.
 """
 
 from __future__ import annotations

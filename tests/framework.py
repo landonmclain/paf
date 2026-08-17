@@ -21,11 +21,6 @@ from pydantic_ai_harness.compaction import (
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
-from paf.capabilities.turn_index import (
-    TurnIndexCapability,
-    TurnIndexStore,
-    TurnSummarizer,
-)
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -39,13 +34,12 @@ SUBJECT_MODEL = os.environ.get(
     "BEAM_LITE_SUBJECT_MODEL",
     "openrouter:deepseek/deepseek-v4-flash-0731",
 )
-MAX_LINES = int(os.environ.get("LOCOMO_MAX_LINES", "10"))  # injected index tail budget
 
 # --- eviction knobs ---------------------------------------------------------
 # target_tokens bounds the LIVE context window (TieredCompaction prunes messages
-# as the request overflows it). It does NOT touch the on-disk TurnIndexStore or
-# the persisted history -- so it only throttles in-context recognition, it does
-# not (and cannot) affect search_index / search_conversation_history recall.
+# as the request overflows it). It does NOT touch the on-disk history or the
+# persisted transcript -- so it only throttles in-context recognition, it does
+# not (and cannot) affect `search_conversation_history` recall.
 # 400 was far too tight: it forced compaction to spuriously evict evidence
 # turns mid-run. 5000 is a middle dial: enough to keep ordinary exchanges in
 # context while still evicting early evidence turns -> keeps retrieval pressure
@@ -54,14 +48,6 @@ MAX_LINES = int(os.environ.get("LOCOMO_MAX_LINES", "10"))  # injected index tail
 LOCOMO_TARGET_TOKENS = int(os.environ.get("LOCOMO_TARGET_TOKENS", "5000"))
 LOCOMO_SW_MAX_MESSAGES = int(os.environ.get("LOCOMO_SW_MAX_MESSAGES", "6"))
 LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
-
-# Retrieval-ladder knob. DEFAULT (unset) = NO turn index: the TurnIndexCapability
-# block is removed from the pipeline and ConversationSearch flips to
-# add_instructions=True so the plain BM25 search_conversation_history (plus the
-# read-only Memory notebook) is the retrieval ladder. This is the current intended
-# default. Set ABLATE_TURN_INDEX=0 to OPT BACK IN to the TurnIndex-owned ladder
-# (the 20-Q gated baseline, 0.8333 / recall 0.275, run lmem-20260812-133841).
-ABLATE_TURN_INDEX = os.environ.get("ABLATE_TURN_INDEX", "1") == "1"
 
 # Transient network-error retry knobs (bender-adjacent resilience). A single
 # OpenRouter/provider 5xx/429/408 blip should NOT kill a long graded run
@@ -177,9 +163,9 @@ MEMORY = os.environ.get("MEMORY", "1") == "1"
 
 # Per-question memory store for the running question (run_lmem only). The
 # subject agent is built once but must read the SAME per-question notebook the
-# consolidation owner writes. run_lmem sets this to `index_dir.parent /
-# "memory" / <question_id>` before each recall; tiny_lmem (single
-# conversation) leaves it None so the subject defaults to `mem_dir`.
+# consolidation owner writes. run_lmem sets this to `<memory_dir> /
+# <question_id>` before each recall; tiny_lmem (single conversation) leaves it
+# None so the subject defaults to `mem_dir`.
 _CURRENT_MEMORY_DIR: Path | None = None
 
 # Single system prompt owns ALL static guidance — identity, answer rules
@@ -250,87 +236,56 @@ SUBJECT_SYSTEM_PROMPT = (
 
 def _build_agent(
     store: FileStepStore,
-    index_dir: Path,
     *,
     memory_dir: Path | None = None,
-    enable_summarizer: bool = True,
     use_memory_owner: bool = True,
 ) -> Agent:
-    """Wire the full PAF pipeline (retrieval ladder ablatable).
+    """Wire the full PAF pipeline (retrieval ladder + durable memory).
 
-    The durable `Memory` capability is included by default (`MEMORY=1`), plus
+    The retrieval ladder is ConversationSearch + read_turn (paf-owned, no turn
+    index): in-context -> `search_conversation_history` -> `read_turn`, plus
+    the VERIFY-SPECIFICS rung — all steered by the single `SUBJECT_SYSTEM_PROMPT`
+    (capability instruction blocks are off).
+
+    The durable `Memory` capability is included by default (`MEMORY=1`), with
     the consolidation window that fires the owner on each eviction, targeting
-    ``memory_dir`` (default ``index_dir.parent / "memory"``) so a run never
-    touches repo `data/memory`. Set `MEMORY=0` for a no-memory ablation.
+    ``memory_dir`` (default ``memory_dir``; callers pass a run-scoped dir) so a
+    run never touches repo `data/memory`. Set `MEMORY=0` for a no-memory
+    ablation.
 
-    Per-question gating (used by run_lmem): when a question already has durable
-    turn-index summaries (`enable_summarizer=False`) the `TurnIndexCapability`
-    is wired with ``summarizer=None`` so `after_model_request` never calls the
-    LLM summarizer — the index is already populated for that question. When it
-    has a durable memory snapshot (`use_memory_owner=False`) the plain
+    Per-question gating (used by run_lmem): when a question already has a
+    durable memory snapshot (`use_memory_owner=False`) the plain
     `SlidingWindowCompaction` replaces `MemoryConsolidationWindow` so the owner
     sub-agent never fires. Building the agent per-question is cheap (both are
     config-only dataclasses — no model init at build time).
 
     Default: a single `system_prompt=` (SUBJECT_SYSTEM_PROMPT) owns ALL static
     guidance — identity, the CONFLICT/INFERENCE answer rules, and the retrieval
-    ladder (in-context -> search_conversation_history -> read_turn). Every
-    capability instruction block is OFF: ConversationSearch has
+    ladder. Every capability instruction block is OFF: ConversationSearch has
     add_instructions=False and Memory uses guidance="" (only the dynamic
     MEMORY.md body still injects), so the prompt IS the one source of recall
     steering. `search_memory` is deliberately not mentioned in the prompt (the
     notebook is always injected in-context).
-
-    ABLATE_TURN_INDEX (default 1): the TurnIndexCapability block is omitted
-    entirely; the ladder is purely ConversationSearch/search per the prompt.
-    Set ABLATE_TURN_INDEX=0 to include the index tail + search_index/read_turn
-    tools (instructions still off; the prompt names read_turn as rung 3).
 
     With MEMORY=1: the durable `Memory` capability is loaded (a plain capability,
     subject READ-ONLY / writable=False per the M2 owner model, so the subject
     can't contaminate durable memory) and the plain SlidingWindowCompaction tier
     is replaced by MemoryConsolidationWindow — the owner sub-agent (writable=True,
     the sole writer) folds each about-to-evict slice into ``memory_dir`` before
-    the window drops it. Default memory dir is a run-scoped sibling of
-    ``index_dir``.
+    the window drops it.
     """
     source = SnapshotHistorySource(store)
     caps = [
         StepPersistence(store=store),
-        # ConversationSearch: BM25 wide fallback. By default add_instructions=False
-        # because the TurnIndex ladder names search_conversation_history as its LAST
-        # rung; under ablation it flips to True -- it IS the ladder now.
+        # ConversationSearch: BM25 wide fallback (add_instructions=False — the
+        # single system prompt owns the retrieval ladder; this tool is just
+        # registered and named by the prompt).
         ConversationSearch(
             source=source,
             scope="conversation",
-            # Instructions ALWAYS off — the single system prompt (SUBJECT_SYSTEM_PROMPT)
-            # owns the retrieval ladder. This tool is just registered; the prompt names it.
             add_instructions=False,
         ),
     ]
-    if not ABLATE_TURN_INDEX:
-        # TurnIndex: injected tail index (max_lines bounds the tail), plus
-        # read_turn / search_index. Instructions ON — this is the SOLE
-        # system-prompt retrieval ladder (memory removed). ALWAYS-on real LLM
-        # summarizer: sentence + key_terms + outcome. Matches the reference in
-        # tiny_lmem. TurnSummarizer defaults its model to SUBJECT_MODEL;
-        # explicit keeps tool/model in one place.
-        caps.append(
-            TurnIndexCapability(
-                source=source,
-                index_store=TurnIndexStore(index_dir),
-                max_lines=MAX_LINES,
-                # Instructions off — SUBJECT_SYSTEM_PROMPT owns the ladder.
-                add_instructions=False,
-                summarizer=(
-                    TurnSummarizer(
-                        model=SUBJECT_MODEL, budget_chars=160, max_key_terms=6
-                    )
-                    if enable_summarizer
-                    else None
-                ),
-            )
-        )
     sw_tier: SlidingWindowCompaction
     if MEMORY:
         # Memory arm: durable notebook injected every request. Per the M2 owner
@@ -341,7 +296,7 @@ def _build_agent(
         from paf.capabilities.memory import Memory
         from paf.capabilities.memory._window import MemoryConsolidationWindow
 
-        mem_dir = memory_dir or (index_dir.parent / "memory")
+        mem_dir = memory_dir or Path("memory")
         # Per-question isolation (run_lmem): the subject's memory store must
         # track the SAME dir the consolidation owner writes. run_lmem sets
         # `_CURRENT_MEMORY_DIR` to `memory/<question_id>` before each recall
@@ -446,8 +401,8 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
     from pydantic_ai import capture_run_messages
 
     # Zero-tool fallback: plain Agent with NO capabilities = no tools, so it
-    # is physically incapable of calling search_index / read_turn and must
-    # answer from whatever the subject retrieved before the cut.
+    # is physically incapable of calling any retrieval tool and must answer
+    # from whatever the subject retrieved before the cut.
     cutoff_agent = Agent(
         os.environ.get("RECALL_CUTOFF_MODEL", SUBJECT_MODEL),
         system_prompt=(
