@@ -33,7 +33,9 @@ Decisions vs the harness original:
 from __future__ import annotations
 
 from ._capability import Memory
+from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord
 from ._markdown import MarkdownStorage
+from ._render import render_journal_memory, write_render
 from ._store import (
     FileStore,
     InMemoryStore,
@@ -65,7 +67,9 @@ from ._toolset import (
 __all__ = [
     "FileStore",
     "InMemoryStore",
+    "JournalStore",
     "MAIN_FILENAME",
+    "MEMORY_TYPES",
     "MarkdownStorage",
     "Memory",
     "MemoryConflictError",
@@ -74,6 +78,7 @@ __all__ = [
     "MemoryMutation",
     "MemoryOperation",
     "MemoryOperationConflictError",
+    "MemoryRecord",
     "MemorySearchMatch",
     "MemorySearchMatchResult",
     "MemorySearchResponse",
@@ -85,7 +90,9 @@ __all__ = [
     "lexical_search",
     "list_subfiles",
     "normalize_filename",
+    "render_journal_memory",
     "render_memory_prompt",
     "validate_store_path",
     "validate_store_prefix",
+    "write_render",
 ]

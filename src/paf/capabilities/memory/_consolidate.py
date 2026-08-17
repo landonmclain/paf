@@ -70,7 +70,9 @@ Skip ordinary small talk and single-use instructions.
 NEWER ALWAYS WINS: memory holds the current truth. When an older message
 contradicts what memory already records, update memory to the newest value —
 do not re-assert the older one, and do not leave conflicting entries. Produce
-the single current value.
+the single current value. If a more precise value turns up in the input than
+memory currently holds (an exact figure where a vaguer one sits), update memory
+to the more precise value rather than keeping the vague one.
 
 Update in place; prefer a targeted edit over a duplicate append. Delete an
 entry when it is done or superseded.

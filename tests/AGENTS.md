@@ -122,6 +122,18 @@ question ever spins in `search_index` (repeating the same two queries), that is
 the no-memory cold-retrieval signature — re-check that `MEMORY=0` didn't leak
 into the run — not a memory-arm bug.
 
+**Owner no-progress read guard (2026-08-16) — `_guard_repeat` in `_toolset.py`:**
+the memory-owner consolidates by WRITING, so `read_memory`/`search_memory` are
+only preparation. If the owner issues **3 consecutive read-only calls with no
+intervening write**, the tool returns a redirect nudge ("it is time to write");
+at **10 consecutive reads** it raises `ModelRetry`, which pydantic-ai escalates
+(after `_OWNER_TOOL_MAX_RETRIES=5`) to `UnexpectedModelBehavior` and the chunk
+loop in `_consolidate.py` aborts that chunk gracefully. A write
+(`write_memory`/`delete_memory`) resets the window; a different sig does NOT
+reset it (alternating `read`/`search` is itself a stall). This keys on *progress*,
+not identical args, so the 2026-08-16 chunk-8 50-read runaway can't recur. Scope:
+owner agent only — recall/live agents are untouched.
+
 **Bender guard (2026-08-13) — `RECALL_TOOL_CALLS_LIMIT` (default 25):**
 `_run_turn` caps tool calls per recall turn. On a runaway retrieval loop that
 would trip `request_limit=50` (the crash that killed earlier full-50 runs at
