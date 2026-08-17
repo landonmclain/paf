@@ -151,7 +151,7 @@ def _consolidation_model_settings() -> ModelSettings:
 
 
 def _build_owner_memory(
-    store, *, agent_name: str, namespace: str, inject_memory: bool = False
+    store, *, agent_name: str, namespace: str, inject_memory: bool = False, journal=None
 ) -> Memory:
     """Build the single-writer Memory capability the owner carries.
 
@@ -159,10 +159,13 @@ def _build_owner_memory(
     the existing eviction-slice owner reads the store through tools (never via
     injected context); pass ``inject_memory=True`` for the chunked seed variant
     (:func:`consolidate_conversation_chunked`) so each chunk pass sees the
-    cumulative ``MEMORY.md`` rendered in-context (the machinery in
+    cumulative rendered notebook in-context (the machinery in
     ``Memory.before_model_request`` re-reads the store every request), enabling
-    later chunks to append/merge instead of re-derive. Fixed
-    ``CONSOLIDATION_GUIDANCE``. Extracted so the ownership invariants are
+    later chunks to append instead of re-derive. ``journal`` is an optional
+    :class:`JournalStore` (M2 three-layer model): when set, the owner's toolset
+    exposes ONLY ``append_memory`` (append-only, no in-place edits) and the
+    rendered ``MEMORY.md`` is derived from the journal at recall time.
+    Fixed ``CONSOLIDATION_GUIDANCE``. Extracted so the ownership invariants are
     testable WITHOUT constructing an ``Agent`` (which resolves the model/provider
     and requires an API key).
     """
@@ -175,11 +178,12 @@ def _build_owner_memory(
         inject_memory=inject_memory,
         guidance=CONSOLIDATION_GUIDANCE,
         writable=True,
+        journal=journal,
     )
 
 
 def _build_owner(
-    store, *, agent_name: str, namespace: str, inject_memory: bool = False
+    store, *, agent_name: str, namespace: str, inject_memory: bool = False, journal=None
 ):
     """Construct the single-writer owner agent (writable=True, read-via-tools).
 
@@ -195,7 +199,11 @@ def _build_owner(
     ``CONSOLIDATION_GUIDANCE`` operating manual.
     """
     owner_memory = _build_owner_memory(
-        store, agent_name=agent_name, namespace=namespace, inject_memory=inject_memory
+        store,
+        agent_name=agent_name,
+        namespace=namespace,
+        inject_memory=inject_memory,
+        journal=journal,
     )
     owner = Agent(
         consolidate_model(),
@@ -219,6 +227,14 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
     system prompts (the instruction channel, not conversation), retries, native /
     tool-search / capability-load traffic, files, and compaction artifacts.
 
+    Each emitted message is labeled with its ``{run_id}:{turn_id}`` turn address
+    (the SAME convention :func:`search_conversation_history` labels and
+    :func:`read_turn` resolves — turn_id = ordinal of the message's user-prompt
+    anchor) and, when the message carries a ``source_date`` in its metadata, its
+    date. This is what lets the owner fill ``source_ref`` / ``born_on`` correctly:
+    it copies the label verbatim into ``append_memory`` so the journal record is
+    read_turn-resolvable and date-grounded.
+
     Injected artifacts (`<memory>` / `<turn-index>` user-prompt blocks tag their
     ``TextContent`` with a marker) are stripped via
     :func:`paf.capabilities._markers.injected_artifact_markers` so a snapshotted
@@ -233,6 +249,7 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
     )
 
     from paf.capabilities._markers import injected_artifact_markers
+    from paf.capabilities.turn_index._generate import user_anchor_indices
 
     markers = injected_artifact_markers()
 
@@ -259,21 +276,45 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
         joined = " ".join(texts).strip()
         return joined or None
 
+    # Precompute each message's `{run_id}:{turn_id}` ref (same walk as the
+    # conversation-search toolset: turn_id = ordinal of the message's greatest
+    # user-prompt anchor <= its index). Messages before any anchor get None.
+    runs = [getattr(m, "run_id", None) for m in messages]
+    anchors = user_anchor_indices(messages)
+    turn_refs: list[str | None] = []
+    for idx, _m in enumerate(messages):
+        tid = None
+        for a in range(len(anchors) - 1, -1, -1):
+            if anchors[a] <= idx:
+                tid = a
+                break
+        run_id = runs[idx]
+        turn_refs.append(f"{run_id}:{tid}" if run_id is not None and tid is not None else None)
+
+    def _label(role: str, idx: int) -> str:
+        ref = turn_refs[idx]
+        date = ""
+        md = getattr(messages[idx], "metadata", None) or {}
+        src_date = md.get("source_date")
+        if src_date:
+            date = f" [{src_date}]"
+        return f"{role} {ref}{date}:"
+
     lines: list[str] = []
-    for message in messages:
+    for idx, message in enumerate(messages):
         if isinstance(message, ModelRequest):
             for part in message.parts:
                 if isinstance(part, UserPromptPart):
                     content = _user_text(part)
                     if content:
-                        lines.append(f"User: {content}")
+                        lines.append(f"{_label('User', idx)} {_strip_inline_date(content)}")
                 # Everything else a request can carry (system prompt, tool return,
                 # retry, thinking, native / tool-search / capability-load traffic,
                 # file) is not durable user text — dropped.
         elif isinstance(message, ModelResponse):
             for part in message.parts:
                 if isinstance(part, TextPart):
-                    lines.append(f"Assistant: {part.content}")
+                    lines.append(f"{_label('Assistant', idx)} {part.content}")
                 # Tool calls, thinking, compaction — all dropped.
 
     if not lines:
@@ -321,6 +362,7 @@ async def consolidate_conversation(
     store,
     agent_name: str,
     namespace: str = "",
+    journal=None,
 ) -> None:
     """Fold a *full given* conversation into memory via the owner agent.
 
@@ -331,9 +373,16 @@ async def consolidate_conversation(
     history). The call site is responsible for passing only pre-question
     content (honest-memory guard) — this function folds exactly what it is
     handed.
+
+    ``journal`` (optional :class:`JournalStore`) switches the owner to the M2
+    append-only model (``append_memory`` only); ``MEMORY.md`` is rendered from
+    the journal at recall time.
     """
     owner, _owner_memory = _build_owner(
-        store, agent_name=agent_name, namespace=namespace
+        store,
+        agent_name=agent_name,
+        namespace=namespace,
+        journal=journal,
     )
     text = await resident_consolidate_text(messages)
     if not text:
@@ -372,6 +421,23 @@ async def consolidate_conversation(
 # bound on prompt size, not a hard token gate). Overridable via
 # `LME_CONSOL_CHUNK_TOKENS` (see `_chunk_token_budget`).
 _CHARS_PER_TOKEN = 4
+
+
+def _strip_inline_date(text: str) -> str:
+    """Strip a leading ``[date: ...]`` inline prefix (used for search/read_turn).
+
+    The harness prefixes the session datetime onto the FIRST turn of each session
+    so ``search_conversation_history`` / ``read_turn`` re-surface a time anchor.
+    The owner view already carries the date on EVERY message as an ISO label
+    (``[<source_date>]`` from metadata), so the redundant first-turn-only inline
+    prefix is dropped here to keep the owner's input to one clean date source —
+    it copies the ISO label verbatim into ``append_memory`` as ``born_on``.
+    """
+    if text.startswith("[date: "):
+        end = text.find("]")
+        if end != -1:
+            return text[end + 1 :].lstrip()
+    return text
 
 
 def _chunk_token_budget() -> int:
@@ -413,9 +479,15 @@ def _split_chunks(text: str, *, max_tokens: int) -> list[str]:
         current_chars = 0
 
     for line in lines:
-        # A new message starts when the line begins a User:/Assistant: marker.
-        # (Lines inside a message's content do not carry the marker.)
-        is_msg_start = line.startswith("User:") or line.startswith("Assistant:")
+        # A new message starts when the line begins a User/Assistant label:
+        # ``User <ref> [<date>]: <text>`` (role + space + turn ref) or the
+        # legacy ``User: <text>`` form. Lines inside a message's content do not
+        # carry the label.
+        is_msg_start = (
+            line.startswith("User:") or line.startswith("User ")
+            or line.startswith("Assistant:")
+            or line.startswith("Assistant ")
+        )
         line_chars = len(line) + 1  # +1 for the newline
 
         # If starting a new message would overflow the budget AND we already
@@ -438,6 +510,7 @@ async def consolidate_conversation_chunked(
     agent_name: str,
     namespace: str,
     chunk_max_tokens: int | None = None,
+    journal=None,
 ) -> None:
     """Consolidate a conversation into durable memory in token-bounded chunks.
 
@@ -450,12 +523,18 @@ async def consolidate_conversation_chunked(
     one-shot path drops under output-budget pressure. The owner is built with
     ``inject_memory=True`` only for this path; the live/eviction ``consolidate``
     keeps its tool-only owner unchanged.
+
+    ``journal`` (optional :class:`JournalStore`) switches the owner to the M2
+    three-layer model: it appends immutable facts via ``append_memory`` (its
+    ONLY tool) instead of in-place editing, and ``MEMORY.md`` is rendered from
+    the journal later (at recall time), not here.
     """
     owner, _owner_memory = _build_owner(
         store,
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=True,
+        journal=journal,
     )
     text = await resident_consolidate_text(messages)
     if not text:

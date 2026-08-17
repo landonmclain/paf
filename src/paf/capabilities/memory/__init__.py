@@ -54,6 +54,7 @@ from ._store import (
 )
 from ._toolset import (
     MAIN_FILENAME,
+    JournalAppendToolset,
     MemoryDeleteResult,
     MemorySearchMatchResult,
     MemorySearchResponse,
@@ -67,6 +68,7 @@ from ._toolset import (
 __all__ = [
     "FileStore",
     "InMemoryStore",
+    "JournalAppendToolset",
     "JournalStore",
     "MAIN_FILENAME",
     "MEMORY_TYPES",

@@ -6,7 +6,7 @@ import difflib
 import hashlib
 import json
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NotRequired
 
 from opentelemetry.trace import Span
 from pydantic_ai import ModelRetry
@@ -14,6 +14,7 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from typing_extensions import TypedDict
 
+from ._journal import MEMORY_TYPES, JournalStore
 from ._store import (
     MemoryConflictError,
     MemoryMutation,
@@ -84,8 +85,13 @@ _OWNER_TOOL_MAX_RETRIES = 5  # per-tool `max_retries` for these read tools in th
 class MemoryWriteResult(TypedDict):
     """Result from `write_memory` — includes the applied diff so the model can
     confirm its edit landed (and detect a mangled structure), mirroring how the
-    Hermes `patch` tool returns a diff rather than forcing a re-read."""
+    Hermes `patch` tool returns a diff rather than forcing a re-read.
 
+    ``memory`` is the appended/replaced fact text (used by ``append_memory`` in
+    the journal toolset to echo what was recorded); it is unset for the legacy
+    write path."""
+
+    memory: NotRequired[str | None]
     file: str
     version: str
     replayed: bool
@@ -321,6 +327,75 @@ def _apply_write(existing: str | None, content: str, old_text: str | None, name:
             '(in one write, so its old wording is gone).'
         )
     return existing.replace(old_text, content, 1), 'updated'
+
+
+class JournalAppendToolset(FunctionToolset[AgentDepsT]):
+    """The M2 owner's ONLY tool: ``append_memory`` -> :class:`JournalStore`.
+
+    The three-layer memory model makes the owner a pure *appender*: it reads
+    nothing through tools and edits nothing in place. It inspects the labeled
+    conversation slice in its prompt and calls ``append_memory`` once per
+    durable fact, writing an immutable record to the append-only journal. No
+    read/search/write/delete surface here — those tools stay on ``MemoryToolset``
+    (used by the assistant and the legacy in-place paths).
+    """
+
+    def __init__(self, journal: JournalStore) -> None:
+        super().__init__(id='memory')
+        self._journal = journal
+        self.add_function(self.append_memory, name='append_memory')
+
+    async def append_memory(
+        self,
+        ctx: RunContext[AgentDepsT],
+        type: str,
+        fact: str,
+        born_on: str,
+        source_ref: str,
+    ) -> MemoryWriteResult:
+        """Append ONE durable fact to the append-only memory journal.
+
+        The journal is write-once and never edited, moved, or deleted: each call
+        records a new immutable entry, and the memory notebook (``MEMORY.md``)
+        is re-rendered from the journal later (recency-wins, dedup handled by the
+        render pass — never by you). Write one fact per call, in the order you
+        encounter it.
+
+        Args:
+            type: One of the six semantic kinds — ``identity``, ``preference``,
+                ``fact``, ``event``, ``task``, ``current``.
+            fact: A plain, self-contained durable statement, subject inline
+                ("user prefers X", "project uses Y").
+            born_on: The ISO date the fact was stated, from the message's label.
+            source_ref: The message's ``{run_id}:{turn_id}`` label, so the fact
+                can be traced and verified via ``read_turn``.
+        """
+        with ctx.tracer.start_as_current_span(
+            'memory.append', record_exception=False, set_status_on_exception=False
+        ) as span:
+            if type not in MEMORY_TYPES:
+                raise ModelRetry(
+                    f"invalid memory type {type!r}; expected one of {sorted(MEMORY_TYPES)}"
+                )
+            try:
+                self._journal.append(
+                    type=type,
+                    fact=fact,
+                    born_on=born_on,
+                    source_ref=source_ref,
+                )
+            except ValueError as exc:
+                raise ModelRetry(str(exc)) from exc
+            if span.is_recording():
+                span.set_attributes({'memory.append.type': type})
+            return {
+                'memory': fact,
+                'file': MAIN_FILENAME,
+                'version': str(self._journal.count()),
+                'replayed': False,
+                'status': 'appended',
+                'diff': None,
+            }
 
 
 class MemoryToolset(FunctionToolset[AgentDepsT]):

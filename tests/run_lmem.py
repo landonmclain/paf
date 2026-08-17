@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -272,6 +273,27 @@ def _parse_dt(s: str) -> tuple:
     return (y, m, d, hh, mm)
 
 
+def _iso_date(s: str | None) -> str | None:
+    """Convert an LME date ('2023/04/10 (Mon) 23:07') to ISO-8601 (''/None -> None).
+
+    The consolidation owner's ``append_memory`` needs a ``born_on`` in ISO form
+    (lexically sortable == chronologically sortable). ``_parse_dt`` drops the time
+    when a weekday like ``(Mon)`` sits between the date and the time, so this
+    helper parses the date+time directly with a regex instead of ``_parse_dt``.
+    Returns ``None`` when there is no date so callers drop the ``source_date``
+    metadata key rather than emit a bogus value.
+    """
+    if not s:
+        return None
+    m = re.search(r"(\d{4})/(\d{1,2})/(\d{1,2})(?:[^0-9]*?(\d{1,2}):(\d{2}))?", s)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    hh = int(m.group(4)) if m.group(4) else 0
+    mm = int(m.group(5)) if m.group(5) else 0
+    return f"{y:04d}-{mo:02d}-{d:02d}T{hh:02d}:{mm:02d}:00+00:00"
+
+
 def _seed_turns(q: dict) -> tuple[list[dict], list[str]]:
     """Return datestamped seed turns (sorted by date) + their session id per turn.
 
@@ -330,7 +352,11 @@ def _raw_turns(q: dict) -> list[dict]:
                     "role": turn.get("role", "user"),
                     "content": turn.get("content", ""),
                     "dia_id": f"{sid}_t{i}",
-                    "date": dstr if i == 0 else "",
+                    # Every turn of the session carries the session's date so the
+                    # owner can label each message with a `born_on` (not just the
+                    # first turn). `_transcript_messages` uses it for the
+                    # `source_date` metadata seam.
+                    "date": dstr,
                 }
             )
     return out
@@ -353,22 +379,31 @@ def _transcript_messages(
     pipeline that persists turns from a dialogue can tag them the same way.
     """
     messages: list[ModelMessage] = []
+    prev_sid: str | None = None
     for t in raw_turns:
         text = t["content"]
         dia_id = t.get("dia_id", "")
-        # The session's datetime rides on the FIRST turn of each session
-        # (set by `_raw_turns` as a `date` key). Prefix it into the persisted
-        # content so `search_conversation_history` / `read_turn` re-surface the
-        # time anchor the model needs to resolve "how long ago"/"which first"
-        # against. Without this the dates exist only in the separate
-        # `haystack_dates` array and are dropped before the store is written.
-        date_prefix = t.get("date")
-        if date_prefix:
-            text = f"[date: {date_prefix}] {text}"
         # dia_id == "{sid}_t{i}"; the source session id is the part before the
         # last "_t<i>" (index may itself contain '_'); strip the _t suffix.
         sid = dia_id.rsplit("_t", 1)[0] if dia_id else None
-        metadata = {"source_session_id": sid} if sid else None
+        # Propagate the session's datetime into the metadata of EVERY message so
+        # the consolidation owner can label each message with a `born_on` (the
+        # `source_date` seam `resident_consolidate_text` reads). This is what
+        # keeps the date alive for non-first turns -- it was previously dropped.
+        iso_date = _iso_date(t.get("date"))
+        metadata: dict = {"source_date": iso_date} if iso_date else {}
+        if sid:
+            metadata["source_session_id"] = sid
+        # The session's datetime ALSO rides inline on the FIRST turn of each
+        # session (session-id change) so `search_conversation_history` /
+        # `read_turn` re-surface the time anchor the model needs to resolve
+        # "how long ago"/"which first" against. Only the first turn: prefixing
+        # every message would pollute content and duplicate the source_date
+        # already in metadata.
+        is_fresh_session = sid is not None and sid != prev_sid
+        if is_fresh_session and t.get("date"):
+            text = f"[date: {t['date']}] {text}"
+        prev_sid = sid
         if t["role"] == "assistant":
             messages.append(
                 ModelResponse(
@@ -749,17 +784,35 @@ def main(argv: list[str] | None = None) -> dict:
                 else:
                     consolidation = consolidate_conversation
                     chunk_label = "one-shot"
+                # M2 three-layer model: the owner appends immutable facts to an
+                # append-only journal (`append_memory` is its ONLY tool), and
+                # MEMORY.md is rendered from the journal AT RECALL (below), not
+                # per chunk. The assistant's Memory injection reads MEMORY.md
+                # from this same dir, so rendering here makes it populate.
+                from paf.capabilities.memory._journal import JournalStore
+                from paf.capabilities.memory._render import write_render
+
+                journal = JournalStore(mem_dir)
                 asyncio.run(
                     consolidation(
                         seed_msgs,
                         store=store_mem,
                         agent_name="assistant",
                         namespace="",
+                        journal=journal,
                     )
                 )
                 print(
                     f"[lmem]   q{qi} consolidated {len(seed_msgs)} seed msgs "
                     f"({chunk_label}) (up to question) into {mem_dir}",
+                    flush=True,
+                )
+                # Render the journal -> MEMORY.md at recall: the subject's
+                # injected notebook is the recall presentation of the journal.
+                _rendered = write_render(journal, str(mem_dir / "MEMORY.md"))
+                print(
+                    f"[lmem]   q{qi} rendered {journal.count()} journal records "
+                    f"-> MEMORY.md ({len(_rendered)} chars) for recall",
                     flush=True,
                 )
                 _persist_durable_memory(q["question_id"], mem_dir)

@@ -21,9 +21,11 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AgentToolset
 
 from ._format import MEMORY_FORMAT
+from ._journal import JournalStore
 from ._store import InMemoryStore, MemoryStore, validate_store_path
 from ._toolset import (
     MAIN_FILENAME,
+    JournalAppendToolset,
     MemoryToolset,
     injection_listing_limit,
     list_subfiles,
@@ -184,6 +186,18 @@ class Memory(AbstractCapability[AgentDepsT]):
     and is the sole writer.
     """
 
+    journal: JournalStore | None = field(default=None, kw_only=True)
+    """Optional append-only journal the owner writes through the model.
+
+    When set (with ``writable=True``), :meth:`get_toolset` returns a
+    journal-append toolset exposing ONLY ``append_memory`` (which appends to
+    this journal). This is the M2 three-layer model: the owner never edits,
+    moves, or deletes memory — it appends immutable facts to the journal, and
+    the render pass (``_render.write_render``) produces ``MEMORY.md`` from it
+    at recall time. The legacy 4-tool ``MemoryToolset`` (read/search/write/
+    delete) remains in source for the non-journal / in-place paths.
+    """
+
     _resolved_scope: tuple[MemoryStore, str] | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -217,7 +231,15 @@ class Memory(AbstractCapability[AgentDepsT]):
         return store, scope
 
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:
-        """Provide the stable `memory` toolset."""
+        """Provide the stable `memory` toolset.
+
+        When this capability is journal-backed (`journal` set), the owner's
+        surface is ONLY ``append_memory`` (M2 three-layer model). Otherwise it
+        is the legacy ``writable``-gated ``MemoryToolset`` (read/search plus
+        write/delete when ``writable``).
+        """
+        if self.journal is not None:
+            return JournalAppendToolset(self.journal)
         return MemoryToolset(self, writable=self.writable)
 
     def get_instructions(self) -> AgentInstructions[AgentDepsT] | None:

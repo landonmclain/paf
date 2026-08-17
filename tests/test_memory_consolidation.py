@@ -340,7 +340,7 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
             fed.append(prompt)
             return type("R", (), {"output": "no changes"})()
 
-    def _fake_build_owner(store, *, agent_name, namespace, inject_memory=False):
+    def _fake_build_owner(store, *, agent_name, namespace, inject_memory=False, journal=None):
         return _FakeOwner(), None
 
     monkeypatch.setattr(cons, "_build_owner", _fake_build_owner)
