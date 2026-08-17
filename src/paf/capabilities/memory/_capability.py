@@ -186,6 +186,19 @@ class Memory(AbstractCapability[AgentDepsT]):
     and is the sole writer.
     """
 
+    expose_tools: bool = True
+    """Whether this capability registers ANY memory tools.
+
+    ``False`` ⇒ :meth:`get_toolset` returns ``None``: no ``read_memory`` /
+    ``search_memory`` / ``write_memory`` / ``delete_memory`` / ``append_memory``
+    surface at all. This is the M2 recall (assistant) side: the journal-rendered
+    notebook is injected in-context via :meth:`before_model_request` and the
+    recall ladder is ``search_conversation_history`` / ``read_turn``
+    (ConversationSearch) — NOT memory tools. Memory here is injection-only.
+    The consolidation owner keeps ``expose_tools=True`` (its only tool is
+    ``append_memory`` via the journal toolset).
+    """
+
     journal: JournalStore | None = field(default=None, kw_only=True)
     """Optional append-only journal the owner writes through the model.
 
@@ -238,6 +251,11 @@ class Memory(AbstractCapability[AgentDepsT]):
         is the legacy ``writable``-gated ``MemoryToolset`` (read/search plus
         write/delete when ``writable``).
         """
+        if not self.expose_tools:
+            # Injection-only memory: the assistant carries NO memory tools. The
+            # journal-rendered notebook is injected in-context and the recall
+            # ladder is ConversationSearch (search_conversation_history/read_turn).
+            return None
         if self.journal is not None:
             return JournalAppendToolset(self.journal)
         return MemoryToolset(self, writable=self.writable)
@@ -402,6 +420,7 @@ class Memory(AbstractCapability[AgentDepsT]):
         guidance: str | None = None,
         injection_errors: Literal['ignore', 'raise'] = 'ignore',
         writable: bool = True,
+        expose_tools: bool = True,
     ) -> Memory[AgentDepsT]:
         """Construct a memory capability from serializable options.
 
@@ -439,6 +458,7 @@ class Memory(AbstractCapability[AgentDepsT]):
             guidance=guidance,
             injection_errors=injection_errors,
             writable=writable,
+            expose_tools=expose_tools,
         )
 
     @classmethod

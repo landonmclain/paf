@@ -320,19 +320,32 @@ def _build_agent(
         # lets one agent serve every question's notebook without a rebuild.
         # For a single-conversation runner `_CURRENT_MEMORY_DIR` stays
         # None so the store defaults to `mem_dir` as before.
-        from paf.capabilities.memory import MarkdownStorage as _MarkdownStorage
+        from paf.capabilities.memory._view import JournalViewStore as _JournalViewStore
 
         def _mem_store(_ctx):
             root = _CURRENT_MEMORY_DIR or mem_dir
-            return _MarkdownStorage(root)
+            return _JournalViewStore(root)
 
         caps.append(
             Memory(
-                store=_MarkdownStorage(mem_dir),
+                store=_JournalViewStore(mem_dir),
                 store_resolver=_mem_store,
                 agent_name="assistant",
                 inject_memory=True,
                 writable=False,
+                # The recall/assistant carries NO memory tools: the journal-
+                # rendered notebook is injected in-context, and the recall
+                # ladder is search_conversation_history/read_turn (Conversation-
+                # Search), not memory tools. Inject-only memory.
+                expose_tools=False,
+                # The journal view is a finite, curated render of the journal —
+                # never a growing legacy notebook. Inject it WHOLE: no line or
+                # token budget gating (the legacy `render_memory_prompt` head/
+                # tail truncation is for MarkdownStorage's unbounded MEMORY.md,
+                # not for our journal-rendered view). Max-lines/max-tokens high
+                # so the full notebook passes through verbatim.
+                max_lines=1_000_000,
+                max_tokens=65_536,
                 # guidance="" disables the Memory instruction block entirely —
                 # the single system prompt owns all static guidance. Only the
                 # dynamic MEMORY.md body still injects (before_model_request).
