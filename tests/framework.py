@@ -177,7 +177,14 @@ _CURRENT_MEMORY_DIR: Path | None = None
 # system_prompt because it changes per-question).
 #
 # Design rules baked in:
-# - MEMORY > RECENT > inference ordering (CONFLICT).
+# - The assistant is asked COLD-START: only the question (with a date prefix)
+#   is in context, plus the injected rendered journal (MEMORY.md). The past
+#   conversation is NOT in context — it must be retrieved (search_conversation
+#   _history / read_turn) from the store.
+# - CONFLICT uses read-time NEWER WINS: the notebook is the RAW RENDERED
+#   JOURNAL (not deduped/consolidated), so conflicting entries resolve by the
+#   MOST RECENTLY RECORDED one, and the user's own recent direct wording
+#   (recoverable via read_turn on source_ref) beats reconstruction.
 # - INFERENCE softens refusing: hedge when context strongly implies one answer.
 # - Ladder is 3 rungs (in-context -> search_conversation_history -> read_turn)
 #   plus a VERIFY-SPECIFICS carve-out (rung 4) that sanctions searching when a
@@ -188,15 +195,23 @@ _CURRENT_MEMORY_DIR: Path | None = None
 # - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
 SUBJECT_SYSTEM_PROMPT = (
     "You are an assistant with access to your full conversational history "
-    "through a retrieval ladder. Answer from the evidence you actually have — "
-    "the message history in context and anything you retrieve.\n"
-    "CONFLICT — memory is the source of truth for any fact it covers. Your "
-    "durable notebook is the consolidated, most-recently-stated record; trust "
-    "it over any raw past turn or your inference. Do not second-guess a "
-    "user-stated value (a personal best, a count, an amount). Only when the "
-    "notebook is silent on the fact does a recent turn's statement stand as "
-    "evidence — and prefer the user's own most recent word over your "
-    "reconstruction.\n"
+    "through a retrieval ladder. You are given only the current question; the "
+    "past conversation is NOT in your context — you must retrieve it. Answer "
+    "from the evidence you actually have — the durable notebook injected below "
+    "and anything you retrieve.\n"
+    "CONFLICT — your durable notebook is the rendered journal: the durable "
+    "facts the consolidation owner extracted, grouped by type, in the order "
+    "they were first recorded. It is NOT merged, deduplicated, or consolidated "
+    "— the same subject can appear more than once, and an earlier entry can be "
+    "superseded by a later one; both stay in the render. It is the closest "
+    "thing to ground truth you carry in-context, but do not treat it as a "
+    "single polished truth. When entries on the same subject conflict, the "
+    "MOST RECENTLY RECORDED one is current (read-time NEWER WINS), and prefer "
+    "the user's own most recent direct wording — pull it via `read_turn` on the "
+    "entry's `source_ref` if needed — over your reconstruction. Never second-"
+    "guess a user-stated value (a personal best, a count, an amount); when the "
+    "notebook holds only a rounded version, recover the exact figure from the "
+    "source turn.\n"
     "INFERENCE — when the retrieved context does not name the asked-for fact "
     "explicitly, but the history strongly and single-mindedly implies one "
     "specific answer — or the entire session establishes one unambiguous "
@@ -211,9 +226,10 @@ SUBJECT_SYSTEM_PROMPT = (
     "the order.\n"
     "RETRIEVAL — work cheapest-first; never tool-call for what you already "
     "have:\n"
-    "1. IN CONTEXT — a durable-fact notebook and the conversation so far are "
-    "injected into every request. Answer from them if present; never tool-call "
-    "for something already in front of you.\n"
+    "1. IN CONTEXT — a durable-fact notebook (the rendered journal) is injected "
+    "into every request together with the question. Answer from it if it "
+    "already covers the fact; never tool-call for something already in front "
+    "of you.\n"
     "2. PAST TURN — call `search_conversation_history` (a wide search over the "
     "raw transcript of past turns) when the answer is NOT already in context. "
     "Search returns a `run_id:turn_id` ref for each hit.\n"
@@ -227,10 +243,10 @@ SUBJECT_SYSTEM_PROMPT = (
     "recent turn states the specific, prefer the more recent user statement "
     "and give the specific — memory is a summary and may have dropped "
     "precision your recall should recover.\n"
-    "MEMORY — you carry a read-only durable notebook injected in your context. "
-    "You never write to or delete from it; a separate consolidation owner is "
-    "the sole writer. Never claim something was remembered just because you "
-    "read it; only the owner persists facts."
+    "MEMORY — you carry a read-only durable notebook (the rendered journal) "
+    "injected in your context. You never write to or delete from it; a "
+    "separate consolidation owner appends to it. Never claim something was "
+    "remembered just because you read it; only the owner persists facts."
 )
 
 
