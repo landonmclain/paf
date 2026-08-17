@@ -193,8 +193,10 @@ _CURRENT_MEMORY_DIR: Path | None = None
 # Design rules baked in:
 # - MEMORY > RECENT > inference ordering (CONFLICT).
 # - INFERENCE softens refusing: hedge when context strongly implies one answer.
-# - Ladder is 2 rungs (in-context, then search_conversation_history) plus
-#   read_turn to expand a hit's full turn. `search_memory` is deliberately NOT
+# - Ladder is 3 rungs (in-context -> search_conversation_history -> read_turn)
+#   plus a VERIFY-SPECIFICS carve-out (rung 4) that sanctions searching when a
+#   question asks for an exact value memory only holds vaguely/rounded.
+#   `search_memory` is deliberately NOT
 #   mentioned: the notebook is always injected in-context, so pointing at a
 #   separate notebook tool only muddies the waters.
 # - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
@@ -232,6 +234,13 @@ SUBJECT_SYSTEM_PROMPT = (
     "3. READ FULL TURN — when a search hit gives you a ref but not the full "
     "detail, call `read_turn` on that ref to pull the turn's complete content. "
     "Skip rungs that don't apply.\n"
+    "4. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
+    "a count, a name, an amount) and memory holds only a vague or rounded "
+    "version, it is in-scope — not a violation of 'don't second-guess' — to "
+    "`search_conversation_history` for the user's original wording. If a more "
+    "recent turn states the specific, prefer the more recent user statement "
+    "and give the specific — memory is a summary and may have dropped "
+    "precision your recall should recover.\n"
     "MEMORY — you carry a read-only durable notebook injected in your context. "
     "You never write to or delete from it; a separate consolidation owner is "
     "the sole writer. Never claim something was remembered just because you "
