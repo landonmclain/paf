@@ -511,6 +511,91 @@ def test_search_recency_folds_newer_hit_to_front(tmp_path: Path) -> None:
     asyncio.run(go())
 
 
+def test_search_turn_nudge_orders_same_date_turns(tmp_path: Path) -> None:
+    """Within a session (same date), the turn-ordinal nudge ranks the later turn first.
+
+    The `source_date` is SESSION-granular (one datetime propagated to every message
+    in the session), so the date recency fold cannot separate two turns that share a
+    session — it returns the same boost for both. The added normalized turn nudge
+    (`turn_weight * tid/max_tid`) is the only thing that breaks this same-session
+    tie, ordering the HIGHER (later) turn ahead of the LOWER (earlier) turn.
+
+    The two query-relevant turns (tid 0 and tid 2) are separated by a long unrelated
+    filler turn so their context windows don't overlap into a single merged hit; both
+    carry the SAME session date, so recency_boost is identical (1.0 each) and only the
+    turn nudge decides the order.
+    """
+    filler = " ".join(f"unrelated filler line {i}." for i in range(30))
+    store = _mk_store(
+        tmp_path,
+        {
+            "c1": [
+                *_msg_dated(
+                    user="my charity 5K personal best is 27 minutes 45 seconds",
+                    assistant="good",
+                    iso="2023-05-22T10:41:00+00:00",
+                ),
+                *_msg_dated(
+                    user=filler,
+                    assistant="ok",
+                    iso="2023-05-22T10:41:00+00:00",
+                ),
+                *_msg_dated(
+                    user="my charity 5K personal best is 26 minutes 30 seconds",
+                    assistant="nice",
+                    iso="2023-05-22T10:41:00+00:00",
+                ),
+            ],
+        },
+    )
+    ts = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=1,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        recency_weight=0.5,
+        recency_half_life_days=30.0,
+        turn_weight=0.5,  # within-session turn nudge on — later turn wins
+        scope="all",
+    )
+    ts_noturn = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=1,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        recency_weight=0.5,
+        recency_half_life_days=30.0,
+        turn_weight=0.0,  # turn nudge off — same-session tie throws to BM25 order
+        scope="all",
+    )
+
+    def first_turn_header(out: str) -> str:
+        """Extract the `turn:` ref from the FIRST (top-ranked) hit's header line."""
+        for line in out.splitlines():
+            if "turn: run-c1:" in line:
+                return line.split("turn: run-c1:", 1)[1].split("|", 1)[0].strip()
+        raise AssertionError(f"no turn header in:\n{out}")
+
+    async def go():
+        out = await ts.search_conversation_history(_FakeCtx("c1"), "charity 5K personal best")
+        assert first_turn_header(out) == "2", (
+            "later same-session turn (tid 2) should rank first under the turn nudge:\n" + out
+        )
+        out_noturn = await ts_noturn.search_conversation_history(_FakeCtx("c1"), "charity 5K personal best")
+        # Without the turn nudge, equal BM25 + equal date keeps the earlier turn
+        # (tid 0, the 27:45) at the top — BM25 preserves first-seen order on ties.
+        assert "27 minutes 45" in out_noturn, out_noturn
+        assert out_noturn.find("27 minutes 45") < out_noturn.find("26 minutes 30"), (
+            "without the turn nudge the earlier turn keeps top rank:\n" + out_noturn
+        )
+
+    asyncio.run(go())
+
+
 def test_search_loop_guard_nudges_then_raises(tmp_path: Path) -> None:
     """Repeated `search_conversation_history` with no `read_turn` is a stall.
 

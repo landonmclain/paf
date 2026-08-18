@@ -129,6 +129,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         bm25_b: float,
         recency_weight: float = 0.1,
         recency_half_life_days: float = 30.0,
+        turn_weight: float = 0.1,
         scope: SearchScope = "all",
     ) -> None:
         super().__init__(id=tool_id)
@@ -146,12 +147,15 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             raise ValueError(
                 f"recency_half_life_days must be > 0, got {recency_half_life_days!r}."
             )
+        if turn_weight < 0:
+            raise ValueError(f"turn_weight must be >= 0, got {turn_weight!r}.")
         self._source = source
         self._max_matches = max_matches
         self._context_lines = context_lines
         self._params = Bm25Params(k1=bm25_k1, b=bm25_b)
         self._recency_weight = recency_weight
         self._recency_half_life_days = recency_half_life_days
+        self._turn_weight = turn_weight
         self._scope: SearchScope = scope
         self._finder = TurnFinder(source)
         # Per-run search-loop guard state (see `_guard_search`): counts consecutive
@@ -298,7 +302,17 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # is in [0, recency_weight], and the default weight (0.1) stays well below
         # one BM25 IDF unit, so it only breaks genuine near-ties and never overrides
         # a real relevance gap. Undated candidates get no boost (treated as stale).
-        blended: list[dict] = []  # {doc_idx, score, date}
+        #
+        # The date is SESSION-granular (one datetime per source session, propagated
+        # to every message in it), so it cannot order turns WITHIN a session. To
+        # recover within-session recency we also fold ``turn_id`` (ordinal of the
+        # message's user-prompt anchor within its run = one run per session) in as a
+        # small, separately-weighted, NORMALIZED nudge: ``turn_weight * tid/max_tid``
+        # where the denominator is the largest turn_id among candidate hits in the
+        # SAME run. [0, turn_weight], so it only separates messages that share a
+        # session (equal date) and never disturbs the cross-session date ranking or
+        # a real BM25 relevance gap.
+        blended: list[dict] = []  # {doc_idx, score, date, run, tid}
         for doc_idx, score in ranked:
             section_idx, line_idx = locations[doc_idx]
             section = sections[section_idx]
@@ -307,7 +321,16 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 if section.dates is not None and line_idx < len(section.dates)
                 else None
             )
-            blended.append({"doc_idx": doc_idx, "score": score, "date": dso})
+            run, tid = None, None
+            if section.turn_refs is not None and line_idx < len(section.turn_refs):
+                tref = section.turn_refs[line_idx]
+                if tref and ":" in tref:
+                    run, tid_str = tref.rsplit(":", 1)
+                    if tid_str.isdigit():
+                        tid = int(tid_str)
+            blended.append(
+                {"doc_idx": doc_idx, "score": score, "date": dso, "run": run, "tid": tid}
+            )
         anchor_ts = max(
             (b["date"] for b in blended if b["date"] and b["date"] != ""),
             default="",
@@ -318,6 +341,21 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                     b["score"] += self._recency_weight * recency_boost(
                         b["date"], anchor_ts, self._recency_half_life_days
                     )
+        if self._turn_weight:
+            # Within-session normalization: for each candidate that carries a turn
+            # ordinal, divide by the largest turn_id among candidate hits in the
+            # SAME run so long/short sessions are on the same [0,1] footing.
+            max_tid_by_run: dict[str, int] = {}
+            for b in blended:
+                if b["run"] is not None and b["tid"] is not None:
+                    max_tid_by_run[b["run"]] = max(
+                        max_tid_by_run.get(b["run"], -1), b["tid"]
+                    )
+            for b in blended:
+                if b["run"] is not None and b["tid"] is not None:
+                    m = max_tid_by_run.get(b["run"])
+                    if m:
+                        b["score"] += self._turn_weight * (b["tid"] / m)
         blended.sort(key=lambda b: b["score"], reverse=True)
 
         results: list[str] = []
