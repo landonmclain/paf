@@ -506,11 +506,22 @@ def _restore_durable_memory(qid: str, live_dir: Path) -> int:
     files (MD bodies + the CAS sidecar) back into ``memory/<qid>/`` so the
     subject's normal ``store_resolver`` path reads the exact consolidated
     notebook — ZERO owner tokens for the question.
+
+    Layout normalization: pre-journal snapshots (committed before the M2 journal,
+    e.g. the `memory-lme_oracle/` legacy snapshot set) stored ``MEMORY.md`` under
+    an agent-scoped ``assistant/`` subdir, but the current journal-view store
+    reads ``MEMORY.md`` at the ``memory/<qid>/`` root. When the snapshot has an
+    ``assistant/`` subdir we flat-copy that subdir up to the live root (reuse the
+    legacy durable verbatim — DO NOT re-consolidate, which would change content
+    and break the comparison). Journal-format snapshots (``MEMORY.md`` +
+    ``memory-journal.jsonl`` at root, e.g. ``memory-longmemeval_s_cleaned/``)
+    copy as-is. Keyed off snapshot shape, not data-stem, so both coexist.
     """
     snap = MEMORY_DURABLE_DIR / qid
     if not snap.is_dir():
         return 0
-    n = _copy_tree(snap, live_dir)
+    _src = snap / "assistant" if (snap / "assistant").is_dir() else snap
+    n = _copy_tree(_src, live_dir)
     if n:
         print(
             f"[lmem]     REUSED {n} durable memory files -> {live_dir} "
