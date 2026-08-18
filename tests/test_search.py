@@ -34,8 +34,9 @@ from paf.capabilities.search import ConversationSearchToolset
 
 
 class _FakeCtx:
-    def __init__(self, conversation_id):
+    def __init__(self, conversation_id, run_id="run-test"):
         self.conversation_id = conversation_id
+        self.run_id = run_id
 
 
 def _mk_store(tmp_path: Path, conversations: dict[str, list[object]]) -> FileStepStore:
@@ -86,6 +87,18 @@ def _msg(*, user: str, assistant: str = "", injected: list[str] | None = None) -
     req = ModelRequest(parts=[UserPromptPart(content=content)])
     if assistant:
         return [req, ModelResponse(parts=[TextPart(assistant)])]
+    return [req]
+
+
+def _msg_dated(*, user: str, assistant: str = "", iso: str) -> list[object]:
+    """Like `_msg` but tags every message with `source_date` + `source_session_id`
+    provenance (the shape `run_lmem` writes, which the search tool surfaces)."""
+    metadata = {"source_date": iso, "source_session_id": "answer_abc_0"}
+    req = ModelRequest(
+        parts=[UserPromptPart(content=user)], run_id="run-c1", conversation_id="c1", metadata=metadata
+    )
+    if assistant:
+        return [req, ModelResponse(parts=[TextPart(assistant)], run_id="run-c1", conversation_id="c1", metadata=metadata)]
     return [req]
 
 
@@ -282,14 +295,18 @@ def test_run_scoped_search(tmp_path: Path) -> None:
     # light check: run-scoping still resolves. A malformed run_id yields nothing.
 
     async def go():
-        out = await ts.search_conversation_history(_FakeCtx("c1"), "8080")
+        # Each search here is a distinct fake run (distinct ctx.run_id), which the
+        # search loop-guard treats as a fresh start — so these stay independent and
+        # don't trip the "3 searches with no read_turn" nudge. (Their only purpose
+        # is run-scoping mechanics; the guard's looping behavior is tested separately.)
+        out = await ts.search_conversation_history(_FakeCtx("c1", run_id="r1"), "8080")
         assert "8080" in out, out
         out = await ts.search_conversation_history(
-            _FakeCtx("c1"), "8080", run_id="run-c1"
+            _FakeCtx("c1", run_id="r2"), "8080", run_id="run-c1"
         )
         assert "8080" in out, out
         out = await ts.search_conversation_history(
-            _FakeCtx("c1"), "8080", run_id="nonexistent-run"
+            _FakeCtx("c1", run_id="r3"), "8080", run_id="nonexistent-run"
         )
         assert "No persisted history for run" in out, out
 
@@ -372,6 +389,141 @@ def test_search_hit_carries_turn_ref_for_read_turn(tmp_path: Path) -> None:
         assert "BLUE scaly body" in full, full
         # Reading must return the durable content, NOT an injected artifact.
         assert "<turn-index>" not in full, full
+
+    asyncio.run(go())
+
+
+def test_search_hit_carries_source_date(tmp_path: Path) -> None:
+    """A `search_conversation_history` hit now labels the message's source datetime.
+
+    The model needs "when" to resolve newer-wins / which-happened-first from the
+    hit itself, instead of re-searching to recover ordering (the trigger of the
+    search loop that hit the request limit). The date rides on the label line the
+    same way `session:` / `turn:` do -- the tool returns text, so it must be in
+    the string the model reads.
+    """
+    store = _mk_store(
+        tmp_path,
+        {
+            "c1": [
+                *_msg_dated(
+                    user="I finished the January novel, 416 pages",
+                    assistant="congrats",
+                    iso="2023-05-22T10:41:00+00:00",
+                ),
+                *_msg_dated(
+                    user="and in March I finished a 300 page book",
+                    assistant="nice",
+                    iso="2023-05-24T09:00:00+00:00",
+                ),
+            ]
+        },
+    )
+    ts = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=2,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        scope="conversation",
+    )
+
+    async def go():
+        out = await ts.search_conversation_history(_FakeCtx("c1"), "January novel 416")
+        # The matched hit carries its ISO source date on the label.
+        assert "date: 2023-05-22T10:41:00+00:00" in out, out
+        out = await ts.search_conversation_history(_FakeCtx("c1"), "March 300 page book")
+        assert "date: 2023-05-24T09:00:00+00:00" in out, out
+
+    asyncio.run(go())
+
+
+def test_search_loop_guard_nudges_then_raises(tmp_path: Path) -> None:
+    """Repeated `search_conversation_history` with no `read_turn` is a stall.
+
+    The guard nudges at 3 consecutive searches (redirect string, no retry budget
+    spent) and raises `ModelRetry` at 5 — a bounded stop that keeps a looping recall
+    from burning the run's request limit (the 24-search pathology that hit the limit).
+    A `read_turn` in between IS progress and resets the streak.
+    """
+    store = _mk_store(
+        tmp_path,
+        {
+            "c1": [
+                *_msg(
+                    user="tell me about the avalanche beacon in my pack",
+                    assistant="it's a BCA Tracker 3",
+                ),
+            ]
+        },
+    )
+    ts = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=2,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        scope="conversation",
+    )
+    ctx = _FakeCtx("c1", run_id="loop-run")
+
+    async def go():
+        from pydantic_ai import ModelRetry
+
+        # Searches 1–2 run normally (they return real results).
+        for _ in range(2):
+            out = await ts.search_conversation_history(ctx, "avalanche beacon")
+            assert "avalanche beacon" in out, out
+        # 3rd search hits the nudge (a redirect string, NOT the search result).
+        out = await ts.search_conversation_history(ctx, "avalanche beacon again")
+        assert "You are looping" in out, out
+        # 4th search keeps nudging.
+        out = await ts.search_conversation_history(ctx, "BCA Tracker 3")
+        assert "You are looping" in out, out
+        # 5th search raises ModelRetry (bounded stop).
+        try:
+            await ts.search_conversation_history(ctx, "pack beacon")
+            raise AssertionError("expected ModelRetry")
+        except ModelRetry:
+            pass
+
+    asyncio.run(go())
+
+
+def test_search_guard_resets_on_read_turn(tmp_path: Path) -> None:
+    """`read_turn` after a search is retrieval progress and resets the loop guard."""
+    store = _mk_store(
+        tmp_path,
+        {
+            "c1": [
+                *_msg(user="the avalanche beacon is in my pack", assistant="noted"),
+            ]
+        },
+    )
+    ts = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=2,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        scope="conversation",
+    )
+    ctx = _FakeCtx("c1", run_id="reset-run")
+
+    async def go():
+        out = await ts.search_conversation_history(ctx, "avalanche beacon")
+        assert "avalanche beacon" in out, out
+        # Expanding a hit resets the streak.
+        full = await ts.read_turn(ctx, "run-c1:0")
+        assert "beacon" in full, full
+        # Now the loop can survive several more searches without tripping, because
+        # each one after a read_turn is treated as a fresh, progressing search.
+        for _ in range(4):
+            out = await ts.search_conversation_history(ctx, "beacon pack")
+            assert "beacon" in out, out
 
     asyncio.run(go())
 

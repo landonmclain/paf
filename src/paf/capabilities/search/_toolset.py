@@ -17,7 +17,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic_ai import RunContext
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
@@ -63,6 +63,23 @@ _CONVERSATION_SCOPE_NOTE = (
     "conversations in the same store are not reachable."
 )
 
+# ---------------------------------------------------------------------------
+# Search loop guard (recall ladder)
+# ---------------------------------------------------------------------------
+# An agent that issues N consecutive `search_conversation_history` calls with NO
+# intervening `read_turn` (full-turn expansion) is looping on a theme — re-running
+# near-identical searches in the hope of a different snippet while the context only
+# grows with each result. That is the exact pathology that burned one recall to the
+# request limit (24 searches, zero read_turn). `read_turn` after a search IS retrieval
+# progress (it expands a hit to full content), so it resets the streak. The guard keys
+# on progress (did it expand a hit?), not identical args, so it catches every
+# non-converging loop shape — identical queries, alternating phrases, and churn.
+_SEARCH_NUDGE = 3  # consecutive searches w/o read_turn -> return a redirect nudge
+_SEARCH_RETRY = 5  # consecutive searches w/o read_turn -> raise ModelRetry
+# Per-tool retry cap so the `ModelRetry` the guard raises has room to redirect before
+# pydantic-ai escalates to `UnexpectedModelBehavior` (a spurious hard abort).
+_SEARCH_TOOL_RETRIES = 5
+
 
 @dataclass
 class _RunSection:
@@ -77,6 +94,13 @@ class _RunSection:
     # LongMemEval ID-membership against `answer_session_ids`. General: any
     # message tagged with `metadata['source_session_id']` surfaces it here.
     session_ids: list[str | None] | None = None
+    # Parallel to `index_lines`/`display_lines`: the message's source datetime
+    # as ISO (`metadata['source_date']`, None when absent). Lets a search hit
+    # label carry `date=<iso>` so the model can resolve "newer wins" / "which
+    # happened first" directly from the hit metadata instead of re-searching to
+    # discover the ordering. General: any message tagged with
+    # `metadata['source_date']` surfaces it here.
+    dates: list[str | None] | None = None
     # Parallel to `display_lines`: the `{run_id}:{turn_id}` ref of the TURN each
     # line belongs to (turn_id = ordinal of the message's user-prompt anchor, the
     # same stable ref the turn index emits). Lets a search hit hand `read_turn`
@@ -120,6 +144,12 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         self._params = Bm25Params(k1=bm25_k1, b=bm25_b)
         self._scope: SearchScope = scope
         self._finder = TurnFinder(source)
+        # Per-run search-loop guard state (see `_guard_search`): counts consecutive
+        # `search_conversation_history` calls with no `read_turn` in between, reset
+        # on each `Agent.run()` and on any `read_turn`. `read_turn` is the expand-a-hit
+        # step that constitutes retrieval progress, so reaching it clears the streak.
+        self._s_run: str | None = None
+        self._sigs: list[str] = []  # query sig of each consecutive search since last read_turn/reset
 
         description = SEARCH_HISTORY_DESCRIPTION
         if scope == "conversation":
@@ -128,6 +158,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             self.search_conversation_history,
             name="search_conversation_history",
             description=description,
+            retries=_SEARCH_TOOL_RETRIES,
         )
         # Expose the shared full-content read tool (owned by `search`). Because
         # search is the permanent retrieval layer, its search hits can hand the
@@ -141,10 +172,62 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         ref: str,
     ) -> str:
         """Resolve a `run_id:turn_id` ref into its full durable turn via pydantic-ai persistence."""
+        # Expanding a search hit to its full turn is retrieval PROGRESS — it clears
+        # the search streak so a healthy read-search-read rhythm is never a stall.
+        self._reset_search_streak(ctx)
         run_id, _, _ = ref.partition(":")
         return await self._finder.resolve(
             ref, run_id=run_id, conversation_id=ctx.conversation_id
         )
+
+    def _reset_search_streak(self, ctx: RunContext[AgentDepsT]) -> None:
+        run_id = ctx.run_id
+        self._s_run = run_id
+        self._sigs = []
+
+    def _bump_search_streak(self, ctx: RunContext[AgentDepsT], sig: str) -> int:
+        """Record a `search_conversation_history` call; return the running streak.
+
+        Resets on `Agent.run()` (new run id). Does NOT reset on a different query sig
+        — alternating query phrasing is itself a stall. A `read_turn` in between resets
+        the streak (see `_reset_search_streak`).
+        """
+        run_id = ctx.run_id
+        if run_id != self._s_run:
+            self._s_run = run_id
+            self._sigs = []
+        self._sigs.append(sig)
+        return len(self._sigs)
+
+    def _guard_search(
+        self, ctx: RunContext[AgentDepsT], sig: str
+    ) -> str | None:
+        """Nudge/ModelRetry an agent stuck re-searching without reading a hit.
+
+        Keys on *retrieval progress* (`read_turn`), not identical args, so it catches
+        every non-converging search loop (identical queries, alternating phrases,
+        query churn). Returns a non-None nudge string to short-circuit the tool with a
+        redirect at `_SEARCH_NUDGE`; raises `ModelRetry` at `_SEARCH_RETRY` so the
+        bounded retry escalation stops a token-burning loop before the request limit.
+        Returns ``None`` to let the search run normally.
+        """
+        n = self._bump_search_streak(ctx, sig)
+        if n >= _SEARCH_RETRY:
+            raise ModelRetry(
+                f'You have run {n} searches without calling `read_turn` on any hit '
+                '({\"' + '", "'.join(dict.fromkeys(self._sigs)) + '"}). Re-searching the same '
+                'theme will not change the result — the transcript is static. STOP searching. '
+                'Call `read_turn("<hit ref>")` on your best hit to expand it, then answer from '
+                'the full turn; or answer now from the evidence you already have.'
+            )
+        if n >= _SEARCH_NUDGE:
+            return (
+                f'You have run {n} searches with no `read_turn` in between '
+                '({\"' + '", "'.join(dict.fromkeys(self._sigs)) + '"}). You are looping on '
+                'this theme. Pick your best hit and call `read_turn` on its turn ref to '
+                'expand it — or answer now.'
+            )
+        return None
 
     async def search_conversation_history(
         self,
@@ -161,6 +244,10 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             run_id: Search only this run's history. Use it to resolve a run
                 another tool or a compaction receipt referenced.
         """
+        # Loop guard: nudge / ModelRetry an agent re-searching without reading a hit.
+        nudge = self._guard_search(ctx, sig=f"search:{query.strip()}")
+        if nudge is not None:
+            return nudge
         conversation_id: str | None = None
         if self._scope == "conversation":
             # Fail closed: filtering on `conversation_id is None` would match every
@@ -224,6 +311,15 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 else None
             )
             label += (f" | turn: {tref}" if tref else "")
+            dso = (
+                section.dates[line_idx]
+                if section.dates is not None and line_idx < len(section.dates)
+                else None
+            )
+            # Surface the message's source datetime (ISO) so the model can
+            # resolve "newer wins" / "which happened first" from the hit itself,
+            # instead of re-searching to recover ordering (a loop trigger).
+            label += (f" | date: {dso}" if dso else "")
             header_line = f"[score: {score:.1f} | {label}]"
             # Give the model an explicit, copy-paste-able ref for the shared tool.
             hint = f'\n  -> read_turn("{tref}") for the full turn' if tref else ""
@@ -259,6 +355,12 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 else None
                 for m in messages
             ]
+            dates = [
+                (getattr(m, "metadata", None) or {}).get("source_date")
+                if getattr(m, "metadata", None)
+                else None
+                for m in messages
+            ]
             # Map each message to the `{run_id}:{turn_id}` ref of the TURN it
             # belongs to (turn_id = ordinal of the message's user-prompt anchor,
             # the SAME stable ref the turn index emits). format_messages is
@@ -284,6 +386,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                     index_lines=format_messages(messages, truncate=False),
                     display_lines=display_lines(messages),
                     session_ids=sessions,
+                    dates=dates,
                     turn_refs=turn_refs,
                 )
             )
