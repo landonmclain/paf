@@ -83,6 +83,14 @@ exactly as the tool describes:
 - `source_ref` — the message's `{run_id}:{turn_id}` label, so the fact can be
   traced and verified.
 
+There is NO `decision` type — the only valid types are the six above. When a
+"user decided to do X" moment appears, file it under a valid kind instead of
+inventing `decision`: a standing choice or preference → `preference`; a
+completed, one-time action → `event`; an upcoming/planned action → `task`; a
+settled choice that is really just a durable state about the user → `fact`.
+Never pass `decision` as the type — the record will be rejected and the fact
+silently lost.
+
 You do not dedupe, merge, update, or delete — the journal is append-only. If the
 same subject appears again (even with a newer value), append a new record;
 newest-wins and dedup are resolved by the render pass, never by you. There is no
