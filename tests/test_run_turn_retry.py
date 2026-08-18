@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import types
 
+import httpx
 import pytest
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.exceptions import ModelHTTPError
@@ -152,4 +153,39 @@ def test_retry_exhausted_still_raises(monkeypatch) -> None:
     # total attempts = LME_RETRY_MAX_ATTEMPTS; sleeps happen on attempts 1..N-1.
     assert len(slept) == LME_RETRY_MAX_ATTEMPTS - 1
     # Constant backoff (Landon default 30s between 5 retries).
+    assert all(d == LME_RETRY_BASE_BACKOFF for d in slept)
+
+
+# ---- Raw transport errors (httpx.ReadError and friends) ----
+# A mid-stream disconnect surfaces as a raw `httpx.TransportError` (no HTTP
+# status code), which pydantic-ai does NOT wrap into ModelHTTPError. Before the
+# httpx.TransportError handling was added to `_run_turn`, a single such blip
+# killed a whole 472-Q run at q329 (2026-08-18). These prove the transport path
+# retries with the same backoff and recovers.
+
+
+def test_transport_error_recovers(monkeypatch, capsys) -> None:
+    """A raw httpx.ReadError on attempt 1 is retried and succeeds."""
+    monkeypatch.setattr("tests.framework.asyncio.sleep", _fake_sleep)
+    agent = _FakeAgent(httpx.ReadError("disconnected"), fail_count=1)
+    row = _run_turn(agent, "question", "cid", "lmem.recall.1", "sess")
+    assert row["text"] == "final answer"
+    assert row["bailed"] is False
+    out = capsys.readouterr().out
+    assert "retryable httpx transport error" in out
+    assert "ReadError" in out
+
+
+def test_transport_error_exhausted_still_raises(monkeypatch) -> None:
+    """A transport error that never resolves -> raises after max attempts."""
+    slept: list[float] = []
+
+    async def _spy_sleep(d):
+        slept.append(d)
+
+    monkeypatch.setattr("tests.framework.asyncio.sleep", _spy_sleep)
+    agent = _FakeAgent(httpx.ReadTimeout("timed out"), fail_permanently=True)
+    with pytest.raises(httpx.ReadTimeout):
+        _run_turn(agent, "q", "cid", "n", "s")
+    assert len(slept) == LME_RETRY_MAX_ATTEMPTS - 1
     assert all(d == LME_RETRY_BASE_BACKOFF for d in slept)

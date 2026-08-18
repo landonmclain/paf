@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import cast
 
+import httpx
 from pydantic_ai import Agent, AgentRunResultEvent, ModelSettings, UsageLimits
 from pydantic_ai.exceptions import (
     ModelHTTPError,
@@ -193,25 +194,72 @@ _CURRENT_MEMORY_DIR: Path | None = None
 #   mentioned: the notebook is always injected in-context, so pointing at a
 #   separate notebook tool only muddies the waters.
 # - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
+# NOTE (2026-08-17, TEMP for search-only ablation): the full memory-bearing
+# SUBJECT_SYSTEM_PROMPT is commented out below (kept verbatim). The active
+# SUBJECT_SYSTEM_PROMPT is a search-only variant with NO memory / notebook /
+# owner language, so a MEMORY=0 run is a clean test of the raw retrieval ladder
+# (search_conversation_history -> read_turn) alone. REVERT after the test.
+#
+# SUBJECT_SYSTEM_PROMPT = (
+#     "You are an assistant with access to your full conversational history "
+#     "through a retrieval ladder. You are given only the current question; the "
+#     "past conversation is NOT in your context — you must retrieve it. Answer "
+#     "from the evidence you actually have — the durable notebook injected below "
+#     "and anything you retrieve.\n"
+#     "CONFLICT — your durable notebook is the rendered journal: the durable "
+#     "facts the consolidation owner extracted, grouped by type, in the order "
+#     "they were first recorded. It is NOT merged, deduplicated, or consolidated "
+#     "— the same subject can appear more than once, and an earlier entry can be "
+#     "superseded by a later one; both stay in the render. It is the closest "
+#     "thing to ground truth you carry in-context, but do not treat it as a "
+#     "single polished truth. When entries on the same subject conflict, the "
+#     "MOST RECENTLY RECORDED one is current (read-time NEWER WINS), and prefer "
+#     "the user's own most recent direct wording — pull it via `read_turn` on the "
+#     "entry's `source_ref` if needed — over your reconstruction. Never second-"
+#     "guess a user-stated value (a personal best, a count, an amount); when the "
+#     "notebook holds only a rounded version, recover the exact figure from the "
+#     "source turn.\n"
+#     "INFERENCE — when the retrieved context does not name the asked-for fact "
+#     "explicitly, but the history strongly and single-mindedly implies one "
+#     "specific answer — or the entire session establishes one unambiguous "
+#     "context — do not stop at \"that's not on record\". Give the implied answer "
+#     "in hedged form — \"Most likely X, but you never told me the exact Y\" — so "
+#     "the user gets the useful answer while you stay honest about the "
+#     "uncertainty. Reserve a flat \"not in our history\" refusal for when the "
+#     "history is genuinely ambiguous or empty. The hedged inference is preferred "
+#     "over a bare refusal whenever the evidence points at a single answer.\n"
+#     "ORDER — when asked what happened first, answer by the date the event "
+#     "actually occurred, and state the dates you're comparing before giving "
+#     "the order.\n"
+#     "RETRIEVAL — work cheapest-first; never tool-call for what you already "
+#     "have:\n"
+#     "1. IN CONTEXT — a durable-fact notebook (the rendered journal) is injected "
+#     "into every request together with the question. Answer from it if it "
+#     "already covers the fact; never tool-call for something already in front "
+#     "of you.\n"
+#     "2. PAST TURN — call `search_conversation_history` (a wide search over the "
+#     "raw transcript of past turns) when the answer is NOT already in context. "
+#     "Search returns a `run_id:turn_id` ref for each hit.\n"
+#     "3. READ FULL TURN — when a search hit gives you a ref but not the full "
+#     "detail, call `read_turn` on that ref to pull the turn's complete content. "
+#     "Skip rungs that don't apply.\n"
+#     "4. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
+#     "a count, a name, an amount) and memory holds only a vague or rounded "
+#     "version, it is in-scope — not a violation of 'don't second-guess' — to "
+#     "`search_conversation_history` for the user's original wording. If a more "
+#     "recent turn states the specific, prefer the more recent user statement "
+#     "and give the specific — memory is a summary and may have dropped "
+#     "precision your recall should recover.\n"
+#     "MEMORY — you carry a read-only durable notebook (the rendered journal) "
+#     "injected in your context. You never write to or delete from it; a "
+#     "separate consolidation owner appends to it. Never claim something was "
+#     "remembered just because you read it; only the owner persists facts."
+# )
 SUBJECT_SYSTEM_PROMPT = (
     "You are an assistant with access to your full conversational history "
     "through a retrieval ladder. You are given only the current question; the "
     "past conversation is NOT in your context — you must retrieve it. Answer "
-    "from the evidence you actually have — the durable notebook injected below "
-    "and anything you retrieve.\n"
-    "CONFLICT — your durable notebook is the rendered journal: the durable "
-    "facts the consolidation owner extracted, grouped by type, in the order "
-    "they were first recorded. It is NOT merged, deduplicated, or consolidated "
-    "— the same subject can appear more than once, and an earlier entry can be "
-    "superseded by a later one; both stay in the render. It is the closest "
-    "thing to ground truth you carry in-context, but do not treat it as a "
-    "single polished truth. When entries on the same subject conflict, the "
-    "MOST RECENTLY RECORDED one is current (read-time NEWER WINS), and prefer "
-    "the user's own most recent direct wording — pull it via `read_turn` on the "
-    "entry's `source_ref` if needed — over your reconstruction. Never second-"
-    "guess a user-stated value (a personal best, a count, an amount); when the "
-    "notebook holds only a rounded version, recover the exact figure from the "
-    "source turn.\n"
+    "from the evidence you actually retrieve.\n"
     "INFERENCE — when the retrieved context does not name the asked-for fact "
     "explicitly, but the history strongly and single-mindedly implies one "
     "specific answer — or the entire session establishes one unambiguous "
@@ -225,28 +273,18 @@ SUBJECT_SYSTEM_PROMPT = (
     "actually occurred, and state the dates you're comparing before giving "
     "the order.\n"
     "RETRIEVAL — work cheapest-first; never tool-call for what you already "
-    "have:\n"
-    "1. IN CONTEXT — a durable-fact notebook (the rendered journal) is injected "
-    "into every request together with the question. Answer from it if it "
-    "already covers the fact; never tool-call for something already in front "
-    "of you.\n"
-    "2. PAST TURN — call `search_conversation_history` (a wide search over the "
-    "raw transcript of past turns) when the answer is NOT already in context. "
-    "Search returns a `run_id:turn_id` ref for each hit.\n"
-    "3. READ FULL TURN — when a search hit gives you a ref but not the full "
+    "have. There is no injected notebook — retrieve everything from the raw "
+    "transcript:\n"
+    "1. PAST TURN — call `search_conversation_history` (a wide search over the "
+    "raw transcript of past turns). Search returns a `run_id:turn_id` ref for "
+    "each hit.\n"
+    "2. READ FULL TURN — when a search hit gives you a ref but not the full "
     "detail, call `read_turn` on that ref to pull the turn's complete content. "
     "Skip rungs that don't apply.\n"
-    "4. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
-    "a count, a name, an amount) and memory holds only a vague or rounded "
-    "version, it is in-scope — not a violation of 'don't second-guess' — to "
-    "`search_conversation_history` for the user's original wording. If a more "
-    "recent turn states the specific, prefer the more recent user statement "
-    "and give the specific — memory is a summary and may have dropped "
-    "precision your recall should recover.\n"
-    "MEMORY — you carry a read-only durable notebook (the rendered journal) "
-    "injected in your context. You never write to or delete from it; a "
-    "separate consolidation owner appends to it. Never claim something was "
-    "remembered just because you read it; only the owner persists facts."
+    "3. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
+    "a count, a name, an amount), `search_conversation_history` for the user's "
+    "original wording and give the exact value it states — the transcript is "
+    "the source of truth."
 )
 
 
@@ -557,6 +595,23 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                            "cache_write_tokens", "total_tokens", "requests"):
                     usage[_k] = 0
                 text = ""
+
+                def _delay(exc: ModelHTTPError | None, _attempt: int = attempt) -> float:
+                    """Compute the sleep before the next retry.
+
+                    The loop counter is captured as a default arg so ruff's B023
+                    (loop-variable-in-closure) is satisfied: _delay is called
+                    synchronously in this loop, so the value is read at call time.
+                    """
+                    if exc is not None and exc.retry_after is not None:
+                        return exc.retry_after
+                    if LME_RETRY_BACKOFF_EXPONENTIAL:
+                        return min(
+                            LME_RETRY_BASE_BACKOFF * (2 ** (_attempt - 1)),
+                            LME_RETRY_MAX_BACKOFF,
+                        )
+                    return LME_RETRY_BASE_BACKOFF
+
                 try:
                     await _attempt()
                     return  # succeeded (or bender guard produced an answer)
@@ -564,22 +619,31 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     retryable = exc.status_code in LME_RETRYABLE_STATUSES
                     if not retryable or attempt >= LME_RETRY_MAX_ATTEMPTS:
                         raise  # fatal status or out of attempts
-                    delay = exc.retry_after
-                    if delay is None:
-                        if LME_RETRY_BACKOFF_EXPONENTIAL:
-                            # exponential, capped (no jitter: sleep is a
-                            # predictable, tunable knob, not a thundering-herd
-                            # concern for a single-run benchmark)
-                            delay = min(
-                                LME_RETRY_BASE_BACKOFF * (2 ** (attempt - 1)),
-                                LME_RETRY_MAX_BACKOFF,
-                            )
-                        else:
-                            # constant 30s between retries (Landon's default)
-                            delay = LME_RETRY_BASE_BACKOFF
+                    delay = _delay(exc)
                     print(
                         f"[_run_turn] retryable ModelHTTPError {exc.status_code} "
                         f"(attempt {attempt}/{LME_RETRY_MAX_ATTEMPTS}) on {name!r} — "
+                        f"waiting {delay:.1f}s before retrying",
+                        flush=True,
+                    )
+                    await asyncio.sleep(delay)
+                except httpx.TransportError as exc:
+                    # Raw transport/network failure (no HTTP status code): a
+                    # mid-stream read/connect drop, timeout, or protocol error
+                    # (e.g. `httpx.ReadError` "Server disconnected without sending
+                    # a response"). pydantic-ai surfaces these raw, NOT wrapped in
+                    # ModelHTTPError (which requires a status_code), so the
+                    # ModelHTTPError handler never saw them and a single blip
+                    # killed whole 2-hour runs (2026-08-15 502 & 2026-08-18
+                    # httpx.ReadError at q328/472). These are always transient —
+                    # retry the whole turn with the same backoff budget.
+                    if attempt >= LME_RETRY_MAX_ATTEMPTS:
+                        raise  # out of retries — let it propagate fatally
+                    delay = _delay(None)
+                    print(
+                        f"[_run_turn] retryable httpx transport error "
+                        f"{type(exc).__name__} (attempt {attempt}/"
+                        f"{LME_RETRY_MAX_ATTEMPTS}) on {name!r} — "
                         f"waiting {delay:.1f}s before retrying",
                         flush=True,
                     )

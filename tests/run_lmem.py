@@ -657,10 +657,47 @@ def main(argv: list[str] | None = None) -> dict:
     artifact_dir = RESULTS_DIR / session
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
-    # The recall agent is built PER-QUESTION (inside the loop below) so its
-    # memory-owner can be gated off when that question already has a durable
-    # snapshot -- never call a model when the durable store already has the
-    # answer.
+
+    # ---- Incremental persistence (crash-resilience, 2026-08-18) ----
+    # Each completed question's `row` is appended as JSONL to
+    # `lmem-<session>.partial.jsonl` the moment it's judged, so a crash (e.g. the
+    # raw httpx.ReadError at q328/472 on 2026-08-18 that discarded 328 completed
+    # questions) never loses finished work. With `LME_RESUME_PARTIAL=1` the run
+    # READS an existing partial file back into `all_recall_rows` and skips any
+    # question_id already present, turning an interruption into a resumable one.
+    # The final `lmem-<ts>.json` is still written at the end with all rows; the
+    # partial is a durable side-channel, not the report.
+    partial_path = RESULTS_DIR / f"{session}.partial.jsonl"
+    resume_partial = os.environ.get("LME_RESUME_PARTIAL", "0") == "1"
+    _partial_fh = None
+
+    # Resume: if a partial JSONL exists for THIS question set and resume is on,
+    # replay it into all_recall_rows (completion order) and build a skip-set of
+    # question_ids so the loop below only re-runs what's unfinished. Saved rows
+    # are still weighted into the final aggregation exactly as if freshly judged.
+    _done_qids: set[str] = set()
+    if resume_partial and partial_path.exists():
+        _n_done = 0
+        with partial_path.open() as _pf:
+            for _ln in _pf:
+                _ln = _ln.strip()
+                if not _ln:
+                    continue
+                try:
+                    _prev = json.loads(_ln)
+                except json.JSONDecodeError:
+                    continue  # trailing partial line from a kill mid-write
+                _qid = _prev.get("question_id")
+                if _qid:
+                    _done_qids.add(str(_qid))
+                    all_recall_rows.append(_prev)
+                    _n_done += 1
+        print(
+            f"[run_lmem] LME_RESUME_PARTIAL=1: replayed {_n_done} completed "
+            f"question(s) from {partial_path.name}; {len(questions)} requested, "
+            f"{len(questions) - _n_done} remaining",
+            flush=True,
+        )
     # Write the agent spec once so the artifact dir is self-describing.
     (artifact_dir / "meta.json").write_text(json.dumps({
         "subject": SUBJECT_MODEL,
@@ -674,8 +711,22 @@ def main(argv: list[str] | None = None) -> dict:
         "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }, indent=2))
 
+    # The recall agent is built PER-QUESTION (inside the loop below) so its
+    # memory-owner can be gated off when that question already has a durable
+    # snapshot -- never call a model when the durable store already has the
+    # answer.
     for qi, q in enumerate(questions, start=1):
         cid = f"lmem-{uuid.uuid4().hex[:8]}"
+        # Resume: skip any question whose row was already replayed from the
+        # partial file (LME_RESUME_PARTIAL=1), so an interrupted run picks up
+        # exactly where it left off instead of re-answering completed QIDs.
+        if _done_qids and str(q.get("question_id", "")) in _done_qids:
+            print(
+                f"[lmem] q{qi}/{len(questions)} {q.get('question_id', '?')} "
+                f"SKIPPED (already in partial, resumed)",
+                flush=True,
+            )
+            continue
         raw_turns = _raw_turns(q)
         # NO per-question turn cap: seed the FULL haystack so the owner sees
         # every session and can distill facts that live later in the stack
@@ -872,6 +923,12 @@ def main(argv: list[str] | None = None) -> dict:
             row["retrieval"] = _retrieval(row)
 
         all_recall_rows.append(row)
+        # Crash-resilience: persist this judged row immediately so a later crash
+        # (transport error, OOM, manual kill) never loses already-finished work.
+        if _partial_fh is None:
+            _partial_fh = partial_path.open("a", encoding="utf-8")  # append mode
+        _partial_fh.write(json.dumps(row) + "\n")
+        _partial_fh.flush()
         print(
             f"[lmem] q{qi}/{len(questions)} DONE type={q['question_type']} "
             f"judge={'CORRECT' if row['judged'].get('label') else 'wrong'} "
@@ -981,6 +1038,9 @@ def main(argv: list[str] | None = None) -> dict:
     out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
     print(f"\n[written] {out}")
+    # Close the incremental-persistence handle on the success path.
+    if _partial_fh is not None:
+        _partial_fh.close()
     if traced:
         shutdown_observability()  # flush buffered OTel spans before process exit
     return result
