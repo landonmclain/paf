@@ -439,6 +439,78 @@ def test_search_hit_carries_source_date(tmp_path: Path) -> None:
     asyncio.run(go())
 
 
+def test_search_recency_folds_newer_hit_to_front(tmp_path: Path) -> None:
+    """The wide search folds recency into BM25, so a newer equal-scoring hit ranks first.
+
+    Pure BM25 is recency-blind (the ranking that let a July "new PB" turn outrank
+    the April turn holding the "previous PB" the question asked for). Mirroring the
+    turn-index ranker, `recency_weight * recency_boost(...)` breaks the near-tie
+    toward the newer, still-relevant hit. The two messages below have identical
+    lexical coverage of the query (near-equal BM25), so the recency fold is the
+    only thing separating them.
+    """
+    store = _mk_store(
+        tmp_path,
+        {
+            "old": [
+                *_msg_dated(
+                    user="my previous charity 5K personal best is 27 minutes 45 seconds",
+                    assistant="good",
+                    iso="2023-05-22T10:41:00+00:00",
+                )
+            ],
+            "new": [
+                *_msg_dated(
+                    user="my new charity 5K personal best is 26 minutes 30 seconds",
+                    assistant="nice",
+                    iso="2023-07-30T22:59:00+00:00",
+                )
+            ],
+        },
+    )
+    ts = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=2,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        recency_weight=0.5,
+        recency_half_life_days=30.0,
+        scope="all",
+    )
+    ts_flat = ConversationSearchToolset(
+        SnapshotHistorySource(store),
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=2,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        recency_weight=0.0,  # pure BM25 — recency fold off
+        recency_half_life_days=30.0,
+        scope="all",
+    )
+
+    async def go():
+        out = await ts.search_conversation_history(_FakeCtx("c1"), "charity 5K personal best")
+        # recency fold: the NEWER (July) hit must rank before the older (May) hit.
+        assert out.find("2023-07-30") != -1, out
+        assert out.find("2023-05-22") != -1, out
+        assert out.find("2023-07-30") < out.find("2023-05-22"), (
+            "newer hit should rank first under the recency fold:\n" + out
+        )
+        # pure BM25 (weight=0): the fold is off, so the first header keeps the
+        # older hit's date (stable order) — recency is the ONLY differentiator here
+        # since both messages have identical query coverage.
+        out_flat = await ts_flat.search_conversation_history(_FakeCtx("c1"), "charity 5K personal best")
+        assert out_flat.find("2023-05-22") != -1 and out_flat.find("2023-07-30") != -1, out_flat
+        assert out_flat.find("2023-05-22") < out_flat.find("2023-07-30"), (
+            "pure BM25 should keep older-first order when recency is off:\n" + out_flat
+        )
+
+    asyncio.run(go())
+
+
 def test_search_loop_guard_nudges_then_raises(tmp_path: Path) -> None:
     """Repeated `search_conversation_history` with no `read_turn` is a stall.
 

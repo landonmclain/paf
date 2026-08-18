@@ -23,7 +23,7 @@ from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
-from ._ranking import Bm25Params, bm25_rank
+from ._ranking import Bm25Params, bm25_rank, recency_boost
 from ._reader import READ_TURN_DESCRIPTION, ReadTurnToolset, TurnFinder
 from ._render import display_lines, format_messages, is_summary_artifact
 from ..turn_index._generate import user_anchor_indices
@@ -127,6 +127,8 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         context_lines: int,
         bm25_k1: float,
         bm25_b: float,
+        recency_weight: float = 0.1,
+        recency_half_life_days: float = 30.0,
         scope: SearchScope = "all",
     ) -> None:
         super().__init__(id=tool_id)
@@ -138,10 +140,18 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             raise ValueError(f"bm25_k1 must be a non-negative finite number, got {bm25_k1!r}.")
         if not 0.0 <= bm25_b <= 1.0:
             raise ValueError(f"bm25_b must be between 0.0 and 1.0, got {bm25_b!r}.")
+        if recency_weight < 0:
+            raise ValueError(f"recency_weight must be >= 0, got {recency_weight!r}.")
+        if recency_half_life_days <= 0:
+            raise ValueError(
+                f"recency_half_life_days must be > 0, got {recency_half_life_days!r}."
+            )
         self._source = source
         self._max_matches = max_matches
         self._context_lines = context_lines
         self._params = Bm25Params(k1=bm25_k1, b=bm25_b)
+        self._recency_weight = recency_weight
+        self._recency_half_life_days = recency_half_life_days
         self._scope: SearchScope = scope
         self._finder = TurnFinder(source)
         # Per-run search-loop guard state (see `_guard_search`): counts consecutive
@@ -279,11 +289,44 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         if not ranked:
             return f"No matches for '{query}' in {total_messages} persisted messages."
 
+        # Fold recency in as a conservative nudge, mirroring the turn-index
+        # ranker (see turn_index/_toolset.py). Pure BM25 is recency-blind, so on
+        # an exact-value question ("what was my PREVIOUS best?") the newer turn
+        # about the SAME subject can outrank the older turn holding the asked-for
+        # value; the model then reasons from the wrong hit. Anchor to the newest
+        # dated candidate so ranking stays deterministic (no wall-clock): the boost
+        # is in [0, recency_weight], and the default weight (0.1) stays well below
+        # one BM25 IDF unit, so it only breaks genuine near-ties and never overrides
+        # a real relevance gap. Undated candidates get no boost (treated as stale).
+        blended: list[dict] = []  # {doc_idx, score, date}
+        for doc_idx, score in ranked:
+            section_idx, line_idx = locations[doc_idx]
+            section = sections[section_idx]
+            dso = (
+                section.dates[line_idx]
+                if section.dates is not None and line_idx < len(section.dates)
+                else None
+            )
+            blended.append({"doc_idx": doc_idx, "score": score, "date": dso})
+        anchor_ts = max(
+            (b["date"] for b in blended if b["date"] and b["date"] != ""),
+            default="",
+        )
+        if self._recency_weight and anchor_ts:
+            for b in blended:
+                if b["date"] and b["date"] != "":
+                    b["score"] += self._recency_weight * recency_boost(
+                        b["date"], anchor_ts, self._recency_half_life_days
+                    )
+        blended.sort(key=lambda b: b["score"], reverse=True)
+
         results: list[str] = []
         shown: set[tuple[int, int]] = set()
-        for doc_idx, score in ranked:
+        for item in blended:
             if len(results) == self._max_matches:
                 break
+            doc_idx = item["doc_idx"]
+            score = item["score"]
             section_idx, line_idx = locations[doc_idx]
             if (section_idx, line_idx) in shown:
                 continue
