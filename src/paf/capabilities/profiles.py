@@ -74,18 +74,27 @@ ASSISTANT_PROFILE = AgentProfile(
 )
 
 
-# The demo/live-testing profile — deliberately LEAN. Its job is a surface to
-# poke at capabilities in the CLI (ui/cli2.py <agent>) WITHOUT dragging in the
-# assistant's persistence/recall/compaction stack. Capabilities that resolve
-# natively from a spec's YAML `capabilities:` (WebSearch, WebFetch, XSearch,
-# Thinking, MCP, ToolSearch, ImageGeneration — pydantic-ai's own CAPABILITY_TYPES)
-# do NOT belong here: they need no builder and no allowlist row. This allowlist
-# should only grow with harness capabilities that need a Python build step
-# (e.g. ToolOutputLimits, FileSystem, Shell) as we wire them in. Empty for now —
-# the first demo pokes are all native, spec-declarable capabilities.
+# The demo/live-testing profile — the "EVERYTHING" sandbox.
+#
+# demo_assistant is the agent where we build out and tune the full stack —
+# persistence, recall, durable memory (journal), and context compaction — plus
+# poke at native spec-declarable capabilities (WebSearch, WebFetch, XSearch,
+# Thinking, MCP, ToolSearch, ImageGeneration) via the YAML `capabilities:` list.
+# The profile allowlists every *harness* capability that needs a Python build
+# step (the ones pydantic-ai can't resolve natively): StepPersistence,
+# ConversationSearch, Memory, and Compaction — mirroring the production
+# assistant's stack. Once the experiment proves out, demo's tuned values are
+# promoted to the clean production `assistant` spec and this sandbox is reset.
+# Native capabilities don't belong here (they need no builder / no allowlist
+# row); they resolve directly from the demo spec's YAML `capabilities:`.
 DEMO_PROFILE = AgentProfile(
     name="demo",
-    capability_names=(),
+    capability_names=(
+        "StepPersistence",
+        "ConversationSearch",
+        "Memory",
+        "Compaction",
+    ),
 )
 
 

@@ -1,17 +1,19 @@
-# Demo/live-testing agent spec (M2).
+# Demo/live-testing agent spec (M2) — the "EVERYTHING" sandbox.
 #
-# The surface for poking at capabilities in the CLI (`python ui/cli2.py
-# demo_assistant`) WITHOUT dragging in the assistant's persistence/recall/
-# compaction stack. The profile `demo` (src/paf/capabilities/profiles.py) is
-# deliberately LEAN — its allowlist only holds harness capabilities that need a
-# Python build step. Everything here is NATIVE pydantic-ai, so it resolves
-# purely from YAML via `Agent.from_file`/`Agent.from_spec` (pydantic-ai's own
-# CAPABILITY_TYPES), with no catalog row and no builder.
+# The surface for building out and tuning the FULL stack in the CLI (`python
+# ui/cli2.py demo_assistant`): persistence, recall, durable memory (journal),
+# and context compaction, PLUS poking at native spec-declarable capabilities.
 #
-# The 7 headline native capabilities are below, COMMENTED OUT. Uncomment one
-# (or a few) to poke at it in the CLI — each row shows the common knobs. Most
-# accept `defer_loading: true` to keep them out of the prompt until the model
-# calls `load_capability` (the "ready-but-cold" seam).
+# The `demo` profile (src/paf/capabilities/profiles.py) allowlists the harness
+# capabilities that need a Python build step — StepPersistence,
+# ConversationSearch, Memory, Compaction — mirroring the production assistant.
+# These resolve via `build_agent`'s `capabilities=` seam (shared store). Native
+# pydantic-ai capabilities (WebSearch, WebFetch, XSearch, Thinking, MCP,
+# ToolSearch, ImageGeneration) are declared below in `capabilities:` and need no
+# allowlist row.
+#
+# Once the experiment proves out, demo's tuned values (e.g. the `compact:`
+# block) are promoted to the clean production `assistant` spec.
 #
 # Reference: `building-pydantic-ai-agents` skill → references/ON-DEMAND-
 # CAPABILITIES.md (defer_loading), NATIVE-TOOLS.md (WebSearch/WebFetch),
@@ -71,3 +73,38 @@ model_settings:
 #   # Provider-native image generation (or a local `image_model`).
 #   - ImageGeneration:
 #       size: 1024x1024
+
+# ---------------------------------------------------------------------------
+# Per-assistant context-compaction tuning (option B — lives in the spec, not in
+# Python). Read by `build_agent` -> `CompactionConfig` -> the no-summary ladder
+# in `build_compaction()`. The `demo` profile allowlists `Compaction`, so this
+# block is ACTIVE here — the sandbox where we tune compaction for a 300k-context
+# live agent (NOT the benchmark harness, which keeps ~5000 to force-evict
+# evidence out of context for retrieval testing). Live we want the OPPOSITE:
+# keep real conversation in context, compact only when near the ceiling, and
+# scavenge bulk (tool dumps) when we do.
+#
+# All keys optional; unset -> the builder's benchmark-tuned defaults.
+#
+# target_tokens: live-history size (tokens) that triggers compaction to start
+#   escalating. 100k is ~1/3 of 300k — aggressive (compact earlier, memory-light)
+#   but never before a real conversation.
+# window_max_messages / window_keep_messages: a deliberately WIDE window — even
+#   when compaction fires, a large recent slice survives intact (memory-first
+#   priority over the benchmark's tight 6/3).
+# clear_tool_max_tokens: biggest token saver — any single tool result above this
+#   is collapsed to a placeholder. 5000 scavenges only genuinely bulky dumps
+#   while keeping normal tool output.
+# clear_tool_keep_pairs: always keep the 4 most-recent tool-call/result pairs.
+# consolidate: TRUE — memory is used in demo (the everything sandbox), and the
+#   journal-folding consolidation is proven in benchmark tests, so wire it in.
+#   When the sliding window evicts old turns, it first folds the about-to-evict
+#   slice into the durable journal via the writable owner sub-agent, so durable
+#   facts survive eviction instead of being lost.
+compact:
+  target_tokens: 100000
+  window_max_messages: 150
+  window_keep_messages: 75
+  clear_tool_max_tokens: 5000
+  clear_tool_keep_pairs: 4
+  consolidate: true

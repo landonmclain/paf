@@ -107,7 +107,10 @@ def _turn_index_suppressed(store):
     return replace(build_turn_index(store), add_instructions=False)
 
 
-def build_runtime_capabilities(profile: AgentProfile) -> list:
+def build_runtime_capabilities(
+    profile: AgentProfile,
+    compaction_config=None,
+) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
     Persistence + recall select per :data:`PERSISTENCE_BUILDERS`; ``TurnIndex``
@@ -167,5 +170,5 @@ def build_runtime_capabilities(profile: AgentProfile) -> list:
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
-        capabilities.append(build_compaction())
+        capabilities.append(build_compaction(compaction_config))
     return capabilities

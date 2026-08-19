@@ -58,12 +58,14 @@ def test_capability_types_resolves_and_raises_on_missing() -> None:
 
 
 def test_only_one_real_profile_for_m1() -> None:
-    """M1 has exactly one agent kind: assistant (YAGNI — don't scaffold blanks).
+    """Two known profiles: assistant (clean prod) and demo (the everything sandbox).
 
-    M2 adds one more: the lean ``demo`` profile for CLI/live capability poking
-    (specs/demo_assistant.yaml). Its allowlist is deliberately tiny so it does
-    NOT drag in the assistant's persistence/recall/compaction stack. This is
-    the complete, intentional set — no further blank profile scaffolding.
+    ``demo_assistant`` is the surface where we build out and tune the full stack
+    (persistence, recall, memory, compaction) via the ``demo`` profile, which
+    allowlists the same harness capabilities as the production assistant. Once the
+    experiment proves out, demo's tuned values promote to the clean ``assistant``
+    spec and the sandbox resets. This is the complete, intentional set — no further
+    blank profile scaffolding.
     """
     assert set(PROFILES) == {"assistant", "demo"}
     assert PROFILES["assistant"] is ASSISTANT_PROFILE

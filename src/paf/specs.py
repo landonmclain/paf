@@ -6,11 +6,13 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+import yaml
 from pydantic_ai import Agent, AgentSpec
 from pydantic_ai.settings import ModelSettings
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
+from paf.capabilities.compaction import CompactionConfig
 from paf.config import SPECS_DIR
 
 DEFAULT_SPEC_DIRECTORY = SPECS_DIR
@@ -66,6 +68,30 @@ def _openrouter_model_settings(
         extra_body["provider"] = provider
         out["extra_body"] = extra_body
     return cast(ModelSettings, out)
+
+
+def _spec_compaction_config(spec_path: Path) -> CompactionConfig:
+    """Read the spec's top-level ``compact:`` block into a ``CompactionConfig``.
+
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately for the per-agent compaction tuning block.
+
+    Absent block (or unreadable YAML) -> ``CompactionConfig()`` (all-None),
+    which makes ``build_compaction`` use its benchmark-tuned defaults. Unknown
+    keys *inside* ``compact:`` are ignored so the schema can grow without
+    breaking older spec files.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return CompactionConfig()
+    if not isinstance(data, dict):
+        return CompactionConfig()
+    block = data.get("compact")
+    if not isinstance(block, dict):
+        return CompactionConfig()
+    return CompactionConfig.from_mapping(block)
 
 
 class AgentSpecNotFoundError(FileNotFoundError):
@@ -127,6 +153,13 @@ def build_agent(
     """
     profile = profile or ASSISTANT_PROFILE
     spec = load_agent_spec(agent_name, spec_directory)
+    spec_path = get_spec_path(agent_name, spec_directory)
+    # Per-agent compaction tuning lives in the spec YAML under a top-level
+    # `compact:` block (option B — diffable, reviewable, per-agent). pydantic-ai's
+    # `AgentSpec` silently drops unknown top-level keys, so we read the raw YAML
+    # off disk to extract `compact:` (lenient: unknown keys inside ignored;
+    # absent block -> CompactionConfig() -> builder's benchmark defaults).
+    compaction_config = _spec_compaction_config(spec_path)
     # Default: apply the OpenRouter provider/quantization pin (temp 0,
     # top_p 1.0, seed, pinned provider chain) unless the caller supplies their own
     # `model_settings` override. Agent.from_spec shallow-merges this over the spec's
@@ -142,7 +175,8 @@ def build_agent(
         custom_capability_types=profile.capability_types(),
         # Capabilities that only Python can construct merge here with any
         # spec-declared ones via Agent.from_spec. The profile is the gatekeeper:
-        # only capabilities in its allowlist are built (see build.py).
-        capabilities=build_runtime_capabilities(profile),
+        # only capabilities in its allowlist are built (see build.py). The spec's
+        # `compact:` block (if any) drives the compaction tiers.
+        capabilities=build_runtime_capabilities(profile, compaction_config),
         **overrides,
     )
