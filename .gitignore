@@ -25,6 +25,11 @@ data/*
 !data/benchmarks/
 data/benchmarks/*
 !data/benchmarks/generated/
+# Journal-sandbox oracle stem: OUR derived data (copy of lme_oracle.json under
+# a distinct stem so journal-format durables namespace to memory-lme_oracle_journal/).
+# Tracked so a fresh clone can restore those journal durables and re-run the
+# soft-verify/prompt experiments. The upstream lme_oracle.json bank stays ignored.
+!data/benchmarks/lme_oracle_journal.json
 # Durable seed summaries under generated/ are auto-persisted by run_lmem.py
 # (_persist_durable_summary) per seeded question and TRACKED so a fresh clone
 # re-runs zero-live-summarizer. They rename only when a question's seed turns
