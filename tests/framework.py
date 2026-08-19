@@ -194,13 +194,18 @@ _CURRENT_MEMORY_DIR: Path | None = None
 #   mentioned: the notebook is always injected in-context, so pointing at a
 #   separate notebook tool only muddies the waters.
 # - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
-# ACTIVE (2026-08-18): memory-bearing prompt RESTORED with a HARD VERIFY-SPECIFICS
-# rung. The 2026-08-17 TEMP search-only prompt is preserved below (commented) for
-# easy revert. See vault LongMemEval-Testing.md "memory-hurts finding": 8/12
-# memory-missees answered with zero tools (injected-memory only) and a search
-# verification would likely have caught 7/8. This prompt makes verification MANDATORY
-# for exact-value + preference questions. To test soft-verify later, revert rung 4 to
-# the conditional wording (search only "when memory holds only a vague version").
+# ACTIVE (2026-08-18): memory-bearing prompt with CONDITIONAL VERIFY-SPECIFICS
+# rung. The journal render now carries exact values + dates + source_refs, so
+# Rung 4 lost its MANDATORY status: search only when the journal lacks/rounds
+# the asked-for exact value, or the detail is too task-specific for durable
+# facts (tables/grids). See vault LongMemEval-Testing.md "memory-hurts finding".
+# The prior HARD (MANDATORY) VERIFY-SPECIFICS wording is preserved below as a
+# comment (lines after this block) for easy revert if soft-verify underperforms.
+# RETIRED HARD wording (for revert):
+#   4. VERIFY SPECIFICS (MANDATORY) -- exact value or preference -> MUST NOT
+#   answer from memory alone; run search, then give the value the transcript
+#   states; memory is a summary and drops precision; fall back only if search
+#   returns nothing. Revert rung 4 to that if soft-verify hurts accuracy.
 SUBJECT_SYSTEM_PROMPT = (
     "You are an assistant with access to your full conversational history "
     "through a retrieval ladder. You are given only the current question; the "
@@ -244,14 +249,18 @@ SUBJECT_SYSTEM_PROMPT = (
     "3. READ FULL TURN — when a search hit gives you a ref but not the full "
     "detail, call `read_turn` on that ref to pull the turn's complete content. "
     "Skip rungs that don't apply.\n"
-    "4. VERIFY SPECIFICS (MANDATORY) — when the question asks for an exact "
-    "value (a date, a count, a name, an amount) or for a personal preference "
-    "or opinion of your user, you MUST NOT answer from the injected memory "
-    "alone. Run `search_conversation_history` for the user's original wording, "
-    "then give the exact value or tailored preference the transcript states. "
-    "Memory is a summary and commonly drops precision, counts, and task-specific "
-    "detail; the transcript is the source of truth. Fall back to the memory "
-    "version only if the search returns nothing relevant.\n"
+    "4. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
+    "a count, a name, an amount) or for a personal preference or opinion of your "
+    "user, AND the injected journal holds only a rounded, vague, or missing "
+    "version of it — or the detail is task-specific and too granular for durable "
+    "facts (e.g. a table, grid, or per-item breakdown) — then run "
+    "`search_conversation_history` for the user's original wording, and call "
+    "`read_turn` on the hit when the search excerpt truncates the value. But "
+    "when the injected journal already records the exact value with its "
+    "`source_ref`, answer from it directly: the journal IS the rendered durable "
+    "record (facts + dates + provenance), and a truncated search excerpt is no "
+    "more authoritative than it. Never second-guess a user-stated value that "
+    "appears verbatim in the journal.\n"
     "MEMORY — you carry a read-only durable notebook (the rendered journal) "
     "injected in your context. You never write to or delete from it; a "
     "separate consolidation owner appends to it. Never claim something was "
