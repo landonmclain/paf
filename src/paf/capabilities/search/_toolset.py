@@ -23,10 +23,10 @@ from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
-from ._ranking import Bm25Params, bm25_rank, recency_boost
-from ._reader import READ_TURN_DESCRIPTION, ReadTurnToolset, TurnFinder
-from ._render import display_lines, format_messages, is_summary_artifact
 from ..turn_index._generate import user_anchor_indices
+from ._ranking import Bm25Params, bm25_rank
+from ._reader import READ_TURN_DESCRIPTION, TurnFinder
+from ._render import display_lines, format_messages, is_summary_artifact
 
 SearchScope = Literal["all", "conversation"]
 """How much of the store one search may reach (mirrors the harness type)."""
@@ -46,6 +46,14 @@ names the run it came from and carries a `turn: <run_id>:<turn_id>` ref; pass \
 that ref to `read_turn` to pull the FULL matched turn (do not re-search for a \
 detail -- a hit's ref expands to the original content). Pass `run_id` to search \
 only one run, e.g. a run a compaction receipt references as its full transcript.
+
+The top matches are PRESENTED most-recent-first: within the returned set, the \
+hits are ordered by recency (date, then turn order within a session) rather than \
+by score, and each carries a `recency: N` label (1 = most recent). The BM25 \
+`score:` is still shown on every hit and is NOT changed -- score is relevance, \
+the ordering is chronological. Treat the most recent relevant hit as the current \
+state of a topic; use the `date:` and `turn:` labels to resolve which value came \
+first when a question asks about a PAST value.
 
 When to use:
 - You need to recall exact details from earlier in the conversation
@@ -127,9 +135,6 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         context_lines: int,
         bm25_k1: float,
         bm25_b: float,
-        recency_weight: float = 0.1,
-        recency_half_life_days: float = 30.0,
-        turn_weight: float = 0.1,
         scope: SearchScope = "all",
     ) -> None:
         super().__init__(id=tool_id)
@@ -141,21 +146,10 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             raise ValueError(f"bm25_k1 must be a non-negative finite number, got {bm25_k1!r}.")
         if not 0.0 <= bm25_b <= 1.0:
             raise ValueError(f"bm25_b must be between 0.0 and 1.0, got {bm25_b!r}.")
-        if recency_weight < 0:
-            raise ValueError(f"recency_weight must be >= 0, got {recency_weight!r}.")
-        if recency_half_life_days <= 0:
-            raise ValueError(
-                f"recency_half_life_days must be > 0, got {recency_half_life_days!r}."
-            )
-        if turn_weight < 0:
-            raise ValueError(f"turn_weight must be >= 0, got {turn_weight!r}.")
         self._source = source
         self._max_matches = max_matches
         self._context_lines = context_lines
         self._params = Bm25Params(k1=bm25_k1, b=bm25_b)
-        self._recency_weight = recency_weight
-        self._recency_half_life_days = recency_half_life_days
-        self._turn_weight = turn_weight
         self._scope: SearchScope = scope
         self._finder = TurnFinder(source)
         # Per-run search-loop guard state (see `_guard_search`): counts consecutive
@@ -293,25 +287,20 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         if not ranked:
             return f"No matches for '{query}' in {total_messages} persisted messages."
 
-        # Fold recency in as a conservative nudge, mirroring the turn-index
-        # ranker (see turn_index/_toolset.py). Pure BM25 is recency-blind, so on
-        # an exact-value question ("what was my PREVIOUS best?") the newer turn
-        # about the SAME subject can outrank the older turn holding the asked-for
-        # value; the model then reasons from the wrong hit. Anchor to the newest
-        # dated candidate so ranking stays deterministic (no wall-clock): the boost
-        # is in [0, recency_weight], and the default weight (0.1) stays well below
-        # one BM25 IDF unit, so it only breaks genuine near-ties and never overrides
-        # a real relevance gap. Undated candidates get no boost (treated as stale).
+        # BM25 scores stay EXACTLY as computed — no recency weighting, no re-scoring.
+        # Conversation recall is chronological, so we only change the PRESENTATION:
+        # take the top-`max_matches` hits by BM25 relevance, then re-order THAT slice
+        # newest-first (date, then turn within a session), and tag each with a recency
+        # rank. The score stays on every hit and the ordering is made explicit, so the
+        # model can see both "how relevant" and "how recent" and reason about time
+        # (e.g. "which value is the previous one?") without us silently distorting
+        # relevance. Recency is given to the model as an ordering + label, not by
+        # weighting scores differently.
         #
-        # The date is SESSION-granular (one datetime per source session, propagated
-        # to every message in it), so it cannot order turns WITHIN a session. To
-        # recover within-session recency we also fold ``turn_id`` (ordinal of the
-        # message's user-prompt anchor within its run = one run per session) in as a
-        # small, separately-weighted, NORMALIZED nudge: ``turn_weight * tid/max_tid``
-        # where the denominator is the largest turn_id among candidate hits in the
-        # SAME run. [0, turn_weight], so it only separates messages that share a
-        # session (equal date) and never disturbs the cross-session date ranking or
-        # a real BM25 relevance gap.
+        # The date is SESSION-granular (one datetime per source session, propagated to
+        # every message in it); turn_id (ordinal of the message's user-prompt anchor
+        # within its run = one run per session) orders turns WITHIN a session. Undated
+        # messages carry no recency signal and sort last (stable, after all dated).
         blended: list[dict] = []  # {doc_idx, score, date, run, tid}
         for doc_idx, score in ranked:
             section_idx, line_idx = locations[doc_idx]
@@ -331,43 +320,32 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             blended.append(
                 {"doc_idx": doc_idx, "score": score, "date": dso, "run": run, "tid": tid}
             )
-        anchor_ts = max(
-            (b["date"] for b in blended if b["date"] and b["date"] != ""),
-            default="",
-        )
-        if self._recency_weight and anchor_ts:
-            for b in blended:
-                if b["date"] and b["date"] != "":
-                    b["score"] += self._recency_weight * recency_boost(
-                        b["date"], anchor_ts, self._recency_half_life_days
-                    )
-        if self._turn_weight:
-            # Within-session normalization: for each candidate that carries a turn
-            # ordinal, divide by the largest turn_id among candidate hits in the
-            # SAME run so long/short sessions are on the same [0,1] footing.
-            max_tid_by_run: dict[str, int] = {}
-            for b in blended:
-                if b["run"] is not None and b["tid"] is not None:
-                    max_tid_by_run[b["run"]] = max(
-                        max_tid_by_run.get(b["run"], -1), b["tid"]
-                    )
-            for b in blended:
-                if b["run"] is not None and b["tid"] is not None:
-                    m = max_tid_by_run.get(b["run"])
-                    if m:
-                        b["score"] += self._turn_weight * (b["tid"] / m)
+        # Relevance-first candidate selection (scores untouched), capped at max_matches.
         blended.sort(key=lambda b: b["score"], reverse=True)
+        blended = blended[: self._max_matches]
+        # Presentation re-order: dated hits newest-first by (date, turn_id); undated
+        # hits (no recency signal) go last in their original relative order.
+        blended.sort(
+            key=lambda b: (
+                b["date"] is None or b["date"] == "",  # undated sort last
+                b["date"] or "",
+                b["tid"] if b["tid"] is not None else -1,
+            ),
+            reverse=True,
+        )
 
         results: list[str] = []
         shown: set[tuple[int, int]] = set()
-        for item in blended:
+        shown_rank = 0  # recency rank of the LAST actually-displayed hit (1 = newest)
+        for _pos, item in enumerate(blended, start=1):
             if len(results) == self._max_matches:
                 break
             doc_idx = item["doc_idx"]
-            score = item["score"]
+            score = item["score"]  # unchanged BM25 score (recency never re-scores)
             section_idx, line_idx = locations[doc_idx]
             if (section_idx, line_idx) in shown:
                 continue
+            shown_rank += 1
             section = sections[section_idx]
             start = max(0, line_idx - self._context_lines)
             end = min(len(section.display_lines), line_idx + self._context_lines + 1)
@@ -401,6 +379,9 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             # resolve "newer wins" / "which happened first" from the hit itself,
             # instead of re-searching to recover ordering (a loop trigger).
             label += (f" | date: {dso}" if dso else "")
+            # Recency rank: 1 = newest. Results are PRESENTED newest-first (recency
+            # shapes only presentation order + this label, never the BM25 score).
+            label += f" | recency: {shown_rank}"
             header_line = f"[score: {score:.1f} | {label}]"
             # Give the model an explicit, copy-paste-able ref for the shared tool.
             hint = f'\n  -> read_turn("{tref}") for the full turn' if tref else ""
