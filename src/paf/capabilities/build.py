@@ -45,31 +45,30 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
 
 def _build_memory(store) -> Memory:
-    """Markdown-backed durable memory (flat, diffable `.md` files + CAS sidecar),
-    READ-ONLY for the assistant.
+    """M2 journal-view durable memory, INJECT-ONLY for the assistant.
 
-    ``store`` (the shared persistence store) is accepted for a uniform builder
-    signature but unused: memory owns its own ``MarkdownStorage`` rather than
-    writing into the run-events store. The assistant's surface is read-only
-    (``writable=False``): it recalls from the injected ``MEMORY.md`` /
-    ``search_memory`` but NEVER writes or deletes — the consolidation owner
-    sub-agent is the sole writer. This prevents drift / contamination of the
-    canonical notebook during ordinary turns.
+    Mirrors the benchmark assembly in `tests/framework.py`: the model carries
+    the rendered journal (MEMORY.md) injected into every request via
+    before_model_request, and is exposed ZERO memory tools (expose_tools=False)
+    -- not even read/search -- because a separate consolidation owner sub-agent
+    is the sole writer. This converges prod's memory surface on the M2 contract
+    (JournalViewStore, read-only, inject-only), the same shape the LongMemEval
+    harness measures.
 
-    ``guidance=""`` (not ``_READONLY_GUIDANCE``) matches the benchmark/reference
-    assembly in `tests/framework.py`: the spec `instructions` (the single
-    ``system_prompt``) owns ALL static guidance — identity, the CONFLICT /
-    INFERENCE answer rules, the retrieval ladder, and the read-only memory
-    contract — so the model sees exactly one source of recall steering. Only the
-    dynamic ``MEMORY.md`` body still injects (via ``before_model_request``); the
-    capability's own instruction block is off.
+    `store` (the shared persistence store) is accepted for a uniform builder
+    signature but unused. inject_memory=True, writable=False, and an empty
+    guidance string mirror _build_agent; max_lines=1_000_000 / max_tokens=65_536
+    are high, non-evicting caps so the full rendered journal always shows.
     """
-    return Memory.from_spec(
-        backend="markdown",
-        directory=str(_MEMORY_DIR),
-        agent_name="assistant",
+    from paf.capabilities.memory._view import JournalViewStore
+
+    return Memory(
+        store=JournalViewStore(_MEMORY_DIR),
         inject_memory=True,
         writable=False,
+        expose_tools=False,
+        max_lines=1_000_000,
+        max_tokens=65_536,
         guidance="",
     )
 

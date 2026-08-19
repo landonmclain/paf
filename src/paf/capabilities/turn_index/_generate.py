@@ -31,7 +31,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    UserPromptPart,
+)
 
 from ._extract import build_turn_context
 from ._store import TurnIndexStore

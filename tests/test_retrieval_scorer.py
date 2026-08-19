@@ -12,7 +12,6 @@ tests pin the surviving ID-membership path against regressions like q2's.
 See LongMemEval-Testing.md "Memory-consolidation owner A/B".
 """
 
-import pytest
 
 from tests.run_lmem import _id_membership_recall, _retrieval
 

@@ -22,7 +22,6 @@ and a real FileStepStore + TurnIndexStore in a tmp dir.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -50,7 +49,6 @@ from paf.capabilities.turn_index import (
 
 def _toolcall_model(tool_name: str, args: dict | None = None):
     """FunctionModel that FIRST calls `tool_name` with `args`, then answers when a tool result is present."""
-    from pydantic_ai.models.function import FunctionModel
 
     call_args = args if args is not None else {}
 
@@ -88,11 +86,13 @@ def test_all_retrieval_tools_exposed_on_built_agent() -> None:
 
     This is the deterministic guard that would have caught the "search_index isn't
     registered" wiring scare (doc §Problem): assert the FunctionTools are present
-    on the toolset the agent actually runs with. The assistant profile now uses the
-    memory + BM25 stack (TurnIndex removed), and its memory surface is READ-ONLY
-    (the consolidation owner is the sole writer), so the exposed recall tools are
-    `read_memory`/`search_memory`/`search_conversation_history`/`read_turn` — and
-    crucially NOT `write_memory`/`delete_memory`.
+    on the toolset the agent actually runs with. The assistant profile uses the
+    memory + BM25 stack (TurnIndex removed), and its memory surface is the M2
+    INJECT-ONLY contract (`expose_tools=False`, matching `tests/framework.py`
+    `_build_agent`): the journal-rendered notebook is injected in-context and the
+    recall ladder is `search_conversation_history` / `read_turn` — the subject
+    carries NO memory tools at all (not even read/search). Memory is injected,
+    not tooled.
     """
     from paf.specs import build_agent
 
@@ -102,20 +102,18 @@ def test_all_retrieval_tools_exposed_on_built_agent() -> None:
     for ts in combined.toolsets:
         wrapped = getattr(ts, "wrapped", ts)
         names.update(wrapped.tools.keys())
-    # The memory + BM25 stack's read tools must all be exposed.
-    assert "search_memory" in names, f"search_memory missing; got {sorted(names)}"
-    assert "read_memory" in names, f"read_memory missing; got {sorted(names)}"
+    # The BM25 recall rungs must be exposed.
     assert "search_conversation_history" in names, (
         f"search_conversation_history missing; got {sorted(names)}"
     )
-    # Read-only assistant: it must NEVER carry the write/delete surface (the
-    # consolidation owner is the sole writer). Prevents drift/contamination of the
-    # canonical MEMORY.md during ordinary turns.
-    assert "write_memory" not in names, f"write_memory should be absent; got {sorted(names)}"
-    assert "delete_memory" not in names, f"delete_memory should be absent; got {sorted(names)}"
     # `read_turn` is owned by the search capability (ConversationSearch -> ReadTurn),
     # NOT by TurnIndex, so it survives the index removal and stays reachable.
     assert "read_turn" in names, f"read_turn missing; got {sorted(names)}"
+    # M2 INJECT-ONLY memory: the subject must carry NO memory tools — memory is
+    # injected in-context, never tooled. All memory-tool names must be absent
+    # (read/search likewise, matching `expose_tools=False` in _build_agent).
+    for mtool in ("search_memory", "read_memory", "write_memory", "delete_memory", "append_memory"):
+        assert mtool not in names, f"{mtool} should be absent (inject-only); got {sorted(names)}"
     # `search_index` was the TurnIndex-only tool and is gone with the profile change.
     assert "search_index" not in names, f"search_index should be absent; got {sorted(names)}"
 

@@ -46,16 +46,16 @@ from paf.observability.instrumentation import (
     shutdown_observability,
 )
 
+# Shared harness: memory-free builder + turn runner (the ONE source of truth for
+# the pipeline; tiny delegates so it can't drift from run_lmem again).
+from tests.framework import _build_agent, _run_turn
+
 # Direct-persist seed (no agent loop): write raw LME turns straight into the
 # store + turn index, then let the real summarizer build the one-liners.
 from tests.run_lmem import (
     _persist_seed_direct,
     _raw_turns,
 )
-
-# Shared harness: memory-free builder + turn runner (the ONE source of truth for
-# the pipeline; tiny delegates so it can't drift from run_lmem again).
-from tests.framework import _build_agent, _run_turn
 
 # ---------------------------------------------------------------- config ----
 SUBJECT_MODEL = os.environ.get(

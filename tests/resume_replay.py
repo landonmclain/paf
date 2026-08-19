@@ -39,7 +39,6 @@ import os
 import shutil
 import sys
 import time
-import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -48,7 +47,6 @@ from pydantic_ai.capabilities import ReinjectSystemPrompt
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
-    ModelResponse,
     TextContent,
     UserPromptPart,
 )
@@ -56,16 +54,22 @@ from pydantic_ai.messages import (
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence  # noqa: E402
+from pydantic_ai_harness.step_persistence import (  # noqa: E402
+    FileStepStore,
+    StepPersistence,
+)
 
+from paf.capabilities._markers import injected_artifact_markers  # noqa: E402
 from paf.capabilities.memory import Memory  # noqa: E402
-from paf.capabilities.search import ConversationSearch, SnapshotHistorySource  # noqa: E402
+from paf.capabilities.search import (  # noqa: E402
+    ConversationSearch,
+    SnapshotHistorySource,
+)
 from paf.capabilities.turn_index import (  # noqa: E402
     TurnIndexCapability,
     TurnIndexStore,
     TurnSummarizer,
 )
-from paf.capabilities._markers import injected_artifact_markers  # noqa: E402
 
 SUBJECT_MODEL = os.environ.get(
     "BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
@@ -272,7 +276,10 @@ def build_resume_agent(store: FileStepStore, index_dir: Path, memory_dir: Path,
     ]
     # Eviction tier mirrors the harness so the resumed turn still *must* retrieve.
     from pydantic_ai_harness.compaction import (
-        ClampOversizedMessages, ClearToolResults, SlidingWindowCompaction, TieredCompaction,
+        ClampOversizedMessages,
+        ClearToolResults,
+        SlidingWindowCompaction,
+        TieredCompaction,
     )
     caps.append(TieredCompaction(
         target_tokens=LOCOMO_TARGET_TOKENS,
@@ -411,7 +418,10 @@ async def run_replay(args) -> int | dict:
     # observability (optional, mirrors the harness)
     traced = False
     try:
-        from paf.observability.instrumentation import setup_observability, shutdown_observability
+        from paf.observability.instrumentation import (
+            setup_observability,
+            shutdown_observability,
+        )
         traced = setup_observability()
     except Exception:
         traced = False

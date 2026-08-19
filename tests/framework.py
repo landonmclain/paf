@@ -566,7 +566,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     # captured context to the zero-tool fallback for a graceful
                     # best-effort answer. Repair dangling calls first so the
                     # fallback can be fed a valid history.
-                    bailed = True
+                    bailed = True  # noqa: F841  # read via `nonlocal bailed` -> returned in `out`
                     try:
                         from pydantic_ai._agent_graph import _repair_dangling_tool_calls
                         repaired = _repair_dangling_tool_calls(

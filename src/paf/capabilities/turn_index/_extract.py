@@ -21,7 +21,7 @@ and ``read_turn`` returns it whole later.
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from .._markers import injected_artifact_markers
 

@@ -30,9 +30,9 @@ import types
 from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
 from paf.capabilities.memory._window import MemoryConsolidationWindow
-from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
 
 def _make_messages(n: int) -> list[ModelRequest]:

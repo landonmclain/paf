@@ -10,7 +10,7 @@ model end-to-end through the ``Session`` and is excluded from the default
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -74,7 +74,7 @@ async def _seed_run(store: FileStepStore, run_id: str, conv: str, msg: str) -> N
             conversation_id=conv,
             parent_run_id=None,
             agent_name="assistant",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             state="complete",
         )
     )

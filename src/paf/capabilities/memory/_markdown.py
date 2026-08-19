@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio.to_thread
+
 from ._atomic import read_json, write_atomic, write_json_atomic
 from ._store import (
     MemoryConflictError,
