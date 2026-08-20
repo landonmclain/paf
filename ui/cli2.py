@@ -117,12 +117,12 @@ class TurnStream:
 
 def _tool_line(block: ToolBlock) -> Text:
     """A plain labeled line for one tool call (no box): `tool: name(args)`."""
-    return Text(f"tool: {block.name}({block.args})", style="dim")
+    return Text(f"tool: {block.name}({block.args})", style="yellow")
 
 
 def _thinking_line(text: str) -> Text:
     """A plain labeled line for reasoning (no box): `thinking: <text>`."""
-    return Text(f"thinking: {text}", style="dim")
+    return Text(f"thinking: {text}", style="cyan")
 
 
 def _activity_strip(out: TurnStream) -> list[Text]:
@@ -184,10 +184,11 @@ async def _run_streamed(session: Session, prompt: str) -> None:
     """
 
     def build(out: TurnStream) -> Group:
-        return Group(
-            *_activity_strip(out),
-            _answer_panel(out),
-        )
+        # Blank line spacer: activity (tool:/thinking:) sits apart from the
+        # boxed answer (only when there is activity to separate).
+        activity = _activity_strip(out)
+        parts: list = [*activity, Text("")] if activity else []
+        return Group(*parts, _answer_panel(out))
 
     out = TurnStream()
     with Live(
@@ -220,14 +221,16 @@ async def _run_streamed(session: Session, prompt: str) -> None:
                 spinner_task.cancel()
 
     # Turn settled: commit the conversation once to the main scrollback --
-    # plain labeled lines for thinking and tools (still no boxes), then the
-    # green answer box. Thinking is committed verbatim so it doesn't vanish
-    # once streaming ends.
-    for b in out.blocks:
-        if isinstance(b, ToolBlock):
-            console.print(_tool_line(b))
-        elif isinstance(b, ThinkingBlock) and b.text:
-            console.print(_thinking_line(b.text))
+    # plain labeled (colored) lines for thinking and tools, a blank spacer,
+    # then the green answer box. Thinking is committed verbatim so it doesn't
+    # vanish once streaming ends.
+    if out.blocks:
+        for b in out.blocks:
+            if isinstance(b, ToolBlock):
+                console.print(_tool_line(b))
+            elif isinstance(b, ThinkingBlock) and b.text:
+                console.print(_thinking_line(b.text))
+        console.print()  # full empty line spacer before the answer
     console.print(_answer_panel(out))
 
 
