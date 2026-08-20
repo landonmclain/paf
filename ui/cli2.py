@@ -153,21 +153,13 @@ def _activity_strip(out: TurnStream) -> list[Text]:
     return lines
 
 
-def _answer_panel(out: TurnStream, streaming: bool = False) -> Panel:
-    """Render the (possibly still streaming) assistant answer panel.
-
-    When ``streaming`` is true, a live ``⠋ generating…`` spinner is shown as a
-    footer *inside* the green panel so a long prose answer (or a slow model)
-    always reads as alive rather than stalled. The green box itself is what the
-    model wrote so far; the footer is pure UI and never part of the answer.
-    """
+def _answer_panel(out: TurnStream) -> Panel:
+    """Render the (possibly still streaming) assistant answer panel."""
     body: RenderableType = (
         Markdown(_safe("".join(out.response)))
         if out.response
         else Text("")
     )
-    if streaming:
-        body = Group(body, Text(""), Spinner("dots", text="generating…"))
     return Panel(body, title="assistant", border_style="green")
 
 
@@ -200,47 +192,48 @@ async def _run_streamed(session: Session, prompt: str) -> None:
     """
 
     def build(out: TurnStream, streaming: bool = False) -> Group:
+        # A live "generating…" status line is pinned at the TOP of the frame
+        # while the model works. It must sit at the very top: with
+        # `vertical_overflow="ellipsis"` the frame keeps its top edge and
+        # ellipsizes the bottom, so a footer spinner would scroll out of view
+        # the moment the answer grows -- but a top status line never does.
+        parts: list = []
+        if streaming:
+            parts.append(_status_line)
         # Blank line spacer: activity (tool:/thinking:) sits apart from the
         # boxed answer (only when there is activity to separate).
         activity = _activity_strip(out)
-        parts: list = [*activity, Text("")] if activity else []
-        return Group(*parts, _answer_panel(out, streaming))
+        if activity:
+            parts.extend([*activity, Text("")])
+        parts.append(_answer_panel(out))
+        return Group(*parts)
 
     out = TurnStream()
+    # ONE persistent Spinner for the whole turn. Rich's Spinner advances its
+    # frame by real elapsed time (`render(console.get_time())`), so reusing a
+    # single instance animates at the correct speed however often the console
+    # repaints. Creating a fresh Spinner every frame would reset `start_time`
+    # each repaint and make it blink/freeze on frame 0.
+    _status_line = Group(Text(""), Spinner("dots", text="generating…"))
+
     with Live(
-        _answer_panel(out, streaming=True),
+        build(out, streaming=True),
         console=console,
         refresh_per_second=12,
         vertical_overflow="ellipsis",
         screen=True,
     ) as live:
-        # Heartbeat: repaint the whole frame ~10x/sec for the ENTIRE turn so
-        # the "generating…" spinner in the answer panel footer keeps animating
-        # even while a long prose answer is mid-stream (no new tokens arriving)
-        # or the model is slow to start. The stream loop mutates `out` and
-        # repaints on each event; the heartbeat guarantees continuous motion
-        # in between. Cancelled once the turn settles.
-        running = True
-
-        async def _heartbeat() -> None:
-            while running:
-                # Refresh never drops below what Live needs to keep the footer
-                # spinner visibly spinning between stream events.
-                live.update(build(out, streaming=True), refresh=True)
-                await asyncio.sleep(0.1)
-
-        heartbeat_task = asyncio.create_task(_heartbeat())
+        # Live auto-refreshes at `refresh_per_second` (12Hz) via its own
+        # background thread, so the top status-line spinner keeps animating even
+        # while a long prose answer is mid-stream (no new tokens arriving) or
+        # the model is slow to start -- no manual heartbeat task needed.
         try:
             async for event in session.stream(prompt, conversation_id=session.conversation_id):
                 render(event, out)
-                # Repaint immediately on each event; live.update is cheap after
-                # the heartbeat has already been driving frames.
                 live.update(build(out, streaming=True))
         finally:
-            running = False
-            heartbeat_task.cancel()
-            # Final repaint with the spinner removed so the settled panel has
-            # no stray "generating…" footer.
+            # Final repaint with the status line removed so the settled view has
+            # no stray "generating…" line.
             live.update(build(out, streaming=False))
 
     # Turn settled: commit the conversation once to the main scrollback --
