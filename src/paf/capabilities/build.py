@@ -39,6 +39,7 @@ from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
+from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.turn_index import build_turn_index
 from paf.capabilities.web import Web as _Web
 from paf.config import PROJECT_ROOT, settings
@@ -147,6 +148,21 @@ def _build_web(store) -> _Web:
     and each tool reports the missing key/package rather than failing hard).
     """
     return _Web()
+
+
+def _build_skills(store) -> _Skills:
+    """Skill library — list/load on demand + deterministic pointer trigger.
+
+    `store` is accepted for a uniform builder signature but unused — the skill
+    library is self-contained over its demo_skills/ directory, not the
+    persistence store. Indexes the repo's `demo_skills/` (SKILL.md skills +
+    .md notes) at construction; `list_skills`/`load_skill` expose the load
+    mechanism (prompt stays thin, bodies pulled on demand) and `point_to_skill`
+    pre-arms which skill a message needs via zero-LLM BM25 over the declared
+    frontmatter vocab (the skill-note-hint pointer engine re-homed into paf).
+    One paf-native capability for all skill functionality (Landon 2026-08-19).
+    """
+    return _Skills(libraries=(PROJECT_ROOT / "demo_skills",), top_k=3)
 
 
 def _build_tool_output_limits(store) -> ToolOutputLimits:
@@ -319,6 +335,8 @@ def build_runtime_capabilities(
         "Git": _build_git,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,
+        # Skill library — list/load on demand + deterministic pointer trigger.
+        "Skills": _build_skills,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).
         "ToolOutputLimits": _build_tool_output_limits,
         # Observational prompt-cache-collapse monitor (BUILTIN, paf-supplied config).

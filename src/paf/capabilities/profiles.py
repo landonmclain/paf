@@ -111,6 +111,12 @@ DEMO_PROFILE = AgentProfile(
         # time; tools degrade to clear messages when key/package missing.
         # (Adapted from coding_agent web_search_tools.)
         "Web",
+        # Skill library — LIST / LOAD on demand + deterministic POINTER trigger.
+        # list_skills/load_skill keep the prompt thin; point_to_skill pre-arms
+        # which skill a message needs (zero-LLM BM25, skill-note-hint re-homed).
+        # One paf-native capability for all skill functionality, wired to the
+        # repo's demo_skills/ library.
+        "Skills",
         # Framework-level tool-return reduction (BUILTIN, not a paf port) —
         # spills/summarizes/truncates oversized tool results so a giant return
         # doesn't dominate context. Consumed as a pydantic-ai AbstractCapability

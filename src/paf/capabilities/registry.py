@@ -36,6 +36,7 @@ from paf.capabilities.memory import Memory
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
+from paf.capabilities.skills import Skills
 from paf.capabilities.turn_index import TurnIndexCapability
 from paf.capabilities.web import Web
 
@@ -105,6 +106,17 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # controls it and real config objects are passed. Kept as a BUILTIN per Landon —
     # same drop-in pattern as ToolOutputLimits, NOT ported into paf.capabilities.
     "WarnOnCacheBusts": WarnOnCacheBusts,
+    # Skill library — LIST / LOAD on demand + a deterministic POINTER trigger.
+    # One paf-native capability for all skill functionality (Landon 2026-08-19):
+    # loads the load-on-demand idea from the harness Skills / pydantic-ai
+    # deferred-capability catalog (list_skills/load_skill keep the prompt thin)
+    # AND re-homes the skill-note-hint pointer engine (point_to_skill pre-arms
+    # which skill a message needs via zero-LLM BM25 over frontmatter vocab).
+    # paf icon-capability (FunctionToolset wrapped in AbstractCapability), same
+    # shape as FileSystem/Shell/Git/Web — NOT the deferred-Capability bundle.
+    # Has `get_toolset` so it resolves via build.py (and declaratively with a
+    # libraries path).
+    "Skills": Skills,
     # Sub-agent delegation: expose a single `delegate_task(agent_name, task)` tool so
     # the agent can hand a self-contained task to a named child agent that runs in its
     # own fresh, isolated run (never sees this conversation). Consumed as a pydantic-ai
