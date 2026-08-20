@@ -213,8 +213,9 @@ async def _run_streamed(session: Session, prompt: str) -> None:
     # frame by real elapsed time (`render(console.get_time())`), so reusing a
     # single instance animates at the correct speed however often the console
     # repaints. Creating a fresh Spinner every frame would reset `start_time`
-    # each repaint and make it blink/freeze on frame 0.
-    _status_line = Group(Text(""), Spinner("dots", text="generating…"))
+    # each repaint and make it blink/freeze on frame 0. A blank line above and
+    # below gives the status line breathing room (not flush against content).
+    _status_line = Group(Text(""), Spinner("dots", text="generating…"), Text(""))
 
     with Live(
         build(out, streaming=True),
