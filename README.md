@@ -34,10 +34,17 @@ src/paf/capabilities/
   search/       paf-owned BM25 ConversationSearch (search_conversation_history)
                 + the SHARED full-content read (read_turn) — search is the
                 permanent retrieval layer, read_turn lives here
-  memory/       paf-owned Memory capability, markdown backend (readable .md + CAS sidecar)
+  memory/       paf-owned Memory capability, M2 journal model (append-only
+                memory-journal.jsonl + rendered MEMORY.md view + consolidation owner)
+  fs/           read/write/edit/search files (demo "everything sandbox" profile)
+  shell/        run/start/check/stop commands (demo profile)
+  git/          status/changed/diff/checkpoint/restore (demo profile)
+  web/          Tavily search/official-docs/fetch (demo profile)
+  skills/       list/load BM25-pointed project skills (demo profile)
   _markers.py   shared injected-prompt markers (turn-index injection + memory strip)
   registry.py   allowlisted catalog;  profiles.py named profiles;  build.py assembles
-  compaction.py tiered compaction (sliding window + summary);  persistence.py StepPersistence
+  compaction.py tiered compaction (sliding window + journal consolidation);
+  persistence.py StepPersistence
 ```
 
 `agent-foundation` remains a *dependency* — but only for the **turn-index
@@ -73,6 +80,15 @@ BM25-matches the one-liners **and** their key terms, with a **conservative
 recency nudge** (`recency_weight=0.1`, anchored to the newest result) that
 breaks ties toward newer facts without overriding significant relevance.
 
+**Raw search is recency-*presented*, not recency-*scored*.** Separately,
+`search_conversation_history` does **not** re-weight BM25 scores. It takes the
+top-`max_matches` hits by pure relevance, then *re-orders that slice
+newest-first* by `(date, turn)` and tags each with a `recency: N` label
+(1 = newest). The score stays on every hit and the ordering is made explicit, so
+relevance still decides *which* hits return while the model can tell which is
+the current value of a topic. Undated hits carry no recency signal and sort
+last.
+
 **The summarizer (`_summarizer.py`) — a structured record, not a sentence:**
 
 - `TurnSummary(BaseModel)`: `sentence` (the in-context one-liner, hard
@@ -81,8 +97,9 @@ breaks ties toward newer facts without overriding significant relevance.
   (`resolved/blocked/error/decided/awaiting`).
 - `TurnSummarizer(Agent)`: a real pydantic-ai agent, `output_type=TurnSummary`,
   bounded `retries=` for schema validation. Defaults to a cheap secondary model
-  (`openrouter:deepseek/deepseek-v4-flash-0731:nitro`), decoupled from the chat
-  model, so the write path stays cheap.
+  (`openrouter:deepseek/deepseek-v4-flash-0731`, bare slug — routing pinned via
+  a provider object, **not** a `:nitro` suffix, for deterministic sampling),
+  decoupled from the chat model, so the write path stays cheap.
 - **Char-budget retry** (the axis pydantic-ai's builtin `retries=` can't cover).
   An over-budget `sentence` triggers our own loop: re-run with an explicit
   *"you wrote N chars, cap is M, cut to essentials"* corrective prompt, bounded,
@@ -139,14 +156,36 @@ the whole turn, so the model resolves it in one `read_turn` call.
 
 ## Memory (`paf.capabilities.memory`)
 
-The memory arm is **paf-owned and live**, un-gated as a capability. It runs with
-`backend="markdown"`, writing **readable `.md` bodies** plus a flat
-`.memory-state.json` CAS sidecar under `data/memory/` (root-anchored) — so saved
-knowledge is inspectable, editable, and diffable (flat-file-first; no opaque DB).
+The memory arm is **paf-owned and live**, built on the **M2 three-layer journal
+model** — an *append-only JSONL journal is the source of truth*, and
+`MEMORY.md` is a *pure presentation view rendered from it* (no opaque DB;
+inspectable, editable, diffable — flat-file-first).
 
-Conflict resolution is **"most recently user-stated value wins"** — the Memory
-capability's guidance treats the most recent user-stated fact as truth over
-older conflicting entries (commit `48f8c14`).
+```
+data/memory/
+  memory-journal.jsonl   # source of truth — append-only, one JSON record per durable fact
+  MEMORY.md              # rendered view (write_render) — what gets injected as <memory>
+```
+
+**Write side — the consolidation owner (the only writer).** A dedicated owner
+sub-agent extracts durable facts from the conversation and appends them to the
+journal via `append_memory(type, fact, born_on, source_ref)` — append-only, one
+fact per call, six semantic types (`identity` / `preference` / `fact` / `event`
+/ `task` / `current`; **no `decision` type** — file decisions under one of the
+six). It never edits, moves, deletes, or dedupes; newest-wins and dedup are
+resolved by the render pass. The owner runs lazily on compaction eviction (and
+in the benchmark via `journal=JournalStore(...)` + `write_render`).
+
+**Read side — the assistant (read-only).** The answerer's `Memory` uses
+`JournalViewStore(_MEMORY_DIR)`, `inject_memory=True`, `writable=False`,
+`expose_tools=False`, and injects the rendered `MEMORY.md` into `<memory>` on
+every request. It recalls by the ladder *in-context → `search_conversation_history`
+→ `read_turn`* — it has **no** memory write tool (recording is the owner's job),
+and injected memory conflicts with raw past turns resolve to "memory wins".
+
+**As-of date / traceability.** Each journal record carries `born_on` (ISO date
+the fact was stated) and `source_ref` (`run_id:turn_id`), so every fact is
+date-grounded and `read_turn`-resolvable back to the turn it came from.
 
 ## Benchmarking: LongMemEval (the grading gate) + LoCoMo
 
@@ -204,13 +243,16 @@ src/paf/
     turn_index/   episodic index (write gate + inject/recall tools + summarizer)
     search/       paf-owned BM25 ConversationSearch (search_conversation_history)
                   + shared full-content read (read_turn) — search-owned, both ladders use it
-    memory/       paf-owned Memory, markdown backend (atomics inlined)
+    memory/       paf-owned Memory, M2 journal model (journal + render + owner)
+    fs/ shell/ git/ web/ skills/   demo-profile capabilities ("everything sandbox")
   observability/  Langfuse OTLP instrumentation (setup/shutdown)
   runtime.py      Session — UI-agnostic run lifecycle (build + trace + stream +
                   history + flush)
   specs.py        spec loader (agent name → YAML → Agent)
   config.py       pydantic-settings config + spec/root anchoring
 specs/            declarative agent specs (*.yaml)
+ui/               cli.py (plain), cli2.py (Rich live), cli_textual.py (Textual),
+                  cli_demo.py (keyless/deterministic)
 tests/            benchmark harness (run_lmem, run_locomo, tiny_lmem, ...)
 ```
 
@@ -224,14 +266,20 @@ Dependencies resolve from a sibling `agent-foundation` package
 cp .env.example .env        # OPENAI_API_KEY + optional Langfuse keys
 PYTHONPATH= .venv/bin/pip install -e .   # or: uv sync
 
-# interactive REPL
+# interactive REPL — plain assistant
 PYTHONPATH="" .venv/bin/python -m ui.cli
+# or the richer live UIs (same Session/Runtime underneath)
+PYTHONPATH="" .venv/bin/python -m ui.cli2            # Rich live render
+PYTHONPATH="" .venv/bin/python -m ui.cli_textual     # Textual full-screen
+# the "everything sandbox" demo profile (fs/shell/git/web/skills/subagents)
+uv run --env-file .env python ui/cli2.py demo_assistant
 ```
 
 Prepend `set -a && . ./.env && set +a;` to export secrets for the runner. The
-REPL keeps a durable conversation (`conversation_id "cli-primary"`); run it
-twice with the same id to see persistence + recall — start, quit, restart, then
-ask for something reachable only via `search_conversation_history`.
+REPL keeps a durable conversation (`conversation_id "cli-primary"` for
+`ui.cli`, per-agent lanes for `cli2`); run it twice with the same id to see
+persistence + recall — start, quit, restart, then ask for something reachable
+only via `search_conversation_history`.
 
 A keyless/deterministic run path is available in `ui/cli_demo.py`
 (`MODEL='test'`).
@@ -272,9 +320,19 @@ The recall/memory stack is now **entirely paf-owned**:
 - `ConversationSearch` is paf-local BM25 (`paf.capabilities.search`,
   `search_conversation_history` tool).
 - `Memory` is re-homed to `paf.capabilities.memory` as a **paf-owned
-  capability**, markdown backend, `agent-foundation` dropped for memory.
+  capability**, now on the **M2 journal model**: an append-only
+  `memory-journal.jsonl` is the source of truth, a **consolidation owner
+  sub-agent** is the sole writer (`append_memory`, six semantic types), and
+  `MEMORY.md` is a `write_render` view injected read-only into the assistant.
+  `agent-foundation` dropped for memory.
 - All three recall tools emit `session=<id>`, enabling **ID-membership recall**
   scoring.
+
+Also shipped on the demo (`demo_assistant`, the "everything sandbox" profile):
+paf-owned **FileSystem, Shell, Git, Web, and Skills** capabilities plus
+**Subagents**, wired through the registry + profile allowlist + `build.py`
+builders — a functional REPL (`ui/cli2.py demo_assistant`) exercising the full
+capability surface live against Langfuse traces.
 
 Benchmarking has pivoted **from Beam-Lite to a LongMemEval+LoCoMo gate** (the
 north-star): official-binary-judge grading, ID-membership retrieval recall,
