@@ -121,13 +121,17 @@ class TurnStream:
 
 
 def _tool_line(block: ToolBlock) -> Text:
-    """A labeled line for one tool call (no box): `tool: name(args)`.
+    """A labeled line for one tool call (no box): `✓ tool: name(args)`.
 
     Only the ``tool:`` label is colored; the call itself stays default so the
-    content reads clearly.
+    content reads clearly. The status marker reflects the block's live state:
+    ``✓`` (green) once the tool result has returned, ``●`` (yellow) while it is
+    still in flight — so ``finish_latest_tool()`` has a visible effect.
     """
+    done = block.status == "done"
+    marker = "✓" if done else "●"
     return Text.assemble(
-        ("tool: ", "yellow"),
+        (f"{marker} tool: ", "green" if done else "yellow"),
         f"{block.name}({block.args})",
     )
 
@@ -143,14 +147,18 @@ def _thinking_line(text: str) -> Text:
     )
 
 
-def _activity_strip(out: TurnStream) -> list[Text]:
+def _activity_strip(out: TurnStream, max_blocks: int | None = None) -> list[Text]:
     """Box-free labeled activity lines for thinking/tools in the live view.
 
     Each thinking block renders as ``thinking: <text>`` and each tool call as
-    ``tool: name(args)``, in stream order, full text (no truncation).
+    ``tool: name(args)``, in stream order. When ``max_blocks`` is given, only the
+    *last* ``max_blocks`` blocks are shown (live viewport — keeps old activity
+    from consuming the screen). The final committed transcript calls it with no
+    cap so the full activity is retained.
     """
+    blocks = out.blocks[-max_blocks:] if max_blocks else out.blocks
     lines: list[Text] = []
-    for block in out.blocks:
+    for block in blocks:
         if isinstance(block, ToolBlock):
             lines.append(_tool_line(block))
         elif isinstance(block, ThinkingBlock) and block.text:
@@ -158,9 +166,36 @@ def _activity_strip(out: TurnStream) -> list[Text]:
     return lines
 
 
+def _tail_text_lines(text: str, max_lines: int) -> str:
+    """Keep only the last ``max_lines`` visual lines (auto-follow viewport).
+
+    Older lines scroll off the top; the newest tokens stay pinned at the bottom
+    edge, so as new content streams in the view shifts upward naturally. Guards
+    against starting mid-code-fence so the kept slice re-renders cleanly as
+    Markdown (no giant orphaned code block at the top).
+    """
+    if max_lines < 1:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    kept = lines[len(lines) - max_lines :]
+    n = sum(1 for ln in kept if ln.strip().startswith("```"))
+    if n % 2 == 1:
+        # cut inside a fence opened above the viewport: drop content through the
+        # first fence line to exit the orphaned block (best-effort; the final
+        # commit re-renders the full answer exactly).
+        for i, ln in enumerate(kept):
+            if ln.strip().startswith("```"):
+                kept = kept[i + 1 :]
+                break
+    return "\n".join(kept)
+
+
 def _status_line(word: str, color: str) -> Group:
     """One live status line: colored ``<phase>…`` label beside the spinner.
 
+    Sits at the BOTTOM of the live frame (the chat-eye anchor) while streaming.
     The label carries its own style so only the phase word is colored (matching
     the ``thinking:`` / ``tool:`` label-only coloring elsewhere); the spinner
     glyph stays default. ``Spinner`` accepts a `RenderableType` text and uses it
@@ -226,29 +261,67 @@ async def _run_streamed(session: Session, prompt: str) -> None:
     we exit the alt buffer and commit the final conversation ONCE to the main
     console (one clean copy of each thinking/tool panel plus the full answer).
 
+    **Auto-follow viewport.** While streaming, the answer is NOT rendered in
+    full: ``build()`` keeps only the last ``_available_answer_lines`` visual
+    lines and re-renders that tail as Markdown. Because the newest tokens stay
+    pinned at the bottom edge, older lines scroll off the top of the live view
+    as the answer grows — genuine auto-follow. The phase status line sits at
+    the BOTTOM (the chat-eye anchor), below the trimmed answer, and stays
+    visible because the frame is trimmed to fit. Live activity is capped to the
+    last few blocks so old thinking/tool lines can't consume the viewport.
+
     This replaces the earlier `vertical_overflow="visible"` approach, where the
     frame could exceed the terminal and Rich emitted every overflowing line
     into the scrollback on each repaint -- the duplicated `read_file`/`tools`
-    boxes you saw when scrolling back through history.
+    boxes you saw when scrolling back through history. It also replaces an
+    interim top-pinned status line; trimming the answer to fit is what keeps
+    the bottom status (and the newest tokens) visible without relying on the
+    top-edge preservation that ``vertical_overflow=\"ellipsis\"`` provides.
     """
 
+    def _available_answer_lines(out: TurnStream) -> int:
+        """Rows the answer panel body may occupy so the whole frame fits.
+
+        Reserves rows for live activity (capped), a blank spacer, the panel
+        borders + padding, and the bottom status line, then hands the rest to
+        the answer. A small safety margin absorbs Markdown reflow wrapping so
+        the frame essentially never exceeds the terminal (it must not: with
+        ``vertical_overflow="ellipsis"`` Rich keeps the TOP and would chop the
+        newest tokens otherwise). The final commit below re-renders the full
+        answer, so this is purely the live-preview budget.
+        """
+        h = console.size.height
+        activity = _activity_strip(out, max_blocks=3)
+        # 1 blank spacer above the panel + 2 borders + 2 padding + bottom status
+        # + breathing room (~2): conservative so wraps don't blow the budget.
+        reserved = max(4, len(activity) + 1 + 2 + 2 + 1 + 2)
+        return max(1, h - reserved)
+
     def build(out: TurnStream, streaming: bool = False) -> Group:
-        # A live status line is pinned at the TOP of the frame while the model
-        # works. It must sit at the very top: with `vertical_overflow="ellipsis"`
-        # the frame keeps its top edge and ellipsizes the bottom, so a footer
-        # spinner would scroll out of view the moment the answer grows -- but a
-        # top status line never does. Its label swaps per phase (thinking / using
-        # {tool} / writing) so the single line tracks what the model is doing.
         parts: list = []
-        if streaming:
-            word, color = _phase(out)
-            parts.append(_status_line(word, color))
-        # Blank line spacer: activity (tool:/thinking:) sits apart from the
-        # boxed answer (only when there is activity to separate).
-        activity = _activity_strip(out)
+        # Live activity first (capped while streaming so old thinking/tool lines
+        # don't consume the viewport). Order is top-down here.
+        activity = _activity_strip(out, max_blocks=3 if streaming else None)
         if activity:
             parts.extend([*activity, Text("")])
-        parts.append(_answer_panel(out))
+        # The answer is rendered as a manageable viewport: only the LAST
+        # `_available_answer_lines` visual lines are kept, so the newest tokens
+        # stay pinned at the bottom edge and older lines scroll off the top —
+        # genuine auto-follow. The status line sits at the very BOTTOM (the
+        # chat-eye anchor), below the answer, and stays visible because the
+        # frame is trimmed to fit.
+        body = "\n".join(out.response)
+        answer = Panel(
+            Markdown(_tail_text_lines(body, _available_answer_lines(out))),
+            title="assistant",
+            border_style="green",
+        )
+        if streaming:
+            word, color = _phase(out)
+            status = _status_line(word, color)
+            parts.append(Group(answer, Text(""), status))
+        else:
+            parts.append(answer)
         return Group(*parts)
 
     out = TurnStream()
@@ -266,9 +339,9 @@ async def _run_streamed(session: Session, prompt: str) -> None:
         screen=True,
     ) as live:
         # Live auto-refreshes at `refresh_per_second` (12Hz) via its own
-        # background thread, so the top status-line spinner keeps animating even
-        # while a long prose answer is mid-stream (no new tokens arriving) or
-        # the model is slow to start -- no manual heartbeat task needed.
+        # background thread, so the bottom status-line spinner keeps animating
+        # even while a long prose answer is mid-stream (no new tokens arriving)
+        # or the model is slow to start -- no manual heartbeat task needed.
         try:
             async for event in session.stream(prompt, conversation_id=session.conversation_id):
                 render(event, out)
