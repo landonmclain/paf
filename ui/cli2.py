@@ -115,18 +115,40 @@ class TurnStream:
                 return
 
 
-def _block_panel(block: ThinkingBlock | ToolBlock) -> Panel:
-    """Render one thinking or tool step as a full-width panel."""
-    if isinstance(block, ThinkingBlock):
-        return Panel(
-            Text(block.text, style="dim"), title="thinking", border_style="cyan"
-        )
+def _tool_line(block: ToolBlock) -> Text:
+    """A compact, muted single-line entry for one tool call (no box)."""
     mark = "\u2713" if block.status == "done" else "\u2026"
-    return Panel(
-        Text(f"  {mark} {block.name}({block.args})", style="dim"),
-        title="tools",
-        border_style="blue",
-    )
+    # Trim the args so a long command doesn't blow out the line full-width.
+    call = f"{block.name}({block.args})"
+    if len(call) > 160:
+        call = call[:157] + "..."
+    return Text(f"  {mark} {call}", style="dim")
+
+
+def _thinking_line(text: str) -> Text:
+    """A single muted line representing in-flight (or brief) reasoning."""
+    snippet = " ".join(text.split())
+    if len(snippet) > 120:
+        snippet = snippet[:117] + "..."
+    return Text(f"  \u2026 {snippet}", style="italic dim")
+
+
+def _activity_strip(out: TurnStream) -> list[Text]:
+    """Dim, box-free activity lines for thinking/tools in the live view.
+
+    Consecutive thinking channels into a single live line; each tool call is
+    its own compact line. The reasoning text itself is muted and truncated so
+    it reads as background motion, not a wall of boxes.
+    """
+    lines: list[Text] = []
+    for block in out.blocks:
+        if isinstance(block, ToolBlock):
+            lines.append(_tool_line(block))
+    # Live thinking (the non-terminal last block) shown as one muted line if
+    # there is nothing more specific to watch.
+    if out.blocks and isinstance(out.blocks[-1], ThinkingBlock) and out.blocks[-1].text:
+        lines.append(_thinking_line(out.blocks[-1].text))
+    return lines
 
 
 def _answer_panel(out: TurnStream) -> Panel:
@@ -174,7 +196,7 @@ async def _run_streamed(session: Session, prompt: str) -> None:
 
     def build(out: TurnStream) -> Group:
         return Group(
-            *[_block_panel(b) for b in out.blocks],
+            *_activity_strip(out),
             _answer_panel(out),
         )
 
@@ -208,23 +230,58 @@ async def _run_streamed(session: Session, prompt: str) -> None:
             if not started:
                 spinner_task.cancel()
 
-    # Turn settled: commit the full conversation once to the main scrollback.
+    # Turn settled: commit the conversation once to the main scrollback --
+    # compact muted tool lines (thinking is absorbed, not committed verbatim)
+    # then the green answer box.
     for b in out.blocks:
-        console.print(_block_panel(b))
+        if isinstance(b, ToolBlock):
+            console.print(_tool_line(b))
     console.print(_answer_panel(out))
 
 
 def _startup_banner(session: Session) -> None:
-    """Show whether this conversation resumes durable history."""
+    """Load durable history and import it into the visible conversation.
+
+    ``session.restore()`` seeds ``session.history`` with the prior turns for
+    this conversation id. We then render those prior ``you`` / ``assistant``
+    panels to the main scrollback so a fresh process opens showing the actual
+    conversation, not just a count. The banner confirms what was loaded.
+    """
+    restored = 0
     try:
         restored = asyncio.run(session.restore())
     except Exception as exc:  # noqa: BLE001 - persistence is optional sugar here
         console.print(f"(persistence/resume skipped: {exc})")
         return
+
     if restored:
-        console.print(f"[cyan]resumed {restored} prior message(s)[/cyan]")
+        _render_prior_history(session.history)
+        console.print(f"[cyan]resumed {restored} prior message(s)[/cyan]\n")
     else:
-        console.print(f"[green]new conversation: {session.conversation_id}[/green]")
+        console.print(f"[green]new conversation: {session.conversation_id}[/green]\n")
+
+
+def _render_prior_history(history: list) -> None:
+    """Print prior turns (``Session.history``) to the main scrollback.
+
+    Keeps it to the chat skeleton -- the user's prompts and the assistant's
+    final text per turn -- mirroring how the live turn renders, so the opened
+    conversation reads as a continuous transcript.
+    """
+    from pydantic_ai.messages import TextPart, UserPromptPart
+
+    for msg in history:
+        for part in getattr(msg, "parts", []):
+            if isinstance(part, UserPromptPart):
+                content = part.content
+                if isinstance(content, str):
+                    console.print(
+                        Panel(content, title="you", border_style="magenta")
+                    )
+            elif isinstance(part, TextPart):
+                console.print(
+                    Panel(part.content, title="assistant", border_style="green")
+                )
 
 
 def main() -> int:

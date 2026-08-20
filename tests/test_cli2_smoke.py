@@ -41,7 +41,11 @@ def fold(events):
 def render_layout(out):
     cap = Cap()
     c.console = cap
-    cap.print(c._build_layout(out))
+    # Rebuild the committed layout: activity strip (dim tool lines) + answer box.
+    for b in out.blocks:
+        if isinstance(b, c.ToolBlock):
+            cap.print(c._tool_line(b))
+    cap.print(c._answer_panel(out))
     return _visible(cap.buf.getvalue())
 
 
@@ -71,18 +75,18 @@ def test_layout_renders_markdown_and_tools():
         ev(kind="tool_result", tool_name="search", tool_text="results"),
     ])
     raw = render_layout(out)
-    # Two titled panels present.
+    # Assistant stays boxed (titled panel); answer is Markdown-rendered.
     assert "assistant" in raw, raw
-    assert "tools" in raw, raw
-    # Answer is Markdown-rendered: bold consumed, no literal **.
     assert "**" not in raw, raw
     assert "Bold answer and italics." in raw.replace("\n", " "), raw
-    # Tool shows done mark.
+    # Tool is a compact box-free dim line (no "tools" box title), with done mark.
+    assert "tools" not in raw, raw
+    assert "search" in raw, raw
     assert "\u2713" in raw, raw
     print("test_layout_renders_markdown_and_tools OK")
 
 
-def test_layout_thinking_is_own_box_before_assistant_and_tools_interleave():
+def test_layout_thinking_is_absorbed_tools_interleave():
     # thinking -> tool -> thinking -> tool(done) -> response
     out = fold([
         ev(kind="thinking", text="check calendar"),
@@ -93,26 +97,30 @@ def test_layout_thinking_is_own_box_before_assistant_and_tools_interleave():
         ev(kind="text", text="Created it."),
     ])
     raw = render_layout(out)
-    # Thinking renders as its own titled panel, not inline.
-    assert "thinking" in raw, raw
-    # Box order preserved: first thinking appears before the assistant box.
-    assert raw.index("thinking") < raw.index("assistant"), raw
-    # Interleaved second thinking block also present, tools between them.
-    assert raw.count("thinking") >= 2, raw
-    assert raw.count("tools") >= 2, raw
-    print("test_layout_thinking_is_own_box_before_assistant_and_tools_interleave OK")
+    # Redesign: thinking is absorbed (no "thinking" box), tools are dim lines.
+    assert "thinking" not in raw, raw
+    # Both tool calls present as compact lines, no "tools" box title.
+    assert "tools" not in raw, raw
+    assert "get_calendar" in raw, raw
+    assert "create_event" in raw, raw
+    # Only the last (done) tool carries the check mark in this stream.
+    assert "\u2713" in raw, raw
+    assert "assistant" in raw, raw
+    print("test_layout_thinking_is_absorbed_tools_interleave OK")
 
 
 def test_layout_thinking_placeholder():
     out = fold([ev(kind="text", text="plain answer")])
     raw = render_layout(out)
     assert "plain answer" in raw, raw
+    # No thinking box when there was no reasoning in the turn.
+    assert "thinking" not in raw, raw
     print("test_layout_thinking_placeholder OK")
 
 
 if __name__ == "__main__":
     test_fold_accumulates_thinking_response_tools()
     test_layout_renders_markdown_and_tools()
-    test_layout_thinking_is_own_box_before_assistant_and_tools_interleave()
+    test_layout_thinking_is_absorbed_tools_interleave()
     test_layout_thinking_placeholder()
     print("ALL OK")
