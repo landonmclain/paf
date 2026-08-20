@@ -87,12 +87,10 @@ model_settings:
 # All keys optional; unset -> the builder's benchmark-tuned defaults.
 #
 # target_tokens: live-history size (tokens) that triggers compaction to start
-#   escalating. PROBE VALUE: 2500 tokens (~10k chars at 4 chars/token) so the
-#   ladder still fires reliably on any real conversation (turn 2+), while leaving
-#   a little more room than the 1000-token first probe — enough that the agent
-#   keeps a few turns of context instead of evicting every single time. Still NOT
-#   a production value; raise toward ~1/6 of the 300k context (≈50k) once the
-#   consolidation path is confirmed working end-to-end, before promoting.
+#   escalating. 20000 tokens (~80k chars at 4 chars/token) — normal demo turns
+#   stay well under this, so eviction only fires on genuinely long conversations
+#   instead of every request (the 2500 probe fired up to 3x per turn). At ~1/15
+#   of the 300k context, still conservative; can push toward ~50k later.
 # window_max_messages / window_keep_messages: window trigger / tail. The
 #   sliding window keeps the 5 most-recent messages (+1 preserved first prompt)
 #   and drops the rest, so eviction trims hard and consolidation replays the
@@ -109,7 +107,7 @@ model_settings:
 #   M2 JournalStore + write_render, matching the benchmark path), so durable
 #   facts survive eviction instead of being lost.
 compact:
-  target_tokens: 2500
+  target_tokens: 20000
   window_max_messages: 150
   window_keep_messages: 5
   clear_tool_max_tokens: 5000
