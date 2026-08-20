@@ -28,11 +28,13 @@ from pydantic_ai_harness.compaction import (
 from pydantic_ai_harness.step_persistence import StepPersistence
 
 from paf.capabilities.fs import FileSystem
+from paf.capabilities.git import Git
 from paf.capabilities.memory import Memory
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.turn_index import TurnIndexCapability
+from paf.capabilities.web import Web
 
 # name -> capability type. The name is the serialization form used in a spec's
 # `capabilities:` entry and the key a profile allowlists against.
@@ -74,4 +76,12 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # verbatim from the harness. `from_spec` + `get_toolset` so it resolves
     # declaratively AND via build.py with paf-anchored settings.
     "Shell": Shell,
+    # Safe git inspection + checkpoint tools (status/changed/diff/checkpoint/
+    # restore) rooted at a workspace dir. Adapted from coding_agent git_tools;
+    # `get_toolset` so it resolves via build.py (and declaratively when rooted).
+    "Git": Git,
+    # Tavily-backed web search + page extraction (search_web_docs /
+    # search_official_docs / fetch_web_page). Adapted from coding_agent
+    # web_search_tools. Reads TAVILY_API_KEY from the env at call time.
+    "Web": Web,
 }

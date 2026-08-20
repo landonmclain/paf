@@ -102,6 +102,15 @@ DEMO_PROFILE = AgentProfile(
         # allow/deny lists, interactive-command blocking, and env-masking
         # (incl. LLM-creds preset). (Copied harness Shell.)
         "Shell",
+        # Safe git inspection + checkpoint tools — status/changed/diff (chunked,
+        # paged), checkpoint (explicit paths only, no broad add), restore
+        # (explicit paths only). (Adapted from coding_agent git_tools.)
+        "Git",
+        # Tavily-backed web search + page extraction — search_web_docs,
+        # search_official_docs, fetch_web_page. Reads TAVILY_API_KEY at call
+        # time; tools degrade to clear messages when key/package missing.
+        # (Adapted from coding_agent web_search_tools.)
+        "Web",
     ),
 )
 

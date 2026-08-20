@@ -28,12 +28,14 @@ from pathlib import Path
 
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
+from paf.capabilities.git import Git as _Git
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.turn_index import build_turn_index
+from paf.capabilities.web import Web as _Web
 from paf.config import PROJECT_ROOT, settings
 
 # The profile name that gates context compaction in build_runtime_capabilities.
@@ -119,6 +121,29 @@ def _build_shell(store) -> _Shell:
     return _Shell(cwd=PROJECT_ROOT)
 
 
+def _build_git(store) -> _Git:
+    """Safe git inspection + checkpoint tools rooted at the project root.
+
+    `store` is accepted for a uniform builder signature but unused — git
+    operates over the repo at PROJECT_ROOT, not the persistence store. The
+    toolset confines every user-supplied path to this root; the two write tools
+    (git_checkpoint / git_restore_paths) refuse empty path lists so the agent
+    can never broad-`add -A` or wipe more than it named.
+    """
+    return _Git(root=PROJECT_ROOT)
+
+
+def _build_web(store) -> _Web:
+    """Tavily-backed web search + page extraction tools.
+
+    `store` is accepted for a uniform builder signature but unused — web tool
+    state is just the Tavily client, read lazily from `TAVILY_API_KEY` at call
+    time (so the capability constructs and registers even before a key exists,
+    and each tool reports the missing key/package rather than failing hard).
+    """
+    return _Web()
+
+
 def _turn_index_suppressed(store):
     """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
 
@@ -178,6 +203,10 @@ def build_runtime_capabilities(
         "FileSystem": _build_filesystem,
         # Shell command execution (paf-owned harness copy) rooted at the project root.
         "Shell": _build_shell,
+        # Safe git inspection + checkpoint tools rooted at the repo root.
+        "Git": _build_git,
+        # Tavily-backed web search + page extraction tools.
+        "Web": _build_web,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder:
