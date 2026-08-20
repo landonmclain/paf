@@ -10,11 +10,12 @@ from pydantic_ai_harness.compaction import (
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
+from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory._window import MemoryConsolidationWindow
-from paf.capabilities.profiles import PROFILES
+from paf.capabilities.profiles import DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 
 
@@ -55,6 +56,28 @@ def test_capability_types_resolves_and_raises_on_missing() -> None:
     with pytest.raises(KeyError) as excinfo:
         bad.capability_types()
     assert "NoSuchCapability" in str(excinfo.value)
+
+
+def test_warn_on_cache_busts_cataloged_and_wired() -> None:
+    """WarnOnCacheBusts is a cataloged BUILTIN and resolves on the demo profile.
+
+    Same drop-in pattern as ToolOutputLimits: cataloged (so the allowlist + schema
+    resolve) and built in Python (so the profile gate controls it with real config
+    objects). Observer-only, conservative defaults — no tools/instructions/settings.
+    """
+    assert CAPABILITY_TYPES["WarnOnCacheBusts"] is WarnOnCacheBusts
+
+    from paf.capabilities.build import build_runtime_capabilities
+
+    built = build_runtime_capabilities(DEMO_PROFILE)
+    monitor = next(
+        (c for c in built if type(c).__name__ == "WarnOnCacheBusts"), None
+    )
+    assert monitor is not None
+    assert isinstance(monitor, WarnOnCacheBusts)
+    assert monitor.collapse_ratio == 0.5
+    assert monitor.min_prefix_tokens == 1024
+    assert monitor.cache_ttl_seconds == 300.0
 
 
 def test_only_one_real_profile_for_m1() -> None:

@@ -27,6 +27,7 @@ from pydantic_ai_harness.compaction import (
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
+from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
@@ -93,4 +94,14 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # profile allowlist + schema resolve. Kept as a BUILTIN per Landon (plug-and-play
     # with config, not ported into paf.capabilities).
     "ToolOutputLimits": ToolOutputLimits,
+    # Observational prompt-cache-collapse monitor (BUILTIN, not a paf port). Reads
+    # `usage.cache_read_tokens` after each model request and warns (CacheBustWarning,
+    # stdlib `warnings`) when the established cacheable prefix collapses mid-run —
+    # a moved prefix or a provider-side expiry spikes billing. Consumed as a
+    # pydantic-ai AbstractCapability; adds no tools/instructions/model-settings so it
+    # composes with anything. Silent when caching is off/unreported. Cataloged so the
+    # profile allowlist + schema resolve; built in Python (build.py) so profile gate
+    # controls it and real config objects are passed. Kept as a BUILTIN per Landon —
+    # same drop-in pattern as ToolOutputLimits, NOT ported into paf.capabilities.
+    "WarnOnCacheBusts": WarnOnCacheBusts,
 }

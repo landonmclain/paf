@@ -27,6 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
+from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
@@ -167,6 +168,32 @@ def _build_tool_output_limits(store) -> ToolOutputLimits:
     return ToolOutputLimits()
 
 
+def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
+    """Observational prompt-cache-collapse monitor — a BUILTIN, not a paf icon-capability.
+
+    Attaches to the agent's model requests; after each response it reads
+    ``usage.cache_read_tokens`` and warns (``CacheBustWarning``, stdlib ``warnings``)
+    once when the established cacheable prefix collapses mid-run. A collapse means a
+    moved prefix (reordered tools, injected timestamp, serialization-level block hop)
+    or a provider-side expiry — either way it spikes billing by re-charging tokens a
+    stable prefix would have served from cache. Purely observational: no tools,
+    instructions, or model-settings, so it composes with every other capability.
+
+    Defaults are conservative (collapse_ratio 0.5, min_prefix_tokens 1024,
+    cache_ttl_seconds 300): only a drop below half of an established >=1024-token
+    prefix fires, so ordinary rounding or partial misses don't warn. Silent when
+    caching is off or unreported (cache_read_tokens stays 0), so it never fires
+    spuriously in runs that don't cache. Same drop-in pattern as ToolOutputLimits
+    — consumed as a pydantic-ai AbstractCapability, per Landon.
+
+    To surface busts in Langfuse traces, route stdlib warnings into logging once at
+    startup: ``logging.captureWarnings(True)`` (Logfire bridges logging, not warnings;
+    they reach the trace via the ``py.warnings`` logger).
+    """
+
+    return WarnOnCacheBusts()
+
+
 def _turn_index_suppressed(store):
     """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
 
@@ -232,6 +259,8 @@ def build_runtime_capabilities(
         "Web": _build_web,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).
         "ToolOutputLimits": _build_tool_output_limits,
+        # Observational prompt-cache-collapse monitor (BUILTIN, paf-supplied config).
+        "WarnOnCacheBusts": _build_warn_on_cache_busts,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder:

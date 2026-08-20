@@ -117,6 +117,12 @@ DEMO_PROFILE = AgentProfile(
         # with paf-supplied config; the builtin `read_tool_result` lets the model
         # page spilled payloads back on demand. Plug-and-play per Landon.
         "ToolOutputLimits",
+        # Observational prompt-cache-collapse monitor (BUILTIN, not a paf port) —
+        # warns via CacheBustWarning (stdlib `warnings`) when the cacheable prefix
+        # collapses mid-run (moved prefix or provider-side expiry → billing spike).
+        # Observer-only: no tools/instructions/model-settings. Silent when caching
+        # is off/unreported. Same drop-in pattern as ToolOutputLimits per Landon.
+        "WarnOnCacheBusts",
     ),
 )
 
