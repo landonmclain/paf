@@ -26,6 +26,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.text import Text
 
 from paf.capabilities import PROFILES
@@ -150,6 +151,11 @@ def render(event: StreamEvent, out: TurnStream) -> None:
         out.finish_latest_tool()
 
 
+def _working_panel(message: str = "waiting for the model…") -> Panel:
+    """A compact placeholder shown while the first stream event is pending."""
+    return Panel(Spinner("dots", text=message), title="assistant", border_style="green")
+
+
 async def _run_streamed(session: Session, prompt: str) -> None:
     """Run one turn, streaming thinking/tools/answer inside `Live` (alt screen).
 
@@ -174,15 +180,33 @@ async def _run_streamed(session: Session, prompt: str) -> None:
 
     out = TurnStream()
     with Live(
-        Group(),
+        _working_panel(),
         console=console,
         refresh_per_second=12,
         vertical_overflow="ellipsis",
         screen=True,
     ) as live:
-        async for event in session.stream(prompt, conversation_id=session.conversation_id):
-            render(event, out)
-            live.update(build(out))
+        # Animate a "working" placeholder until the first real stream event
+        # arrives, so a slow model startup reads as alive rather than frozen.
+        # Cancelled the moment the stream yields anything.
+        started = False
+
+        async def _animate_placeholder() -> None:
+            while not started:
+                live.update(_working_panel(), refresh=True)
+                await asyncio.sleep(0.1)
+
+        spinner_task = asyncio.create_task(_animate_placeholder())
+        try:
+            async for event in session.stream(prompt, conversation_id=session.conversation_id):
+                if not started:
+                    started = True
+                    spinner_task.cancel()
+                render(event, out)
+                live.update(build(out))
+        finally:
+            if not started:
+                spinner_task.cancel()
 
     # Turn settled: commit the full conversation once to the main scrollback.
     for b in out.blocks:
