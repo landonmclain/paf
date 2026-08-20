@@ -26,6 +26,7 @@ from pydantic_ai_harness.compaction import (
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
+from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
@@ -104,4 +105,12 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # controls it and real config objects are passed. Kept as a BUILTIN per Landon —
     # same drop-in pattern as ToolOutputLimits, NOT ported into paf.capabilities.
     "WarnOnCacheBusts": WarnOnCacheBusts,
+    # Sub-agent delegation: expose a single `delegate_task(agent_name, task)` tool so
+    # the agent can hand a self-contained task to a named child agent that runs in its
+    # own fresh, isolated run (never sees this conversation). Consumed as a pydantic-ai
+    # AbstractCapability from the harness (NOT a paf icon-capability port) per Landon.
+    # NOT spec-serializable — it holds live `Agent` instances (get_serialization_name
+    # returns None), so it is ALWAYS built in Python (build.py `_build_subagents`) by
+    # passing explicit child `SubAgent` entries; it can never resolve from a YAML spec.
+    "Subagents": SubAgents,
 }

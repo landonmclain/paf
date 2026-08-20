@@ -24,8 +24,10 @@ its ``capability_names`` and that agent won't get it.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
@@ -194,6 +196,66 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     return WarnOnCacheBusts()
 
 
+# Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
+# variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
+# across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism (see
+# specs.py `_openrouter_model_settings`). Override via SUBAGENT_MODEL / .env.
+_SUBAGENT_MODEL = os.environ.get("SUBAGENT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731")
+
+
+def _build_subagents(store) -> SubAgents:
+    """Explicit sub-agent delegation (BUILTIN, not a paf port) — demo leaf agents.
+
+    Lets the demo agent delegate a self-contained task to a named child agent via
+    one `delegate_task(agent_name, task)` tool. Each child runs in its own fresh,
+    isolated run and never sees the parent conversation (the parent must pass
+    everything the task needs). Two demo children, both on the demo model:
+
+    - ``researcher`` — gathers/verifies facts and returns a tight evidence-backed
+      brief (no tools, prompt-only; uses the same model as the demo subject).
+    - ``writer`` — drafts prose/format from material the parent passes in (no
+      tools; deterministic same-model leaf).
+
+    This is a pydantic-ai AbstractCapability consumed from the harness per Landon
+    (same drop-in pattern as ToolOutputLimits / WarnOnCacheBusts). It is NOT
+    spec-serializable (holds live `Agent` instances; get_serialization_name ->
+    None), so it is built ONLY here in Python by passing explicit `SubAgent`
+    entries — it can never resolve from a YAML spec. `agent_folders=None` disables
+    disk-agent loading entirely so the demo is purely explicit and deterministic
+    (it does not vary with whatever markdown agent files happen to exist in
+    `~/.agents/` or the project). `inherit_tools` is off (children don't get the
+    parent's toolset), keeping delegation a clean leaf call. `store` unused
+    (uniform builder signature).
+    """
+    from pydantic_ai import Agent
+
+    researcher = Agent(
+        _SUBAGENT_MODEL,
+        name="researcher",
+        description="Gathers and verifies facts, returns a tight evidence-backed brief",
+        system_prompt=(
+            "You are a research sub-agent. You do not see the parent conversation. "
+            "Given a research task, return a concise, factual, evidence-backed brief. "
+            "State what is certain vs. uncertain. Do not fabricate; say 'unknown' when you "
+            "do not have evidence for something."
+        ),
+    )
+    writer = Agent(
+        _SUBAGENT_MODEL,
+        name="writer",
+        description="Drafts clear prose from material the delegating agent provides",
+        system_prompt=(
+            "You are a writing sub-agent. You do not see the parent conversation. "
+            "Given source material and a writing task, produce clean, clear prose. "
+            "Rewrite for clarity and structure, preserve all facts, add nothing."
+        ),
+    )
+    return SubAgents(
+        agents=[SubAgent(researcher), SubAgent(writer)],
+        agent_folders=None,  # purely explicit, deterministic demo (no disk loading)
+    )
+
+
 def _turn_index_suppressed(store):
     """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
 
@@ -261,6 +323,8 @@ def build_runtime_capabilities(
         "ToolOutputLimits": _build_tool_output_limits,
         # Observational prompt-cache-collapse monitor (BUILTIN, paf-supplied config).
         "WarnOnCacheBusts": _build_warn_on_cache_busts,
+        # Sub-agent delegation (BUILTIN, not a paf port) — explicit child leaf agents.
+        "Subagents": _build_subagents,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder:

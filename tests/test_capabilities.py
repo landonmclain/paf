@@ -10,6 +10,7 @@ from pydantic_ai_harness.compaction import (
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
+from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
@@ -78,6 +79,31 @@ def test_warn_on_cache_busts_cataloged_and_wired() -> None:
     assert monitor.collapse_ratio == 0.5
     assert monitor.min_prefix_tokens == 1024
     assert monitor.cache_ttl_seconds == 300.0
+
+
+def test_subagents_cataloged_and_wired() -> None:
+    """Subagents is a cataloged BUILTIN and resolves on the demo profile with child agents.
+
+    Same BUILTIN drop-in pattern as WarnOnCacheBusts, but NOT spec-serializable
+    (holds live `Agent` instances; get_serialization_name -> None), so it must be
+    built in Python (`_build_subagents`) with explicit child entries. Assert the
+    demo build attaches a SubAgents capability whose toolset exposes exactly the
+    two named demo leaf agents.
+    """
+    assert CAPABILITY_TYPES["Subagents"] is SubAgents
+
+    from paf.capabilities.build import build_runtime_capabilities
+
+    built = build_runtime_capabilities(DEMO_PROFILE)
+    subagents = next((c for c in built if type(c).__name__ == "SubAgents"), None)
+    assert subagents is not None
+    assert isinstance(subagents, SubAgents)
+    # _by_name is built in __post_init__ from the two explicit SubAgent entries.
+    assert set(subagents._by_name) == {"researcher", "writer"}
+    assert all(isinstance(sa, SubAgent) for sa in subagents._by_name.values())
+    # A live toolset is produced so the delegate_task tool is actually exposed.
+    toolset = subagents.get_toolset()
+    assert toolset is not None
 
 
 def test_only_one_real_profile_for_m1() -> None:

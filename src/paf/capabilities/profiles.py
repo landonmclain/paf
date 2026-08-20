@@ -123,6 +123,13 @@ DEMO_PROFILE = AgentProfile(
         # Observer-only: no tools/instructions/model-settings. Silent when caching
         # is off/unreported. Same drop-in pattern as ToolOutputLimits per Landon.
         "WarnOnCacheBusts",
+        # Sub-agent delegation (BUILTIN, not a paf port) — exposes a single
+        # `delegate_task(agent_name, task)` tool so the model can hand a
+        # self-contained task to a named child agent running in its own fresh,
+        # isolated run. Explicit child agents are defined in code (build.py
+        # `_build_subagents`) because the capability is not spec-serializable.
+        # Demo: two named sub-agents sharing the demo model.
+        "Subagents",
     ),
 )
 
