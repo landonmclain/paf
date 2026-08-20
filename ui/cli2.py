@@ -2,14 +2,16 @@
 coding_agent CLI's Live layout): tool activity in a fit-width "tools" box above
 the Markdown-rendered assistant answer, both redrawn per token via `Live`.
 
-This is a drop-in alternative until it's liked, then it becomes cli.py. No
-slash commands. Resume is surfaced as a banner (no viewing of old sessions).
+This is a drop-in alternative until it's liked, then it becomes cli.py. Resume
+is surfaced as a banner (no viewing of old sessions) — use `/history`,
+`/memory`, `/debug` to inspect the session and durable memory at runtime.
 
 Usage:
     python ui/cli2.py [agent_name]
     # default agent_name "assistant" (specs/assistant.yaml); use "demo_assistant"
     # (specs/demo_assistant.yaml) to poke at the lean demo profile's capabilities.
-    # conversation_id defaults to cli-{agent_name}.
+    # conversation_id defaults to cli-{agent_name}. Slash commands (/help) are
+    # handled locally and never sent to the model.
 
 Needs OPENAI_API_KEY (live model). Run twice with the same conversation_id to
 see the "resumed N prior messages" banner.
@@ -21,15 +23,18 @@ import asyncio
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.spinner import Spinner
+from rich.table import Table
 from rich.text import Text
 
 from paf.capabilities import PROFILES
+from paf.config import PROJECT_ROOT
 from paf.runtime import Session, StreamEvent
 
 DEFAULT_AGENT = "assistant"
@@ -336,6 +341,151 @@ def _render_prior_history(history: list) -> None:
                 )
 
 
+# ---------------------------------------------------------------------------
+# Slash commands
+#
+# Command lines starting with `/` are intercepted here and handled locally --
+# they are never sent to the model. Everything in this set is read-only:
+# it inspects the session / durable memory but writes nothing and makes no
+# model or tool calls, so it is safe to run at any point in a conversation.
+# ---------------------------------------------------------------------------
+
+
+def _memory_dir() -> Path:
+    """Resolve the durable-memory directory (config-anchored, not CWD)."""
+    from paf.config import settings  # env-driven; resolves memory_dir
+
+    return PROJECT_ROOT / Path(settings.memory_dir)
+
+
+def _show_history(session: Session, n: int | None) -> None:
+    """Print the last ``n`` persisted turns (or all when ``n`` is None)."""
+    history = session.history or []
+    if not history:
+        console.print("[dim]no persisted history for this conversation[/dim]")
+        return
+    if n is not None:
+        history = history[-n:]
+    console.print(f"[dim]showing {len(history)} persisted turn(s)[/dim]")
+    # Reuse the chat-skeleton renderer (users + final assistant text).
+    _render_prior_history(history)
+
+
+def _show_memory() -> None:
+    """Show what durable memory exists on disk and what's injected."""
+    memdir = _memory_dir()
+    root_md = memdir / "MEMORY.md"
+    journal = memdir / "memory-journal.jsonl"
+
+    console.print(f"[cyan]memory dir:[/cyan] {memdir}")
+
+    def _file_status(path: Path) -> str:
+        if not path.exists():
+            return "absent"
+        lines = path.read_text(encoding="utf-8", errors="replace").count("\n")
+        return f"{path.stat().st_size} bytes, {lines} lines"
+
+    console.print(f"  MEMORY.md             {_file_status(root_md)}")
+    console.print(f"  memory-journal.jsonl  {_file_status(journal)}")
+
+    if root_md.exists():
+        body = root_md.read_text(encoding="utf-8", errors="replace").strip()
+        if body:
+            # Show the rendered journal inline so you can see what the agent
+            # actually has in context right now.
+            console.print("\n[cyan]--- rendered MEMORY.md (what's injected) ---[/cyan]")
+            console.print(body)
+        else:
+            console.print("[dim]  (MEMORY.md is empty)[/dim]")
+    else:
+        console.print(
+            "[yellow]No MEMORY.md yet — durable memory is empty. Facts only land "
+            "here after the consolidation owner folds them in.[/yellow]"
+        )
+
+
+def _show_debug(session: Session) -> None:
+    """Print session plumbing: ids, spec, model, resume, store paths."""
+    table = Table(title="debug", show_header=False, box=None)
+    table.add_column("key", style="cyan", no_wrap=True)
+    table.add_column("value", style="default")
+
+    agent = getattr(session, "_agent", None)
+    model = getattr(agent, "model", None) if agent is not None else None
+
+    table.add_row("agent_name", str(session.agent_name))
+    table.add_row(
+        "profile",
+        getattr(session.profile, "name", str(session.profile))
+        if session.profile is not None
+        else "?",
+    )
+    table.add_row("conversation_id", str(session.conversation_id))
+    table.add_row("resume_window", str(session.resume_window))
+    table.add_row("model", str(model))
+    table.add_row("spec", str(PROJECT_ROOT / "specs" / f"{session.agent_name}.yaml"))
+    table.add_row("memory_dir", str(_memory_dir()))
+    table.add_row("restored", str(session.restored_count))
+
+    store = getattr(session, "_store", None)
+    store_dir = getattr(store, "directory", None) or getattr(store, "root", None)
+    table.add_row("store", str(store_dir) if store_dir else str(store))
+
+    console.print(table)
+
+
+def _slash_help() -> None:
+    rows = [
+        ("/help", "this list"),
+        ("/history [n]", "show last n persisted turns (default: all)"),
+        ("/memory", "show durable-memory dir, files, and injected render"),
+        ("/debug", "show session plumbing: ids, model, spec, store"),
+        ("/quit", "exit (alias /q, exit)"),
+    ]
+    table = Table(title="slash commands (read-only)", box=None)
+    table.add_column("cmd", style="cyan", no_wrap=True)
+    table.add_column("description", style="default")
+    for cmd, desc in rows:
+        table.add_row(cmd, desc)
+    console.print(table)
+
+
+def _handle_slash(session: Session, line: str) -> bool:
+    """Dispatch a ``/command`` line locally. Returns False when the REPL should exit.
+
+    Commands never reach the model. Unknown commands print the help list.
+    """
+    cmd, _, arg = line.partition(" ")
+    cmd = cmd.strip().lower()
+    arg = arg.strip()
+
+    if cmd in {"/quit", "/q", "/exit"}:
+        console.print("bye")
+        return False
+    if cmd in {"/help", "/?"}:
+        _slash_help()
+        return True
+    if cmd == "/history":
+        n = None
+        if arg:
+            try:
+                n = int(arg)
+            except ValueError:
+                console.print("[yellow]/history takes an optional count[/yellow]")
+        _show_history(session, n)
+        return True
+    if cmd == "/memory":
+        _show_memory()
+        return True
+    if cmd == "/debug":
+        _show_debug(session)
+        return True
+
+    console.print(f"[red]unknown command:[/red] {line}")
+    _slash_help()
+    return True
+
+
 def main() -> int:
     if not os.environ.get("OPENAI_API_KEY"):
         console.print("OPENAI_API_KEY not set. Provide it to call the live model:")
@@ -357,7 +507,7 @@ def main() -> int:
     if profile is None:
         console.print(f"unknown profile {profile_name!r}; known: {sorted(PROFILES)}")
         return 2
-    conversation_id = f"cli-{agent_name}"
+    conversation_id = f"cli2-{agent_name}"
 
     with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15) as session:
         _startup_banner(session)
@@ -376,16 +526,25 @@ def main() -> int:
             if not prompt:
                 console.print()
                 continue
-            if prompt.lower() in {"quit", "exit", "/q"}:
-                console.print("bye")
+            if not prompt.startswith("/"):
+                # Bare quit/exit words (legacy). Slash commands are handled
+                # below via `_handle_slash`.
+                if prompt.lower() in {"quit", "exit"}:
+                    console.print("bye")
+                    return 0
+
+                # Render the user's turn as a `you` Panel, then stream the reply.
+                show_prompt_box(prompt)
+                console.print()
+
+                asyncio.run(_run_streamed(session, prompt))
+                console.print()  # blank line before the next prompt
+                continue
+
+            # Slash command: handled locally, never sent to the model. Returns
+            # False when the REPL should exit (e.g. /quit).
+            if not _handle_slash(session, prompt):
                 return 0
-
-            # Render the user's turn as a `you` Panel, then stream the reply.
-            show_prompt_box(prompt)
-            console.print()
-
-            asyncio.run(_run_streamed(session, prompt))
-            console.print()  # blank line before the next prompt
 
     return 0
 
