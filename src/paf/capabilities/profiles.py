@@ -94,6 +94,14 @@ DEMO_PROFILE = AgentProfile(
         "ConversationSearch",
         "Memory",
         "Compaction",
+        # Scoped filesystem access — the "everything sandbox" gets it so the
+        # model can read/write/edit/list/search/find under a root, with
+        # expected_hash stale-write guarding. (Copied harness FileSystem.)
+        "FileSystem",
+        # Shell command execution — run/start/check/stop, rooted at a cwd, with
+        # allow/deny lists, interactive-command blocking, and env-masking
+        # (incl. LLM-creds preset). (Copied harness Shell.)
+        "Shell",
     ),
 )
 

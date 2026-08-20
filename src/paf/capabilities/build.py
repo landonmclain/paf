@@ -27,10 +27,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from paf.capabilities.compaction import build_compaction
+from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
+from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.turn_index import build_turn_index
 from paf.config import PROJECT_ROOT, settings
 
@@ -90,6 +92,33 @@ def _conversation_search_suppressed(store):
     )
 
 
+def _build_filesystem(store) -> _FileSystem:
+    """Scoped filesystem access rooted at the project root (paf-owned copy).
+
+    `store` is accepted for a uniform builder signature but unused — the
+    filesystem is self-contained over its own root, not the persistence store.
+    Rooting at PROJECT_ROOT lets the model work with repo files (read/write/
+    edit/list/search/find) while the harness toolset's traversal prevention +
+    protected-pattern defaults (`.git/`, `.env`, keys, secrets read-only) keep it
+    confined and safe.
+    """
+    return _FileSystem(root_dir=PROJECT_ROOT)
+
+
+def _build_shell(store) -> _Shell:
+    """Shell command execution rooted at the project root (paf-owned copy).
+
+    `store` is accepted for a uniform builder signature but unused — the shell
+    is self-contained over its own cwd, not the persistence store. Rooting at
+    PROJECT_ROOT lets the model run commands against the repo; the harness
+    toolset's deny-list (rm/dd/shutdown/...), interactive-command blocking, and
+    output truncation keep it bounded. Environment defaults to inheriting the
+    parent, so host secrets (incl. LLM API keys) remain present unless a caller
+    opts into `denied_env_patterns=LLM_API_KEY_ENV_PATTERNS`.
+    """
+    return _Shell(cwd=PROJECT_ROOT)
+
+
 def _turn_index_suppressed(store):
     """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
 
@@ -145,6 +174,10 @@ def build_runtime_capabilities(
         # its builder ignores the arg — but keeping it here means the profile's
         # `Memory` allowlist entry actually gets built (un-gated, M2 live-test beat).
         "Memory": _build_memory,
+        # Scoped filesystem (paf-owned harness copy) rooted at the project root.
+        "FileSystem": _build_filesystem,
+        # Shell command execution (paf-owned harness copy) rooted at the project root.
+        "Shell": _build_shell,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder:

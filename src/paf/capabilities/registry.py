@@ -27,9 +27,11 @@ from pydantic_ai_harness.compaction import (
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
 
+from paf.capabilities.fs import FileSystem
 from paf.capabilities.memory import Memory
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
+from paf.capabilities.shell import Shell
 from paf.capabilities.turn_index import TurnIndexCapability
 
 # name -> capability type. The name is the serialization form used in a spec's
@@ -63,4 +65,13 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # assistant profile it IS the recall-ladder owner (see profiles.py). Has
     # `from_spec`, so it ALSO resolves declaratively (`- Memory: {...}`).
     "Memory": Memory,
+    # Scoped filesystem access (read/write/edit/list/search/find) rooted at a
+    # directory, copied verbatim from the harness. Has `get_toolset`/`from_spec`
+    # so it resolves declaratively from a spec (`- FileSystem: {root_dir: ...}`)
+    # AND can be built in Python (build.py) with a paf-anchored root_dir.
+    "FileSystem": FileSystem,
+    # Shell command execution (run/start/check/stop) rooted at a cwd, copied
+    # verbatim from the harness. `from_spec` + `get_toolset` so it resolves
+    # declaratively AND via build.py with paf-anchored settings.
+    "Shell": Shell,
 }
