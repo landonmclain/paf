@@ -116,13 +116,26 @@ class TurnStream:
 
 
 def _tool_line(block: ToolBlock) -> Text:
-    """A plain labeled line for one tool call (no box): `tool: name(args)`."""
-    return Text(f"tool: {block.name}({block.args})", style="yellow")
+    """A labeled line for one tool call (no box): `tool: name(args)`.
+
+    Only the ``tool:`` label is colored; the call itself stays default so the
+    content reads clearly.
+    """
+    return Text.assemble(
+        ("tool: ", "yellow"),
+        f"{block.name}({block.args})",
+    )
 
 
 def _thinking_line(text: str) -> Text:
-    """A plain labeled line for reasoning (no box): `thinking: <text>`."""
-    return Text(f"thinking: {text}", style="cyan")
+    """A labeled line for reasoning (no box): `thinking: <text>`.
+
+    Only the ``thinking:`` label is colored; the reasoning text stays default.
+    """
+    return Text.assemble(
+        ("thinking: ", "cyan"),
+        text,
+    )
 
 
 def _activity_strip(out: TurnStream) -> list[Text]:
