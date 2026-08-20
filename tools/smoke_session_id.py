@@ -38,7 +38,7 @@ def main() -> None:
     print("session id (clean):", sid)
 
     agent = Agent(
-        "openrouter:deepseek/deepseek-v4-flash-0731:nitro",
+        "openrouter:deepseek/deepseek-v4-flash-0731",
     )
     with root_span(
         "smoke.session.verify",

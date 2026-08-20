@@ -23,8 +23,11 @@
 name: demo_assistant
 
 # Provider-qualified model string. Same default as the assistant: DeepSeek V4
-# Flash via OpenRouter. Requires OPENROUTER_API_KEY in .env (gitignored).
-model: openrouter:deepseek/deepseek-v4-flash-0731:nitro
+# Flash via OpenRouter. Bare slug (NO `:nitro` suffix) — `build_agent` applies
+# the OpenRouter determinism pin (provider order + fp8 quantization) via
+# model_settings, and `:nitro`'s throughput routing would fight that pin and
+# reintroduce run-to-run provider bounce. Requires OPENROUTER_API_KEY in .env.
+model: openrouter:deepseek/deepseek-v4-flash-0731
 
 instructions: |
   You are an assistant with access to your full conversational history through a retrieval ladder. You are given only the current question; the past conversation is NOT in your context — you must retrieve it. Answer from the evidence you actually have — the durable notebook injected below and anything you retrieve.
