@@ -40,6 +40,15 @@ class AgentProfile:
 
         Raises ``KeyError`` naming the offending entry if a profile references a
         capability not in the catalog — fail loudly at build time, not at run.
+
+        Capabilities that **opt out of spec serialization** (``get_serialization_name()``
+        returns ``None`` — e.g. ``Subagents``, which holds live ``Agent`` instances and
+        can never be expressed in YAML) are **excluded** from the returned registry.
+        ``Agent.from_spec`` insists every type in ``custom_capability_types`` be
+        spec-serializable and hard-crashes otherwise; a serialization-opted-out
+        capability can only be supplied as a live object via ``build_runtime_capabilities``
+        (gated by ``capability_names``, not ``capability_types``), so it must be kept in
+        the former but kept OUT of the latter.
         """
         missing = [n for n in self.capability_names if n not in CAPABILITY_TYPES]
         if missing:
@@ -47,7 +56,10 @@ class AgentProfile:
                 f"Profile {self.name!r} references capabilities not in the catalog: "
                 f"{missing}. Known: {sorted(CAPABILITY_TYPES)}"
             )
-        return tuple(CAPABILITY_TYPES[name] for name in self.capability_names)
+        types = (CAPABILITY_TYPES[name] for name in self.capability_names)
+        return tuple(
+            t for t in types if t.get_serialization_name() is not None
+        )
 
 
 # The single real M1 profile. The assistant may enable persistence, lossless
