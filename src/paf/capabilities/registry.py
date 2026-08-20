@@ -26,6 +26,7 @@ from pydantic_ai_harness.compaction import (
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
+from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
@@ -84,4 +85,12 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # search_official_docs / fetch_web_page). Adapted from coding_agent
     # web_search_tools. Reads TAVILY_API_KEY from the env at call time.
     "Web": Web,
+    # Framework-level tool-return reduction (truncate/summarize/spill oversized
+    # tool results via after_tool_execute + a `read_tool_result` read-back tool).
+    # A pydantic-ai AbstractCapability from the harness (NOT a paf icon-capability
+    # / FunctionToolset bundle) — built in Python (build.py) so the profile gate
+    # controls it and real Band/Spill config objects are passed; cataloged so the
+    # profile allowlist + schema resolve. Kept as a BUILTIN per Landon (plug-and-play
+    # with config, not ported into paf.capabilities).
+    "ToolOutputLimits": ToolOutputLimits,
 }

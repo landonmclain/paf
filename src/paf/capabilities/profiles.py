@@ -111,6 +111,12 @@ DEMO_PROFILE = AgentProfile(
         # time; tools degrade to clear messages when key/package missing.
         # (Adapted from coding_agent web_search_tools.)
         "Web",
+        # Framework-level tool-return reduction (BUILTIN, not a paf port) —
+        # spills/summarizes/truncates oversized tool results so a giant return
+        # doesn't dominate context. Consumed as a pydantic-ai AbstractCapability
+        # with paf-supplied config; the builtin `read_tool_result` lets the model
+        # page spilled payloads back on demand. Plug-and-play per Landon.
+        "ToolOutputLimits",
     ),
 )
 

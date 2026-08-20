@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
+
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
@@ -144,6 +146,27 @@ def _build_web(store) -> _Web:
     return _Web()
 
 
+def _build_tool_output_limits(store) -> ToolOutputLimits:
+    """Framework-level tool-return reduction — a BUILTIN, not a paf icon-capability.
+
+    Intercepts oversized tool returns in `after_tool_execute` and reduces them
+    once, so a giant return doesn't dominate (and re-send on every later request
+    of) the context window. Complements the eviction/compaction tier: a spilled
+    payload is offloaded to the flat-file store instead of being retained in
+    history, then paged back on demand via the builtin `read_tool_result`.
+
+    Config (per Landon: "plug-and-play with some configuration"): by default,
+    returns over `_DEFAULT_THRESHOLD` (10_000 chars) are LOSS LESSLY SPILLED to a
+    `LocalFileStore` with a bounded truncation fallback — zero LLM cost, no silent
+    drop. `read_tool_result` is registered by the capability's own toolset.
+
+    `store` (the shared persistence store) is accepted for a uniform builder
+    signature but unused — ToolOutputLimits uses its own `LocalFileStore` spill
+    backend by default (swap via `store=` for a custom OverflowStore).
+    """
+    return ToolOutputLimits()
+
+
 def _turn_index_suppressed(store):
     """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
 
@@ -207,6 +230,8 @@ def build_runtime_capabilities(
         "Git": _build_git,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,
+        # Framework-level tool-return reduction (BUILTIN, paf-supplied config).
+        "ToolOutputLimits": _build_tool_output_limits,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder:
