@@ -272,7 +272,11 @@ def _render_prior_history(history: list) -> None:
                     )
             elif isinstance(part, TextPart):
                 console.print(
-                    Panel(part.content, title="assistant", border_style="green")
+                    Panel(
+                        Markdown(_safe(part.content)),
+                        title="assistant",
+                        border_style="green",
+                    )
                 )
 
 
