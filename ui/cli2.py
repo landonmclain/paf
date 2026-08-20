@@ -114,34 +114,28 @@ class TurnStream:
                 return
 
 
-def _build_layout(out: TurnStream) -> Group:
-    """Build the live-turn panels, one box per model step.
+def _block_panel(block: ThinkingBlock | ToolBlock) -> Panel:
+    """Render one thinking or tool step as a full-width panel."""
+    if isinstance(block, ThinkingBlock):
+        return Panel(
+            Text(block.text, style="dim"), title="thinking", border_style="cyan"
+        )
+    mark = "\u2713" if block.status == "done" else "\u2026"
+    return Panel(
+        Text(f"  {mark} {block.name}({block.args})", style="dim"),
+        title="tools",
+        border_style="blue",
+    )
 
-    Each thinking/tool segment renders as its own full-width panel in the
-    order it occurred (``thinking -> tool -> thinking -> tool``), then the
-    final ``assistant`` answer as a full-width Markdown panel.
-    """
-    # One full-width panel per interleaved thinking/tool step.
-    step_panels = []
-    for block in out.blocks:
-        if isinstance(block, ThinkingBlock):
-            step_panels.append(
-                Panel(Text(block.text, style="dim"), title="thinking", border_style="cyan")
-            )
-        elif isinstance(block, ToolBlock):
-            mark = "\u2713" if block.status == "done" else "\u2026"
-            step_panels.append(
-                Panel(
-                    Text(f"  {mark} {block.name}({block.args})", style="dim"),
-                    title="tools",
-                    border_style="blue",
-                )
-            )
-    if out.response:
-        answer = Markdown(_safe("".join(out.response)))
-    else:
-        answer = Text("")
-    return Group(*step_panels, Panel(answer, title="assistant", border_style="green"))
+
+def _answer_panel(out: TurnStream) -> Panel:
+    """Render the (possibly still streaming) assistant answer panel."""
+    answer = (
+        Markdown(_safe("".join(out.response)))
+        if out.response
+        else Text("")
+    )
+    return Panel(answer, title="assistant", border_style="green")
 
 
 def render(event: StreamEvent, out: TurnStream) -> None:
@@ -157,22 +151,43 @@ def render(event: StreamEvent, out: TurnStream) -> None:
 
 
 async def _run_streamed(session: Session, prompt: str) -> None:
-    """Run one turn, streaming BOTH panels via `Live`.
+    """Run one turn, streaming thinking/tools/answer inside `Live` (alt screen).
 
-    Live is non-transient by default, so the last frame (the finished panels)
-    stays on screen after the `with` exits — no vanishing like the naive
-    coding_agent version; no duplicate like a separate inline stream + box.
+    Commit-on-complete, alt-screen style: the whole turn is streamed and
+    redrawn in place inside a `Live(screen=True)` alternate-screen buffer, so
+    every repaint happens off the terminal's main scrollback -- a long answer
+    can never leave piles of duplicated panels behind. When the turn settles,
+    we exit the alt buffer and commit the final conversation ONCE to the main
+    console (one clean copy of each thinking/tool panel plus the full answer).
+
+    This replaces the earlier `vertical_overflow="visible"` approach, where the
+    frame could exceed the terminal and Rich emitted every overflowing line
+    into the scrollback on each repaint -- the duplicated `read_file`/`tools`
+    boxes you saw when scrolling back through history.
     """
+
+    def build(out: TurnStream) -> Group:
+        return Group(
+            *[_block_panel(b) for b in out.blocks],
+            _answer_panel(out),
+        )
+
     out = TurnStream()
     with Live(
-        _build_layout(out),
+        Group(),
         console=console,
         refresh_per_second=12,
-        vertical_overflow="visible",
+        vertical_overflow="ellipsis",
+        screen=True,
     ) as live:
         async for event in session.stream(prompt, conversation_id=session.conversation_id):
             render(event, out)
-            live.update(_build_layout(out))
+            live.update(build(out))
+
+    # Turn settled: commit the full conversation once to the main scrollback.
+    for b in out.blocks:
+        console.print(_block_panel(b))
+    console.print(_answer_panel(out))
 
 
 def _startup_banner(session: Session) -> None:

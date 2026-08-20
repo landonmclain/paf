@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "A thin, opinionated agent framework on pydantic-ai V2."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pydantic-ai", "pydantic-settings", "agent-foundation"]
+dependencies = [
+    "pydantic-ai",
+    "pydantic-settings",
+    "agent-foundation",
+    "textual>=8.2.8",
+]
 
 # Local sibling package (not on PyPI): the framework-free storage seam.
 # `agent-foundation` lives in its own repo at ~/projects/Personal/agent-foundation;
