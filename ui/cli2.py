@@ -22,7 +22,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from rich.console import Console, Group
+from rich.console import Console, Group, RenderableType
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -153,14 +153,22 @@ def _activity_strip(out: TurnStream) -> list[Text]:
     return lines
 
 
-def _answer_panel(out: TurnStream) -> Panel:
-    """Render the (possibly still streaming) assistant answer panel."""
-    answer = (
+def _answer_panel(out: TurnStream, streaming: bool = False) -> Panel:
+    """Render the (possibly still streaming) assistant answer panel.
+
+    When ``streaming`` is true, a live ``⠋ generating…`` spinner is shown as a
+    footer *inside* the green panel so a long prose answer (or a slow model)
+    always reads as alive rather than stalled. The green box itself is what the
+    model wrote so far; the footer is pure UI and never part of the answer.
+    """
+    body: RenderableType = (
         Markdown(_safe("".join(out.response)))
         if out.response
         else Text("")
     )
-    return Panel(answer, title="assistant", border_style="green")
+    if streaming:
+        body = Group(body, Text(""), Spinner("dots", text="generating…"))
+    return Panel(body, title="assistant", border_style="green")
 
 
 def render(event: StreamEvent, out: TurnStream) -> None:
@@ -173,11 +181,6 @@ def render(event: StreamEvent, out: TurnStream) -> None:
         out.add_tool(event.tool_name or "<unknown>", _safe(event.args))
     elif event.kind == "tool_result":
         out.finish_latest_tool()
-
-
-def _working_panel(message: str = "waiting for the model…") -> Panel:
-    """A compact placeholder shown while the first stream event is pending."""
-    return Panel(Spinner("dots", text=message), title="assistant", border_style="green")
 
 
 async def _run_streamed(session: Session, prompt: str) -> None:
@@ -196,42 +199,49 @@ async def _run_streamed(session: Session, prompt: str) -> None:
     boxes you saw when scrolling back through history.
     """
 
-    def build(out: TurnStream) -> Group:
+    def build(out: TurnStream, streaming: bool = False) -> Group:
         # Blank line spacer: activity (tool:/thinking:) sits apart from the
         # boxed answer (only when there is activity to separate).
         activity = _activity_strip(out)
         parts: list = [*activity, Text("")] if activity else []
-        return Group(*parts, _answer_panel(out))
+        return Group(*parts, _answer_panel(out, streaming))
 
     out = TurnStream()
     with Live(
-        _working_panel(),
+        _answer_panel(out, streaming=True),
         console=console,
         refresh_per_second=12,
         vertical_overflow="ellipsis",
         screen=True,
     ) as live:
-        # Animate a "working" placeholder until the first real stream event
-        # arrives, so a slow model startup reads as alive rather than frozen.
-        # Cancelled the moment the stream yields anything.
-        started = False
+        # Heartbeat: repaint the whole frame ~10x/sec for the ENTIRE turn so
+        # the "generating…" spinner in the answer panel footer keeps animating
+        # even while a long prose answer is mid-stream (no new tokens arriving)
+        # or the model is slow to start. The stream loop mutates `out` and
+        # repaints on each event; the heartbeat guarantees continuous motion
+        # in between. Cancelled once the turn settles.
+        running = True
 
-        async def _animate_placeholder() -> None:
-            while not started:
-                live.update(_working_panel(), refresh=True)
+        async def _heartbeat() -> None:
+            while running:
+                # Refresh never drops below what Live needs to keep the footer
+                # spinner visibly spinning between stream events.
+                live.update(build(out, streaming=True), refresh=True)
                 await asyncio.sleep(0.1)
 
-        spinner_task = asyncio.create_task(_animate_placeholder())
+        heartbeat_task = asyncio.create_task(_heartbeat())
         try:
             async for event in session.stream(prompt, conversation_id=session.conversation_id):
-                if not started:
-                    started = True
-                    spinner_task.cancel()
                 render(event, out)
-                live.update(build(out))
+                # Repaint immediately on each event; live.update is cheap after
+                # the heartbeat has already been driving frames.
+                live.update(build(out, streaming=True))
         finally:
-            if not started:
-                spinner_task.cancel()
+            running = False
+            heartbeat_task.cancel()
+            # Final repaint with the spinner removed so the settled panel has
+            # no stray "generating…" footer.
+            live.update(build(out, streaming=False))
 
     # Turn settled: commit the conversation once to the main scrollback --
     # plain labeled (colored) lines for thinking and tools, a blank spacer,
