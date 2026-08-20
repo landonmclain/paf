@@ -103,10 +103,15 @@ model_settings:
 #   and drops the rest, so eviction trims hard and consolidation replays the
 #   about-to-evict slice into the journal each turn it fires. Again a probe, not
 #   tuned.
-# clear_tool_max_tokens: biggest token saver — any single tool result above this
-#   is collapsed to a placeholder. 5000 scavenges only genuinely bulky dumps
-#   while keeping normal tool output.
-# clear_tool_keep_pairs: always keep the 4 most-recent tool-call/result pairs.
+# clear_tool_max_tokens: whole-context token trigger for ClearToolResults — when
+#   the entire live context (system + turns + tool results) exceeds this, the
+#   OLDEST tool results get collapsed to a placeholder. NOT per-tool-call. 5000 is
+#   intentionally low-ish so it only scavenges bulky dumps after keep_pairs.
+# clear_tool_keep_pairs: always keep the 20 most-recent tool-call/result pairs.
+#   A normal exploration turn runs fewer than 20 tools, so none of its results
+#   get cleared mid-turn — the destructive blanking only kicks in on genuinely
+#   long/huge turns. (Was 4 — too aggressive, nuked read_file results the model
+#   still needed, leaving it blind mid-answer.)
 # consolidate: TRUE — memory is used in demo (the everything sandbox), and the
 #   journal-folding consolidation is proven in benchmark tests, so wire it in.
 #   When the sliding window evicts old turns, it first folds the about-to-evict
@@ -118,5 +123,5 @@ compact:
   window_max_messages: 150
   window_keep_messages: 5
   clear_tool_max_tokens: 5000
-  clear_tool_keep_pairs: 4
+  clear_tool_keep_pairs: 20
   consolidate: true
