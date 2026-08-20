@@ -14,7 +14,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 from pydantic_ai_harness.step_persistence import (
     ContinuableSnapshot,
     FileStepStore,
@@ -137,6 +143,59 @@ def test_session_restore_is_idempotent(tmp_path: Path) -> None:
         assert first == 2
         assert second == 2
         assert len(s.history) == 2  # not 4
+
+    asyncio.run(scenario())
+
+
+def test_session_restore_respecs_resume_window(tmp_path: Path) -> None:
+    """resume_window caps resumed history to the last N messages, not the full snapshot."""
+    store = FileStepStore(tmp_path / "store")
+    messages: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content=f"msg {i}")])
+        for i in range(6)
+    ]
+    messages.append(ModelResponse(parts=[TextPart(content="ack")]))
+
+    async def scenario() -> None:
+        await store.register_run(
+            RunRecord(run_id="r1", conversation_id="conv", agent_name="assistant")
+        )
+        await store.save_snapshot(
+            ContinuableSnapshot(
+                run_id="r1",
+                step_index=0,
+                messages=messages,
+                conversation_id="conv",
+                parent_run_id=None,
+                agent_name="assistant",
+                timestamp=datetime.now(UTC),
+                state="complete",
+            )
+        )
+        s = runtime.Session(
+            "assistant", conversation_id="conv", trace=False, store=store, resume_window=4
+        )
+        n = await s.restore()
+        # Only the last 4 of 7 messages are loaded into context.
+        assert n == 4
+        assert s.restored_count == 4
+        assert len(s.history) == 4
+
+    asyncio.run(scenario())
+
+
+def test_session_restore_resume_window_zero_loads_nothing(tmp_path: Path) -> None:
+    """resume_window=0 drops all prior history from context."""
+    store = FileStepStore(tmp_path / "store")
+
+    async def scenario() -> None:
+        await _seed_run(store, "r1", "conv", "seed me")
+        s = runtime.Session(
+            "assistant", conversation_id="conv", trace=False, store=store, resume_window=0
+        )
+        n = await s.restore()
+        assert n == 0
+        assert s.history == []
 
     asyncio.run(scenario())
 

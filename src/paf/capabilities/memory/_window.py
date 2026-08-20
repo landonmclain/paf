@@ -55,13 +55,21 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
     memory writer); the assistant's ``Memory`` stays ``writable=False``
     (read-only).
 
-    Store config defaults to the same ``data/memory`` / ``assistant`` scope the
-    assistant's ``Memory`` uses, so both share one durable store. Override
+    The owner writes through the M2 **journal** (``memory-journal.jsonl`` in
+    ``memory_directory``), then ``compact`` renders that journal to the root
+    ``MEMORY.md`` — the exact file the assistant's read-only
+    ``JournalViewStore`` injects. This keeps the live/eviction path on the SAME
+    store contract as the benchmark/chunked path; the legacy in-place
+    ``MarkdownStorage`` (assistant/MEMORY.md) is NOT used here, so a
+    consolidation can never write to a store the assistant doesn't read.
+
+    Store config defaults to the same ``data/memory`` scope the assistant's
+    ``Memory`` uses, so both share one durable store. Override
     ``memory_directory`` / ``memory_agent`` to target a different scope.
     """
 
     memory_directory: str = field(default=DEFAULT_MEMORY_DIR, kw_only=True)
-    """Directory for the shared Markdown-backed memory store."""
+    """Directory for the shared memory store (owns ``memory-journal.jsonl`` + rendered ``MEMORY.md``)."""
 
     memory_agent: str = field(default=DEFAULT_MEMORY_AGENT, kw_only=True)
     """Agent segment scoping the shared memory store (must match the assistant's)."""
@@ -74,22 +82,38 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         messages: list[ModelMessage],
         ctx: RunContext,
     ) -> list[ModelMessage]:
-        """Consolidate the about-to-evict slice, then run the window trim."""
+        """Consolidate the about-to-evict slice into the journal, render, then trim."""
         cutoff = find_safe_cutoff(messages, self.keep_messages)
         if cutoff > 0:
             from ._consolidate import consolidate
+            from ._journal import JournalStore
+            from ._render import write_render
 
+            journal = JournalStore(self.memory_directory)
             await consolidate(
                 messages,
                 store=self._build_memory_store(),
                 agent_name=self.memory_agent,
                 namespace=self.memory_namespace,
                 keep_tail=self.keep_messages,
+                journal=journal,
+            )
+            # Materialize the root MEMORY.md the assistant's read-only
+            # JournalViewStore injects. (journal passed -> owner appended to
+            # memory-journal.jsonl; this step is what makes it visible.)
+            write_render(
+                journal,
+                str(Path(self.memory_directory) / "MEMORY.md"),
             )
         return await super().compact(messages, ctx)
 
     def _build_memory_store(self):
-        """Construct the shared Markdown storage for the owner to write."""
+        """Construct the shared store for the owner's Memory handle.
+
+        Semantically inert for writes once ``journal`` is passed (the owner
+        appends through the journal, not the store), but still required by
+        ``consolidate``'s signature.
+        """
         from paf.capabilities.memory._markdown import MarkdownStorage
 
         return MarkdownStorage(self.memory_directory)

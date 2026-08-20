@@ -337,6 +337,7 @@ async def consolidate(
     agent_name: str,
     namespace: str,
     keep_tail: int,
+    journal=None,
 ) -> None:
     """Fold the about-to-be-evicted slice into the store via the owner agent.
 
@@ -344,6 +345,12 @@ async def consolidate(
     consolidated is exactly what :func:`.find_safe_cutoff` says the window will
     drop, so consolidation is always *on* the eviction boundary. When nothing
     is about to be evicted, this is a no-op.
+
+    ``journal`` (optional :class:`JournalStore`) switches the owner to the M2
+    append-only model (``append_memory`` only); ``MEMORY.md`` is rendered from
+    the journal at recall time. When set, ``store`` is still required (the
+    owner's ``Memory`` holds it) but the owner writes through the journal, not
+    the store.
     """
     from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
@@ -353,7 +360,7 @@ async def consolidate(
 
     evicted = messages[:cutoff]
     owner, _owner_memory = _build_owner(
-        store, agent_name=agent_name, namespace=namespace
+        store, agent_name=agent_name, namespace=namespace, journal=journal
     )
     evicted_text = await resident_consolidate_text(evicted)
     if not evicted_text:

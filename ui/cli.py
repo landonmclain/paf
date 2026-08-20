@@ -89,7 +89,7 @@ def main() -> int:
         )
         return 2
 
-    with Session("assistant", conversation_id=CONVERSATION_ID) as session:
+    with Session("assistant", conversation_id=CONVERSATION_ID, resume_window=15) as session:
         _startup_banner(session)
         print('type a message, or "quit" to exit')
 

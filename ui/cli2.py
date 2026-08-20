@@ -153,6 +153,42 @@ def _activity_strip(out: TurnStream) -> list[Text]:
     return lines
 
 
+def _status_line(word: str, color: str) -> Group:
+    """One live status line: colored ``<phase>…`` label beside the spinner.
+
+    The label carries its own style so only the phase word is colored (matching
+    the ``thinking:`` / ``tool:`` label-only coloring elsewhere); the spinner
+    glyph stays default. ``Spinner`` accepts a `RenderableType` text and uses it
+    as-is (no re-parsing), so the per-phase color survives.
+    """
+    return Group(Text(""), Spinner("dots", text=Text(f"{word}…", style=color)), Text(""))
+
+
+def _phase(out: TurnStream) -> tuple[str, str]:
+    """Map the accumulated turn state to a (label word, color) status line.
+
+    * ``writing``   once the first answer token has streamed — this is the
+                    ``full response has started`` signal and dominates.
+    * ``using {tool}`` / ``using tools``  while tool calls are in flight (or
+                    were the last thing seen). Names the most recent tool when it
+                    is still the active tail block (``using read_file``); falls
+                    back to the generic ``using tools`` while reasoning about a
+                    result, since naming a finished tool then would be stale.
+    * ``thinking``  while only reasoning has arrived.
+    * ``generating`` otherwise (no events yet — the initial fallback).
+    """
+    if out.response:
+        return "writing", "green"
+    last = out.blocks[-1] if out.blocks else None
+    if isinstance(last, ToolBlock):
+        return f"using {last.name}", "yellow"
+    if any(isinstance(b, ToolBlock) for b in out.blocks):
+        return "using tools", "yellow"
+    if out.blocks:
+        return "thinking", "cyan"
+    return "generating", "magenta"
+
+
 def _answer_panel(out: TurnStream) -> Panel:
     """Render the (possibly still streaming) assistant answer panel."""
     body: RenderableType = (
@@ -192,14 +228,16 @@ async def _run_streamed(session: Session, prompt: str) -> None:
     """
 
     def build(out: TurnStream, streaming: bool = False) -> Group:
-        # A live "generating…" status line is pinned at the TOP of the frame
-        # while the model works. It must sit at the very top: with
-        # `vertical_overflow="ellipsis"` the frame keeps its top edge and
-        # ellipsizes the bottom, so a footer spinner would scroll out of view
-        # the moment the answer grows -- but a top status line never does.
+        # A live status line is pinned at the TOP of the frame while the model
+        # works. It must sit at the very top: with `vertical_overflow="ellipsis"`
+        # the frame keeps its top edge and ellipsizes the bottom, so a footer
+        # spinner would scroll out of view the moment the answer grows -- but a
+        # top status line never does. Its label swaps per phase (thinking / using
+        # {tool} / writing) so the single line tracks what the model is doing.
         parts: list = []
         if streaming:
-            parts.append(_status_line)
+            word, color = _phase(out)
+            parts.append(_status_line(word, color))
         # Blank line spacer: activity (tool:/thinking:) sits apart from the
         # boxed answer (only when there is activity to separate).
         activity = _activity_strip(out)
@@ -209,13 +247,11 @@ async def _run_streamed(session: Session, prompt: str) -> None:
         return Group(*parts)
 
     out = TurnStream()
-    # ONE persistent Spinner for the whole turn. Rich's Spinner advances its
-    # frame by real elapsed time (`render(console.get_time())`), so reusing a
-    # single instance animates at the correct speed however often the console
-    # repaints. Creating a fresh Spinner every frame would reset `start_time`
-    # each repaint and make it blink/freeze on frame 0. A blank line above and
+    # Rich's Spinner advances its frame by real elapsed time
+    # (`render(console.get_time())`), so even though `_status_line` rebuilds the
+    # Spinner each repaint (needed to swap the phase label), it still animates
+    # at the correct real speed and doesn't blink/freeze. A blank line above and
     # below gives the status line breathing room (not flush against content).
-    _status_line = Group(Text(""), Spinner("dots", text="generating…"), Text(""))
 
     with Live(
         build(out, streaming=True),
@@ -323,7 +359,7 @@ def main() -> int:
         return 2
     conversation_id = f"cli-{agent_name}"
 
-    with Session(agent_name, profile=profile, conversation_id=conversation_id) as session:
+    with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15) as session:
         _startup_banner(session)
         console.print("type a message, or \"quit\" to exit")
 

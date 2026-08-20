@@ -109,6 +109,7 @@ class Session:
         conversation_id: str | None = None,
         trace: bool = True,
         resume: bool = True,
+        resume_window: int | None = None,
         store=None,
     ) -> None:
         self.agent_name = agent_name
@@ -122,6 +123,11 @@ class Session:
         # Set ``False`` for a genuinely fresh conversation (e.g. tests, probe runs
         # that must NOT inherit prior history).
         self.resume = resume
+        # ``resume_window``: cap the number of most-recent messages loaded back
+        # into context on resume. ``None`` (default) loads the full snapshot;
+        # an int loads only the last N messages and drops older history from the
+        # live context (recoverable via the journal / conversation search).
+        self.resume_window = resume_window
         self._resumed = False
         self._restored = False
         # Default to the canonical shared flat-file store (same directory
@@ -170,9 +176,12 @@ class Session:
 
         ``continue_run`` loads the latest settled snapshot for the conversation's
         most recent run and returns it as a message history — M1 semantics, full
-        snapshot (compaction summary included). Idempotent: only acts when resume
-        is enabled, the conversation has a stable id, and this is the first run.
-        A conversation with no prior runs stays empty (``restored_count == 0``).
+        snapshot (compaction summary included). When ``resume_window`` is set, the
+        history is trimmed to the last N messages so a fresh process does not load
+        the entire conversation into context (older turns stay recoverable via the
+        journal / ``search_conversation_history``). Idempotent: only acts when
+        resume is enabled, the conversation has a stable id, and this is the first
+        run. A conversation with no prior runs stays empty (``restored_count == 0``).
         """
         if self._resumed or not self.resume or conversation_id is None:
             self._resumed = True
@@ -182,7 +191,10 @@ class Session:
             runs = await self._store.list_runs(conversation_id=conversation_id)
             if not runs:
                 return
-            self.history = await continue_run(self._store, run_id=runs[-1].run_id)
+            history = await continue_run(self._store, run_id=runs[-1].run_id)
+            if self.resume_window is not None and self.resume_window >= 0:
+                history = history[-self.resume_window:] if self.resume_window else []
+            self.history = history
             self._restored = True
         except Exception:  # noqa: BLE001 - resume is sugar; never break the run
             self._restored = False

@@ -52,15 +52,19 @@ class _Gotcha:
         self.passed_messages: int = 0
         self.keep_tail: int = 0
 
-    async def __call__(self, messages, *, store, agent_name, namespace, keep_tail):
+    async def __call__(self, messages, *, store, agent_name, namespace, keep_tail, journal=None):
         # Record exactly what _window.compact handed over.
         self.passed_messages = len(messages)
         self.keep_tail = keep_tail
         self.cutoff = find_safe_cutoff(messages, keep_tail)
-        # Write durable memory the way the real owner would.
-        (self.store_dir / "MEMORY.md").write_text(
-            f"# Facts\n- consolidated {self.cutoff} evicted messages\n",
-            encoding="utf-8",
+        # Durable memory is written through the M2 journal (append_memory), which
+        # the window then renders to root MEMORY.md — NOT the legacy store.
+        assert journal is not None, "window must pass the journal through to consolidate"
+        journal.append(
+            type="fact",
+            fact=f"consolidated {self.cutoff} evicted messages",
+            born_on="2023-08-20",
+            source_ref="test:0",
         )
         return None
 
