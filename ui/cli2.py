@@ -116,38 +116,27 @@ class TurnStream:
 
 
 def _tool_line(block: ToolBlock) -> Text:
-    """A compact, muted single-line entry for one tool call (no box)."""
-    mark = "\u2713" if block.status == "done" else "\u2026"
-    # Trim the args so a long command doesn't blow out the line full-width.
-    call = f"{block.name}({block.args})"
-    if len(call) > 160:
-        call = call[:157] + "..."
-    return Text(f"  {mark} {call}", style="dim")
+    """A plain labeled line for one tool call (no box): `tool: name(args)`."""
+    return Text(f"tool: {block.name}({block.args})", style="dim")
 
 
 def _thinking_line(text: str) -> Text:
-    """A single muted line representing in-flight (or brief) reasoning."""
-    snippet = " ".join(text.split())
-    if len(snippet) > 120:
-        snippet = snippet[:117] + "..."
-    return Text(f"  \u2026 {snippet}", style="italic dim")
+    """A plain labeled line for reasoning (no box): `thinking: <text>`."""
+    return Text(f"thinking: {text}", style="dim")
 
 
 def _activity_strip(out: TurnStream) -> list[Text]:
-    """Dim, box-free activity lines for thinking/tools in the live view.
+    """Box-free labeled activity lines for thinking/tools in the live view.
 
-    Consecutive thinking channels into a single live line; each tool call is
-    its own compact line. The reasoning text itself is muted and truncated so
-    it reads as background motion, not a wall of boxes.
+    Each thinking block renders as ``thinking: <text>`` and each tool call as
+    ``tool: name(args)``, in stream order, full text (no truncation).
     """
     lines: list[Text] = []
     for block in out.blocks:
         if isinstance(block, ToolBlock):
             lines.append(_tool_line(block))
-    # Live thinking (the non-terminal last block) shown as one muted line if
-    # there is nothing more specific to watch.
-    if out.blocks and isinstance(out.blocks[-1], ThinkingBlock) and out.blocks[-1].text:
-        lines.append(_thinking_line(out.blocks[-1].text))
+        elif isinstance(block, ThinkingBlock) and block.text:
+            lines.append(_thinking_line(block.text))
     return lines
 
 
@@ -231,11 +220,14 @@ async def _run_streamed(session: Session, prompt: str) -> None:
                 spinner_task.cancel()
 
     # Turn settled: commit the conversation once to the main scrollback --
-    # compact muted tool lines (thinking is absorbed, not committed verbatim)
-    # then the green answer box.
+    # plain labeled lines for thinking and tools (still no boxes), then the
+    # green answer box. Thinking is committed verbatim so it doesn't vanish
+    # once streaming ends.
     for b in out.blocks:
         if isinstance(b, ToolBlock):
             console.print(_tool_line(b))
+        elif isinstance(b, ThinkingBlock) and b.text:
+            console.print(_thinking_line(b.text))
     console.print(_answer_panel(out))
 
 
