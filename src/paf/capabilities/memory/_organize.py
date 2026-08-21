@@ -40,12 +40,13 @@ import os
 from dataclasses import dataclass, field
 from typing import cast
 
-from pydantic_ai import Agent, ModelSettings
+from pydantic_ai import Agent, ModelRetry, ModelSettings
 
 from paf.config import settings
 
 from ._atomic import read_json, write_json_atomic
 from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord, _normalize_born_on
+from ._toolset import MemoryWriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -560,6 +561,10 @@ index, classifying each one:
   obsolete (removed entirely). A merge of two entries is a special case: keep
   the winner, prune the losers.
 
+ADDRESSING: when a tool asks for `entry_id`, pass the entry's `mem-N` id EXACTLY
+as shown in the index text (e.g. `mem-1`), never the subject string. The index
+text lists each entry as `mem-1 [type/subject] ...` — copy the `mem-N` token.
+
 Contracts (do not violate):
 - Never edit the journal. You only write the index.
 - `born_on` of an entry never changes (original date). `updated_on` bumps ONLY
@@ -614,8 +619,6 @@ def _build_index_toolset():
 
     from pydantic_ai.toolsets import FunctionToolset
 
-    from ._toolset import MemoryWriteResult
-
     class _IndexToolset(FunctionToolset):
         def __init__(self, store: IndexStore) -> None:
             super().__init__(id="memory-index")
@@ -651,18 +654,33 @@ def _build_index_toolset():
             ))
             return self._result()
 
+        def _valid_ids(self) -> list[str]:
+            return [e.id for e in self._get_stage().entries]
+
         async def confirm(self, ctx, entry_id: str, line_no: int):
-            self._get_stage().apply(ConfirmDecision(entry_id=entry_id, line_no=line_no))
+            try:
+                self._get_stage().apply(ConfirmDecision(entry_id=entry_id, line_no=line_no))
+            except ValueError:
+                raise ModelRetry(
+                    f"invalid entry_id {entry_id!r}; use one of the index ids "
+                    f"{self._valid_ids()} (from the index text), never a subject"
+                ) from None
             return self._result()
 
         async def supersede(self, ctx, entry_id: str, line_no: int, fact: str,
                             source_ref: str, updated_on: str,
                             prune: list[str] | None = None):
-            self._get_stage().apply(SupersedeDecision(
-                entry_id=entry_id, line_no=line_no, fact=fact,
-                source_ref=source_ref, updated_on=updated_on,
-                prune=list(prune or []),
-            ))
+            try:
+                self._get_stage().apply(SupersedeDecision(
+                    entry_id=entry_id, line_no=line_no, fact=fact,
+                    source_ref=source_ref, updated_on=updated_on,
+                    prune=list(prune or []),
+                ))
+            except ValueError:
+                raise ModelRetry(
+                    f"invalid entry_id {entry_id!r}; use one of the index ids "
+                    f"{self._valid_ids()} (from the index text), never a subject"
+                ) from None
             return self._result()
 
         async def finalize_index(self, ctx, end_line: int | None = None) -> MemoryWriteResult:
