@@ -255,12 +255,14 @@ class Session:
         cid = conversation_id if conversation_id is not None else self.conversation_id
         await self._ensure_resumed(cid)
 
-        # Stamp the current UTC date onto the start of EVERY user message (same
-        # ``[date: ...]`` convention the benchmark harness prepends), so the
-        # model always has an explicit time anchor and the consolidation owner
-        # can derive a real ``born_on`` instead of inventing one. The owner
-        # strips this prefix from the stored fact text before appending.
-        prompt = f"[date: {datetime.now(UTC).date().isoformat()}] {prompt}"
+        # Stamp the current UTC timestamp onto the start of EVERY user message
+        # (same ``[date: ...]`` convention the benchmark harness prepends), so
+        # the model always has an explicit date+time anchor and the
+        # consolidation owner can derive a real ``born_on`` instead of
+        # inventing one. Second precision, ``+00:00`` suffix (matches what
+        # ``_normalize_born_on`` emits); microseconds are noise for provenance.
+        now = datetime.now(UTC).replace(microsecond=0)
+        prompt = f"[date: {now.isoformat()}] {prompt}"
 
         result: AgentRunResult | None = None
         # Trace hygiene: open ONE root span for the whole turn so Langfuse's
