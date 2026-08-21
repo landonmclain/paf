@@ -40,8 +40,11 @@ from ._organize import (
     IndexEntry,
     IndexStore,
     NewDecision,
+    Stage,
     SupersedeDecision,
     render_index_text,
+    render_journal_tail,
+    run_organizer,
 )
 from ._render import render_journal_memory, write_render
 from ._store import (
@@ -101,13 +104,16 @@ __all__ = [
     "MemoryWriteResult",
     "NewDecision",
     "SearchableMemoryStore",
+    "Stage",
     "SupersedeDecision",
     "lexical_search",
     "list_subfiles",
     "normalize_filename",
     "render_index_text",
     "render_journal_memory",
+    "render_journal_tail",
     "render_memory_prompt",
+    "run_organizer",
     "validate_store_path",
     "validate_store_prefix",
     "write_render",

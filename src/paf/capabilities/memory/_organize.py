@@ -45,7 +45,7 @@ from pydantic_ai import Agent, ModelSettings
 from paf.config import settings
 
 from ._atomic import read_json, write_json_atomic
-from ._journal import MEMORY_TYPES, MemoryRecord, _normalize_born_on
+from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord, _normalize_born_on
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +392,64 @@ def _max_date(a: str, b: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# In-memory staging: the organizer's working set for ONE run
+# ---------------------------------------------------------------------------
+
+
+class Stage:
+    """The in-memory working set the organizer mutates across one run.
+
+    The organizer accumulates its NEW / CONFIRM / SUPERSEDE decisions against a
+    ``Stage`` (loaded once from the on-disk index) and persists with ONE atomic
+    write at run end (:meth:`finalize`). Nothing touches disk between tool calls,
+    so a whole run is either committed or not — the same all-or-nothing shape as
+    the journal's block append, but for the curated index.
+
+    ``entries`` is the current (possibly mutated) entry list; ``watermark`` the
+    current read cursor. ``finalize(end_line)`` resolves the new watermark
+    (never backwards) and writes ``{version, watermark, next_id, entries}``
+    atomically.
+    """
+
+    def __init__(self, store: IndexStore) -> None:
+        self._store = store
+        self.entries = store.load()
+        self.watermark = store.load_watermark()
+        store._advance_id_from(self.entries)
+
+    def apply(self, decision: object) -> None:
+        """Apply one decision to the staged entry list (no disk I/O)."""
+        if isinstance(decision, NewDecision):
+            apply_new(self._store, self.entries, decision)
+        elif isinstance(decision, ConfirmDecision):
+            apply_confirm(self.entries, decision)
+        elif isinstance(decision, SupersedeDecision):
+            apply_supersede(self.entries, decision)
+        else:
+            raise TypeError(f"unknown decision type: {type(decision).__name__}")
+
+    def apply_all(self, decisions: list[object]) -> None:
+        for d in decisions:
+            self.apply(d)
+
+    def finalize(self, end_line: int | None = None) -> int:
+        """Atomic single write of the staged index + resolved watermark.
+
+        Returns the new watermark. ``end_line`` is the exclusive end of the
+        processed journal slice; the watermark never moves backward (idempotent
+        re-runs). ``next_id`` persists the monotonic cursor so pruned ids are
+        never reused (see ``_save``).
+        """
+        new_watermark = new_watermark_for(end_line, self.watermark)
+        self._store._save(self.entries, new_watermark)
+        self.watermark = new_watermark
+        return new_watermark
+
+    def render(self) -> str:
+        return render_index_text(self.entries)
+
+
 def reconcile(
     store: IndexStore,
     journal_records: list[tuple[int, MemoryRecord]],
@@ -401,40 +459,27 @@ def reconcile(
     end_line: int | None = None,
     watermark: int | None = None,
 ) -> int:
-    """Apply ``decisions`` over a journal slice and advance the watermark.
+    """Apply ``decisions`` over a journal slice and persist, returning the new watermark.
 
-    ``decisions`` is the organizer's classification output for the slice; this
-    function applies them mechanically (the deterministic core) so callers can
-    drive an entire reconcile without an LLM by supplying pre-computed
-    decisions — and re-running over an overlapping tail is idempotent (a
-    decision for a line already in ``source`` is a no-op because ``_extend_source``
-    dedupes).
+    Deterministic single-shot convenience over :class:`Stage` (one atomic write):
+    loads the index, applies all ``decisions`` mechanically, advances the
+    watermark to ``end_line`` (never backward), and saves once. Re-running over
+    an overlapping tail is idempotent (a decision for a line already in an
+    entry's ``source`` is a no-op because ``_extend_source`` dedupes).
 
-    Returns the new watermark. The caller persists via ``store._save``; this
-    function works over an in-memory entry list so the whole reconcile can be
-    one atomic write.
+    ``journal_records`` is reserved for the organizer's line->record lookup
+    (classify step); not required for applying decisions.
 
-    ``journal_records`` is only needed for provenance/bootstrapping (line->record
-    mapping) but is not required for applying decisions; kept for the running
-    signature the organizer will use.
+    This is the surface the deterministic unit tests use. The live organizer
+    agent instead holds a :class:`Stage` across its tool calls and calls
+    ``finalize`` once at run end.
     """
-    del journal_records  # reserved: line->record lookup for the organizer's classify step
-    entries = store.load()
-    store._advance_id_from(entries)
-
-    for d in decisions:
-        if isinstance(d, NewDecision):
-            apply_new(store, entries, d)
-        elif isinstance(d, ConfirmDecision):
-            apply_confirm(entries, d)
-        elif isinstance(d, SupersedeDecision):
-            apply_supersede(entries, d)
-        else:
-            raise TypeError(f"unknown decision type: {type(d).__name__}")
-
-    new_watermark = _advance_watermark(store, watermark=watermark, new_end=end_line)
-    store._save(entries, new_watermark)
-    return new_watermark
+    del journal_records  # reserved
+    stage = Stage(store)
+    if watermark is not None:
+        stage.watermark = watermark
+    stage.apply_all(decisions)
+    return stage.finalize(end_line)
 
 
 def new_watermark_for(end_line: int | None, current: int) -> int:
@@ -447,11 +492,6 @@ def new_watermark_for(end_line: int | None, current: int) -> int:
     if end_line is None:
         return current
     return end_line if end_line > current else current
-
-
-def _advance_watermark(store: IndexStore, *, watermark: int | None, new_end: int | None) -> int:
-    current = watermark if watermark is not None else store.load_watermark()
-    return new_watermark_for(new_end, current)
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +569,10 @@ Contracts (do not violate):
 - Facts must be plain, self-contained statements. Never invent facts absent from
   the journal records.
 
+After classifying the whole tail, call `finalize_index` ONCE with `end_line` =
+the last journal line you processed, to commit the index atomically. Do not
+finalize more than once.
+
 Reply with one short line: how many entries you added, confirmed, or superseded.
 """
 
@@ -557,12 +601,17 @@ def render_index_text(entries: list[IndexEntry]) -> str:
 
 
 def _build_index_toolset():
-    """Build the organizers' writable index toolset.
+    """Build the organizer's writable index toolset (in-memory staged).
 
     Mirrors ``JournalAppendToolset`` in shape: a ``FunctionToolset`` exposing
-    the index-maintenance tools under an ``id='memory-index'``. Tools emit the
-    three decision types; all apply mechanically via the deterministic core.
+    the index-maintenance tools under an ``id='memory-index'``. Unlike the
+    journal's per-call append, the organizer stages its decisions in memory
+    (a :class:`Stage` created on first tool call from the current index) and
+    persists with ONE atomic write via :func:`finalize_index` at run end —
+    never between tool calls. Tools: ``index_new`` / ``index_confirm`` /
+    ``index_supersede`` (accumulate) + ``finalize_index`` (commit).
     """
+
     from pydantic_ai.toolsets import FunctionToolset
 
     from ._toolset import MemoryWriteResult
@@ -571,45 +620,68 @@ def _build_index_toolset():
         def __init__(self, store: IndexStore) -> None:
             super().__init__(id="memory-index")
             self._store = store
+            self._stage: Stage | None = None
             self.add_function(self.add_new, name="index_new")
             self.add_function(self.confirm, name="index_confirm")
             self.add_function(self.supersede, name="index_supersede")
+            self.add_function(self.finalize_index, name="finalize_index")
 
-        def _stage(self, ctx, decisions: list[object]) -> MemoryWriteResult:
-            # Apply against the CURRENT on-disk index, atomically, advancing the
-            # watermark to the slice end supplied by the caller.
-            new_wm = reconcile(
-                self._store, [], decisions,
-            )
+        def _get_stage(self) -> Stage:
+            if self._stage is None:
+                self._stage = Stage(self._store)
+            return self._stage
+
+        def _result(self) -> MemoryWriteResult:
             return {
                 "memory": "index",
                 "file": _INDEX_FILENAME,
-                "version": str(self._store.count()),
+                "version": str(len(self._get_stage().entries)),
                 "replayed": False,
                 "status": "updated",
-                "diff": f"watermark={new_wm}",
+                "diff": f"staged entries={len(self._get_stage().entries)}",
             }
 
         async def add_new(self, ctx, line_no: int, type: str, subject: str,
                           fact: str, born_on: str, source_ref: str):
             if type not in MEMORY_TYPES:
                 raise ValueError(f"invalid memory type {type!r}")
-            return self._stage(ctx, [NewDecision(line_no=line_no, type=type,
-                                                 subject=subject, fact=fact,
-                                                 born_on=born_on, source_ref=source_ref)])
+            self._get_stage().apply(NewDecision(
+                line_no=line_no, type=type, subject=subject, fact=fact,
+                born_on=born_on, source_ref=source_ref,
+            ))
+            return self._result()
 
         async def confirm(self, ctx, entry_id: str, line_no: int):
-            return self._stage(ctx, [ConfirmDecision(entry_id=entry_id, line_no=line_no)])
+            self._get_stage().apply(ConfirmDecision(entry_id=entry_id, line_no=line_no))
+            return self._result()
 
         async def supersede(self, ctx, entry_id: str, line_no: int, fact: str,
                             source_ref: str, updated_on: str,
                             prune: list[str] | None = None):
-            return self._stage(
-                ctx,
-                [SupersedeDecision(entry_id=entry_id, line_no=line_no, fact=fact,
-                                   source_ref=source_ref, updated_on=updated_on,
-                                   prune=list(prune or []))],
-            )
+            self._get_stage().apply(SupersedeDecision(
+                entry_id=entry_id, line_no=line_no, fact=fact,
+                source_ref=source_ref, updated_on=updated_on,
+                prune=list(prune or []),
+            ))
+            return self._result()
+
+        async def finalize_index(self, ctx, end_line: int | None = None) -> MemoryWriteResult:
+            """Persist the staged index atomically and advance the watermark.
+
+            Call ONCE at the end of the run, with ``end_line`` = the last journal
+            line processed (the new watermark). The watermark never moves
+            backward. If a previous commit advanced past ``end_line``, nothing
+            regresses (idempotent re-run).
+            """
+            new_wm = self._get_stage().finalize(end_line)
+            return {
+                "memory": "index",
+                "file": _INDEX_FILENAME,
+                "version": str(len(self._get_stage().entries)),
+                "replayed": False,
+                "status": "updated",
+                "diff": f"committed watermark={new_wm}",
+            }
 
     return _IndexToolset
 
@@ -645,3 +717,57 @@ def organize_batch_size() -> int:
         except ValueError:
             logger.warning("LME_ORGANIZE_BATCH=%r not an int; using %d", raw, _DEFAULT_ORGANIZE_BATCH)
     return _DEFAULT_ORGANIZE_BATCH
+
+
+def render_journal_tail(
+    journal_records: list[tuple[int, MemoryRecord]],
+    watermark: int,
+) -> str:
+    """Render the journal records AFTER ``watermark`` as labeled lines for the prompt."""
+    lines = []
+    for lineno, rec in journal_records:
+        if lineno <= watermark:
+            continue
+        lines.append(
+            f"line {lineno} [{rec.type}] {rec.fact} "
+            f"(born {rec.born_on}, ref {rec.source_ref})"
+        )
+    if not lines:
+        return "(no new records)"
+    return "\n".join(lines)
+
+
+async def run_organizer(
+    journal: JournalStore,
+    *,
+    index_store: IndexStore,
+    agent_name: str = "memory-organizer",
+) -> str:
+    """Run the memory organizer over the new journal tail, committing the index.
+
+    Reads all journal records, builds/renders the new tail ``(watermark, N]``
+    plus the current index, runs the organizer leaf agent (which calls the
+    staged index tools and ``finalize_index`` once), and returns the agent's
+    final output line. The index is committed atomically by ``finalize_index``,
+    advancing the watermark to the last journal line.
+
+    Live-LLM: costs tokens. The caller is responsible for sourcing .env /
+    ``ORGANIZE_MODEL`` (or the consol-model default).
+    """
+    records = journal.read_all()
+    if not records:
+        return "no changes"
+
+    entries = index_store.load()
+    watermark = index_store.load_watermark()
+    tail = render_journal_tail(records, watermark)
+    if tail == "(no new records)":
+        return "no changes"
+
+    prompt = ORGANIZE_PROMPT.format(
+        journal_tail=tail,
+        index_text=render_index_text(entries),
+    )
+    organizer, _toolset = _build_memory_organizer(index_store, agent_name=agent_name)
+    result = await organizer.run(prompt)
+    return str(result.output) if result.output is not None else "no changes"

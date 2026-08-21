@@ -337,3 +337,27 @@ provider={"order": ["DeepInfra", "Parasail", "CoreWeave"],
 
 **Caveat:** pinning a single provider trades uptime for determinism (a pinned host down = run fails,
 no graceful route). For a reproducibility benchmark that is the correct tradeoff.
+
+## Memory organizer live test — `tests/run_organizer_live.py`
+
+The memory **organizer** (`src/paf/capabilities/memory/_organize.py`) is the
+sibling sub-agent that maintains the curated `memory-index.json` from the
+append-only journal tail (NEW / CONFIRM / SUPERSEDE, prune, watermark advanced
+atomically at `finalize_index`). Its mechanical rules are pinned by the
+deterministic `tests/test_memory_index.py`; the live LLM *classify* brain is
+exercised here. Cost: real OpenRouter tokens — NOT part of the plain pytest run.
+
+```bash
+# Disposable fixture (2 batches, ~17 records) exercising all classifications:
+PYTHONPATH= .venv/bin/python data/benchmarks/memory/organizer-live/generate_fixture.py
+set -a && . ./.env 2>/dev/null && set +a && \
+  PYTHONPATH= .venv/bin/python -m tests.run_organizer_live --fixture
+
+# First index over the REAL data/memory journal (adds memory-index.json there):
+set -a && . ./.env 2>/dev/null && set +a && \
+  PYTHONPATH= .venv/bin/python -m tests.run_organizer_live --live
+```
+
+The organizer shares the owner's model by default (`ORGANIZE_MODEL` unset →
+`consol_model`); set `ORGANIZE_MODEL=openrouter:<higher-level>` to override.
+Run-end auto-trigger threshold: `LME_ORGANIZE_BATCH` (default 25 new lines).
