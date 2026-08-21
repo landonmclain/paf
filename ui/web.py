@@ -52,7 +52,7 @@ DEFAULT_PORT = 8080
 # every prior run's restored history for that agent. Handy after crash pollution
 # or when you want a clean scrape. Keep the agent name / page title stable; only
 # the stored conversation id changes.
-CONV_EPOCH = 2
+CONV_EPOCH = 3
 
 # Page-level CSS. Injected via `launch(css=...)` (Gradio 6 moved the css/theme
 # params from Blocks/ChatInterface constructors to launch()). Goals: (1) kill the
