@@ -46,7 +46,12 @@ from ._organize import (
     render_journal_tail,
     run_organizer,
 )
-from ._render import render_journal_memory, write_render
+from ._render import (
+    render_index,
+    render_journal_memory,
+    write_index_render,
+    write_render,
+)
 from ._store import (
     FileStore,
     InMemoryStore,
@@ -109,6 +114,7 @@ __all__ = [
     "lexical_search",
     "list_subfiles",
     "normalize_filename",
+    "render_index",
     "render_index_text",
     "render_journal_memory",
     "render_journal_tail",
@@ -116,5 +122,6 @@ __all__ = [
     "run_organizer",
     "validate_store_path",
     "validate_store_prefix",
+    "write_index_render",
     "write_render",
 ]
