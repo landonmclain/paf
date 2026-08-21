@@ -171,6 +171,21 @@ class Session:
         await self._ensure_resumed(cid)
         return self.restored_count
 
+    async def refresh(self, *, conversation_id: str | None = None) -> int:
+        """Re-read prior history from the store, discarding the cached copy.
+
+        Unlike :meth:`restore` — which is one-shot per session (guarded by the
+        ``_resumed`` flag) — this forces a fresh ``continue_run`` so a *page
+        reload* shows turns that were persisted after the session first resumed.
+        Returns the new ``restored_count`` (0 if none).
+        """
+        cid = conversation_id if conversation_id is not None else self.conversation_id
+        self._resumed = False
+        self._restored = False
+        self.history = []
+        await self._ensure_resumed(cid)
+        return self.restored_count
+
     async def _ensure_resumed(self, conversation_id: str | None) -> None:
         """Seed ``self.history`` from the store exactly once (before the first run).
 

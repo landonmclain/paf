@@ -99,6 +99,16 @@ _CSS = """
     flex: 1 1 auto !important;
     min-height: 0 !important;
 }
+/* The explicit outer `gr.Blocks(fill_width=True)` wrapper (added for
+   `demo.load` on page refresh) renders as a `.column svelte-siq5d6` that ships
+   with `flex: 0 1 auto` — it does NOT grow, so it caps the chatbot card at its
+   fixed `height=640` and the chat stops filling the viewport. Force the column
+   wrapper(s) to grow too so the card can stretch (regression 2026-08-21, seen
+   once the chat was wrapped in gr.Blocks). Hash class is stable for Gradio 6.25. */
+.gradio-container .column.svelte-siq5d6 {
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+}
 #chatbot {
     height: 100% !important;
 }
@@ -484,6 +494,13 @@ def _render_session_history(session: Session) -> list[dict]:
     def _flush() -> None:
         nonlocal cur_user, cur
         if cur_user is not None and cur is not None:
+            # Force-close any trailing open tool/thinking block and mark it done,
+            # mirroring the live path's turn-end `finish_open_blocks()` (see
+            # event_messages). Restored message folds may not see a closing
+            # ToolReturnPart for a turn's last tool, which would otherwise leave
+            # that block `status="…"` -> a spinner on a PAST turn. Stamping it
+            # done here keeps restored turns spinner-free.
+            cur.finish_open_blocks()
             turns.append((cur_user, cur))
         cur_user, cur = None, None
 
@@ -554,6 +571,25 @@ def session_history_msgs(session: Session) -> list[dict]:
     rendered = _render_session_history(session)
     _session_history[session.conversation_id or session.agent_name] = rendered
     return rendered
+
+
+async def _load_history(agent_name: str) -> list[dict]:
+    """Freshly-rendered restored history for the chatbot on PAGE LOAD/REFRESH.
+
+    ``session_history_msgs``/``restore()`` are one-shot: they run once at server
+    startup and cache, so a browser refresh would otherwise keep showing the
+    startup-time transcript even though newer turns were persisted meanwhile
+    (the model had them in context; the UI didn't). This re-reads the store via
+    ``Session.refresh()`` and re-renders, so a refresh always shows the latest
+    persisted turns.
+    """
+    session = get_session(agent_name)
+    _session_history.pop(session.conversation_id or session.agent_name, None)
+    try:
+        await session.refresh(conversation_id=session.conversation_id)
+    except Exception:  # noqa: BLE001 - resume is optional sugar
+        pass
+    return _render_session_history(session)
 
 
 def _to_dict(m: Any) -> dict:
@@ -718,15 +754,31 @@ def main() -> int:
         pass
     initial_history: list[dict] = session_history_msgs(session)
 
-    demo = gr.ChatInterface(
-        # functools.partial (NOT a lambda) so Gradio introspects fn as an async
-        # generator and uses the streaming `_stream_fn` path. A lambda defeats
-        # `inspect.isasyncgenfunction` and Gradio would treat it as a plain fn,
-        # returning the generator object instead of streaming it.
-        fn=functools.partial(event_messages, agent_name),
-        chatbot=gr.Chatbot(height=640, layout="bubble", value=initial_history),
-        fill_width=True,
-    )
+    chatbot = gr.Chatbot(height=640, layout="bubble", value=initial_history)
+    # ChatInterface is a Blocks subclass but only exposes `.load()` once it's
+    # mounted inside an open Blocks context — so wrap it explicitly. That lets
+    # us attach a page-load handler that re-renders restored history on every
+    # refresh (see _load_history), not just at server startup. Keep `demo` as
+    # the enclosing Blocks (do NOT rebind it to the ChatInterface) so the
+    # `.load` handler and the ChatInterface mount on the same served graph.
+    with gr.Blocks(fill_width=True) as demo:
+        # Re-render restored history on every page load/refresh: a refresh must
+        # show turns persisted since startup, which startup-time `initial_history`
+        # alone would miss.
+        demo.load(
+            fn=functools.partial(_load_history, agent_name),
+            inputs=None,
+            outputs=chatbot,
+        )
+        gr.ChatInterface(
+            # functools.partial (NOT a lambda) so Gradio introspects fn as an async
+            # generator and uses the streaming `_stream_fn` path. A lambda defeats
+            # `inspect.isasyncgenfunction` and Gradio would treat it as a plain fn,
+            # returning the generator object instead of streaming it.
+            fn=functools.partial(event_messages, agent_name),
+            chatbot=chatbot,
+            fill_width=True,
+        )
     demo.queue()
     demo.launch(
         server_name="0.0.0.0",
