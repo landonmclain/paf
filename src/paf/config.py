@@ -58,6 +58,22 @@ class Settings(BaseSettings):
     consol_provider_quantizations: list[str] = ["fp8"]
     consol_seed: int | None = None
 
+    # Model for the memory-organizer sub-agent (index maintenance). Blank
+    # (default) → resolved to the SAME model as the consolidation owner
+    # (`consol_model` / its cheap default) — the organizer is a separate leaf
+    # agent that can later move to a higher-level model via ORGANIZE_MODEL /
+    # .env. Not the spec'd subject model, and NOT hardcoded in source.
+    organize_model: str = ""
+
+    # OpenRouter routing pin for the memory organizer, mirroring the `consol_*`
+    # knobs (provider-order + quantization hard filter). Defaults to the owner's
+    # provider order + fp8; set empty (ORGANIZE_PROVIDER_ORDER='') to disable
+    # the routing pin. Set via ORGANIZE_PROVIDER_ORDER /
+    # ORGANIZE_PROVIDER_QUANTIZATIONS / ORGANIZE_SEED / .env.
+    organize_provider_order: list[str] = ["deepinfra", "parasail", "coreweave"]
+    organize_provider_quantizations: list[str] = ["fp8"]
+    organize_seed: int | None = None
+
     # The derived one-line-per-turn index lives NEXT TO the step store, as its own
     # append-only JSONL surface. It is now backed by the agent-foundation
     # `StorageService` seam (M2): this value is the seam's *base directory* for the

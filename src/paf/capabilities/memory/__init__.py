@@ -35,6 +35,14 @@ from __future__ import annotations
 from ._capability import Memory
 from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord
 from ._markdown import MarkdownStorage
+from ._organize import (
+    ConfirmDecision,
+    IndexEntry,
+    IndexStore,
+    NewDecision,
+    SupersedeDecision,
+    render_index_text,
+)
 from ._render import render_journal_memory, write_render
 from ._store import (
     FileStore,
@@ -66,8 +74,11 @@ from ._toolset import (
 )
 
 __all__ = [
+    "ConfirmDecision",
     "FileStore",
     "InMemoryStore",
+    "IndexEntry",
+    "IndexStore",
     "JournalAppendToolset",
     "JournalStore",
     "MAIN_FILENAME",
@@ -88,10 +99,13 @@ __all__ = [
     "MemoryStore",
     "MemoryToolset",
     "MemoryWriteResult",
+    "NewDecision",
     "SearchableMemoryStore",
+    "SupersedeDecision",
     "lexical_search",
     "list_subfiles",
     "normalize_filename",
+    "render_index_text",
     "render_journal_memory",
     "render_memory_prompt",
     "validate_store_path",
