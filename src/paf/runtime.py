@@ -191,7 +191,21 @@ class Session:
             runs = await self._store.list_runs(conversation_id=conversation_id)
             if not runs:
                 return
-            history = await continue_run(self._store, run_id=runs[-1].run_id)
+            # Resume the latest *continuable* run. The last listed run may be an
+            # interrupted/in-flight one whose snapshot never settled (e.g. the
+            # process was killed mid-turn), which `continue_run` refuses with a
+            # LookupError. Falling straight through to it would return EMPTY
+            # history even though earlier runs have valid snapshots — so walk
+            # backward to the newest run with a continuable snapshot.
+            history = []
+            for run in reversed(runs):
+                try:
+                    history = await continue_run(self._store, run_id=run.run_id)
+                    break
+                except Exception:  # noqa: BLE001 - skip unsettled runs
+                    continue
+            if not history:
+                return
             if self.resume_window is not None and self.resume_window >= 0:
                 history = history[-self.resume_window:] if self.resume_window else []
             self.history = history
