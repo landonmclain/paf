@@ -121,6 +121,14 @@ input[type="text"],
 input[type="search"] {
     font-size: 16px !important;
 }
+/* Hide Gradio's default footer bar ("Runs · Use via API · Built with Gradio").
+   Selection is by the semantic `<footer>` tag (stable across Gradio versions —
+   the hashed class differs per build), so it survives upgrades. Removes the
+   per-browser run-history / API links and reclaims the bottom strip, which is
+   wasted space on mobile (2026-08-21). */
+footer {
+    display: none !important;
+}
 """
 
 # ---------------------------------------------------------------------------
