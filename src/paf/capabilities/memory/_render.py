@@ -72,6 +72,8 @@ def render_journal_memory(
             continue
         lines = [
             f"- {_encode(r.fact)}{_SEP}{r.born_on}{_SEP}{r.source_ref}"
+            if r.born_on
+            else f"- {_encode(r.fact)}{_SEP}{r.source_ref}"
             for r in recs
         ]
         sections.append(f"## {type_name}\n" + "\n".join(lines))

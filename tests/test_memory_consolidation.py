@@ -326,6 +326,30 @@ def test_resident_consolidate_text_renders_every_segment() -> None:
         assert f"turn {i}" in out
 
 
+def test_resident_consolidate_text_labels_inline_date_from_prefix() -> None:
+    """No metadata ``source_date`` → the owner derives ``born_on`` from the
+    inline ``[date: ...]`` prefix (production seam), and the prefix is stripped
+    from the fact text so it never leaks into the stored fact."""
+    import asyncio
+
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    from paf.capabilities.memory._consolidate import resident_consolidate_text
+
+    msgs = [
+        ModelRequest(
+            parts=[UserPromptPart(content="[date: 2026-08-21] do the thing now")]
+        )
+    ]
+    out = asyncio.run(resident_consolidate_text(msgs))
+    assert out is not None
+    # Date rides in the label so the owner can fill born_on with real provenance.
+    assert "2026-08-21" in out
+    # The prefix is stripped from the fact text the owner copies verbatim.
+    assert "[date: 2026-08-21]" not in out
+    assert "do the thing now" in out
+
+
 # ---------------------------------------------------------------------------
 # chunked seed consolidation (benchmark / large-haystack path)
 # ---------------------------------------------------------------------------

@@ -79,7 +79,7 @@ class MemoryRecord:
         *,
         type: str,
         fact: str,
-        born_on: str | datetime,
+        born_on: str | datetime | None = None,
         source_ref: str,
     ) -> None:
         if type not in MEMORY_TYPES:
@@ -133,12 +133,19 @@ class MemoryRecord:
         )
 
 
-def _normalize_born_on(value: str | datetime) -> str:
+def _normalize_born_on(value: str | datetime | None) -> str:
     """Normalize ``born_on`` to a UTC ISO-8601 string (string out for dump/read ease).
 
     Accepts a ``datetime`` (naive is assumed UTC per the corpus-clock convention)
     or an ISO string. Stored in ISO order so chronological sort is lexical.
+
+    An empty/``None`` value is allowed and stored as ``""``: a fact with no
+    derivable date (no label, no metadata, no inline prefix) is recorded with
+    empty ``born_on`` rather than a fabricated one. Recency ordering must
+    tolerate empty values (they sort last).
     """
+    if value is None:
+        return ""
     if isinstance(value, datetime):
         dt = value
         if dt.tzinfo is None:
@@ -147,7 +154,7 @@ def _normalize_born_on(value: str | datetime) -> str:
     # String: try to normalize, else keep as-is (ISO already sorts lexically).
     text = value.strip()
     if not text:
-        raise ValueError("born_on must be non-empty")
+        return ""
     try:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if dt.tzinfo is None:

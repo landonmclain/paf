@@ -79,7 +79,9 @@ exactly as the tool describes:
   `event`, `task`, `current`); pick the kind that best fits.
 - `fact` — a plain, self-contained statement, subject inline ("user prefers X",
   "project uses Y").
-- `born_on` — the ISO date the fact was stated, from the message's label.
+- `born_on` — the ISO date the fact was stated, from the message's label. If
+  the label carries no date, leave `born_on` empty — NEVER invent a date; a
+  fabricated date is worse than none.
 - `source_ref` — the message's `{run_id}:{turn_id}` label, so the fact can be
   traced and verified.
 
@@ -299,13 +301,19 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
         run_id = runs[idx]
         turn_refs.append(f"{run_id}:{tid}" if run_id is not None and tid is not None else None)
 
-    def _label(role: str, idx: int) -> str:
+    def _label(role: str, idx: int, inline_date: str | None = None) -> str:
         ref = turn_refs[idx]
         date = ""
         md = getattr(messages[idx], "metadata", None) or {}
         src_date = md.get("source_date")
         if src_date:
             date = f" [{src_date}]"
+        elif inline_date:
+            # No metadata ``source_date`` (production path — the harness prepends
+            # a ``[date: ...]`` prefix instead of stamping metadata). Derive the
+            # date from that inline prefix so ``born_on`` is still real
+            # provenance, never a model-invented value.
+            date = f" [{inline_date}]"
         return f"{role} {ref}{date}:"
 
     lines: list[str] = []
@@ -315,7 +323,10 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
                 if isinstance(part, UserPromptPart):
                     content = _user_text(part)
                     if content:
-                        lines.append(f"{_label('User', idx)} {_strip_inline_date(content)}")
+                        lines.append(
+                            f"{_label('User', idx, _inline_date(content))} "
+                            f"{_strip_inline_date(content)}"
+                        )
                 # Everything else a request can carry (system prompt, tool return,
                 # retry, thinking, native / tool-search / capability-load traffic,
                 # file) is not durable user text — dropped.
@@ -438,15 +449,30 @@ async def consolidate_conversation(
 _CHARS_PER_TOKEN = 4
 
 
+def _inline_date(text: str) -> str | None:
+    """Extract the date from a leading ``[date: ...]`` prefix, else ``None``.
+
+    The harness (benchmark and production) prefixes the message date as
+    ``[date: <iso>]``. When a message carries no ``metadata['source_date']``,
+    the consolidation owner reads this inline value (via the label) so it can
+    fill ``born_on`` with real provenance instead of inventing one.
+    """
+    if text.startswith("[date: "):
+        end = text.find("]")
+        if end != -1:
+            return text[len("[date: ") : end].strip() or None
+    return None
+
+
 def _strip_inline_date(text: str) -> str:
     """Strip a leading ``[date: ...]`` inline prefix (used for search/read_turn).
 
-    The harness prefixes the session datetime onto the FIRST turn of each session
-    so ``search_conversation_history`` / ``read_turn`` re-surface a time anchor.
-    The owner view already carries the date on EVERY message as an ISO label
-    (``[<source_date>]`` from metadata), so the redundant first-turn-only inline
-    prefix is dropped here to keep the owner's input to one clean date source —
-    it copies the ISO label verbatim into ``append_memory`` as ``born_on``.
+    The benchmark harness prefixes a ``[date: ...]`` token (first turn of each
+    session) and the production harness prepends one to EVERY user message, so
+    the model always has an explicit time anchor. The owner view resolves the
+    date into the label (metadata ``source_date`` first, else the inline
+    prefix) and drops the redundant prefix from the fact TEXT so it never leaks
+    into the stored ``fact`` — the date lives in ``born_on``, not in prose.
     """
     if text.startswith("[date: "):
         end = text.find("]")

@@ -128,6 +128,20 @@ def test_born_on_sorts_lexically() -> None:
     assert earlier < later
 
 
+def test_empty_born_on_is_allowed_and_stored_empty(tmp_path) -> None:
+    """A fact with no derivable date is recorded with empty born_on — never a
+    fabricated one, and never rejected/dropped (the fabrication-bug fix)."""
+    rec = MemoryRecord(type="fact", fact="no date", born_on="", source_ref="run:0")
+    assert rec.born_on == ""
+    rec_none = MemoryRecord(type="fact", fact="no date", source_ref="run:1")
+    assert rec_none.born_on == ""
+    # round-trips through the store without raising (previously ValueError)
+    store = JournalStore(tmp_path)
+    store.append(type="fact", fact="no date", born_on="", source_ref="run:0")
+    _, stored = store.read_all()[0]
+    assert stored.born_on == ""
+
+
 # ---------------------------------------------------------------------------
 # id = JSONL line number, append order
 # ---------------------------------------------------------------------------
