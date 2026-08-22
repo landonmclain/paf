@@ -40,6 +40,7 @@ from paf.capabilities.memory._consolidate import (
     _strip_inline_date,
     resident_consolidate_text,
 )
+from paf.capabilities.memory._view import JournalViewStore
 
 # --- null tracer/context (mirrors test_memory.py) -------------------------
 
@@ -144,6 +145,7 @@ def test_append_toolset_rejects_bad_type(tmp_path: Path) -> None:
 def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
     """Memory with a journal exposes append_memory only; non-journal has no toolset."""
     cap = Memory(
+        store=JournalViewStore(tmp_path),
         agent_name="assistant",
         writable=True,
         journal=JournalStore(tmp_path),
@@ -152,7 +154,12 @@ def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
     assert isinstance(ts, JournalAppendToolset)
     assert set(ts.tools.keys()) == {"append_memory"}
     # A non-journal Memory exposes NO toolset (the legacy 4-tool surface is gone).
-    assert Memory(agent_name="a", writable=True).get_toolset() is None
+    assert (
+        Memory(
+            store=JournalViewStore(tmp_path), agent_name="a", writable=True
+        ).get_toolset()
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,13 +177,23 @@ def _msg(body: str, role: str, sid: str, dt: str | None):
 
     run_id = "seed-lmem-abcd1234"
     cid = "lmem-abcd1234"
-    metadata = {"source_date": dt, "source_session_id": sid} if dt else {"source_session_id": sid}
+    metadata = (
+        {"source_date": dt, "source_session_id": sid}
+        if dt
+        else {"source_session_id": sid}
+    )
     if role == "u":
         return ModelRequest(
-            parts=[UserPromptPart(content=body)], run_id=run_id, conversation_id=cid, metadata=metadata
+            parts=[UserPromptPart(content=body)],
+            run_id=run_id,
+            conversation_id=cid,
+            metadata=metadata,
         )
     return ModelResponse(
-        parts=[TextPart(content=body)], run_id=run_id, conversation_id=cid, metadata=metadata
+        parts=[TextPart(content=body)],
+        run_id=run_id,
+        conversation_id=cid,
+        metadata=metadata,
     )
 
 
@@ -191,19 +208,32 @@ def test_resident_labels_turn_ref_and_date() -> None:
     out = asyncio.run(resident_consolidate_text(msgs))
     assert out is not None
     lines = out.split("\n")
-    assert lines[0].startswith("User seed-lmem-abcd1234:0 [2023-05-20T02:21:00+00:00]: first Q")
+    assert lines[0].startswith(
+        "User seed-lmem-abcd1234:0 [2023-05-20T02:21:00+00:00]: first Q"
+    )
     # Assistant inherits its containing user turn (turn 0).
-    assert lines[1].startswith("Assistant seed-lmem-abcd1234:0 [2023-05-20T02:21:00+00:00]: first A")
+    assert lines[1].startswith(
+        "Assistant seed-lmem-abcd1234:0 [2023-05-20T02:21:00+00:00]: first A"
+    )
     # Second user message advances to turn 1.
-    assert lines[2].startswith("User seed-lmem-abcd1234:1 [2023-05-20T02:21:00+00:00]: second Q")
+    assert lines[2].startswith(
+        "User seed-lmem-abcd1234:1 [2023-05-20T02:21:00+00:00]: second Q"
+    )
     # New session gets its own date, turn 2.
-    assert lines[3].startswith("User seed-lmem-abcd1234:2 [2023-05-20T02:57:00+00:00]: new session Q")
+    assert lines[3].startswith(
+        "User seed-lmem-abcd1234:2 [2023-05-20T02:57:00+00:00]: new session Q"
+    )
 
 
 def test_resident_strips_inline_date_from_user_content() -> None:
     """The owner view drops the first-turn inline [date:] prefix (ISO label covers it)."""
     msgs = [
-        _msg("[date: 2023/05/20 (Sat) 02:21] first Q", "u", "sess_1", "2023-05-20T02:21:00+00:00"),
+        _msg(
+            "[date: 2023/05/20 (Sat) 02:21] first Q",
+            "u",
+            "sess_1",
+            "2023-05-20T02:21:00+00:00",
+        ),
     ]
     out = asyncio.run(resident_consolidate_text(msgs))
     assert out is not None
@@ -224,7 +254,8 @@ def test_missing_date_survives() -> None:
     msgs = [
         ModelRequest(
             parts=[UserPromptPart(content="no date here")],
-            run_id="seed-r", conversation_id="c",
+            run_id="seed-r",
+            conversation_id="c",
             metadata={"source_session_id": "sess_1"},
         )
     ]

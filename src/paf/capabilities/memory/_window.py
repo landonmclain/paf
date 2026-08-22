@@ -118,14 +118,15 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         return await super().compact(messages, ctx)
 
     def _build_memory_store(self):
-        """Construct a store handle for the owner's `Memory` (inert in journal model).
+        """Construct the store handle for the owner's `Memory` (journal-view).
 
         Semantically inert for writes once ``journal`` is passed (the owner
         appends through the journal, not the store), but still required by
-        ``consolidate``'s signature. An ``InMemoryStore`` — process-lifetime,
-        never persisted — is exactly right: the owner never reads it back and the
-        durable truth lives in the journal.
+        ``consolidate``'s signature and read by the chunked/inject variant.
+        A ``JournalViewStore`` of the memory directory — the read-only view of
+        the journal-rendered ``MEMORY.md`` — is the correct M2 backend (same as
+        the assistant's ``Memory`` in ``build.py``).
         """
-        from ._store import InMemoryStore
+        from ._view import JournalViewStore
 
-        return InMemoryStore()
+        return JournalViewStore(self.memory_directory)

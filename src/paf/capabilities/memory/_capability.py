@@ -22,7 +22,7 @@ from pydantic_ai.toolsets import AgentToolset
 
 from ._format import MEMORY_FORMAT
 from ._journal import JournalStore
-from ._store import InMemoryStore, MemoryStore, validate_store_path
+from ._store import MemoryStore, validate_store_path
 from ._toolset import (
     MAIN_FILENAME,
     JournalAppendToolset,
@@ -30,6 +30,7 @@ from ._toolset import (
     list_subfiles,
     render_memory_prompt,
 )
+from ._view import JournalViewStore
 
 _DEFAULT_GUIDANCE = (
     "TO RETRIEVE ANYTHING (a fact or a past turn), work cheapest-first and never "
@@ -128,8 +129,10 @@ class Memory(AbstractCapability[AgentDepsT]):
     not DBOS-durable without an application-provided DBOS step wrapper.
     """
 
-    store: MemoryStore = field(default_factory=InMemoryStore)
-    """Storage backend. The default persists only for the process lifetime."""
+    store: MemoryStore
+    """Storage backend (required). The M2 path supplies a read-only
+    ``JournalViewStore`` of the journal-rendered ``MEMORY.md``; there is no
+    legacy process-lifetime default."""
 
     store_resolver: Callable[[RunContext[AgentDepsT]], MemoryStore] | None = None
     """Optional per-run store resolver. Resolver failures always propagate."""
@@ -442,16 +445,16 @@ class Memory(AbstractCapability[AgentDepsT]):
     ) -> Memory[AgentDepsT]:
         """Construct a memory capability from serializable options.
 
-        ``backend`` is accepted for spec compatibility: only ``'memory'``
-        (the process-lifetime ``InMemoryStore``) remains — the durable M2 memory
-        lives in the journal (``JournalStore``) + curated index (``IndexStore``) +
-        rendered view (``JournalViewStore``), surfaced by ``MemoryConsolidationWindow``
-        / ``_build_memory``. The legacy ``'file'`` (``FileStore``, SQLite journal)
-        and ``'markdown'`` (``MarkdownStorage``) backends were removed.
-        ``directory`` is accepted for spec compatibility but ignored.
+        ``backend`` is accepted for spec compatibility only: the legacy
+        ``'file'`` (``FileStore``, SQLite journal) and ``'markdown'``
+        (``MarkdownStorage``) backends were removed, and there is no
+        process-lifetime default. The M2 model always reads the journal-rendered
+        ``MEMORY.md``, so ``store`` is the read-only ``JournalViewStore`` rooted
+        at ``directory`` (previously accepted but ignored; now the concrete
+        backend). ``writable``/``expose_tools`` still gate the tool surface.
         """
         return cls(
-            store=InMemoryStore(),
+            store=JournalViewStore(directory),
             agent_name=agent_name,
             heading=heading,
             namespace=namespace,

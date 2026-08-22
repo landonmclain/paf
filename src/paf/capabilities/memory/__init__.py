@@ -12,12 +12,14 @@ the **index renderer** materializes the root ``MEMORY.md`` (``write_index_render
 that the assistant's read-only ``JournalViewStore`` injects.
 
 The legacy rehomed pydantic-ai builtin surface (the ``FileStore`` SQLite-journal
-backend, ``MarkdownStorage``, and the 4-tool ``MemoryToolset``) was removed —
-none of it is used by the M2 journal model or by benchmarking/prod. ``InMemoryStore``
-remains only as the ``Memory`` field default and the owner's inert store handle.
+backend, ``MarkdownStorage``, the 4-tool ``MemoryToolset``, and the
+``InMemoryStore`` process-lifetime placeholder) was removed — none of it is used
+by the M2 journal model or by benchmarking/prod. A ``Memory`` always carries a
+concrete backend (the ``store`` arg is required); the M2 path supplies the
+read-only ``JournalViewStore`` of the rendered journal.
 
 - ``_store``     -- ``MemoryStore``/``SearchableMemoryStore`` protocols, shared
-                    record types, ``InMemoryStore``, ``lexical_search``, validation.
+                    record types, ``lexical_search``, validation.
 - ``_journal``   -- append-only ``JournalStore`` (source of truth).
 - ``_organize``  -- ``run_organizer`` + ``IndexStore`` (curated index).
 - ``_render``    -- ``write_render`` / ``write_index_render`` (MEMORY.md).
@@ -48,7 +50,6 @@ from ._render import (
     write_render,
 )
 from ._store import (
-    InMemoryStore,
     MemoryConflictError,
     MemoryFile,
     MemoryMutation,
@@ -73,7 +74,6 @@ from ._toolset import (
 
 __all__ = [
     "ConfirmDecision",
-    "InMemoryStore",
     "IndexEntry",
     "IndexStore",
     "JournalAppendToolset",

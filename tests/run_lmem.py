@@ -827,8 +827,8 @@ def main(argv: list[str] | None = None) -> dict:
         fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
         restored = 0
         if MEMORY:
-            from paf.capabilities.memory import InMemoryStore
             from paf.capabilities.memory._consolidate import consolidate_conversation
+            from paf.capabilities.memory._view import JournalViewStore
 
             # HONEST-MEMORY GUARD (Landon: owner reads up to the question, not
             # further). raw_turns is built purely from q["haystack_sessions"]
@@ -867,7 +867,7 @@ def main(argv: list[str] | None = None) -> dict:
                         f"(durable snapshot overwritten)",
                         flush=True,
                     )
-                store_mem = InMemoryStore()
+                store_mem = JournalViewStore(mem_dir)
                 # Chunked seed consolidation (default): folds the haystack in
                 # token-bounded, message-boundary-aligned chunks into durable
                 # memory so single-mention thematic clusters survive the owner's
