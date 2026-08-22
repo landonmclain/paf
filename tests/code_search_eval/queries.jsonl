@@ -1,0 +1,3 @@
+{"query": "where is get_toolset for the skill capability", "mode": "keywords", "answer_files": ["src/paf/capabilities/skills/_capability.py"], "answer_symbols": ["get_toolset"], "note": "starter — seed full set in Phase 1 from genuine paf questions"}
+{"query": "who calls SummarizingCompaction", "mode": "callers", "answer_files": ["src/paf/capabilities/compaction.py"], "answer_symbols": ["SummarizingCompaction"], "note": "starter — call graph is Phase 2"}
+{"query": "memory owner consolidation writer", "mode": "keywords", "answer_files": ["src/paf/capabilities/memory/_consolidate.py"], "answer_symbols": ["_consolidate"], "note": "starter"}
