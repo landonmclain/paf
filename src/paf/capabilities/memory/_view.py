@@ -6,12 +6,10 @@ presentation view* rendered from it. The recall/answerer is READ-ONLY: it
 never touches the journal and never writes memory. Its job is simply to have
 the current rendered notebook inserted into `<memory>` on every request.
 
-That insertion does NOT go through ``MarkdownStorage`` (the legacy agent-scoped
-store). We don't use MarkdownStorage for writing anymore (the owner only
-appends to the journal), so we should not use it for reading either. This view
-reader sits on the *rendered output only*: read() returns the top-level
-``MEMORY.md`` file content verbatim -- the exact md that ``write_render``
-produced -- and the capability injects that text in full. No scope/agent
+That insertion goes through this view reader on the *rendered output only*:
+read() returns the top-level ``MEMORY.md`` file content verbatim -- the exact md
+that ``write_render``/``write_index_render`` produced -- and the capability
+injects that text in full. No scope/agent
 pathing, no protocol indirection: read the file, insert the text.
 
 Isolated by design: this reader does not implement write/delete/search and

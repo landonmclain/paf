@@ -3,20 +3,19 @@
 Like :mod:`paf.capabilities.compaction`, this owns capabilities that can't cleanly
 resolve from YAML because they need real Python objects as arguments (see
 ``build.py`` for the full rationale on the ``capabilities=`` seam). For M1 that is
-`ConversationSearch` and `TurnIndexCapability`: their ``source: HistorySource`` needs
+`ConversationSearch`: its ``source: HistorySource`` needs
 a real ``SnapshotHistorySource(store)`` object, and no recall class overrides
-``from_spec`` (and `TurnIndexCapability`, though it DOES override `from_spec`, is wired
-here to share the live store) — so they are assembled here, in Python.
+``from_spec`` — so it is assembled here, in Python.
 
 ``ConversationSearch`` is the paf-owned search capability
 (``paf.capabilities.search``), a drop-in for the harness's of the same name — so the
-recall surface shares the marker-strip that keeps injected ``<turn-index>`` /
-``<memory>`` blocks out of the corpus.
+recall surface shares the marker-strip that keeps injected ``<memory>``
+blocks out of the corpus.
 
-``TurnIndexCapability`` is NOT built here: it owns its builder in
-``paf.capabilities.turn_index`` (``build_turn_index``) so its summarizer/content
-config flows from the capability's own spec. This module is scoped to pure
-store construction for StepPersistence (write) and ConversationSearch (recall).
+(The original ``TurnIndex`` recall capability — one-line-per-turn index + ``read_turn``
+resolver — was retired as a failed experiment and archived; see the codebase History
+notes. It was built in ``paf.capabilities.turn_index`` and is no longer part of this
+module.)
 
 `StepPersistence` *could* resolve from YAML (it overrides ``from_spec``), but it is
 built here too so it shares ONE ``FileStepStore`` with `ConversationSearch`.
@@ -27,7 +26,7 @@ no divergence between the write path and the recall-corpus read path.
 This module owns that assembly. ``build_persistence()`` builds the single shared store
 and returns the persistence + recall capabilities wired over it;
 ``build_runtime_capabilities(profile)`` (in ``build.py``) selects the subset the profile
-allowlists (merging in the TurnIndex builder) and hands it to the agent via
+allowlists and hands it to the agent via
 ``Agent.from_spec(capabilities=)``.
 """
 
@@ -61,10 +60,10 @@ def _build_step_persistence(store: FileStepStore) -> StepPersistence:
 
     IMPORTANT: no ``agent_name``. StepPersistence derives its run_id as
     ``{agent_name}-{uuid}`` when agent_name is set (the harness's ``_derive_run_id``),
-    which would make the STORE key runs by ``assistant-<hex>`` while the TurnIndex
-    capability writes pydantic-ai's ``ctx.run_id`` (``019fe…``) -- a run-id namespace
+    which would make the STORE key runs by ``assistant-<hex>`` while the recall
+    capability reads pydantic-ai's ``ctx.run_id`` (``019fe…``) -- a run-id namespace
     mismatch that silently broke ``read_turn`` (refs never resolve). With agent_name
-    unset, StepPersistence falls through to ``ctx.run_id``, so store and index agree
+    unset, StepPersistence falls through to ``ctx.run_id``, so store and recall agree
     on the same id and every ref round-trips.
     """
     return StepPersistence(store=store)
@@ -83,10 +82,6 @@ def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
 # constructed — one shared store handed to whichever are selected. There is no
 # separate hardcoded list; this IS the resolution of the allowlist names.
 #
-# NOTE: `TurnIndex` is deliberately NOT here — it builds its own capability in
-# `paf.capabilities.turn_index` (`build_turn_index`) so its content config
-# (summarizer) lives with the capability, not in persistence. build.py merges
-# that builder with this dict so the shared store still flows to it.
 PERSISTENCE_BUILDERS: dict[str, Callable[[FileStepStore], Any]] = {
     "StepPersistence": _build_step_persistence,
     "ConversationSearch": _build_conversation_search,

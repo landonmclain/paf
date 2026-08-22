@@ -37,7 +37,6 @@ from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
-from paf.capabilities.turn_index import TurnIndexCapability
 from paf.capabilities.web import Web
 
 # name -> capability type. The name is the serialization form used in a spec's
@@ -61,10 +60,6 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # its `source` needs a real SnapshotHistorySource object; cataloged so the
     # profile allowlist + schema stay complete.
     "ConversationSearch": ConversationSearch,
-    # One-line-per-turn index in context + gated `read_turn`. Built in Python (build.py)
-    # to share the single persistence store; has `from_spec`, so it can ALSO resolve
-    # declaratively from a spec (`- TurnIndex: {index_dir: ...}`).
-    "TurnIndex": TurnIndexCapability,
     # Durable-facts notebook (MEMORY.md + topic files). Near-copy of the harness
     # Memory capability; paf-owned so its injected block shares the one marker
     # convention. Built by build.py whenever the profile allowlists it; for the

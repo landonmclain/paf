@@ -117,12 +117,14 @@ def test_expose_tools_false_registers_no_memory_tools(mem_dir: Path) -> None:
     assert cap.get_toolset() is None
 
 
-def test_expose_tools_true_still_gates_writes_like_read_only(mem_dir: Path) -> None:
-    """Sanity: `expose_tools=True` (default) exposes read/search but not write
-    when `writable=False` -- the legacy read-only surface is unchanged.
+def test_expose_tools_true_nonjournal_registers_no_toolset(mem_dir: Path) -> None:
+    """A non-journal Memory exposes NO toolset (legacy 4-tool surface removed).
+
+    With ``MemoryToolset`` gone, `expose_tools=True` alone does not produce a
+    toolset: the only remaining tool surface is the journal-append owner, which
+    requires ``journal``. Anything else is injection-only and carries no tools.
     """
     from paf.capabilities.memory import Memory
-    from paf.capabilities.memory._toolset import MemoryToolset
     from paf.capabilities.memory._view import JournalViewStore as _JVS
 
     cap = Memory(
@@ -133,7 +135,4 @@ def test_expose_tools_true_still_gates_writes_like_read_only(mem_dir: Path) -> N
         expose_tools=True,
         guidance="",
     )
-    ts = cap.get_toolset()
-    assert ts is not None
-    assert isinstance(ts, MemoryToolset)
-
+    assert cap.get_toolset() is None

@@ -14,11 +14,11 @@ We no longer declare capabilities in YAML, so this Python ``capabilities=`` seam
 ONLY thing that reaches the agent — which means the profile's allowlist is what decides
 "what this agent gets." No hardcoded list here; it is the resolution of the profile.
 
-Persistent capabilities (StepPersistence, ConversationSearch, TurnIndex) select their
+Persistent capabilities (StepPersistence, ConversationSearch) select their
 builders from :data:`paf.capabilities.persistence.PERSISTENCE_BUILDERS`. Context
 compaction builds via ``build_compaction()`` **iff the profile allowlists ``Compaction``**
 — the ladder WITHOUT the summarizing tier (the LLM rewrite is mutually exclusive with the
-`<turn-index>` one-liner block; see ``compaction.py``). A profile simply omits a name from
+recall-ladder injection; see ``compaction.py``). A profile simply omits a name from
 its ``capability_names`` and that agent won't get it.
 """
 
@@ -40,7 +40,6 @@ from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
-from paf.capabilities.turn_index import build_turn_index
 from paf.capabilities.web import Web as _Web
 from paf.config import PROJECT_ROOT, settings
 
@@ -86,9 +85,8 @@ def _build_memory(store) -> Memory:
 def _conversation_search_suppressed(store):
     """ConversationSearch with its own instruction scrap disabled.
 
-    Used when TurnIndex OR Memory owns the composite recall ladder: TurnIndex's
-    `get_instructions` (when Memory absent) or Memory's composite `_DEFAULT_GUIDANCE`
-    (when present) already name `search_conversation_history`'s slot, so this
+    Used when Memory owns the composite recall ladder: Memory's composite
+    `_DEFAULT_GUIDANCE` already names `search_conversation_history`'s slot, so this
     capability's standalone "a search_conversation_history tool can retrieve
     exact details…" fragment would be duplicative and potentially conflicting.
     Same shared store either way — this only toggles instruction emission.
@@ -216,7 +214,9 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
 # variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
 # across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism (see
 # specs.py `_openrouter_model_settings`). Override via SUBAGENT_MODEL / .env.
-_SUBAGENT_MODEL = os.environ.get("SUBAGENT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731")
+_SUBAGENT_MODEL = os.environ.get(
+    "SUBAGENT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
+)
 
 
 def _build_subagents(store) -> SubAgents:
@@ -272,31 +272,13 @@ def _build_subagents(store) -> SubAgents:
     )
 
 
-def _turn_index_suppressed(store):
-    """TurnIndex with its own instruction scrap disabled (Memory owns the ladder).
-
-    When the profile also allowlists ``Memory``, Memory's composite
-    ``_DEFAULT_GUIDANCE`` is the single recall ladder (durable-fact + past-turn +
-    last-rung history). It already names ``search_index`` / ``read_turn`` /
-    ``search_conversation_history``, so TurnIndex's own self-contained ladder would
-    be a conflicting duplicate. Same shared store — this only toggles instruction
-    emission; the `search_index` / `read_turn` tools stay registered.
-    """
-    from dataclasses import replace
-
-    from paf.capabilities.turn_index import build_turn_index
-
-    return replace(build_turn_index(store), add_instructions=False)
-
-
 def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
-    Persistence + recall select per :data:`PERSISTENCE_BUILDERS`; ``TurnIndex``
-    builds itself via :func:`turn_index.build_turn_index`, but all are handed the
+    Persistence + recall select per :data:`PERSISTENCE_BUILDERS`, all handed the
     SAME store (so write / search / read_turn provably resolve the same history).
     ``Compaction`` (the no-summary ladder) is appended iff the profile allowlists
     it. A profile may list fewer — e.g. a minimal agent with only
@@ -305,27 +287,19 @@ def build_runtime_capabilities(
 
     **Recall-instruction ownership:** exactly ONE capability emits the composite
     recall ladder. When ``Memory`` is allowlisted it owns it (durable-fact +
-    past-turn + last-rung history, in ``_DEFAULT_GUIDANCE``), so ``TurnIndex`` and
-    ``ConversationSearch`` get ``add_instructions=False`` here to keep that single
-    ladder the ONLY recall guidance the model sees. The current assistant profile
-    allowlists ``Memory`` and NOT ``TurnIndex`` (BEAM+gated benchmark: index
-    summaries are a ±7/−5 wash vs memory's reliable +0.146 lift), so the
-    ``TurnIndex``-owns path below is a fallback only reached by a custom profile
-    that re-adds it. When ``Memory`` is absent but ``TurnIndex`` is present,
-    ``TurnIndex`` owns it (recognition → search_index → read_turn →
-    search_conversation_history), and ``ConversationSearch`` alone is
-    suppressed. The suppression gates live here (build time) because capabilities
-    cannot see each other; ``add_instructions=False`` never disables tool
-    registration.
+    past-turn + last-rung history, in ``_DEFAULT_GUIDANCE``), so
+    ``ConversationSearch`` gets ``add_instructions=False`` here to keep that single
+    ladder the ONLY recall guidance the model sees. The suppression gate lives
+    here (build time) because capabilities cannot see each other;
+    ``add_instructions=False`` never disables tool registration.
     """
     # Both builders are keyed by the SAME names a profile allowlists, so the
     # profile is the gatekeeper for each.
     builders = {
         **PERSISTENCE_BUILDERS,
-        "TurnIndex": build_turn_index,
-        # Memory is its own store (MarkdownStorage), not the shared run store, so
-        # its builder ignores the arg — but keeping it here means the profile's
-        # `Memory` allowlist entry actually gets built (un-gated, M2 live-test beat).
+        # Memory is its own journal-backed store (JournalViewStore), not the shared
+        # run store, so its builder ignores the arg — but keeping it here means the
+        # profile's `Memory` allowlist entry actually gets built (un-gated, live-test beat).
         "Memory": _build_memory,
         # Scoped filesystem (paf-owned harness copy) rooted at the project root.
         "FileSystem": _build_filesystem,
@@ -345,26 +319,20 @@ def build_runtime_capabilities(
         "Subagents": _build_subagents,
     }
     store = _build_store()
-    # Exactly ONE capability owns the composite recall ladder:
-    #   - Memory present       -> Memory's `_DEFAULT_GUIDANCE` is the ladder (durable
-    #     fact + past-turn + last-rung history); TurnIndex and ConversationSearch's
-    #     instruction scraps are suppressed so the model sees one ladder, not three.
-    #   - Memory absent        -> TurnIndex owns it (recognition -> search_index ->
-    #     read_turn -> search_conversation_history); ConversationSearch suppressed.
-    # The suppression gates live HERE (build time) because capabilities can't see
-    # each other; `add_instructions=False` only toggles instruction TEXT, never the
-    # tool registration (search_index / read_turn / search_conversation_history are
-    # still attached).
-    has_turn_index = "TurnIndex" in profile.capability_names
+    # Exactly ONE capability owns the composite recall ladder: when ``Memory`` is
+    # allowlisted it owns it (durable-fact + past-turn + last-rung history, in
+    # ``_DEFAULT_GUIDANCE``), so ``ConversationSearch``'s instruction scrap is
+    # suppressed so the model sees one ladder, not two. This gate lives HERE
+    # (build time) because capabilities can't see each other;
+    # ``add_instructions=False`` only toggles instruction TEXT, never the tool
+    # registration (search_conversation_history is still attached).
     has_memory = "Memory" in profile.capability_names
     capabilities = []
     for name, builder in builders.items():
         if name not in profile.capability_names:
             continue
-        if name == "ConversationSearch" and (has_turn_index or has_memory):
+        if name == "ConversationSearch" and has_memory:
             capabilities.append(_conversation_search_suppressed(store))
-        elif name == "TurnIndex" and has_memory:
-            capabilities.append(_turn_index_suppressed(store))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

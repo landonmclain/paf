@@ -23,7 +23,7 @@ from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
-from ..turn_index._generate import user_anchor_indices
+from .._turns import user_anchor_indices
 from ._ranking import Bm25Params, bm25_rank
 from ._reader import READ_TURN_DESCRIPTION, TurnFinder
 from ._render import display_lines, format_messages, is_summary_artifact

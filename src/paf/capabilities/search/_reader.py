@@ -1,17 +1,15 @@
 """The shared `read_turn` primitive — full-content read of a persisted turn.
 
-Owned by `search` because search is the permanent retrieval layer (never
-ablated); the turn index is an optional *producer* of refs on top of it. A
+Owned by `search` because search is the permanent retrieval layer; the retired
+turn index was an optional *producer* of refs on top of it. A
 `run_id:turn_id` ref (or bare `run_id`) is resolved through the `HistorySource`
-seam back to the original `ModelMessage` span — whether the ref came from the
-index (`search_index` / injected one-liners) or from raw search
-(`search_conversation_history`).
+seam back to the original `ModelMessage` span — whether the ref came from a
+recalled one-liner or from raw search (`search_conversation_history`).
 
 The read primitive is deliberately index-free: it depends only on
-`HistorySource` and message rendering. Both `TurnIndexToolset` (index ladder)
-and `ConversationSearchToolset` (raw search ladder) register `read_turn` from
-here, so the model has ONE full-content read tool regardless of how it obtained
-the ref.
+`HistorySource` and message rendering. `ConversationSearchToolset` (raw search
+ladder) registers `read_turn` from here, so the model has ONE full-content read
+tool regardless of how it obtained the ref.
 """
 
 from __future__ import annotations
@@ -196,11 +194,11 @@ class TurnFinder:
 class ReadTurnToolset(FunctionToolset[AgentDepsT]):
     """Exposes the shared `read_turn` full-content read tool.
 
-    Tool-id defaults to `"reader"` so a capability mounting it can register it as
-    its own tool without colliding with the index's `"turn-index"` id. It owns NO
+    Tool-id defaults to `"reader"` so a capability mounting it can register it
+    under its own id without colliding. It owns NO
     state of its own -- just a `TurnFinder` over a `HistorySource`.
 
-    Both `TurnIndexToolset` and `ConversationSearchToolset` expose this same tool
+    `ConversationSearchToolset` exposes this same tool
     so the model has a single full-content read regardless of retrieval ladder.
     """
 

@@ -35,7 +35,6 @@ from paf.capabilities.memory import (
     JournalStore,
     Memory,
     MemoryRecord,
-    MemoryToolset,
 )
 from paf.capabilities.memory._consolidate import (
     _strip_inline_date,
@@ -143,7 +142,7 @@ def test_append_toolset_rejects_bad_type(tmp_path: Path) -> None:
 
 
 def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
-    """Memory with a journal exposes append_memory only, not the legacy tools."""
+    """Memory with a journal exposes append_memory only; non-journal has no toolset."""
     cap = Memory(
         agent_name="assistant",
         writable=True,
@@ -152,10 +151,8 @@ def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
     ts = cap.get_toolset()
     assert isinstance(ts, JournalAppendToolset)
     assert set(ts.tools.keys()) == {"append_memory"}
-    # The legacy 4-tool surface is untouched on a non-journal Memory.
-    assert set(
-        MemoryToolset(Memory(agent_name="a", writable=True), writable=True).tools.keys()
-    ) == {"read_memory", "search_memory", "write_memory", "delete_memory"}
+    # A non-journal Memory exposes NO toolset (the legacy 4-tool surface is gone).
+    assert Memory(agent_name="a", writable=True).get_toolset() is None
 
 
 # ---------------------------------------------------------------------------

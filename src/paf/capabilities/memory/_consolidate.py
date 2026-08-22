@@ -259,7 +259,7 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
     )
 
     from paf.capabilities._markers import injected_artifact_markers
-    from paf.capabilities.turn_index._generate import user_anchor_indices
+    from paf.capabilities._turns import user_anchor_indices
 
     markers = injected_artifact_markers()
 

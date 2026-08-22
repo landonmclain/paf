@@ -1,10 +1,10 @@
 """Message rendering for the paf full-context search corpus.
 
 Renders a persisted `ModelMessage` to searchable text with the SAME
-injected-artifact strip the turn-index's `read_turn` uses (see
-`paf.capabilities.turn_index._markers`). This is the read-side hygiene that
+injected-artifact strip convention (see
+`paf.capabilities._markers`). This is the read-side hygiene that
 `pydantic_ai_harness.conversation_search` lacks: its corpus renders marker-tagged
-`UserPromptPart` blocks verbatim, so `<turn-index>` / `<memory>` artifacts leak
+`UserPromptPart` blocks verbatim, so `<memory>` artifacts leak
 into the BM25 index and can surface as matches. Owning the search here lets us
 apply one consistent strip to the entire recall surface.
 

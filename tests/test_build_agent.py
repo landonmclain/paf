@@ -1,12 +1,11 @@
 """Integration test: build_agent resolves the hybrid capability merge.
 
-Pins the M2 contract: building the assistant from specs/assistant.yaml (with the
-TurnIndex profile) yields an Agent carrying —
+Pins the M2 contract: building the assistant from specs/assistant.yaml yields an
+Agent carrying —
   * a spec-declared StepPersistence (resolved from YAML via from_spec),
-  * a Python-assembled TurnIndexCapability (the `capabilities=` runtime seam),
-  * and a no-summary compaction ladder — turn-index is the summary layer, so the
-    SummarizingCompaction tier is mutually exclusive and removed (see compaction.py).
-    The non-summary tiers (clamp / clear-tool / sliding-window) stay as context mgmt.
+  * Python-assembled recall + memory capabilities (the `capabilities=` runtime seam),
+  * and a no-summary compaction ladder (the SummarizingCompaction tier is removed;
+    the non-summary tiers (clamp / clear-tool / sliding-window) stay as context mgmt).
 
 This only *builds* the agent — it makes no model call — but constructing an
 `openai:` Agent requires `OPENAI_API_KEY` to be present (the provider is
@@ -28,7 +27,6 @@ from pydantic_ai_harness.step_persistence import StepPersistence
 from paf.capabilities.memory import Memory
 from paf.capabilities.profiles import ASSISTANT_PROFILE
 from paf.capabilities.search import ConversationSearch
-from paf.capabilities.turn_index import TurnIndexCapability
 from paf.specs import build_agent
 
 pytestmark = pytest.mark.skipif(
@@ -43,7 +41,7 @@ def _collect_capabilities(node: Any, seen: set[type] | None = None) -> set[type]
     seen = seen if seen is not None else set()
     if node is None:
         return seen
-    if isinstance(node, (StepPersistence, TieredCompaction, TurnIndexCapability, Memory)):
+    if isinstance(node, (StepPersistence, TieredCompaction, Memory)):
         seen.add(type(node))
         return seen
     if isinstance(node, (list, tuple)):
@@ -97,13 +95,11 @@ def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
     caps = _collect_capabilities(root)
 
     # Persistence leg (spec-declared) + memory + recall legs (Python runtime seam) +
-    # the no-summary compaction ladder (profile-gated "Compaction"). TurnIndex is
-    # intentionally NOT in the assistant profile (index summaries were a ±7/−5 wash
-    # vs memory's +0.146 lift — memory + BM25 search is the proven stack).
+    # the no-summary compaction ladder (profile-gated "Compaction").
     assert StepPersistence in caps
     assert Memory in caps
     assert TieredCompaction in caps
-    # The summarizing tier is the one mutually exclusive with the turn-index block.
+    # The summarizing tier is excluded from the compaction ladder.
     compaction = _find_compaction(root)
     assert compaction is not None
     from pydantic_ai_harness.compaction import SummarizingCompaction
@@ -111,13 +107,13 @@ def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
     assert not any(type(t) is SummarizingCompaction for t in compaction.tiers)
 
 
-def test_build_agent_excludes_compaction_when_turn_index() -> None:
-    """Turn-index and SummarizingCompaction are mutually exclusive summary layers.
+def test_build_agent_excludes_summarizing_compaction() -> None:
+    """The assistant's compaction ladder carries NO SummarizingCompaction tier.
 
-    With the TurnIndex profile, the agent still carries context compaction (the
-    no-summary ladder), but that ladder must NOT include a SummarizingCompaction —
-    otherwise the model gets BOTH the <turn-index> one-liners AND an LLM-rewritten
-    `Summary of previous conversation` in the same request (redundant/confusing).
+    The assistant profile uses the no-summary ladder (context mgmt only), so its
+    compaction must not include a SummarizingCompaction — otherwise the model
+    gets an LLM-rewritten `Summary of previous conversation` block injected on
+    top of the injected, curated memory.
     """
     agent = build_agent("assistant")
     root = getattr(agent, "root_capability", None) or getattr(
@@ -152,15 +148,14 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     everything regardless of its allowlist. Now it is the resolution of the profile.
     """
     # The real assistant profile: persistence + recall + memory + compaction
-    # (the no-summary ladder). Everything the profile lists is present. TurnIndex
-    # is deliberately absent (memory + BM25 is the proven stack).
+    # (the no-summary ladder). Everything the profile lists is present.
     assistant = _runtime_capabilities_for(ASSISTANT_PROFILE.capability_names)
     types = {type(c) for c in assistant}
     assert StepPersistence in types
     assert ConversationSearch in types
     assert Memory in types
     assert TieredCompaction in types
-    # ...and the compaction ladder excludes the summarizing tier (mutex with index).
+    # ...and the compaction ladder excludes the summarizing tier.
     compaction = next(c for c in assistant if isinstance(c, TieredCompaction))
     from pydantic_ai_harness.compaction import SummarizingCompaction
 
@@ -170,40 +165,19 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     minimal = _runtime_capabilities_for(("StepPersistence",))
     assert {type(c) for c in minimal} == {StepPersistence}
 
-    # A profile that allows persistence + recall (but not turn-index) gets both,
-    # none of the un-allowed ones.
+    # A profile that allows persistence + recall gets both, none of the others.
     no_index = _runtime_capabilities_for(("StepPersistence", "ConversationSearch"))
     assert {type(c) for c in no_index} == {StepPersistence, ConversationSearch}
 
     # A profile WITHOUT "Compaction" gets no compaction at all.
-    no_compaction = _runtime_capabilities_for(("StepPersistence", "TurnIndex"))
+    no_compaction = _runtime_capabilities_for(("StepPersistence", "ConversationSearch"))
     assert TieredCompaction not in {type(c) for c in no_compaction}
-
-
-def _find_summarizer(root: Any):
-    """Return the TurnIndexCapability's `summarizer` seam anywhere in the root."""
-    if isinstance(root, TurnIndexCapability):
-        return getattr(root, "summarizer", None)
-    if dataclasses.is_dataclass(root) and not isinstance(root, type):
-        for field in dataclasses.fields(root):
-            found = _find_summarizer(getattr(root, field.name, None))
-            if found is not None:
-                return found
-    if isinstance(root, (list, tuple, dict)):
-        items = root.values() if isinstance(root, dict) else root
-        for item in items:
-            found = _find_summarizer(item)
-            if found is not None:
-                return found
-    return None
 
 
 def _build_recall_agent(use_memory_owner):
     """Drive tests.framework._build_agent (the recall-agent builder) both ways.
 
-    Returns (root, None): the composed root capability and a turn-index
-    summarizer seam (always None now — the benchmark builder no longer wires a
-    TurnIndex summarizer; see _build_agent).
+    Returns the composed root capability.
     """
     import tests.framework as _rl
 
@@ -222,44 +196,11 @@ def _build_recall_agent(use_memory_owner):
                 memory_dir=Path(td) / "memory",
                 use_memory_owner=use_memory_owner,
             )
-            root = getattr(agent, "_root_capability", None) or getattr(
+            return getattr(agent, "_root_capability", None) or getattr(
                 agent, "root_capability", None
             )
-            return root, _find_summarizer(root)
     finally:
         _rl.MEMORY = old_mem
-
-
-def test_turn_index_summarizer_seam_is_source_owned() -> None:
-    """The TurnIndex summarizer seam lives on the (intact) source capability.
-
-    Turn-index wiring was removed from the benchmark `_build_agent`, but the
-    source `TurnIndexCapability` still exposes its `summarizer` seam. A bare
-    capability keeps it when a summarizer is supplied and drops it when None —
-    pinning the intact source package's gating (the benchmark no longer drives
-    this, so it is validated against the source class directly).
-    """
-    import tempfile
-    from pathlib import Path
-
-    from pydantic_ai_harness.step_persistence import FileStepStore
-
-    from paf.capabilities.search import SnapshotHistorySource
-    from paf.capabilities.turn_index import TurnIndexCapability, TurnIndexStore
-
-    class _FakeSummarizer:  # any non-None object works for the seam check
-        pass
-
-    with tempfile.TemporaryDirectory() as td:
-        src = SnapshotHistorySource(FileStepStore(directory=Path(td) / "steps"))
-        idx = TurnIndexStore(Path(td) / "index")
-        cap_on = TurnIndexCapability(
-            source=src, index_store=idx, summarizer=_FakeSummarizer(),
-        )
-        assert _find_summarizer(cap_on) is not None, "summarizer present when supplied"
-
-        cap_off = TurnIndexCapability(source=src, index_store=idx, summarizer=None)
-        assert _find_summarizer(cap_off) is None, "summarizer absent when None"
 
 
 def test_recall_agent_gates_memory_owner_off_when_durable() -> None:
@@ -274,12 +215,12 @@ def test_recall_agent_gates_memory_owner_off_when_durable() -> None:
 
     from paf.capabilities.memory._window import MemoryConsolidationWindow
 
-    root_owner, _ = _build_recall_agent(use_memory_owner=True)
+    root_owner = _build_recall_agent(use_memory_owner=True)
     comp_owner = _find_compaction(root_owner)
     assert comp_owner is not None
     assert any(type(t) is MemoryConsolidationWindow for t in comp_owner.tiers)
 
-    root_plain, _ = _build_recall_agent(use_memory_owner=False)
+    root_plain = _build_recall_agent(use_memory_owner=False)
     comp_plain = _find_compaction(root_plain)
     assert comp_plain is not None
     assert not any(type(t) is MemoryConsolidationWindow for t in comp_plain.tiers)

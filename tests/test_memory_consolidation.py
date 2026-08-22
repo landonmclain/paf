@@ -2,13 +2,12 @@
 
 Covers the three seams locked in for the consolidation feature:
 
-1.  ``writable`` gate — the ``MemoryToolset`` exposes ``write_memory`` /
-    ``delete_memory`` only when ``writable=True``; a read-only assistant can't
-    mutate durable memory while the owner (``writable=True``) can.
-2.  ``MemoryConsolidationWindow.compact`` — fires the owner on the
+1.  ``MemoryConsolidationWindow.compact`` — fires the owner on the
     about-to-be-evicted slice and no-ops when nothing would be evicted.
-3.  ``build_compaction`` config toggle — ``consolidate`` on swaps the sliding-window
+2.  ``build_compaction`` config toggle — ``consolidate`` on swaps the sliding-window
     tier for the consolidation window; off keeps the plain window.
+3.  journal round-trip — the window hands the owner the M2 journal and the
+    rendered root ``MEMORY.md`` is readable back via ``JournalViewStore``.
 """
 
 from __future__ import annotations
@@ -19,44 +18,12 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
 from paf.capabilities.compaction import build_compaction
-from paf.capabilities.memory import Memory
 from paf.capabilities.memory._consolidate import (
     CONSOLIDATION_GUIDANCE,
     consolidate_model,
 )
 from paf.capabilities.memory._format import MEMORY_FORMAT, extract_sections
-from paf.capabilities.memory._toolset import MemoryToolset
 from paf.capabilities.memory._window import MemoryConsolidationWindow
-
-# ---------------------------------------------------------------------------
-# writable gate
-# ---------------------------------------------------------------------------
-
-
-def _tool_names(cap: Memory) -> set[str]:
-    ts = MemoryToolset(cap, writable=cap.writable)
-    return set(ts.tools.keys())
-
-
-def test_writable_false_drops_write_and_delete() -> None:
-    """writable=False exposes read/search only — the assistant can't mutate."""
-    ro = _tool_names(Memory(agent_name="a", writable=False))
-    assert "read_memory" in ro
-    assert "search_memory" in ro
-    assert "write_memory" not in ro
-    assert "delete_memory" not in ro
-
-
-def test_writable_true_registers_full_surface() -> None:
-    """writable=True (default + owner) still has the full write/read/search/delete set."""
-    rw = _tool_names(Memory(agent_name="a", writable=True))
-    assert {"read_memory", "search_memory", "write_memory", "delete_memory"} <= rw
-
-
-def test_writable_defaults_true() -> None:
-    """Backward compat: the default surface remains fully writable."""
-    assert Memory(agent_name="a").writable
-
 
 # ---------------------------------------------------------------------------
 # MemoryConsolidationWindow.compact — fires on the eviction slice, no-op otherwise
@@ -64,9 +31,7 @@ def test_writable_defaults_true() -> None:
 
 
 def _messages(n: int) -> list[ModelRequest]:
-    return [
-        ModelRequest(parts=[UserPromptPart(content=f"msg {i}")]) for i in range(n)
-    ]
+    return [ModelRequest(parts=[UserPromptPart(content=f"msg {i}")]) for i in range(n)]
 
 
 def test_compact_noop_when_nothing_evicted() -> None:
@@ -76,7 +41,9 @@ def test_compact_noop_when_nothing_evicted() -> None:
     assert find_safe_cutoff(msgs, window.keep_messages) == 0
 
 
-def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(tmp_path: Path) -> None:
+def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
+    tmp_path: Path,
+) -> None:
     """Driving compact() with an evictable history folds the dropped slice into memory, then trims.
 
     This is the end-to-end seam the prior tests only assert structurally (window swaps
@@ -100,11 +67,14 @@ def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(tmp_pat
     )
 
     msgs: list[ModelMessage] = [
-        ModelRequest(parts=[UserPromptPart(content=f"durable fact alpha {i}")]) for i in range(6)
+        ModelRequest(parts=[UserPromptPart(content=f"durable fact alpha {i}")])
+        for i in range(6)
     ]
     captured: dict[str, object] = {}
 
-    async def fake_consolidate(messages, *, store, agent_name, namespace, keep_tail, journal=None):
+    async def fake_consolidate(
+        messages, *, store, agent_name, namespace, keep_tail, journal=None
+    ):
         captured["slice"] = messages
         captured["keep_tail"] = keep_tail
         captured["journal"] = journal
@@ -256,7 +226,9 @@ def test_consolidation_model_settings_pins_provider(monkeypatch) -> None:
     from paf.config import settings
 
     # restore defaults (avoid leaking env overrides into the test)
-    monkeypatch.setattr(settings, "consol_provider_order", ["deepinfra", "parasail", "coreweave"])
+    monkeypatch.setattr(
+        settings, "consol_provider_order", ["deepinfra", "parasail", "coreweave"]
+    )
     monkeypatch.setattr(settings, "consol_provider_quantizations", ["fp8"])
     monkeypatch.setattr(settings, "consol_seed", 20260815)
 
@@ -317,9 +289,7 @@ def test_resident_consolidate_text_renders_every_segment() -> None:
 
     from paf.capabilities.memory._consolidate import resident_consolidate_text
 
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content=f"turn {i}")]) for i in range(4)
-    ]
+    msgs = [ModelRequest(parts=[UserPromptPart(content=f"turn {i}")]) for i in range(4)]
     out = asyncio.run(resident_consolidate_text(msgs))
     assert out is not None
     for i in range(4):
@@ -439,7 +409,9 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
             fed.append(prompt)
             return type("R", (), {"output": "no changes"})()
 
-    def _fake_build_owner(store, *, agent_name, namespace, inject_memory=False, journal=None):
+    def _fake_build_owner(
+        store, *, agent_name, namespace, inject_memory=False, journal=None
+    ):
         return _FakeOwner(), None
 
     monkeypatch.setattr(cons, "_build_owner", _fake_build_owner)

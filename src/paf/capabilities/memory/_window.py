@@ -59,9 +59,7 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
     ``memory_directory``), then ``compact`` renders that journal to the root
     ``MEMORY.md`` — the exact file the assistant's read-only
     ``JournalViewStore`` injects. This keeps the live/eviction path on the SAME
-    store contract as the benchmark/chunked path; the legacy in-place
-    ``MarkdownStorage`` (assistant/MEMORY.md) is NOT used here, so a
-    consolidation can never write to a store the assistant doesn't read.
+    store contract as the benchmark/chunked path.
 
     Store config defaults to the same ``data/memory`` scope the assistant's
     ``Memory`` uses, so both share one durable store. Override
@@ -120,12 +118,14 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         return await super().compact(messages, ctx)
 
     def _build_memory_store(self):
-        """Construct the shared store for the owner's Memory handle.
+        """Construct a store handle for the owner's `Memory` (inert in journal model).
 
         Semantically inert for writes once ``journal`` is passed (the owner
         appends through the journal, not the store), but still required by
-        ``consolidate``'s signature.
+        ``consolidate``'s signature. An ``InMemoryStore`` — process-lifetime,
+        never persisted — is exactly right: the owner never reads it back and the
+        durable truth lives in the journal.
         """
-        from paf.capabilities.memory._markdown import MarkdownStorage
+        from ._store import InMemoryStore
 
-        return MarkdownStorage(self.memory_directory)
+        return InMemoryStore()

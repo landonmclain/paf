@@ -3,8 +3,9 @@
 These three helpers were the memory package's only use of the ``agent-foundation``
 dependency (``agent_foundation.storage.atomic``). They are small and dependency-free,
 so they are copied here verbatim to keep ``paf.capabilities.memory`` self-contained
-and free of the external ``agent-foundation`` package. ``turn_index`` still consumes
-the ``StorageService`` seam directly; this file exists only to serve memory.
+and free of the external ``agent-foundation`` package. turn_index (which consumed
+the ``StorageService`` seam directly) has been archived; this file is the port of
+the foundation's atomic helper, serving memory.
 
 Why: a plain ``Path.write_text`` on a long JSON artifact can be interrupted midway,
 leaving a truncated/half-written file that a later read fails on. Writing to a

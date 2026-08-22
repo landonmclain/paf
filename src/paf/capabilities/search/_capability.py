@@ -52,7 +52,6 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
         capabilities=[
             StepPersistence(store=store),
             ConversationSearch(SnapshotHistorySource(store), scope="conversation"),
-            TurnIndexCapability(source=SnapshotHistorySource(store), index_store=...),
         ],
     )
     ```

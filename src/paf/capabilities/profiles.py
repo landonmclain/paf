@@ -72,13 +72,12 @@ ASSISTANT_PROFILE = AgentProfile(
         "ConversationSearch",
         # Durable-facts notebook (MEMORY.md + topic files). Recall-ladder OWNER
         # for the assistant: its composite guidance (durable-fact -> past-turn ->
-        # history) is the single recall ladder, so TurnIndex is NOT allowlisted
-        # here (BEAM+gated benchmark showed the truncation-index summaries are a
-        # ±7/−5 wash vs. memory's reliable +0.146 lift → memory + BM25 search is
-        # the proven stack). Re-add "TurnIndex" to restore the index rung.
+        # history) is the single recall ladder (BEAM+gated benchmark showed
+        # memory + BM25 search is the proven stack over the retired turn-index
+        # summaries). No turn index exists anymore.
         "Memory",
         # Context compaction WITHOUT the summarizing tier (the LLM rewrite is
-        # mutually exclusive with the <turn-index> one-liner block). Clamp /
+        # mutually exclusive with the recall-ladder injection). Clamp /
         # clear-tool-results / sliding-window are pure context management and
         # stay; see compaction.py.
         "Compaction",

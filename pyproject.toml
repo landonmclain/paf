@@ -7,16 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "pydantic-ai",
     "pydantic-settings",
-    "agent-foundation",
     "textual>=8.2.8",
 ]
-
-# Local sibling package (not on PyPI): the framework-free storage seam.
-# `agent-foundation` lives in its own repo at ~/projects/Personal/agent-foundation;
-# uv resolves it from source here so both stay in one lockfile/venv. When it's
-# published to PyPI, drop this block and let the version pin resolve normally.
-[tool.uv.sources]
-agent-foundation = { path = "/home/alice/projects/Personal/agent-foundation" }
 
 [build-system]
 requires = ["hatchling"]
@@ -49,6 +41,10 @@ package = true
 # conventional 88 (Black-compatible) so formatting and lint agree.
 line-length = 88
 target-version = "py312"
+# Archived reference files (tests/retired/, archive/) are deliberately preserved
+# as-is from their original state — not collected by pytest and not linted, so
+# stale import-order/deprecation noise from historical code doesn't block CI.
+exclude = ["tests/retired", "archive"]
 
 # Lint rules: E (pycodestyle errors), F (pyflakes), I (isort), W (warnings),
 # UP (pyupgrade modernizations), B (flake8-bugbear). E501 (line too long) is

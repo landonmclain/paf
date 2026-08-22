@@ -91,7 +91,9 @@ from tests.lme_scoring import (
 # Config
 # ---------------------------------------------------------------------------
 
-SUBJECT_MODEL = os.environ.get("BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731")
+SUBJECT_MODEL = os.environ.get(
+    "BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
+)
 # Landon's call: gpt-4o-mini on OpenRouter, reuse the repo OPENROUTER_API_KEY.
 JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
 
@@ -107,8 +109,11 @@ LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
 # different LongMemEval split (e.g. `longmemeval_s_cleaned.json` for the strict
 # paper configuration — same 500 questions but ~48 sessions / ~493 turns with
 # distractor haystacks mixed in, which actually exercises search/retrieval).
-DATA = Path(__file__).parent.parent / "data" / "benchmarks" / os.environ.get(
-    "LME_DATA_FILE", "lme_oracle.json"
+DATA = (
+    Path(__file__).parent.parent
+    / "data"
+    / "benchmarks"
+    / os.environ.get("LME_DATA_FILE", "lme_oracle.json")
 )
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -122,10 +127,7 @@ RESULTS_DIR = Path(__file__).parent / "results"
 # re-consolidation (and re-persists); combining with LME_QIDS narrows the
 # refresh to specific questions.
 MEMORY_DURABLE_DIR = (
-    Path(__file__).parent.parent
-    / "data"
-    / "benchmarks"
-    / f"memory-{DATA.stem}"
+    Path(__file__).parent.parent / "data" / "benchmarks" / f"memory-{DATA.stem}"
 )
 
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
@@ -145,7 +147,15 @@ def _run_sync_under_span(agent, prompt: str, span_name: str, session: str):
         return agent.run_sync(prompt)
 
 
-def _lme_judge(question_type: str, question: str, gold_answer: str, response: str, qid: str, span_name: str = "lmem.judge", session: str = "") -> dict:
+def _lme_judge(
+    question_type: str,
+    question: str,
+    gold_answer: str,
+    response: str,
+    qid: str,
+    span_name: str = "lmem.judge",
+    session: str = "",
+) -> dict:
     """Official LongMemEval binary judge (gpt-4o-mini): yes/no on the ANSCHECK prompt.
 
     Uses the VERBATIM per-task prompt from evaluate_qa.py (`get_lme_anscheck_prompt`),
@@ -189,16 +199,28 @@ def _lme_judge(question_type: str, question: str, gold_answer: str, response: st
             "exactly 'yes' or 'no'."
         ),
     )
-    result = judge.run_sync(prompt) if not session else _run_sync_under_span(judge, prompt, span_name, session)
+    result = (
+        judge.run_sync(prompt)
+        if not session
+        else _run_sync_under_span(judge, prompt, span_name, session)
+    )
     verdict = result.output
     raw = verdict.label if verdict is not None else ""
     label = lme_parse_label(raw)
     reasoning = getattr(verdict, "reasoning", "") if verdict is not None else ""
     if verdict is None:
-        reasoning = "ERROR: judge returned no structured verdict (fallback to raw output)"
+        reasoning = (
+            "ERROR: judge returned no structured verdict (fallback to raw output)"
+        )
         raw = str(result.output or "").strip()
         label = lme_parse_label(raw)
-    return {"label": label, "correct": label, "raw": raw, "reasoning": reasoning, "prompt": prompt}
+    return {
+        "label": label,
+        "correct": label,
+        "raw": raw,
+        "reasoning": reasoning,
+        "prompt": prompt,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +250,10 @@ def _load_questions(n: int | None = None) -> list[dict]:
             if wid in by_id:
                 out.append(by_id[wid])
             else:
-                print(f"[run_lmem] WARNING: LME_QIDS unknown id {wid!r}, skipped", flush=True)
+                print(
+                    f"[run_lmem] WARNING: LME_QIDS unknown id {wid!r}, skipped",
+                    flush=True,
+                )
         return out
     if n is None:
         n = LME_MAX_QUESTIONS
@@ -646,13 +671,18 @@ def main(argv: list[str] | None = None) -> dict:
 
     traced = setup_observability()
     if not traced:
-        print("[run_lmem] WARNING: Langfuse tracing NOT configured — run will "
-              "produce JSON/artifacts but NO Langfuse traces.")
+        print(
+            "[run_lmem] WARNING: Langfuse tracing NOT configured — run will "
+            "produce JSON/artifacts but NO Langfuse traces."
+        )
     else:
         print(f"[run_lmem] tracing ON → Langfuse (session={session})", flush=True)
-    print(f"[run_lmem] questions={len(questions)} subject={SUBJECT_MODEL} "
-          f"judge={JUDGE_MODEL} "
-          f"target_tokens={LOCOMO_TARGET_TOKENS}", flush=True)
+    print(
+        f"[run_lmem] questions={len(questions)} subject={SUBJECT_MODEL} "
+        f"judge={JUDGE_MODEL} "
+        f"target_tokens={LOCOMO_TARGET_TOKENS}",
+        flush=True,
+    )
 
     all_seed_rows: list[dict] = []
     all_recall_rows: list[dict] = []
@@ -710,17 +740,22 @@ def main(argv: list[str] | None = None) -> dict:
             flush=True,
         )
     # Write the agent spec once so the artifact dir is self-describing.
-    (artifact_dir / "meta.json").write_text(json.dumps({
-        "subject": SUBJECT_MODEL,
-        "judge": JUDGE_MODEL,
-        "data": str(DATA),
-        "eviction": {
-            "target_tokens": LOCOMO_TARGET_TOKENS,
-            "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
-            "sw_keep": LOCOMO_SW_KEEP,
-        },
-        "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }, indent=2))
+    (artifact_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "subject": SUBJECT_MODEL,
+                "judge": JUDGE_MODEL,
+                "data": str(DATA),
+                "eviction": {
+                    "target_tokens": LOCOMO_TARGET_TOKENS,
+                    "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
+                    "sw_keep": LOCOMO_SW_KEEP,
+                },
+                "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            },
+            indent=2,
+        )
+    )
 
     # The recall agent is built PER-QUESTION (inside the loop below) so its
     # memory-owner can be gated off when that question already has a durable
@@ -760,7 +795,10 @@ def main(argv: list[str] | None = None) -> dict:
         run_id = f"seed-{cid}"
         seed_rows, seed_msgs = asyncio.run(
             _persist_seed_direct(
-                store, raw_turns, cid, run_id,
+                store,
+                raw_turns,
+                cid,
+                run_id,
             )
         )
         all_seed_rows.extend(seed_rows)
@@ -789,8 +827,8 @@ def main(argv: list[str] | None = None) -> dict:
         fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
         restored = 0
         if MEMORY:
+            from paf.capabilities.memory import InMemoryStore
             from paf.capabilities.memory._consolidate import consolidate_conversation
-            from paf.capabilities.memory._markdown import MarkdownStorage
 
             # HONEST-MEMORY GUARD (Landon: owner reads up to the question, not
             # further). raw_turns is built purely from q["haystack_sessions"]
@@ -829,7 +867,7 @@ def main(argv: list[str] | None = None) -> dict:
                         f"(durable snapshot overwritten)",
                         flush=True,
                     )
-                store_mem = MarkdownStorage(mem_dir)
+                store_mem = InMemoryStore()
                 # Chunked seed consolidation (default): folds the haystack in
                 # token-bounded, message-boundary-aligned chunks into durable
                 # memory so single-mention thematic clusters survive the owner's
@@ -890,6 +928,7 @@ def main(argv: list[str] | None = None) -> dict:
         # store already has the answer (recall is read-only).
         if MEMORY:
             import tests.framework as _rl
+
             _rl._CURRENT_MEMORY_DIR = artifact_dir / "memory" / q["question_id"]
         use_memory_owner = not (MEMORY and restored and not fresh_memory)
         agent = _build_agent(
@@ -897,10 +936,15 @@ def main(argv: list[str] | None = None) -> dict:
             memory_dir=artifact_dir / "memory",
             use_memory_owner=use_memory_owner,
         )
-        qctx = f"The date now is {q['question_date']}. " if q.get("question_date") else ""
+        qctx = (
+            f"The date now is {q['question_date']}. " if q.get("question_date") else ""
+        )
         row = _run_turn(
-            agent, qctx + q["question"], cid,
-            f"lmem.recall.{qi}", session,
+            agent,
+            qctx + q["question"],
+            cid,
+            f"lmem.recall.{qi}",
+            session,
         )
         row["question"] = q["question"]
         row["question_type"] = q["question_type"]
@@ -912,8 +956,13 @@ def main(argv: list[str] | None = None) -> dict:
 
         # Judge: official LongMemEval binary (yes/no ANSCHECK prompt).
         row["judged"] = _lme_judge(
-            q["question_type"], q["question"], q["answer"], row["text"], q.get("question_id", f"q{qi}"),
-            span_name=f"lmem.judge.{qi}", session=session,
+            q["question_type"],
+            q["question"],
+            q["answer"],
+            row["text"],
+            q.get("question_id", f"q{qi}"),
+            span_name=f"lmem.judge.{qi}",
+            session=session,
         )
         row["autoeval_label"] = {"model": JUDGE_MODEL, "label": row["judged"]["label"]}
 
@@ -955,8 +1004,12 @@ def main(argv: list[str] | None = None) -> dict:
     # REFUSE (the official abstention prompt grades this). We keep them separate
     # from factual questions, and report Abstention Accuracy independently --
     # exactly as print_qa_metrics.py does (abstention is sliced out of "all_acc").
-    abstention_rows = [r for r in recall_rows if lme_is_abstention(r.get("question_id", ""))]
-    factual_rows = [r for r in recall_rows if not lme_is_abstention(r.get("question_id", ""))]
+    abstention_rows = [
+        r for r in recall_rows if lme_is_abstention(r.get("question_id", ""))
+    ]
+    factual_rows = [
+        r for r in recall_rows if not lme_is_abstention(r.get("question_id", ""))
+    ]
 
     # ---- Official LongMemEval aggregation (mirrors print_qa_metrics.py) ----
     # Per-task accuracy is the mean of the BINARY labels within each question type;
@@ -969,9 +1022,15 @@ def main(argv: list[str] | None = None) -> dict:
             return None
         return round(sum(r["autoeval_label"]["label"] for r in rows) / len(rows), 4)
 
-    per_task = {t: _acc([r for r in factual_rows if r["question_type"] == t]) for t in LME_TYPES}
-    deline_by_task: list[float] = [v for v in (per_task[t] for t in LME_TYPES) if v is not None]
-    task_averaged = round(sum(deline_by_task) / len(deline_by_task), 4) if deline_by_task else None
+    per_task = {
+        t: _acc([r for r in factual_rows if r["question_type"] == t]) for t in LME_TYPES
+    }
+    deline_by_task: list[float] = [
+        v for v in (per_task[t] for t in LME_TYPES) if v is not None
+    ]
+    task_averaged = (
+        round(sum(deline_by_task) / len(deline_by_task), 4) if deline_by_task else None
+    )
     overall = _acc(factual_rows)
     abstention = _acc(abstention_rows)
 
@@ -1028,12 +1087,24 @@ def main(argv: list[str] | None = None) -> dict:
             "abstention_accuracy": abstention,
             "retrieval_recall_rate": (
                 round(
-                    sum(r["retrieval"]["retrieval_recall"] for r in recall_rows
-                        if r["retrieval"].get("retrieval_recall") is not None)
-                    / len([r for r in recall_rows if r["retrieval"].get("retrieval_recall") is not None]),
+                    sum(
+                        r["retrieval"]["retrieval_recall"]
+                        for r in recall_rows
+                        if r["retrieval"].get("retrieval_recall") is not None
+                    )
+                    / len(
+                        [
+                            r
+                            for r in recall_rows
+                            if r["retrieval"].get("retrieval_recall") is not None
+                        ]
+                    ),
                     4,
                 )
-                if any(r["retrieval"].get("retrieval_recall") is not None for r in recall_rows)
+                if any(
+                    r["retrieval"].get("retrieval_recall") is not None
+                    for r in recall_rows
+                )
                 else None
             ),
             "tokens": {
