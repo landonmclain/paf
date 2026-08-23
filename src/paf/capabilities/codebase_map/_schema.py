@@ -74,6 +74,10 @@ class FileInfo:
     imports: list[str] = field(default_factory=list)
     references_count: int = 0
     searchable_symbols: list[SymbolInfo] = field(default_factory=list)
+    # True when the file is in-scope (part of the codebase) but no extractor could
+    # produce symbols/imports (unknown/binary/oversized/unparseable). It is still
+    # recorded so the corpus is complete and the file is stable, not "changed".
+    unparsed: bool = False
 
 
 @dataclass(frozen=True)

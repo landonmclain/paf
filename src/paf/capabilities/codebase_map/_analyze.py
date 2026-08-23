@@ -137,6 +137,11 @@ def _detect_language(filename: str) -> str | None:
     return _EXT.get(ext)
 
 
+def detect_language(filename: str) -> str | None:
+    """Public wrapper over extension → language id ('' or None when unknown)."""
+    return _detect_language(filename)
+
+
 def _walk_with_children(items, recovery: QueryRecovery):
     """Recursive builder that attaches children to frozen SymbolInfo via __setattr__."""
     all_searchable: list[SymbolInfo] = []

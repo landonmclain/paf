@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -83,6 +84,129 @@ _ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
 
 _INDEX_SUBDIR = ".agent-codeindex"
 _CODEDEX_DIR = "codebase_indexes"
+
+# --- Scan scope: the single source of truth for "what is part of the codebase". ---
+# Per §5.y of the spec (LOCKED 2026-08-22): the corpus = every file under the scan
+# root minus (gitignore ∪ owned-skip). The walker never hardcodes a language; language
+# is an orthogonal extractor axis. `_scan.py` and `sync_changed` BOTH derive from this.
+
+# Owned skip set — *domain* exclusions that are NOT (and arguably shouldn't be) gitignore
+# concerns: older content we still don't want indexed, plus safety nets for common junk
+# dirs that may not be gitignored (node_modules) or that git always manages anyway.
+# Everything git ignores on its own (`.venv/`, `data/`, `tests/results/`, `__pycache__/`)
+# is handled by `git check-ignore`; this is only what git would NOT ignore but we still skip.
+_OWNED_SKIP_DIRS = {
+    _INDEX_SUBDIR,    # our own derived index — never index the index
+    ".git",           # git internals
+    "__pycache__",    # bytecode (also usually gitignored; belt + suspenders)
+    "node_modules",   # vendored js deps (may not be gitignored)
+    "History",        # paf's stale-notes dir — older content, not for the index
+    "archive",        # paf's old-code dir — scratch/stale, not for the index
+    # data/ is TRACKED in git (benchmark durables: generated/*.jsonl, memory-*/,
+    # lme_oracle_journal.json) so git won't ignore it — but it's research/harness
+    # data, not source. The codebase map indexes CODE; data/ is out of scope here.
+    # (In gitignore it's a "runtime persistence" tree; here it's just noise. Owned-skip
+    # keeps the walker fast: pure-Python, no need to fight the gitignore re-includes.)
+    "data",
+}
+_OWNED_SKIP_FILES = {"__init__.py"}  # docstring-only + __version__; not indexed (open deferred item)
+
+
+class ScanScope:
+    """Determines whether a path is part of the indexed codebase.
+
+    In bounds  = path is NOT gitignored AND NOT under an owned-skip dir/filename.
+    ``git check-ignore`` reads the real git semantics (nested .gitignore, ! negation,
+    global excludes). When git isn't available (non-repo / deployed env), we fall back
+    to the owned-skip list alone — which is correct, because if there's no git then
+    there's no .gitignore to honor anyway.
+
+    Efficiency: owned-skip is a pure-Python fast path (no subprocess). Git ignore is
+    applied in ONE batched ``git check-ignore --stdin`` call over the candidate list
+    (never a subprocess per file — that would spawn thousands on a real repo).
+    """
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root).resolve()
+        self._git_ok: bool | None = None  # tri-state: None=unknown, True/False probed
+
+    def _probe_git(self) -> bool:
+        if self._git_ok is None:
+            try:
+                r = subprocess.run(
+                    ["git", "-C", str(self.root), "rev-parse", "--is-inside-work-tree"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                self._git_ok = r.returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                self._git_ok = False
+        return self._git_ok
+
+    def _owned_skipped(self, p: Path) -> bool:
+        """Pure-Python fast path: is this path under an owned-skip dir or filename?"""
+        rel_parts = p.relative_to(self.root).parts
+        if any(part in _OWNED_SKIP_DIRS for part in rel_parts):
+            return True
+        if p.name in _OWNED_SKIP_FILES:
+            return True
+        return False
+
+    def in_scope(self, path: str | Path) -> bool:
+        """Single-path scope check (owned-skip fast path + one git check-ignore call).
+
+        Prefer ``iter_files()`` when walking a whole tree (it batches git check-ignore
+        into one subprocess); this is for one-off membership tests.
+        """
+        p = Path(path)
+        if self._owned_skipped(p):
+            return False
+        if not self._probe_git():
+            return True
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(self.root), "check-ignore", "--no-index", "-q", str(p)],
+                capture_output=True, timeout=5,
+            )
+            return r.returncode != 0  # 0 = ignored (out of scope)
+        except (OSError, subprocess.SubprocessError):
+            return True
+
+    def iter_files(self) -> list[Path]:
+        """Stable-ordered, in-scope files under the root (everything not ignored).
+
+        Two stages: (1) walk + owned-skip (pure Python), (2) ONE batched
+        ``git check-ignore --stdin`` to drop gitignored paths.
+        """
+        root = self.root
+        candidates: list[Path] = []
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                path.relative_to(root)
+            except ValueError:
+                continue
+            if not self._owned_skipped(path):
+                candidates.append(path)
+
+        if not candidates or not self._probe_git():
+            return candidates  # no git (or no files) -> owned-skip is the only filter
+
+        # Batch git-ignore check: feed every candidate path on stdin; git prints the
+        # matched (ignored) ones to stdout. Use --no-index so committed files are still
+        # evaluated against rules regardless of tracking state.
+        input_data = "".join(f"{p}\n" for p in candidates)
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(root), "check-ignore", "--no-index", "--stdin"],
+                input=input_data, capture_output=True, text=True, timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return candidates  # git hiccuped -> owned-skip only (safe)
+        ignored = {line.rstrip("\n") for line in r.stdout.splitlines() if line}
+        # returncode 0 = at least one matched; 1 = none. We just parse stdout either way.
+        out = [p for p in candidates if str(p) not in ignored]
+        return out
 
 
 class StorageService(Protocol):
@@ -169,23 +293,24 @@ class FlatFileStorage:
     def sync_changed(self, scan_root: str | Path) -> set[str]:
         """Freshness pass: return repo-relative paths whose *content* changed.
 
-        1. cheap ``stat`` walk over ``scan_root`` → shortlist files whose mtime/size
-           differ from ``snapshot.json``;
+        Scoped to the indexed corpus (see ``ScanScope`` — gitignore ∪ owned-skip):
+        a gitignored file (e.g. ``.venv/``) is **out of scope, not "changed"**, so it is
+        never walked and never reported. Within scope:
+
+        1. cheap ``stat`` walk → shortlist files whose mtime/size differ from
+           ``snapshot.json``;
         2. sha256 ONLY the shortlist to confirm real content change (stat = gate,
            hash = confirm — catches mtime-preserving edits like ``git checkout``);
-        3. the confirmed set is what callers re-extract.
+        3. the confirmed set (in-scope files whose content actually changed, incl.
+           newly-appearing in-scope files) is what callers re-extract.
         """
         snapshot = self.read(ArtifactKind.SNAPSHOT, scan_root) or {}
         files = snapshot.get("files", {})
 
-        scan_root_p = Path(scan_root)
         confirmed: set[str] = set()
-
-        if not scan_root_p.exists():
-            return confirmed
-
-        for path in self._iter_source_files(scan_root_p):
-            rel = path.relative_to(scan_root_p).as_posix()
+        scope = ScanScope(scan_root)
+        for path in scope.iter_files():
+            rel = path.relative_to(scope.root).as_posix()
             try:
                 st = path.stat()
             except OSError:
@@ -199,17 +324,6 @@ class FlatFileStorage:
         return confirmed
 
     # -- helpers -------------------------------------------------------------
-    def _iter_source_files(self, root: Path):
-        # YAGNI: v1 walks everything except the index dir + git internals. Expand the
-        # ignore set with .gitignore rules in a later phase if needed.
-        ignore = {_INDEX_SUBDIR, ".git"}
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
-            if path.parent.name in ignore or any(p in ignore for p in path.relative_to(root).parts):
-                continue
-            yield path
-
     def _hash_file(self, path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as fh:
