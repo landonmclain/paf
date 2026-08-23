@@ -7,14 +7,16 @@ Phase 1 extraction (THE deliverable) → Phase 2 graph+refs → Phase 3 search �
 
 Public surface: the storage records (`Span`, `BlockRef`, `SymbolInfo`, `FileInfo`,
 `SearchHit`, `DistilledEntry`), the storage seam (`ArtifactKind`, `StorageService`,
-`FlatFileStorage`, `index_dir_for_scan_root`), and the pointer reader (`read_block`).
-Not yet public: the capability/toolset (Phases 2–4).
+`FlatFileStorage`, `index_dir_for_scan_root`), the pointer reader (`read_block`),
+and the scan driver (`scan_and_write`, `iter_python_files`). Not yet public: the
+capability/toolset (Phases 2–4).
 """
 
 from __future__ import annotations
 
 from ._block import BlockRef, Span, read_block
 from ._schema import DistilledEntry, FileInfo, SearchHit, SymbolInfo
+from ._scan import iter_python_files, scan_and_write
 from ._store import (
     ArtifactKind,
     FlatFileStorage,
@@ -37,4 +39,7 @@ __all__ = [
     "index_dir_for_scan_root",
     # pointer reader
     "read_block",
+    # scan driver
+    "iter_python_files",
+    "scan_and_write",
 ]
