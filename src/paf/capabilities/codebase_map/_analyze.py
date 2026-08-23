@@ -138,6 +138,14 @@ def analyze_file(
 
     symbols, searchable = _walk_with_children(res.structure, recovery)
 
+    # Module-level named assignments (NAME = ... / NAME: Type = ...) — a whole
+    # class of symbols tree-sitter's `structure` never emits (registry.py's
+    # `CAPABILITY_TYPES` is the poster child: an 8KB file whose only substance is
+    # one module-level assignment). Captured as Constant/Variable symbols so they
+    # are searchable, per the Phase-1 "every ... reference present" gate.
+    assign_searchable = _module_assignments(recovery)
+    symbols = symbols + assign_searchable
+
     imports = _map_imports(res.imports)
 
     if not symbols and not imports:
@@ -149,7 +157,7 @@ def analyze_file(
         doc=recovery.module_docstring(),
         symbols=[s.name for s in symbols if s.name],
         imports=imports,
-        searchable_symbols=searchable,
+        searchable_symbols=assign_searchable + searchable,
     )
 
 
@@ -173,6 +181,37 @@ def _detect_language(filename: str) -> str | None:
 def detect_language(filename: str) -> str | None:
     """Public wrapper over extension → language id ('' or None when unknown)."""
     return _detect_language(filename)
+
+
+def _module_assignments(recovery: QueryRecovery) -> list[SymbolInfo]:
+    """Build Constant/Variable SymbolInfo records for module-level named assignments.
+
+    Wraps ``QueryRecovery.module_assignments()`` (python only) into full
+    ``SymbolInfo`` records: kind is ``Constant`` for ALL-CAPS names else ``Variable``;
+    ``signature`` is the type annotation when present; ``doc`` is the preceding
+    ``#`` comment line when one is attached (reuses the comment-association
+    machinery); ``body`` is the assignment source (weight-1 field). Returns [] for
+    non-python (module assignment capture is python-only for now — other languages
+    deferred per "one language at a time").
+    """
+    out: list[SymbolInfo] = []
+    for (name, start, end, type_ann) in recovery.module_assignments():
+        span = Span(start_byte=start, end_byte=end)
+        kind = "Constant" if name.upper() == name and "_" in name else "Variable"
+        signature = f"{name}: {type_ann}" if type_ann else None
+        doc = recovery._preceding_comment_block(start)
+        out.append(
+            SymbolInfo(
+                name=name,
+                qualified=name,  # module-level: no parent dotted path
+                kind=kind,
+                signature=signature,
+                doc=doc,
+                body=recovery.body_for(span),
+                span=span,
+            )
+        )
+    return out
 
 
 def _walk_with_children(items, recovery: QueryRecovery):

@@ -396,6 +396,117 @@ def test_searchable_symbol_all_seven_spec_fields_present() -> None:
     assert any_symbol_doc or fi.doc, "no doc field populated anywhere"
 
 
+# --------------------------------------------------------------------------- module-level assignments
+
+
+_ASSIGN_FIXTURE = '''\
+"""Module assign fixture."""
+from typing import Any
+
+# Registry of capability types (multiline doc comment above an assignment).
+CAPABILITY_TYPES: dict[str, type[Any]] = {
+    "A": 1,
+}
+
+MAX_SOURCE_BYTES = 1_000_000
+
+__all__ = ["A"]
+
+_ = 1
+
+
+def f():
+    INNER = 2
+    return INNER
+
+
+class C:
+    ATTR = 3
+'''
+
+
+def _analyze_assign() -> tuple[FileInfo, dict[str, SymbolInfo]]:
+    tmp = Path("/tmp/paf_assign_fixture.py")
+    tmp.write_text(_ASSIGN_FIXTURE, encoding="utf-8")
+    fi = analyze_file(tmp, "/tmp", language="python")
+    assert fi is not None
+    by_name = {s.name: s for s in fi.searchable_symbols}
+    return fi, by_name
+
+
+def test_module_assignment_captured_annotated() -> None:
+    _, by = _analyze_assign()
+    s = by["CAPABILITY_TYPES"]
+    assert s.kind == "Constant"
+    assert s.signature == "CAPABILITY_TYPES: dict[str, type[Any]]"
+    assert s.body is not None and "CAPABILITY_TYPES" in s.body
+
+
+def test_module_assignment_unannotated() -> None:
+    _, by = _analyze_assign()
+    s = by["MAX_SOURCE_BYTES"]
+    assert s.kind == "Constant"
+    assert s.signature is None  # no type annotation
+
+
+def test_module_assignment_dunder_and_throwaway_excluded() -> None:
+    _, by = _analyze_assign()
+    assert "__all__" not in by
+    assert "_" not in by
+
+
+def test_module_assignment_nested_excluded() -> None:
+    _, by = _analyze_assign()
+    # INNER (function-local) and ATTR (class attribute) must NOT be module symbols
+    assert "INNER" not in by
+    assert "ATTR" not in by
+    # but the enclosing function/class still index
+    assert by["f"].kind == "Function"
+    assert by["C"].kind == "Class"
+
+
+def test_module_assignment_doc_from_comment_block() -> None:
+    _, by = _analyze_assign()
+    s = by["CAPABILITY_TYPES"]
+    assert s.doc is not None and "Registry of capability types" in s.doc
+
+
+def test_module_assignment_kind_variable_vs_constant() -> None:
+    # ALL-CAPS-with-underscore => Constant; otherwise Variable
+    src = "lower = 1\nUPPER_CASE = 2\nMIXED123 = 3\n"
+    p = Path("/tmp/paf_kind_fixture.py")
+    p.write_text(src, encoding="utf-8")
+    fi = analyze_file(p, "/tmp", language="python")
+    assert fi is not None
+    by = {s.name: s for s in fi.searchable_symbols}
+    assert by["lower"].kind == "Variable"
+    assert by["UPPER_CASE"].kind == "Constant"
+    assert by["MIXED123"].kind == "Variable"  # not ALL-CAPS-with-underscore
+
+
+def test_recovery_module_assignments() -> None:
+    rec = QueryRecovery(language="python", source=_ASSIGN_FIXTURE)
+    out = rec.module_assignments()
+    names = [n for (n, _s, _e, _t) in out]
+    assert "CAPABILITY_TYPES" in names
+    assert "MAX_SOURCE_BYTES" in names
+    assert "__all__" not in names
+    assert "_" not in names
+    assert "INNER" not in names
+    assert "ATTR" not in names
+    caps = dict((n, t) for (n, _s, _e, t) in out)
+    assert caps["CAPABILITY_TYPES"] == "dict[str, type[Any]]"
+    assert caps["MAX_SOURCE_BYTES"] is None
+
+
+def test_recovery_preceding_comment_block() -> None:
+    src = "# line one\n# line two\nX = 1\n"
+    rec = QueryRecovery(language="python", source=src)
+    doc = rec._preceding_comment_block(src.index("X = 1"))
+    assert doc is not None
+    assert "line one" in doc and "line two" in doc
+
+
 # --------------------------------------------------------------------------- recovery-layer (unit, no process)
 
 

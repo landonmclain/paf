@@ -110,6 +110,17 @@ _PYTHON_DOCSTRING = (
 # `module` root (old grammar — no `expression_statement` wrapper, verified 2026-08-22).
 _MODULE_DOCSTRING = "(module . (string) @doc)"
 
+# Module-level named assignments (NAME = ... / NAME: Type = ...). Enumerate every
+# `assignment` node that is a DIRECT child of `module` (nested fns/class attr
+# assignments live under block/class_definition, so they're excluded). The
+# per-assignment name/type is recovered by a scoped sub-query (see
+# `module_assignments`) — robust against the `@type` list not aligning with
+# `@name` when annotated and unannotated assignments are mixed.
+_MODULE_ASSIGN = "(module (assignment) @assign)"
+_MODULE_ASSIGN_SUB = (
+    "(assignment left: (identifier) @name (type (_) @type)?)"
+)
+
 # Comment-node type(s) per language (VERIFIED: rust/java use line_comment/block_comment,
 # not `comment`; the rest use `comment`).
 _COMMENT_NODE = {
@@ -274,6 +285,37 @@ class QueryRecovery:
         s, e = doc_spans[0]
         return _dedent(_strip_quotes(self._slice(s, e)))
 
+    def module_assignments(self) -> list[tuple[str, int, int, str | None]]:
+        """Recover module-level named assignments (python) as ``(name, start, end, type)``.
+
+        ``start``/``end`` are the whole assignment node's byte span (so ``_analyze.py``
+        can build a ``Span`` for ``read_block`` and slice the assignment source as the
+        weight-1 ``body``). ``type`` is the type annotation text (``NAME: TYPE = ...``)
+        or ``None`` for unannotated assignments. Nested assignments (inside functions /
+        class bodies) are excluded — only direct children of ``module`` match. Dunder
+        names (``__x__``) and the throwaway ``_`` are skipped, but leading-single-underscore
+        names (``_MAX_SOURCE_BYTES``) ARE kept (they're real constants).
+        """
+        if self.language != "python":
+            return []
+        caps = self._captures(_MODULE_ASSIGN)
+        out: list[tuple[str, int, int, str | None]] = []
+        for (as_, ae) in caps.get("assign", []):
+            # scoped sub-query: name + optional annotation within THIS assignment.
+            # Scoping avoids list-alignment drift when annotated/unannotated mix.
+            sub = self._captures(_MODULE_ASSIGN_SUB, (as_, ae))
+            nm = sub.get("name")
+            if not nm:
+                continue
+            ns, ne = nm[0]
+            name = self._slice(ns, ne)
+            if name == "_" or (name.startswith("__") and name.endswith("__")):
+                continue
+            typ = sub.get("type")
+            type_ann = self._slice(typ[0][0], typ[0][1]).strip() if typ else None
+            out.append((name, as_, ae, type_ann))
+        return out
+
     def _preceding_comment(self, start_byte: int) -> str | None:
         """Nearest comment node that ends immediately above ``start_byte``.
 
@@ -293,6 +335,39 @@ class QueryRecovery:
         if gap > 400:  # too far above the symbol — likely unrelated
             return None
         return _strip_comment_markers(self._slice(best[0], best[1]))
+
+    def _preceding_comment_block(self, start_byte: int) -> str | None:
+        """Aggregate the contiguous comment lines immediately above ``start_byte``.
+
+        Multi-line ``#`` / ``//`` comment runs are one `comment` node PER LINE in
+        python (and most grammars), so ``_preceding_comment`` (single closest node)
+        returns only the last line. This walks backwards over comment nodes that are
+        byte-adjacent (no code between them) and joins them — so the rich doc comment
+        above a symbol (e.g. registry.py's ``CAPABILITY_TYPES`` block) is captured
+        whole. Returns None when no comment is within a sane distance above the symbol.
+        """
+        node_type = _COMMENT_NODE.get(self.language, "comment")
+        caps = self._captures(f"({node_type}) @c")
+        comments = sorted((cs, ce) for (cs, ce) in caps.get("c", []) if ce <= start_byte)
+        if not comments:
+            return None
+        # start from the nearest comment; walk backward joining byte-adjacent comment
+        # lines. Two consecutive comment LINES are adjacent when the next line's START
+        # sits a byte (the newline) after the previous line's END — i.e. `cs - prev_ce <= 1`.
+        best: list[tuple[int, int]] = [comments[-1]]
+        cursor = comments[-1][0]  # START of nearest comment
+        for (cs, ce) in reversed(comments[:-1]):
+            if cursor - ce <= 1:  # this comment line ends right where the nearer one begins
+                best.append((cs, ce))
+                cursor = cs
+            else:
+                break
+        gap = start_byte - best[0][1]
+        if gap > 400:
+            return None
+        # best is reversed (farthest->nearest); join in source order
+        parts = [_strip_comment_markers(self._slice(s, e)) for (s, e) in reversed(best)]
+        return " ".join(p for p in parts if p) or None
 
 
 def _strip_quotes(raw: str) -> str:
