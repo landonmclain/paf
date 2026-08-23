@@ -66,6 +66,7 @@ class FileInfo:
 
     path: str  # repo-relative
     language: str | None = None
+    doc: str | None = None  # module-level docstring (describes the whole file)
     role: str | None = None  # role_guess/tags port from old rules
     tags: list[str] = field(default_factory=list)
     symbols: list[str] = field(default_factory=list)  # name list
