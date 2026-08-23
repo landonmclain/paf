@@ -140,13 +140,3 @@ def test_compaction_builds_real_strategy_objects() -> None:
     )
     assert len(compaction.tiers) == 3
     assert all(type(tier) in strategy_types for tier in compaction.tiers)
-
-
-def test_compaction_excludes_the_summarizing_tier() -> None:
-    """The summarizing tier is mutually exclusive with the turn-index one-liner:
-    with turn-index ON, compaction is the no-summary ladder (clamp / clear-tool /
-    sliding-window) and must NOT emit SummarizingCompaction."""
-    compaction = build_compaction()
-    from pydantic_ai_harness.compaction import SummarizingCompaction
-
-    assert not any(type(tier) is SummarizingCompaction for tier in compaction.tiers)

@@ -12,11 +12,14 @@ Harness compaction classes (``TieredCompaction`` and every tier type) do NOT ove
 declared in YAML; it must be assembled here, in Python.
 
 This module owns that assembly. ``build_compaction()`` builds the ``TieredCompaction``
-ladder **minus the summarizing tier**: with turn-index ON (the M2 summary layer), the LLM
-rewrite (``SummarizingCompaction``) is mutually exclusive with the `<turn-index>` one-liner
-block — both inject a compressed *memory* of past turns. The non-summary tiers (clamp,
-clear-tool-results, sliding window) are pure context management and stay; they only ever
-*shrink* the live context without producing a competing summary. ``build_runtime_capabilities()``
+ladder **minus the summarizing tier**: the LLM rewrite (``SummarizingCompaction``) is
+deliberately excluded — long-term recall in paf is the **store-backed memory system**
+(owner → organizer → curated index, via ``ConversationSearch`` / ``read_turn``), not a
+compacted summary. (Historical note: the summary tier was once scoped as mutually
+exclusive with the now-retired turn-index one-liner block; turn-index was archived and we
+no longer summarize at all.) The non-summary tiers (clamp, clear-tool-results, sliding
+window) are pure context management and stay; they only ever *shrink* the live context
+without producing a competing summary. ``build_runtime_capabilities()``
 (in ``build.py``) selects the compaction builder iff the agent's profile allowlists it.
 """
 
@@ -122,8 +125,10 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     writable owner sub-agent) *before* dropping it. Default (unset) keeps the
     byte-identical plain window.
 
-    The LLM rewrite (4. ``SummarizingCompaction``) is intentionally absent — it
-    is mutually exclusive with the turn-index one-liner block (both are summaries).
+    The LLM rewrite (4. ``SummarizingCompaction``) is intentionally absent — paf's
+    long-term recall is the store-backed memory system (owner → organizer → curated
+    index), not a compacted summary, and we no longer summarize at all (the old
+    turn-index summary layer that once made it mutually exclusive is retired/archived).
     Context is bounded here by pruning; long-term recall is the store-backed
     ``ConversationSearch`` / ``read_turn`` instead of a compacted summary.
 

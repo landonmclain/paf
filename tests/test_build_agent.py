@@ -4,8 +4,9 @@ Pins the M2 contract: building the assistant from specs/assistant.yaml yields an
 Agent carrying —
   * a spec-declared StepPersistence (resolved from YAML via from_spec),
   * Python-assembled recall + memory capabilities (the `capabilities=` runtime seam),
-  * and a no-summary compaction ladder (the SummarizingCompaction tier is removed;
-    the non-summary tiers (clamp / clear-tool / sliding-window) stay as context mgmt).
+  * and a no-summary compaction ladder (context management only — the non-summary
+    tiers clamp / clear-tool / sliding-window; long-term recall lives in the
+    store-backed memory system, so there is no summarized-history tier).
 
 This only *builds* the agent — it makes no model call — but constructing an
 `openai:` Agent requires `OPENAI_API_KEY` to be present (the provider is
@@ -99,34 +100,6 @@ def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
     assert StepPersistence in caps
     assert Memory in caps
     assert TieredCompaction in caps
-    # The summarizing tier is excluded from the compaction ladder.
-    compaction = _find_compaction(root)
-    assert compaction is not None
-    from pydantic_ai_harness.compaction import SummarizingCompaction
-
-    assert not any(type(t) is SummarizingCompaction for t in compaction.tiers)
-
-
-def test_build_agent_excludes_summarizing_compaction() -> None:
-    """The assistant's compaction ladder carries NO SummarizingCompaction tier.
-
-    The assistant profile uses the no-summary ladder (context mgmt only), so its
-    compaction must not include a SummarizingCompaction — otherwise the model
-    gets an LLM-rewritten `Summary of previous conversation` block injected on
-    top of the injected, curated memory.
-    """
-    agent = build_agent("assistant")
-    root = getattr(agent, "root_capability", None) or getattr(
-        agent, "_root_capability", None
-    )
-    assert root is not None
-
-    compaction = _find_compaction(root)
-    # Compaction IS present (no-summary ladder); it just contains no summary tier.
-    assert compaction is not None
-    from pydantic_ai_harness.compaction import SummarizingCompaction
-
-    assert not any(type(tier) is SummarizingCompaction for tier in compaction.tiers)
 
 
 def _runtime_capabilities_for(names: tuple[str, ...]):
@@ -155,11 +128,6 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     assert ConversationSearch in types
     assert Memory in types
     assert TieredCompaction in types
-    # ...and the compaction ladder excludes the summarizing tier.
-    compaction = next(c for c in assistant if isinstance(c, TieredCompaction))
-    from pydantic_ai_harness.compaction import SummarizingCompaction
-
-    assert not any(type(t) is SummarizingCompaction for t in compaction.tiers)
 
     # A minimal profile with only StepPersistence must get ONLY StepPersistence.
     minimal = _runtime_capabilities_for(("StepPersistence",))

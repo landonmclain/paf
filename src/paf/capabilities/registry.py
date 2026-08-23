@@ -22,7 +22,6 @@ from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
     SlidingWindowCompaction,
-    SummarizingCompaction,
     TieredCompaction,
 )
 from pydantic_ai_harness.playwright import PlaywrightBrowser
@@ -56,7 +55,6 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Consolidation-on swap for the sliding-window tier (Settings.consolidate /
     # CONSOLIDATE=1): folds the about-to-evict slice into durable memory first.
     "MemoryConsolidationWindow": MemoryConsolidationWindow,
-    "SummarizingCompaction": SummarizingCompaction,
     # Lossless recall over the persistence store. Built in Python (build.py) because
     # its `source` needs a real SnapshotHistorySource object; cataloged so the
     # profile allowlist + schema stay complete.
