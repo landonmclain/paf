@@ -438,3 +438,52 @@ def test_index_confirm_diff_names_target(tmp_path) -> None:
     assert "index_confirm -> mem-1 now sourced from line 41" in diff
 
 
+def test_index_new_rejects_near_dup_and_points_at_entry(tmp_path) -> None:
+    """Re-adding a rephrased version of an already-staged fact raises ModelRetry
+    (Option B) naming the matching entry id and steering to confirm/supersede."""
+    import asyncio
+
+    from pydantic_ai import ModelRetry
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    toolset = _build_index_toolset()(IndexStore(tmp_path))
+    asyncio.run(toolset.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact="paf is built on pydantic-ai",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    with pytest.raises(ModelRetry) as ei:
+        asyncio.run(toolset.add_new(
+            {}, line_no=41, type="fact", subject="paf",
+            fact="paf is built on the pydantic-ai stack",
+            born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+        ))
+    msg = str(ei.value)
+    assert "mem-1" in msg
+    assert "index_confirm" in msg and "index_supersede" in msg
+    # Nothing was added for line 41 — still just the one entry.
+    assert [e.id for e in toolset._get_stage().entries] == ["mem-1"]
+
+
+def test_index_new_allows_genuinely_distinct_fact(tmp_path) -> None:
+    """A fact that is not a near-dup passes the guard (no false positive)."""
+    import asyncio
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    toolset = _build_index_toolset()(IndexStore(tmp_path))
+    asyncio.run(toolset.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact="paf is built on pydantic-ai",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    out = asyncio.run(toolset.add_new(
+        {}, line_no=41, type="fact", subject="paf",
+        fact="paf has a browser_inspect_url tool",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    assert out["status"] == "updated"
+    assert [e.id for e in toolset._get_stage().entries] == ["mem-1", "mem-2"]
+
+

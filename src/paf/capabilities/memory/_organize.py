@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -616,6 +617,52 @@ def render_index_text(entries: list[IndexEntry]) -> str:
     return "\n".join(lines)
 
 
+# Near-match threshold for the `index_new` dedup guard. Rough token-set (Jaccard)
+# overlap above this means "re-paraphrase of an entry already staged this run"
+# -> the model should confirm/supersede, not add a fresh duplicate.
+_NEAR_MATCH_THRESHOLD = 0.55
+# Tokens too generic to discriminate facts (articles, auxiliaries, "has/a/the"…).
+_STOP = frozenset(
+    "a an the and or but of to in for on with is are was were be been "
+    "has have had do does did it its this that these those about into from "
+    "using uses use used user via by as at not no yes i you we they he she".split()
+)
+
+
+def _fact_tokens(fact: str) -> set[str]:
+    """Lowercased alnum tokens, minus stopwords; empty/whitespace-drops when short."""
+    raw = re.findall(r"[a-z0-9]+", fact.lower())
+    tokens = {t for t in raw if t not in _STOP and len(t) > 2}
+    return tokens
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _near_match(entries: list[IndexEntry], fact: str) -> IndexEntry | None:
+    """Return the staged entry whose fact is a near-dup of ``fact``, else None.
+
+    Operates on the *staged* (in-run) entries only — the exact blind spot that
+    caused cross-line duplication (the same fact re-added as ``index_new`` line
+    after line). Compares token-set Jaccard; a match means the model should have
+    called ``index_confirm``/``index_supersede`` instead of a fresh ``index_new``.
+    """
+    tokens = _fact_tokens(fact)
+    if not tokens:
+        return None
+    best: IndexEntry | None = None
+    best_score = _NEAR_MATCH_THRESHOLD
+    for e in entries:
+        score = _jaccard(tokens, _fact_tokens(e.fact))
+        if score > best_score:
+            best, best_score = e, score
+    return best
+
+
+
 def _build_index_toolset():
     """Build the organizer's writable index toolset (in-memory staged).
 
@@ -685,6 +732,17 @@ def _build_index_toolset():
                     f"member — never a `type/subject` compound. The topic goes "
                     f"in `subject`, not `type` (e.g. type='fact', subject='paf', "
                     f"not type='fact/paf')."
+                )
+            match = _near_match(self._get_stage().entries, fact)
+            if match is not None:
+                raise ModelRetry(
+                    f"near-duplicate of already-staged entry {match.id}: "
+                    f"{match.fact!r}. This is the same fact you already added this "
+                    f"run — do NOT `index_new` it again. Instead call "
+                    f"`index_confirm(entry_id={match.id}, line_no=... )` if it "
+                    f"confirms {match.id}, or `index_supersede(entry_id={match.id}, "
+                    f"...)` if it changes {match.id}'s value. `index_new` is only "
+                    f"for a genuinely new fact not already staged."
                 )
             self._get_stage().apply(NewDecision(
                 line_no=line_no, type=type, subject=subject, fact=fact,
