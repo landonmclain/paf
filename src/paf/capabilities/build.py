@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pydantic_ai_harness.playwright import PlaywrightBrowser
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
@@ -146,6 +147,35 @@ def _build_web(store) -> _Web:
     and each tool reports the missing key/package rather than failing hard).
     """
     return _Web()
+
+
+def _build_playwright(store) -> PlaywrightBrowser:
+    """Playwright-driven headless browser automation tools.
+
+    `store` is accepted for a uniform builder signature but unused — browser
+    state lives in the PlaywrightBrowserSession, not the persistence store.
+    BUILTIN import from the harness (same pattern as ToolOutputLimits /
+    Subagents), not a paf port. Defaults keep egress locked down for a demo
+    agent: headless, private-address blocked (SSRF defense), and no auto-install
+    (the browser must be present via `playwright install chromium`). `headless`
+    stays True so a chat-spawned CLI never pops a window; `auto_install_chromium`
+    stays False so a missing browser raises a clear `playwright install chromium`
+    hint instead of silently fetching a ~150MB binary mid-session.
+
+    `chromium_sandbox` is deliberately False: Chromium's sandbox is fatal at
+    launch on Ubuntu 23.10+ hosts where AppArmor restricts unprivileged user
+    namespaces (`kernel.apparmor_restrict_unprivileged_userns=1`, the default).
+    The proper fix is enabling userns (sysctl + reboot) so sandbox can be held
+    ON; until this host is configured that way, sandbox-off is required for the
+    browser to launch at all. This is an environment-dependent escape hatch, not
+    a recommendation to weaken isolation — revisit when userns is enabled.
+    """
+    return PlaywrightBrowser(
+        headless=True,
+        block_private_addresses=True,
+        auto_install_chromium=False,
+        chromium_sandbox=False,
+    )
 
 
 def _build_skills(store) -> _Skills:
@@ -309,6 +339,8 @@ def build_runtime_capabilities(
         "Git": _build_git,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,
+        # Playwright-driven headless browser automation (BUILTIN import from harness).
+        "PlaywrightBrowser": _build_playwright,
         # Skill library — list/load on demand + deterministic pointer trigger.
         "Skills": _build_skills,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).

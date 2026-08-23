@@ -25,6 +25,7 @@ from pydantic_ai_harness.compaction import (
     SummarizingCompaction,
     TieredCompaction,
 )
+from pydantic_ai_harness.playwright import PlaywrightBrowser
 from pydantic_ai_harness.step_persistence import StepPersistence
 from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
@@ -83,6 +84,15 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # search_official_docs / fetch_web_page). Adapted from coding_agent
     # web_search_tools. Reads TAVILY_API_KEY from the env at call time.
     "Web": Web,
+    # Playwright-driven browser automation (navigate/snapshot/click/type/screenshot
+    # + 14 more tools) over a headless Chromium. A BUILTIN AbstractCapability from
+    # the harness (NOT a paf icon-capability port, same as ToolOutputLimits /
+    # Subagents per Landon). Ships native SSRF defense (allowed_domains +
+    # block_private_addresses) and chromium_sandbox. Has `from_spec` AND
+    # `get_toolset`, so it resolves declaratively from a spec AND is built in
+    # Python (build.py) when the profile allowlists it. Requires the
+    # `pydantic-ai-harness[playwright]` extra + `playwright install chromium`.
+    "PlaywrightBrowser": PlaywrightBrowser,
     # Framework-level tool-return reduction (truncate/summarize/spill oversized
     # tool results via after_tool_execute + a `read_tool_result` read-back tool).
     # A pydantic-ai AbstractCapability from the harness (NOT a paf icon-capability

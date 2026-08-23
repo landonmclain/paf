@@ -122,6 +122,15 @@ DEMO_PROFILE = AgentProfile(
         # time; tools degrade to clear messages when key/package missing.
         # (Adapted from coding_agent web_search_tools.)
         "Web",
+        # Playwright-driven headless browser automation (BUILTIN, not a paf port)
+        # — ~18 browser tools (navigate/snapshot/click/type/press/select/hover/
+        # wait_for/screenshot/get_text/scroll/back/forward/execute_js/console_
+        # messages/tabs/dialog/network) over a headless Chromium with native
+        # SSRF defense (allowed_domains + block_private_addresses) and
+        # chromium_sandbox. Requires the harness[playwright] extra + Chromium
+        # (`playwright install chromium`). Headless + private-address-blocked
+        # defaults set in build.py `_build_playwright`.
+        "PlaywrightBrowser",
         # Skill library — LIST / LOAD on demand + deterministic POINTER trigger.
         # list_skills/load_skill keep the prompt thin; point_to_skill pre-arms
         # which skill a message needs (zero-LLM BM25, skill-note-hint re-homed).

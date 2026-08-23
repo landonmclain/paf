@@ -77,6 +77,12 @@ quote-style = "double"
 [dependency-groups]
 dev = [
     "pytest",
-    "pydantic-ai-harness",
+    # PlaywrightBrowser capability is a BUILTIN import from the harness (same
+    # pattern as ToolOutputLimits / Subagents). The [playwright] extra pulls
+    # `playwright>=1.61.0` + `idna`; Chromium itself needs a separate
+    # `playwright install chromium` binary download for live use. Kept on the
+    # harness line (dev group) because the builtin capabilities it enables are
+    # only present when the dev-synced venv runs the demo/assistant CLIs.
+    "pydantic-ai-harness[playwright]",
     "ruff>=0.16.1",
 ]
