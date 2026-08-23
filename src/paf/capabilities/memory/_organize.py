@@ -1008,7 +1008,7 @@ def _render_consolidation_candidates(clusters: list[list[IndexEntry]]) -> str:
         sections.append(
             f"Cluster {i} — these {len(cl)} entries say the same thing "
             f"(type={winner.type!r}, subject={winner.subject!r}):\n{members}\n"
-            f"Suggested survivor: {winner.id} (richest fact, earliest born). "
+            f"Suggested survivor: {winner.id} (best-attested, then richest). "
             f"Prune the others ({losers}) unless they carry distinct detail that "
             f"must be folded into {winner.id} first."
         )
