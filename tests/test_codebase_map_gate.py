@@ -21,7 +21,7 @@ import pytest
 
 from paf.capabilities.codebase_map._analyze import analyze_file
 
-ROOT = Path(__file__).resolve().parents[2]  # repo root
+ROOT = Path(__file__).resolve().parents[1]  # repo root
 QUERIES = ROOT / "tests" / "code_search_eval" / "queries.jsonl"
 SRC = ROOT / "src" / "paf"
 
