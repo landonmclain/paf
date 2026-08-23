@@ -2,20 +2,20 @@
 
 Delegates parsing to ``tree-sitter-language-pack.process()`` (for structure,
 symbols, imports, comments, metrics) and maps those onto our own ``SymbolInfo`` /
-``FileInfo`` records in ``_schema.py``. Fills the two fields ``process()`` leaves
-empty on 1.14.3 — ``signature`` and ``doc`` — via the verified custom-query recovery
-in ``_queries.py`` (see the ``tree-sitter-language-pack`` skill, FILL THE BLANKS).
+``FileInfo`` records in ``_schema.py``.  On 1.15.7 (the version paf declares + runs),
+``process()`` fills ``structure[].signature`` natively; we prefer it (normalized bare
+by ``_native_signature``) and fall back to the custom-query recovery in ``_queries.py``
+(see the ``tree-sitter-language-pack`` skill, FILL THE BLANKS) only where native is
+empty (classes → ``signature=None``; grammars 1.15.7 still blanks).
 
 Honest gaps handled here (all documented in the Archive note + skill):
-- ``process()`` never fills ``signature``/``visibility``/``docstrings``; we recover
-  signature + doc per symbol via QueryCursor queries instead.
+- ``process()`` never fills ``docstrings`` (``doc``/``doc_comment``) even on 1.15.7 —
+  we recover ``doc`` per symbol via QueryCursor queries. ``signature`` *is* native now
+  (1.15.7); recovery is the fallback only.
+- ``visibility``/``decorators`` still empty on 1.15.7.
 - C: ``process()`` yields an anonymous ``Function`` (name=None) — skipped (no usable
   symbol span from the parser); same for the TSX extra anonymous Function item.
 - Import normalization: ``ImportInfo.source/items/alias/is_wildcard`` → canonical fields.
-
-Swap-ready: when a wheel with working native ``signature``/``docstrings`` ships, flip
-to those fields — the ``SignatureInfo``/``FileInfo`` schema keeps ``signature``/``doc``
-regardless (one-line switch). Keeps ``signature``/``doc`` populated today via recovery.
 """
 
 from __future__ import annotations
@@ -31,8 +31,9 @@ from ._queries import QueryRecovery
 from ._schema import FileInfo, Span, SymbolInfo, path_rel_to_scan_root
 
 # DDOS/runaway guard for third-party repos: files over this size are skipped.
-# (1.14.3 ProcessConfig has no max_source_bytes/parse_timeout_ms — 1.15-docs fields —
-#  so we enforce the bound ourselves by reading + pre-checking size.)
+# (1.15.7 ProcessConfig DOES now expose max_source_bytes/parse_timeout_ms — earlier
+#  1.14.3 comment noted they were missing — but we still enforce the bound ourselves by
+#  reading + pre-checking size so the skip is explicit before we spend a parse.)
 _MAX_SOURCE_BYTES = 1_000_000  # 1 MB per file
 
 # Language names paf passes to tree-sitter-language-pack — the "available_languages"
@@ -118,8 +119,9 @@ def analyze_file(
 
     recovery = QueryRecovery(language=language, source=source)
     try:
-        # NOTE: 1.14.3 ProcessConfig has NO max_source_bytes/parse_timeout_ms (1.15-docs
-        # fields) — the pre-read size guard in `analyze_file` covers runaway input instead.
+        # NOTE: 1.15.7 ProcessConfig DOES have max_source_bytes/parse_timeout_ms, but the
+        # pre-read size guard in `analyze_file` still covers runaway input with an explicit,
+        # parse-free skip (see comment at `_MAX_SOURCE_BYTES`).
         res = process(
             source,
             ProcessConfig(

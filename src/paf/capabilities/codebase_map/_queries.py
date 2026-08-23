@@ -1,12 +1,18 @@
 """Per-language tree-sitter query recovery for what ``process()`` leaves empty.
 
-``tree-sitter-language-pack.process()`` never fills ``signature`` / ``visibility`` /
-``docstrings`` on 1.14.3 (the only installable wheel) even though the docs promise
-them — see the ``tree-sitter-language-pack`` skill (FILL THE BLANKS) and the Archive
+``tree-sitter-language-pack.process()`` never fills ``docstrings`` (``doc``/
+``doc_comment``) even on 1.15.7 (the version paf declares + runs) — and until the
+1.15.7 upgrade also left ``signature`` empty (on 1.14.3, the only installable wheel back
+then) — see the ``tree-sitter-language-pack`` skill (FILL THE BLANKS) and the Archive
 note *Tree-Sitter-Empty-Fields-and-Custom-Query-Recovery*. We verified (2026-08-22)
 that these ARE recoverable with ``tree_sitter.Query``+``QueryCursor`` against the
 REAL bundled grammar. This module is that thin per-language recovery layer: ONE small
 query per language per piece (node vocab differs per language), NOT a general walker.
+
+Since the 1.15.7 upgrade (2026-08-23) ``signature``/``module-signature`` recovery here is
+FALLBACK ONLY — ``_analyze.py`` prefers native ``StructureItem.signature``; this recovery
+kicks in where native is empty (classes → ``signature=None``, grammars 1.15.7 still blanks).
+Docstring + body recovery remain the primary path (native still leaves them empty).
 
 Read-model philosophy (memory): captured nodes are cheap byte-offset pointers into
 ``source``; value cleaning (strip quotes/``*``) and comment→declaration association we
@@ -191,8 +197,10 @@ class QueryRecovery:
         [retsep ret]``. All byte offsets are sliced against ``self._bsrc`` (a bytes
         copy) — NEVER against the decoded str (see skill Pitfall #8 / vault History
         note: byte offsets ≠ char indices). Uses the per-language ``header``/``ret``
-        queries in ``_LANG``. Stopgap — swap to native ``StructureItem.signature``
-        when a working 1.15 wheel ships.
+        queries in ``_LANG``. FALLBACK ONLY since the 1.15.7 upgrade — ``_analyze.py``
+        prefers native ``StructureItem.signature`` (normalized bare by ``_native_signature``)
+        and calls this only for symbols/grammars where native is empty (e.g. classes,
+        which stay ``signature=None``, and languages 1.15.7 still blanks).
         """
         cfg = _LANG.get(self.language)
         if not cfg or not span or span.start_byte is None:
