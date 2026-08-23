@@ -384,3 +384,57 @@ def test_index_new_accepts_bare_type_and_subject(tmp_path) -> None:
     assert entry.type == "fact"
     assert entry.subject == "paf"
 
+
+def test_index_result_returns_live_staged_view(tmp_path) -> None:
+    """The tool result returns the last action AND a live view of every staged
+    entry (not just a count), so the organizer can see — on each call — what it
+    has already added this run and avoid re-adding the same fact."""
+    import asyncio
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    toolset = _build_index_toolset()(IndexStore(tmp_path))
+    out1 = asyncio.run(toolset.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact="paf is built on pydantic-ai",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    diff1 = out1["diff"]
+    assert diff1 is not None
+    # First call: names the new id, the type/subject, the line, and shows the entry.
+    assert "index_new -> added mem-1 [fact/paf]" in diff1
+    assert "line 40" in diff1
+    assert "mem-1 [fact/paf] paf is built on pydantic-ai" in diff1
+
+    out2 = asyncio.run(toolset.add_new(
+        {}, line_no=41, type="fact", subject="paf",
+        fact="paf has a browser_inspect_url tool",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    diff2 = out2["diff"]
+    assert diff2 is not None
+    # Second call: still shows BOTH staged entries (the live dedup surface).
+    assert "index_new -> added mem-2 [fact/paf]" in diff2
+    assert "mem-1 [fact/paf] paf is built on pydantic-ai" in diff2
+    assert "mem-2 [fact/paf] paf has a browser_inspect_url" in diff2
+    assert "staged entries=2" in diff2
+
+
+def test_index_confirm_diff_names_target(tmp_path) -> None:
+    """`index_confirm` diff names the confirmed entry id + source line."""
+    import asyncio
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    toolset = _build_index_toolset()(IndexStore(tmp_path))
+    asyncio.run(toolset.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact="paf is built on pydantic-ai",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    out = asyncio.run(toolset.confirm({}, entry_id="mem-1", line_no=41))
+    diff = out["diff"]
+    assert diff is not None
+    assert "index_confirm -> mem-1 now sourced from line 41" in diff
+
+

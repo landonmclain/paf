@@ -635,6 +635,7 @@ def _build_index_toolset():
             super().__init__(id="memory-index")
             self._store = store
             self._stage: Stage | None = None
+            self._last_diff: str | None = None  # human summary of last applied action
             self.add_function(self.add_new, name="index_new")
             self.add_function(self.confirm, name="index_confirm")
             self.add_function(self.supersede, name="index_supersede")
@@ -645,14 +646,34 @@ def _build_index_toolset():
                 self._stage = Stage(self._store)
             return self._stage
 
+        def _staged_view(self) -> str:
+            """A compact running view of the staged (post-edit) entries.
+
+            Shows each staged entry as ``mem-N [type/subject] <fact-truncated>``
+            so the model can see — on every call — exactly what it has already
+            staged this run and avoid re-adding the same fact.
+            """
+            entries = self._get_stage().entries
+            if not entries:
+                return "(no staged entries)"
+            lines = []
+            for e in entries:
+                fact = e.fact if len(e.fact) <= 90 else e.fact[:87] + "..."
+                lines.append(f"{e.id} [{e.type}/{e.subject}] {fact}  (source {e.source})")
+            return "\n".join(lines)
+
         def _result(self) -> MemoryWriteResult:
+            staged = self._get_stage()
             return {
                 "memory": "index",
                 "file": _INDEX_FILENAME,
-                "version": str(len(self._get_stage().entries)),
+                "version": str(len(staged.entries)),
                 "replayed": False,
                 "status": "updated",
-                "diff": f"staged entries={len(self._get_stage().entries)}",
+                "diff": (
+                    f"{self._last_diff or 'no change'}; "
+                    f"staged entries={len(staged.entries)}:\n{self._staged_view()}"
+                ),
             }
 
         async def add_new(self, ctx, line_no: int, type: str, subject: str,
@@ -669,6 +690,10 @@ def _build_index_toolset():
                 line_no=line_no, type=type, subject=subject, fact=fact,
                 born_on=born_on, source_ref=source_ref,
             ))
+            # Report the id the new entry got (last in the staged list) so the
+            # model can reference it in later confirm/supersede calls.
+            new_id = self._get_stage().entries[-1].id
+            self._last_diff = f"index_new -> added {new_id} [{type}/{subject}] (line {line_no})"
             return self._result()
 
         def _valid_ids(self) -> list[str]:
@@ -682,6 +707,7 @@ def _build_index_toolset():
                     f"invalid entry_id {entry_id!r}; use one of the index ids "
                     f"{self._valid_ids()} (from the index text), never a subject"
                 ) from None
+            self._last_diff = f"index_confirm -> {entry_id} now sourced from line {line_no}"
             return self._result()
 
         async def supersede(self, ctx, entry_id: str, line_no: int, fact: str,
@@ -698,6 +724,10 @@ def _build_index_toolset():
                     f"invalid entry_id {entry_id!r}; use one of the index ids "
                     f"{self._valid_ids()} (from the index text), never a subject"
                 ) from None
+            pruned = f", pruned {prune}" if prune else ""
+            self._last_diff = (
+                f"index_supersede -> {entry_id} updated (line {line_no}){pruned}"
+            )
             return self._result()
 
         async def finalize_index(self, ctx, end_line: int | None = None) -> MemoryWriteResult:
