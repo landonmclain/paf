@@ -61,6 +61,37 @@ def _kind_value(kind) -> str:
     return str(v)
 
 
+# Kinds that carry a signature line (functions + methods). Everything else (classes,
+# modules, etc.) has signature=None per the documented/tested contract
+# (test_class_signature_is_none).
+_FUNCTION_LIKE_KINDS = {"Function", "Method"}
+
+
+def _native_signature(it) -> str | None:
+    """Native 1.15.7 ``structure[].signature`` normalized to our bare-signature contract.
+
+    1.15.7 populates ``structure[].signature`` natively (1.14.3 left it empty, which is
+    why ``_queries.py`` ``QueryRecovery.signature_for`` exists). The native field emits
+    the full header (``def f(a) -> b:`` / ``async def f(a):``), but the documented and
+    tested contract (``test_signature_*``) is the **bare** ``f(a) -> b`` form, and
+    classes carry no signature. So: adopt native only for function-like kinds, and strip
+    the leading keyword + trailing colon back down to the bare form. Returns ``None``
+    when there is nothing to adopt (class, or native left it empty).
+    """
+    if _kind_value(it.kind) not in _FUNCTION_LIKE_KINDS:
+        return None
+    sig = (getattr(it, "signature", None) or "").strip()
+    if not sig:
+        return None
+    if sig.endswith(":"):
+        sig = sig[:-1].rstrip()  # drop the trailing colon the header always has
+    for kw in ("async def ", "def "):  # strip the language keyword(s)
+        if sig.startswith(kw):
+            sig = sig[len(kw):]
+            break
+    return sig or None
+
+
 def analyze_file(
     path: str | Path,
     scan_root: str | Path,
@@ -154,7 +185,10 @@ def _walk_with_children(items, recovery: QueryRecovery):
             span = _to_span(it.span)
             body_span = _to_span(it.body_span)
             qualified = f"{parent_name}.{it.name}" if parent_name else it.name
-            sig = recovery.signature_for(span, body_span)
+            # Prefer a normalized native signature (1.15.7 populates
+            # structure[].signature); fall back to our hand recovery (QueryRecovery)
+            # only when native has nothing (class, or a grammar 1.15.7 leaves blank).
+            sig = _native_signature(it) or recovery.signature_for(span, body_span)
             doc = recovery.docstring_for(span, body_span)
             symbol = SymbolInfo(
                 name=it.name,
