@@ -8,6 +8,8 @@ dependencies = [
     "pydantic-ai",
     "pydantic-settings",
     "textual>=8.2.8",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-language-pack>=1.15.7",
 ]
 
 [build-system]
