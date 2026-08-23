@@ -145,6 +145,22 @@ class QueryRecovery:
         """Slice source bytes by TREE-SITTER BYTE offsets and decode to str."""
         return self._bsrc[start_byte:end_byte].decode("utf-8", errors="replace")
 
+    def body_for(self, body_span, *, max_bytes: int = 16_384) -> str | None:
+        """Slice a symbol's body source bytes (weight-1 searchable field, §3.7.2).
+
+        ``body_span`` is our ``Span`` (byte offsets from ``process().structure``;
+        sliced against ``self._bsrc`` bytes for the byte-offset-vs-char rule). Bodies
+        are capped at ``max_bytes`` so a giant function can't balloon the manifest —
+        a body token is weight-1 search signal, not a full-text archive.
+        """
+        if not body_span or body_span.start_byte is None or body_span.end_byte is None:
+            return None
+        start = body_span.start_byte
+        end = min(body_span.end_byte, start + max_bytes)
+        if end <= start:
+            return None
+        return self._slice(start, end)
+
     def _tree(self) -> Tree:
         if self._parsed is None:
             self._parsed = get_parser(self.language).parse(self._bsrc)

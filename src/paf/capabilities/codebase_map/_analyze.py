@@ -157,6 +157,7 @@ def _walk_with_children(items, recovery: QueryRecovery):
                 kind=_kind_value(it.kind),
                 signature=sig,
                 doc=doc,
+                body=recovery.body_for(body_span),
                 span=span,
                 parent=parent_name,
             )

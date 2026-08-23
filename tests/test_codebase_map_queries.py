@@ -347,6 +347,55 @@ def test_imports_no_duplicates() -> None:
     assert len(fi.imports) == len(set(fi.imports))
 
 
+# --------------------------------------------------------------------------- searchable_symbols per-field capture (§3.7.2)
+
+
+def test_searchable_symbols_have_core_scalar_fields() -> None:
+    """Every entry carries name/qualified/kind/signature/doc/body (per-field capture).
+
+    Covers the per-symbol scalar fields of the spec's SearchableSymbol shape. The two
+    file-level fields (imports, file_path) live on FileInfo — see next test.
+    """
+    fi, by = _analyze()
+    assert fi.searchable_symbols, "expected at least one searchable symbol"
+    for s in fi.searchable_symbols:
+        assert s.name, "symbol missing name"
+        assert s.qualified, "symbol missing qualified"
+        assert s.kind, "symbol missing kind"
+        # signature/doc/body are captured where they exist; fields are optional
+        # (classes get sig=None; docstring-less symbols get doc=None). The point is
+        # the fields are wired through the record, not dropped.
+
+
+def test_searchable_symbol_body_captured() -> None:
+    """A method/function body's source text is captured (weight-1 field)."""
+    _, by = _analyze()
+    # plain() body: `return a + b` — body should include the return statement
+    plain_body = by["plain"].body
+    assert plain_body is not None
+    assert "return a + b" in plain_body, plain_body
+    # class body contains its method definitions (nested children)
+    myclass_body = by["MyClass"].body
+    assert myclass_body is not None
+    assert "def __init__" in myclass_body, myclass_body
+
+
+def test_searchable_symbol_all_seven_spec_fields_present() -> None:
+    """The 7 SearchableSymbol fields (§3.7.2) are covered across SymbolInfo + FileInfo."""
+    fi, by = _analyze()
+    # per-symbol scalar fields
+    s = by["plain"]
+    assert s.name and s.qualified  # weight 6 / weight 4
+    assert s.signature  # weight 3
+    assert s.body  # weight 1
+    # file-level fields on FileInfo (ranked per file; not duplicated per symbol)
+    assert fi.imports  # weight 2
+    assert fi.path  # weight 4 (file_path)
+    # doc: symbol or file level — every searchable entry has one of these
+    any_symbol_doc = any(si.doc for si in fi.searchable_symbols)
+    assert any_symbol_doc or fi.doc, "no doc field populated anywhere"
+
+
 # --------------------------------------------------------------------------- recovery-layer (unit, no process)
 
 

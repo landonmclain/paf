@@ -54,6 +54,7 @@ class SymbolInfo:
     kind: str = "OTHER"  # StructureKind/SymbolKind string, e.g. "CLASS"/"FUNCTION"
     signature: str | None = None
     doc: str | None = None  # our docstring extraction (tree-sitter's is empty)
+    body: str | None = None  # symbol body source text (weight-1 field in §3.7.2)
     span: Span | None = None
     visibility: str | None = None  # pub/public/private
     children: list[SymbolInfo] = field(default_factory=list)
