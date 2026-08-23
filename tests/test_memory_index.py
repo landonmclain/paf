@@ -342,3 +342,45 @@ def _make_reconcile(store: IndexStore):
         return _reconcile(store, [], decisions, end_line=end_line, watermark=watermark)
 
     return reconcile
+
+
+def test_index_new_rejects_composite_type_with_retry_guidance(tmp_path) -> None:
+    """The organizer's `index_new` rejects `type/subject` compounds via ModelRetry
+    (not a bare ValueError), teaching the model the type/subject split."""
+    import asyncio
+
+    from pydantic_ai import ModelRetry
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    toolset = _build_index_toolset()(IndexStore(tmp_path))
+    # The prod bug: model emitted type="fact/paf" (topic folded into type).
+    with pytest.raises(ModelRetry) as ei:
+        asyncio.run(toolset.add_new(
+            {}, line_no=27, type="fact/paf", subject="paf",
+            fact="paf is a project", born_on="2026-08-22T00:00:00+00:00",
+            source_ref="run:0",
+        ))
+    msg = str(ei.value)
+    # Message must name the allowed set AND the type/subject correction.
+    assert "expected one of" in msg and "fact" in msg
+    assert "subject" in msg and "fact/paf" in msg
+
+
+def test_index_new_accepts_bare_type_and_subject(tmp_path) -> None:
+    """`index_new` accepts a valid bare `type` with the topic in `subject`."""
+    import asyncio
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    toolset = _build_index_toolset()(IndexStore(tmp_path))
+    out = asyncio.run(toolset.add_new(
+        {}, line_no=27, type="fact", subject="paf",
+        fact="paf is a project", born_on="2026-08-22T00:00:00+00:00",
+        source_ref="run:0",
+    ))
+    assert out["status"] == "updated"
+    entry = toolset._get_stage().entries[0]
+    assert entry.type == "fact"
+    assert entry.subject == "paf"
+

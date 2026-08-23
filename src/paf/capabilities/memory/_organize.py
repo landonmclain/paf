@@ -565,6 +565,17 @@ ADDRESSING: when a tool asks for `entry_id`, pass the entry's `mem-N` id EXACTLY
 as shown in the index text (e.g. `mem-1`), never the subject string. The index
 text lists each entry as `mem-1 [type/subject] ...` — copy the `mem-N` token.
 
+TYPE vs SUBJECT (read carefully — do not confuse them):
+- `type` is ALWAYS exactly one bare member of: identity | preference | fact |
+  event | task | current. It is NEVER a compound and NEVER carries the topic.
+- `subject` is the coarse entity/topic the fact is about (e.g. "paf",
+  "Landon", "tooling approach"). The tool call passes `type` and `subject` as
+  TWO SEPARATE fields.
+- The `[type/subject]` you see in the index text (e.g. `[fact/paf]`) is just a
+  display abbreviation of two fields — it is NOT a valid `type` value. When
+  calling `index_new` for a fact about paf, pass `type="fact"` and
+  `subject="paf"` — never `type="fact/paf"`.
+
 Contracts (do not violate):
 - Never edit the journal. You only write the index.
 - `born_on` of an entry never changes (original date). `updated_on` bumps ONLY
@@ -647,7 +658,13 @@ def _build_index_toolset():
         async def add_new(self, ctx, line_no: int, type: str, subject: str,
                           fact: str, born_on: str, source_ref: str):
             if type not in MEMORY_TYPES:
-                raise ValueError(f"invalid memory type {type!r}")
+                raise ModelRetry(
+                    f"invalid memory type {type!r}; expected one of "
+                    f"{sorted(MEMORY_TYPES)}. `type` is ONLY the bare type "
+                    f"member — never a `type/subject` compound. The topic goes "
+                    f"in `subject`, not `type` (e.g. type='fact', subject='paf', "
+                    f"not type='fact/paf')."
+                )
             self._get_stage().apply(NewDecision(
                 line_no=line_no, type=type, subject=subject, fact=fact,
                 born_on=born_on, source_ref=source_ref,
