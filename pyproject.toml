@@ -10,6 +10,21 @@ dependencies = [
     "textual>=8.2.8",
     "tree-sitter>=0.26.0",
     "tree-sitter-language-pack>=1.15.7",
+    # The systemd-run web UI (ui/web.py → Gradio ChatInterface on :8080). Gradio
+    # pulls fastapi/starlette/uvicorn/jinja2/anyio as transitive deps. Declared
+    # here (not ad-hoc) so `uv sync` stops silently dropping it from the venv —
+    # which broke the running paf-web.service the moment a bare sync ran. Pinned
+    # to Gradio 6 (the UI's CSS targets 6.x); floor 6,<7 to avoid a surprise
+    # major bump.
+    "gradio>=6,<7",
+    # Direct imports in repo code (specs.py → yaml, CLIs → rich, smoke script →
+    # dotenv, memory toolset → typing_extensions). Declared so none vanish from
+    # the venv if their transitive provider (gradio/textual/pydantic-settings)
+    # changes — i.e. no package the repo's own code imports may be ad-hoc only.
+    "pyyaml",
+    "rich",
+    "python-dotenv",
+    "typing-extensions",
 ]
 
 [build-system]

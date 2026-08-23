@@ -7,9 +7,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
+from tree_sitter_language_pack import ProcessConfig, process
+
 from paf.capabilities.codebase_map._queries import QueryRecovery
 from paf.capabilities.codebase_map._schema import Span
-from tree_sitter_language_pack import process, ProcessConfig
 
 CASES = {
     "python": "def add(a: int, b: int) -> int:\n    \"\"\"Add two ints.\"\"\"\n    return a + b\n",
