@@ -41,6 +41,7 @@ from ._organize import (
     SupersedeDecision,
     render_index_text,
     render_journal_tail,
+    run_consolidation,
     run_organizer,
 )
 from ._render import (
@@ -103,6 +104,7 @@ __all__ = [
     "render_journal_memory",
     "render_journal_tail",
     "render_memory_prompt",
+    "run_consolidation",
     "run_organizer",
     "validate_store_path",
     "validate_store_prefix",

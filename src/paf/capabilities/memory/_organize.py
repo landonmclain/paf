@@ -617,10 +617,13 @@ def render_index_text(entries: list[IndexEntry]) -> str:
     return "\n".join(lines)
 
 
-# Near-match threshold for the `index_new` dedup guard. Rough token-set (Jaccard)
-# overlap above this means "re-paraphrase of an entry already staged this run"
-# -> the model should confirm/supersede, not add a fresh duplicate.
-_NEAR_MATCH_THRESHOLD = 0.55
+# Near-match threshold for the `index_new` dedup guard. A candidate entry is a
+# "re-paraphrase" and must be CONFIRM/SUPERSEDE'd (not freshly `index_new`'d)
+# when its token overlap is above this. Overlap is MAX of Jaccard and
+# containment, so both the "verbatim repeat" shape (high Jaccard) and the
+# "short fact fully contained in a richer one" shape (mem-2 vs mem-31-style,
+# high containment, low Jaccard) are caught.
+_NEAR_MATCH_THRESHOLD = 0.60
 # Tokens too generic to discriminate facts (articles, auxiliaries, "has/a/the"…).
 _STOP = frozenset(
     "a an the and or but of to in for on with is are was were be been "
@@ -642,13 +645,39 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
-def _near_match(entries: list[IndexEntry], fact: str) -> IndexEntry | None:
-    """Return the staged entry whose fact is a near-dup of ``fact``, else None.
+def _containment(a: set[str], b: set[str]) -> float:
+    """Fraction of the smaller token set present in the larger.
 
-    Operates on the *staged* (in-run) entries only — the exact blind spot that
-    caused cross-line duplication (the same fact re-added as ``index_new`` line
-    after line). Compares token-set Jaccard; a match means the model should have
-    called ``index_confirm``/``index_supersede`` instead of a fresh ``index_new``.
+    Catches "short fact is a paraphrase/restatement of a richer one" even when
+    the richer entry has many extra tokens that crush the Jaccard score (e.g.
+    ``mem-2``'s full identity vs ``mem-31``'s one-line repeat: Jaccard 0.25 but
+    containment 0.80).
+    """
+    if not a or not b:
+        return 0.0
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short & long) / len(short)
+
+
+def _overlap(a: set[str], b: set[str]) -> float:
+    """Max of Jaccard and containment — the full dedup similarity signal."""
+    return max(_jaccard(a, b), _containment(a, b))
+
+
+def _near_match(entries: list[IndexEntry], fact: str, *, type: str | None = None,
+                subject: str | None = None) -> IndexEntry | None:
+    """Return the existing entry whose fact is a near-dup of ``fact``, else None.
+
+    Scans the whole entry list — ``Stage.entries`` is the on-disk index plus
+    anything staged this run — so it catches not just in-run re-adds (the old
+    blind spot) but also a NEW fact that re-states an existing disk entry. A
+    match means the model should have called ``index_confirm``/``index_supersede``
+    against that entry instead of a fresh ``index_new``.
+
+    When ``type``/``subject`` are given, only entries of the SAME type and
+    subject are candidates (removes cross-topic false positives like a fact
+    about \"paf\" vs one about \"Hope Technologies\" that happen to share a few
+    generic tokens).
     """
     tokens = _fact_tokens(fact)
     if not tokens:
@@ -656,10 +685,62 @@ def _near_match(entries: list[IndexEntry], fact: str) -> IndexEntry | None:
     best: IndexEntry | None = None
     best_score = _NEAR_MATCH_THRESHOLD
     for e in entries:
-        score = _jaccard(tokens, _fact_tokens(e.fact))
+        if type is not None and e.type != type:
+            continue
+        if subject is not None and e.subject != subject:
+            continue
+        score = _overlap(tokens, _fact_tokens(e.fact))
         if score > best_score:
             best, best_score = e, score
     return best
+
+
+def _find_consolidation_candidates(
+    entries: list[IndexEntry],
+) -> list[list[IndexEntry]]:
+    """Return connected near-duplicate clusters in ``entries`` (empty if none).
+
+    A cluster is a group of entries of the SAME ``type`` and ``subject`` whose
+    facts pairwise exceed the near-match overlap — i.e. they say the same thing
+    and only one should survive. Used by the organizer's second (consolidation)
+    pass to know which legacy/accumulated entries to fold together via
+    ``supersede`` + ``prune``.
+
+    Grouping is transitive (union-find): if A~B and B~C, all three form one
+    cluster even if A and C are individually weaker matches, so a chain of
+    paraphrases doesn't leave stragglers.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    by_key: dict[tuple[str, str], list[IndexEntry]] = {}
+    for e in entries:
+        by_key.setdefault((e.type, e.subject), []).append(e)
+
+    for _key, group in by_key.items():
+        toks = {e.id: _fact_tokens(e.fact) for e in group}
+        ids = [e.id for e in group]
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                if _overlap(toks[ids[i]], toks[ids[j]]) > _NEAR_MATCH_THRESHOLD:
+                    union(ids[i], ids[j])
+
+    roots: dict[str, list[IndexEntry]] = {}
+    for e in entries:
+        roots.setdefault(find(e.id), []).append(e)
+    # Keep only clusters with more than one member (a singleton isn't a dup).
+    return [cl for cl in roots.values() if len(cl) > 1]
 
 
 
@@ -733,16 +814,18 @@ def _build_index_toolset():
                     f"in `subject`, not `type` (e.g. type='fact', subject='paf', "
                     f"not type='fact/paf')."
                 )
-            match = _near_match(self._get_stage().entries, fact)
+            match = _near_match(
+                self._get_stage().entries, fact, type=type, subject=subject
+            )
             if match is not None:
                 raise ModelRetry(
-                    f"near-duplicate of already-staged entry {match.id}: "
-                    f"{match.fact!r}. This is the same fact you already added this "
-                    f"run — do NOT `index_new` it again. Instead call "
-                    f"`index_confirm(entry_id={match.id}, line_no=... )` if it "
-                    f"confirms {match.id}, or `index_supersede(entry_id={match.id}, "
-                    f"...)` if it changes {match.id}'s value. `index_new` is only "
-                    f"for a genuinely new fact not already staged."
+                    f"near-duplicate of existing entry {match.id}: "
+                    f"{match.fact!r}. This fact already exists in the index — "
+                    f"do NOT `index_new` it. Call `index_confirm(entry_id={match.id}, "
+                    f"line_no=... )` if it just restates {match.id}, or "
+                    f"`index_supersede(entry_id={match.id}, ...)` if it carries a "
+                    f"new value/detail to fold into {match.id}. `index_new` is only "
+                    f"for a genuinely new fact not already represented."
                 )
             self._get_stage().apply(NewDecision(
                 line_no=line_no, type=type, subject=subject, fact=fact,
@@ -889,6 +972,104 @@ async def run_organizer(
 
     prompt = ORGANIZE_PROMPT.format(
         journal_tail=tail,
+        index_text=render_index_text(entries),
+    )
+    organizer, _toolset = _build_memory_organizer(index_store, agent_name=agent_name)
+    result = await organizer.run(prompt)
+    return str(result.output) if result.output is not None else "no changes"
+
+
+def _pick_winner(cluster: list[IndexEntry]) -> IndexEntry:
+    """Suggest the canonical survivor for a dup cluster.
+
+    Prefer the entry with the best-attested lineage (most source lines — it is
+    the entry the journal has reaffirmed most), then the richest fact (most
+    significant tokens — captures the most detail to preserve), then the
+    earliest-born as a stable tiebreak. This is only a hint: the organizer may
+    pick a different member when that is semantically more accurate/complete.
+    """
+    return max(
+        cluster,
+        key=lambda e: (len(e.source), len(_fact_tokens(e.fact)), e.born_on),
+    )
+
+
+def _render_consolidation_candidates(clusters: list[list[IndexEntry]]) -> str:
+    """Render near-duplicate clusters as a numbered list for the consolidation pass."""
+    sections = []
+    for i, cl in enumerate(clusters, 1):
+        winner = _pick_winner(cl)
+        members = "\n".join(
+            f"  * {e.id}: {e.fact!r} (born {e.born_on}, updated {e.updated_on}, "
+            f"source {e.source})"
+            for e in sorted(cl, key=lambda e: e.id)
+        )
+        losers = ", ".join(sorted(e.id for e in cl if e is not winner))
+        sections.append(
+            f"Cluster {i} — these {len(cl)} entries say the same thing "
+            f"(type={winner.type!r}, subject={winner.subject!r}):\n{members}\n"
+            f"Suggested survivor: {winner.id} (richest fact, earliest born). "
+            f"Prune the others ({losers}) unless they carry distinct detail that "
+            f"must be folded into {winner.id} first."
+        )
+    return "\n\n".join(sections)
+
+
+CONSOLIDATION_PROMPT = """\
+Second pass — consolidate EXISTING duplicate entries in the index.
+
+The entries below are near-duplicate clusters detected automatically: within
+each cluster the facts restate the same thing (same type, same subject). For
+EVERY cluster, keep exactly ONE entry and remove the rest, following the
+SUPERSEDE contract:
+
+- Pick the best survivor (the suggested one is usually right, but you may pick
+  another member if it is clearly more accurate or complete).
+- If a loser carries a distinct, valuable detail the winner lacks, fold that
+  detail into the winner via `index_supersede(entry_id=WINNER, line_no=<last
+  source line>, fact=<merged fact>)` — the merged fact must include the winning
+  text PLUS any non-redundant details from the losers.
+- If the losers add nothing, a single supersede that simply restores/keeps the
+  winner's fact and prunes them is enough (call `index_supersede` once and pass
+  the loser ids in `prune`).
+- Never invent facts; only merge detail that is actually present.
+
+Then call `finalize_index` ONCE to commit. Reply with one short line: how many
+clusters you consolidated and how many entries you pruned.
+
+Clusters to consolidate:
+{clusters}
+
+Current index (before this pass):
+{index_text}
+"""
+
+
+async def run_consolidation(
+    index_store: IndexStore,
+    *,
+    agent_name: str = "memory-organizer",
+) -> str:
+    """Second pass: consolidate near-duplicate entries already in the index.
+
+    Loads the current index, detects near-dup clusters (same type + subject,
+    high token overlap), and has the organizer merge each cluster into one
+    canonical entry via ``supersede`` + ``prune``. Runs even when there is no
+    new journal tail — this is what keeps the curated index from accumulating
+    duplicate facts over time, every time it organizes. Returns a short summary,
+    or ``"no changes"`` (zero tokens) when the index is already clean.
+
+    Live-LLM (only when clusters exist), costs tokens. The caller is
+    responsible for sourcing .env / ``ORGANIZE_MODEL`` (or the consol-model
+    default) just like :func:`run_organizer`.
+    """
+    entries = index_store.load()
+    clusters = _find_consolidation_candidates(entries)
+    if not clusters:
+        return "no changes"
+
+    prompt = CONSOLIDATION_PROMPT.format(
+        clusters=_render_consolidation_candidates(clusters),
         index_text=render_index_text(entries),
     )
     organizer, _toolset = _build_memory_organizer(index_store, agent_name=agent_name)

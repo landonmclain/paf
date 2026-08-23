@@ -94,7 +94,7 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         if cutoff > 0:
             from ._consolidate import consolidate
             from ._journal import JournalStore
-            from ._organize import IndexStore, run_organizer
+            from ._organize import IndexStore, run_consolidation, run_organizer
             from ._render import write_index_render
 
             journal = JournalStore(self.memory_directory)
@@ -111,6 +111,11 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
             # repeats facts as it grows). Same atomic-write guarantee.
             index_store = IndexStore(self.memory_directory)
             await run_organizer(journal, index_store=index_store)
+            # Second pass: fold any near-duplicate entries already in the index
+            # into one canonical survivor each. Runs every organize (even when
+            # the journal tail was already folded) so the curated index never
+            # accumulates duplicate facts over time. No-op (0 tokens) when clean.
+            await run_consolidation(index_store)
             write_index_render(
                 index_store,
                 str(Path(self.memory_directory) / "MEMORY.md"),

@@ -487,3 +487,168 @@ def test_index_new_allows_genuinely_distinct_fact(tmp_path) -> None:
     assert [e.id for e in toolset._get_stage().entries] == ["mem-1", "mem-2"]
 
 
+# ---------------------------------------------------------------------------
+# Full-index dedup guard (pass 1) — catches near-dups of EXISTING disk entries,
+# not just facts staged this run. Same type+subject scope, max(Jaccard,
+# containment) similarity so rich-vs-short repeats are caught too.
+# ---------------------------------------------------------------------------
+
+
+def _commit(toolset, end_line: int) -> None:
+    """Finalize + commit a toolset's staged index so a new toolset reloads it."""
+    import asyncio
+
+    asyncio.run(toolset.finalize_index({}, end_line))
+
+
+def test_index_new_rejects_dup_of_existing_disk_entry(tmp_path) -> None:
+    """A re-phrase of a fact ALREADY in the on-disk index raises ModelRetry
+    naming that entry — the guard now scans the full index, not just staged."""
+    import asyncio
+
+    from pydantic_ai import ModelRetry
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    ts1 = _build_index_toolset()(IndexStore(tmp_path))
+    asyncio.run(ts1.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact="paf is built on pydantic-ai",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    _commit(ts1, 40)  # persist mem-1 to disk
+
+    # A brand-new organizer run over the SAME store loads mem-1 from disk.
+    ts2 = _build_index_toolset()(IndexStore(tmp_path))
+    assert [e.id for e in ts2._get_stage().entries] == ["mem-1"]
+    with pytest.raises(ModelRetry) as ei:
+        asyncio.run(ts2.add_new(
+            {}, line_no=41, type="fact", subject="paf",
+            fact="paf is built on the pydantic-ai stack",
+            born_on="2026-08-22T00:00:00+00:00", source_ref="run:1",
+        ))
+    msg = str(ei.value)
+    assert "mem-1" in msg
+    assert "index_confirm" in msg and "index_supersede" in msg
+    assert [e.id for e in ts2._get_stage().entries] == ["mem-1"]
+
+
+def test_index_new_containment_catches_rich_vs_short_repeat(tmp_path) -> None:
+    """A short near-repeat of a RICH existing entry is caught by the containment
+    signal even though plain Jaccard over the full facts is below threshold."""
+    import asyncio
+
+    from pydantic_ai import ModelRetry
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    ts1 = _build_index_toolset()(IndexStore(tmp_path))
+    asyncio.run(ts1.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact=("paf = Pydantic Agent Framework, a project Landon is working on "
+              "for a GitHub portfolio; an opinionated framework built on the "
+              "pydantic-ai stack, import name `paf`."),
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    _commit(ts1, 40)
+
+    ts2 = _build_index_toolset()(IndexStore(tmp_path))
+    with pytest.raises(ModelRetry) as ei:
+        asyncio.run(ts2.add_new(
+            {}, line_no=41, type="fact", subject="paf",
+            fact="User's project paf is built on the pydantic-ai stack.",
+            born_on="2026-08-22T00:00:00+00:00", source_ref="run:1",
+        ))
+    # Rich entry's tokens mostly contain the short repeat's tokens.
+    assert "mem-1" in str(ei.value)
+
+
+def test_index_new_cross_topic_same_words_not_blocked(tmp_path) -> None:
+    """Same few tokens but a DIFFERENT type+subject must not block — the scope
+    to same type+subject removes cross-topic false positives."""
+    import asyncio
+
+    from paf.capabilities.memory._organize import _build_index_toolset
+
+    ts1 = _build_index_toolset()(IndexStore(tmp_path))
+    asyncio.run(ts1.add_new(
+        {}, line_no=40, type="fact", subject="paf",
+        fact="paf is built on pydantic-ai",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+    ))
+    _commit(ts1, 40)
+
+    ts2 = _build_index_toolset()(IndexStore(tmp_path))
+    out = asyncio.run(ts2.add_new(
+        {}, line_no=41, type="fact", subject="Hope Technologies",
+        fact="The Hope site is built with the Elementor page builder",
+        born_on="2026-08-22T00:00:00+00:00", source_ref="run:1",
+    ))
+    assert out["status"] == "updated"
+    assert [e.id for e in ts2._get_stage().entries] == ["mem-1", "mem-2"]
+
+
+# ---------------------------------------------------------------------------
+# Consolidation pass (pass 2) — detects existing near-dup clusters, no-ops on clean
+# ---------------------------------------------------------------------------
+
+
+def test_find_consolidation_candidates_finds_dup_clusters(tmp_path) -> None:
+    """Near-duplicate pairs (same type+subject) group into clusters; singletons
+    and cross-topic entries do not. Builds the index via the low-level
+    ``Stage``/``NewDecision`` path (bypassing the ``index_new`` guard, which
+    correctly rejects a second near-dup at add time)."""
+    from paf.capabilities.memory._organize import (
+        IndexStore,
+        NewDecision,
+        Stage,
+        _find_consolidation_candidates,
+    )
+
+    store = IndexStore(tmp_path)
+    stage = Stage(store)
+    for line, subj, fact in [
+        (1, "paf", "paf is built on pydantic-ai"),
+        (2, "paf", "paf is built on the pydantic-ai stack"),
+        (3, "paf", "paf has a browser_inspect_url tool"),
+        (4, "Hope Technologies", "The Hope site is built with Elementor"),
+        (5, "Hope Technologies", "The Hope site uses Elementor (WordPress)"),
+    ]:
+        stage.apply(NewDecision(
+            line_no=line, type="fact", subject=subj, fact=fact,
+            born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+        ))
+    stage.finalize(5)
+
+    clusters = _find_consolidation_candidates(store.load())
+    # paf-built pair {mem-1, mem-2} + hope-elementor pair {mem-4, mem-5};
+    # browser tool (mem-3) is a singleton, so it appears in no cluster.
+    member_sets = sorted(sorted(e.id for e in c) for c in clusters)
+    assert member_sets == [
+        ["mem-1", "mem-2"],
+        ["mem-4", "mem-5"],
+    ]
+
+
+def test_run_consolidation_no_changes_when_clean(tmp_path) -> None:
+    """A non-duplicate index yields 'no changes' with zero LLM interaction."""
+    import asyncio
+
+    from paf.capabilities.memory._organize import (
+        _build_index_toolset,
+        run_consolidation,
+    )
+
+    ts = _build_index_toolset()(IndexStore(tmp_path))
+    for line, subj, fact in [
+        (1, "paf", "paf is built on pydantic-ai"),
+        (2, "paf", "paf has a browser_inspect_url tool"),
+    ]:
+        asyncio.run(ts.add_new(
+            {}, line_no=line, type="fact", subject=subj,
+            fact=fact, born_on="2026-08-22T00:00:00+00:00", source_ref="run:0",
+        ))
+    _commit(ts, 2)
+    assert asyncio.run(run_consolidation(IndexStore(tmp_path))) == "no changes"
+
+
