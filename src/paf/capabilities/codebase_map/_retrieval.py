@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ._schema import DistilledEntry, SearchHit
-from ._store import ArtifactKind, FlatFileStorage
+from ._store import ArtifactKind, FlatFileStorage, StorageService
 from ._tokens import tokens_rank
 
 
@@ -50,7 +50,7 @@ class LexicalRetrieval:
 
     def __init__(
         self,
-        storage: FlatFileStorage | None = None,
+        storage: StorageService | None = None,
         scan_root: str | Path | None = None,
     ) -> None:
         self.storage = storage or FlatFileStorage()

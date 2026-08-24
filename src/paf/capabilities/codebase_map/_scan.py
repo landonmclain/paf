@@ -6,7 +6,8 @@ It walks a scan root, extracts every supported file, and persists the results to
 co-located index dir so the artifact files exist **on disk** and are inspectable
 (``index.json`` = per-file lean HEAD, ``manifest.json`` = full detail,
 ``tokens.json`` = the symbol-scoped search backend, ``snapshot.json`` = the
-freshness fingerprint ``sync_changed`` keys off).
+freshness fingerprint ``sync_changed`` keys off, ``overview.json`` = the navigation
+tree).
 
 **Scope model (spec §5.y, LOCKED 2026-08-22):** the walker covers EVERYTHING that
 isn't ignored — the corpus = files under the scan root minus (gitignore ∪ owned-skip),
@@ -38,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from ._analyze import analyze_file, detect_language
+from ._overview import build_overview
 from ._schema import FileInfo, path_rel_to_scan_root
 from ._store import ArtifactKind, FlatFileStorage, ScanScope
 from ._tokens import build_tokens
@@ -181,6 +183,7 @@ def scan_and_write(scan_root: str | Path, storage: FlatFileStorage | None = None
     storage.write(ArtifactKind.INDEX, root, {"files": index_rows})
     storage.write(ArtifactKind.MANIFEST, root, {"files": manifests})
     storage.write(ArtifactKind.TOKENS, root, build_tokens(rich))
+    storage.write(ArtifactKind.OVERVIEW, root, build_overview(root))
 
     from ._store import index_dir_for_scan_root  # public location helper
 

@@ -1,68 +1,318 @@
-"""CodebaseMapToolset (STUB — layout only, matches LOCKED read-model).
+"""CodebaseMapToolset — the navigation-first 5-tool ladder (LOCKED read-model).
 
-Planned (per Codebase-Map-Capability-Spec § `_toolset.py`): a `FunctionToolset`
-exposing the **navigation-first** 5-tool surface (LOCKED 2026-08-23):
+The model climbs a ladder instead of brute-forcing keyword scans:
 
-- `get_overview()` = **orient to the top** — the `overview.json` navigation tree
-  (folders → files, collapsed from the ignore list). The STARTING POINT.
-- `lookup_file(path, symbol=None, detail=False)` = **the bridge** (head → manifest):
-  - `lookup_file(path)`               → the `index` HEAD row (metadata + module-docstring
-                                       head + symbol NAME list) — no bodies
-  - `lookup_file(path, symbol=X)`     → that symbol's head only (name/kind/span)
-  - `lookup_file(path, detail=True)`  → the full `manifest` block for the file
-                                       (all symbols' docstring/signature/span)
-  - `lookup_file(path, symbol=X, detail=True)` → that symbol's full `manifest` entry
-  Guard: never replaces reading the overview — it is a *jump*, not the *path*.
-- `read_block(block_ref)` = **the whole-file / region rung** — exact source bytes,
-  the only path to raw source (query-the-pointer; heavy source deferred).
-- `search_codebase(query, limit=20)` = **the thin escape hatch** — one fused call over
-  `tokens.json` (symbol-scoped, field-weighted BM25); **NO mode menu**. Scores tokens
-  → PRESENTS the `index` head row (path, language, module docstring, matched names)
-  with `manifest_ref` pointers → the model dereferences `manifest`/`read_block` on pick.
-- `get_repo_map(map_tokens=None, focus=None)` = **orient map** (aider --map-tokens
-  distilled map).
+    get_overview() → lookup_file(path, symbol, detail) → read_block(block_ref)
+                                    ↕                        ↑
+                            search_codebase(query)  (escape hatch for known words)
 
-`callers`/`with_graph` defer to the graph phase (YAGNI). A future `semantic` backend is
-an alternative `RetrievalBackend`, never a `mode`. All hits collapse to the universal
-`SearchHit`/`BlockRef` shape.
+- ``get_overview()``            — orient to the top; the ``overview.json`` tree
+- ``lookup_file(...)``          — the bridge; 4 shapes head ↔ detail
+- ``read_block(block_ref)``     — the whole-file/region rung; the ONLY path to raw source
+- ``search_codebase(query)``    — the thin escape hatch over ``tokens.json``; NO mode menu
+- ``get_repo_map(...)``         — orient map (Phase 4; stub)
 
-None of this is built yet — this is stub layout so the package surface matches the
-LOCKED spec (navigation-first, search secondary). Stub exists so the full package layout
-is visible up front.
+``callers``/``with_graph`` defer to the graph phase (YAGNI). A future ``semantic``
+backend is an alternative ``RetrievalBackend``, never a ``mode``. All hits collapse to
+the universal ``SearchHit``/``BlockRef`` shape.
+
+Tools are **agent-facing** — every method returns a bounded, readable ``str`` (matching
+the git/fs/shell toolset convention), never raw dicts. The heavy source text is only
+materialized on ``read_block`` (query-the-pointer); ``lookup_file`` and ``search``
+present bounded heads/blocks.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+
+from pydantic_ai.toolsets import FunctionToolset
+
+from ._block import read_block as _read_block_source
+from ._overview import build_overview, load_overview
+from ._retrieval import LexicalRetrieval
+from ._schema import Span
+from ._store import ArtifactKind, FlatFileStorage, StorageService
+
+_MAX_SEARCH_HEAD = 200          # chars of module-doc head shown per search hit row
+_MAX_SNIPPET_BYTES = 65536      # read_block hard bound (matches _block limit_bytes)
+_MAX_LOOKUP_SYMBOLS = 120       # cap symbol name lists so a big head stays bounded
 
 
-class CodebaseMapToolset:
-    """STUB — the five-tool codebase navigation toolset (locked read-model).
+class CodebaseMapToolset(FunctionToolset):
+    """Navigation-first five-tool codebase browser rooted at a scan root.
 
-    Not built yet. Placeholder so the package layout is complete and imports
-    resolve. Will become a `FunctionToolset`-derived bundle in a later phase,
-    exposing the navigation-first ladder: get_overview → lookup_file → read_block,
-    with search_codebase as the thin escape hatch and get_repo_map for orientation.
+    All reads go through the storage seam (default ``FlatFileStorage``); path/symbol
+    lookups are confined to the scan root. Tools are read-only — nothing here writes
+    artifacts.
     """
 
-    def __init__(self, storage: Any = None, retrieval: Any = None, scan_root: str = "") -> None:
-        self.storage = storage
-        self.retrieval = retrieval
-        self.scan_root = scan_root
+    def __init__(
+        self,
+        *,
+        scan_root: str | Path,
+        storage: StorageService | None = None,
+        retrieval: LexicalRetrieval | None = None,
+    ) -> None:
+        super().__init__()
+        self._scan_root = Path(scan_root).resolve()
+        self._storage = storage or FlatFileStorage()
+        self._retrieval = retrieval or LexicalRetrieval(
+            storage=self._storage, scan_root=self._scan_root
+        )
 
-    def get_overview(self) -> Any:
-        """STUB — get_overview (navigation start). Builds on `overview.json`."""
+        self.add_function(self.get_overview, name="get_overview")
+        self.add_function(self.lookup_file, name="lookup_file")
+        self.add_function(self.read_block, name="read_block")
+        self.add_function(self.search_codebase, name="search_codebase")
+        self.add_function(self.get_repo_map, name="get_repo_map")
 
-    def lookup_file(self, path: str, symbol: str | None = None, detail: bool = False) -> Any:
-        """STUB — lookup_file (head → manifest bridge). Implemented in Phase 3."""
+    # -- presentation helpers -------------------------------------------------
 
-    def read_block(self, block_ref: Any) -> str | None:
-        """STUB — read_block (raw source by BlockRef). See `_block.py`."""
+    def _head_rows_by_path(self) -> dict[str, dict]:
+        payload = self._storage.read(ArtifactKind.INDEX, self._scan_root)
+        rows = (payload or {}).get("files", []) if isinstance(payload, dict) else []
+        return {r["path"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("path"), str)}
 
-    def search_codebase(self, query: str, limit: int = 20) -> list[Any]:
-        """STUB — search_codebase (thin escape hatch over tokens.json). Phase 3."""
-        raise NotImplementedError("search_codebase is not built until Phase 3")
+    def _manifest_paths(self) -> dict[str, dict]:
+        payload = self._storage.read(ArtifactKind.MANIFEST, self._scan_root)
+        rows = (payload or {}).get("files", {}) if isinstance(payload, dict) else {}
+        return rows if isinstance(rows, dict) else {}
 
-    def get_repo_map(self, map_tokens: int | None = None, focus: str | None = None) -> Any:
-        """STUB — get_repo_map (orient). Implemented in Phase 4."""
+    # -- tools ----------------------------------------------------------------
+
+    def get_overview(self) -> str:
+        """Orient to the top of the codebase: return the navigation tree.
+
+        Use this FIRST, before any other tool, to see how the codebase is laid out
+        (folders → files with counts). This is the starting point / orientation —
+        a tree you climb down, not a search. Once you know where you are, drill with
+        ``lookup_file``.
+
+        Returns a tree of repo-relative ``path`` entries (dirs with ``file_count``,
+        files with ``line_count``), shallowest depth first, plus a top summary.
+        """
+        overview = load_overview(self._storage, self._scan_root)
+        if overview is None:
+            # Not indexed yet — derive the tree on demand from the same walker.
+            overview = build_overview(self._scan_root)
+        tree = overview.get("tree", [])
+        dirs = [e for e in tree if e.get("type") == "dir"]
+        files = [e for e in tree if e.get("type") == "file"]
+        lines = [
+            (
+                f"{'  ' * (e.get('depth', 1) - 1)}{e['path']}/"
+                f"  ({e.get('file_count', 0)} files)"
+            )
+            for e in dirs
+        ] + [
+            (
+                f"{'  ' * (e.get('depth', 1) - 1)}{e['path']}"
+                f"  ({e.get('line_count', 0)} lines)"
+            )
+            for e in files
+        ]
+        head = (
+            f"Overview of {overview.get('scan_root', self._scan_root)}\n"
+            f"{len(dirs)} dirs, {len(files)} files\n"
+        )
+        return head + "\n".join(lines)
+
+
+    def lookup_file(self, path: str, symbol: str | None = None, detail: bool = False) -> str | None:
+        """Look up a file's head or detail (the bridge between overview and source).
+
+        Four forms, least → most detail:
+        - ``lookup_file(path)``                    → the file's HEAD: metadata, module
+          docstring, and its symbol NAME list (no bodies).
+        - ``lookup_file(path, symbol=X)``          → just that symbol's head
+          (name/kind/span) from the manifest.
+        - ``lookup_file(path, detail=True)``       → the file's full manifest block:
+          every symbol's docstring/signature/span.
+        - ``lookup_file(path, symbol=X, detail=True)`` → that symbol's full manifest
+          entry (docstring/signature/body/span).
+
+        ``path`` is repo-relative. Returns ``None`` for an unknown path/symbol.
+        This is a *jump* to a known location — prefer ``get_overview`` to discover
+        where things are. For the actual source, follow up with ``read_block``.
+        """
+        heads = self._head_rows_by_path()
+        head = heads.get(path)
+        if head is None:
+            return None
+
+        manifests = self._manifest_paths()
+        manifest = manifests.get(path)
+
+        if detail:
+            if symbol is not None:
+                return self._format_symbol_manifest(manifest, symbol, path)
+            return self._format_file_detail(manifest, head, path)
+        if symbol is not None:
+            return self._format_symbol_head(manifest, symbol, path)
+        return self._format_head(head, path)
+
+    def read_block(self, block_ref: str) -> str | None:
+        """Read raw source for a file or region by a ``block_ref`` pointer.
+
+        ``block_ref`` is the compact pointer form ``path`` or ``path:L1-L2``
+        (e.g. ``src/paf/config.py`` or ``src/paf/config.py:40-80``), resolved
+        relative to the scan root. This is the ONLY tool that returns actual source
+        text — use it after ``lookup_file``/``search_codebase`` point you at a file
+        or symbol. Bounded: never returns more than 64 KB.
+
+        Returns ``None`` if the file does not exist.
+        """
+        file_part, _, line_part = block_ref.partition(":")
+        span: Span | None = None
+        if line_part:
+            try:
+                a, _, b = line_part.partition("-")
+                span = Span(
+                    start_byte=None, end_byte=None,
+                    start_line=int(a), end_line=int(b) if b else int(a),
+                )
+            except ValueError:
+                span = None
+        # resolve repo-relative path against the scan root, then read exact bytes
+        full = (self._scan_root / file_part).resolve()
+        try:
+            full.relative_to(self._scan_root)
+        except ValueError:
+            return None
+        return _read_block_source(full, span, limit_bytes=_MAX_SNIPPET_BYTES)
+
+    def search_codebase(self, query: str, limit: int = 20) -> str:
+        """Search the codebase for ``query`` and return the top hits.
+
+        The thin escape hatch — use when you know a word/name but not where it lives.
+        Scores over the symbol-scoped search index (name > signature > doc) and returns
+        ranked hits, each a repo-relative ``path`` + matched ``symbol`` + ``manifest_ref``
+        line range + module-doc head snippet. Then dereference the exact source with
+        ``read_block`` (or view a symbol's detail with ``lookup_file(path, symbol=...)``).
+        There is no mode menu — one fused search call.
+
+        Args:
+            query: The words to search for (identifiers, docstring terms, etc.).
+            limit: Max hits to return (default 20).
+        """
+        hits = self._retrieval.search(query, limit=max(1, limit))
+        if not hits:
+            return f"No results for {query!r}."
+        head = self._head_rows_by_path()
+        lines = [f"Top {len(hits)} hits for {query!r}:"]
+        for h in hits:
+            doc = (head.get(h.file, {}).get("doc") or "")[: _MAX_SEARCH_HEAD]
+            sym = f"#{h.symbol}" if h.symbol else ""
+            lines.append(
+                f"- {h.file}{sym}  lines {h.start_line}-{h.end_line} "
+                f"(score {h.score:.2f})"
+            )
+            if doc:
+                lines.append(f"    {doc}")
+        return "\n".join(lines)
+
+    def get_repo_map(self, map_tokens: int | None = None, focus: str | None = None) -> str:
+        """[NOT BUILT — Phase 4] Return a distilled orientation map of the codebase.
+
+        Planned (aider ``--map-tokens``-style): a ranked distillation of the most
+        load-bearing files/symbols within a token budget. Not implemented yet.
+        """
         raise NotImplementedError("get_repo_map is not built until Phase 4")
+
+    # -- format helpers -------------------------------------------------------
+
+    def _format_head(self, head: dict, path: str) -> str:
+        doc = (head.get("doc") or "").splitlines()[0] if head.get("doc") else ""
+        names = self._name_lists(head)
+        out = [f"# {path}", f"language: {head.get('language') or '?'}"]
+        if doc:
+            out.append(f"doc: {doc}")
+        if head.get("imports"):
+            out.append(f"imports: {', '.join(head['imports'][:_MAX_LOOKUP_SYMBOLS])}")
+        if names["classes"]:
+            out.append(f"classes: {', '.join(names['classes'])}")
+        if names["functions"]:
+            out.append(f"functions: {', '.join(names['functions'])}")
+        if names["other"]:
+            out.append(f"symbols: {', '.join(names['other'])}")
+        return "\n".join(out)
+
+    def _format_file_detail(self, manifest: dict | None, head: dict, path: str) -> str:
+        out = [self._format_head(head, path), "", "## Detail"]
+        if manifest is None:
+            out.append("(no manifest detail available)")
+            return "\n".join(out)
+        syms = manifest.get("symbols") or []
+        if not syms:
+            out.append("(no symbols)")
+        for s in syms[: _MAX_LOOKUP_SYMBOLS]:
+            out.append(self._symbol_block(s))
+        if len(syms) > _MAX_LOOKUP_SYMBOLS:
+            out.append(f"... {len(syms) - _MAX_LOOKUP_SYMBOLS} more symbols")
+        return "\n".join(out)
+
+    def _format_symbol_head(self, manifest: dict | None, symbol: str, path: str) -> str | None:
+        if manifest is None:
+            return None
+        sym = self._find_symbol(manifest.get("symbols") or [], symbol)
+        if sym is None:
+            return None
+        span = self._span_str(sym.get("span"))
+        return f"{path}#{symbol}  ({sym.get('kind', '?')}{span})"
+
+    def _format_symbol_manifest(self, manifest: dict | None, symbol: str, path: str) -> str | None:
+        if manifest is None:
+            return None
+        sym = self._find_symbol(manifest.get("symbols") or [], symbol)
+        if sym is None:
+            return None
+        out = [f"# {path}#{symbol}"]
+        if sym.get("kind"):
+            out.append(f"kind: {sym['kind']}")
+        span = self._span_str(sym.get("span"))
+        if span:
+            out.append(f"span: {span}")
+        if sym.get("signature"):
+            out.append(f"signature: {sym['signature']}")
+        if sym.get("doc"):
+            out.append(f"docstring: {sym['doc']}")
+        return "\n".join(out)
+
+    def _symbol_block(self, s: dict) -> str:
+        name = s.get("name", "?")
+        kind = s.get("kind", "?")
+        span = self._span_str(s.get("span"))
+        body = s.get("body")
+        block = [f"## {name} ({kind}{span})"]
+        if s.get("signature"):
+            block.append(f"  {s['signature']}")
+        if s.get("doc"):
+            block.append(f"  {s['doc']}")
+        if body:
+            block.append(body)
+        return "\n".join(block)
+
+    @staticmethod
+    def _find_symbol(symbols: list[dict], name: str) -> dict | None:
+        for s in symbols:
+            if s.get("name") == name:
+                return s
+        return None
+
+    @staticmethod
+    def _name_lists(head: dict) -> dict[str, list[str]]:
+        return {
+            "classes": list(head.get("classes") or [])[: _MAX_LOOKUP_SYMBOLS],
+            "functions": list(head.get("functions") or [])[: _MAX_LOOKUP_SYMBOLS],
+            "other": list(head.get("symbols") or [])[: _MAX_LOOKUP_SYMBOLS],
+        }
+
+    @staticmethod
+    def _span_str(span: object | None) -> str:
+        if not isinstance(span, dict):
+            return ""
+        sl, el = span.get("start_line"), span.get("end_line")
+        if sl is not None and el is not None:
+            return f" [{sl}-{el}]"
+        return ""
