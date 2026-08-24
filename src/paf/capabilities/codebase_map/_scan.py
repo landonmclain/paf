@@ -4,7 +4,7 @@ This is the missing orchestration that ties the two existing pieces together:
 ``analyze_file`` (extraction, Phase 1) + ``FlatFileStorage`` (storage seam, Phase 0).
 It walks a scan root, extracts every supported file, and persists the results to the
 co-located index dir so the artifact files exist **on disk** and are inspectable
-(``manifest.json`` = per-file search surface, ``structure.json`` = full symbol tree,
+(``index.json`` = per-file head, ``manifest.json`` = full detail,
 ``snapshot.json`` = the freshness fingerprint ``sync_changed`` keys off).
 
 **Scope model (spec §5.y, LOCKED 2026-08-22):** the walker covers EVERYTHING that
@@ -71,8 +71,8 @@ def scan_and_write(scan_root: str | Path, storage: FlatFileStorage | None = None
     Returns a small summary dict (file count, symbol count, skipped, unparsed) for the
     caller. Writes three artifacts via the storage seam:
       - ``snapshot.json``   — per-file {mtime,size,sha256} fingerprint (freshness).
-      - ``manifest.json``   — per-file slim ``FileInfo`` (the search surface).
-      - ``structure.json``  — per-file full symbol tree with spans/signatures/bodies.
+      - ``index.json``      — per-file HEAD (metadata + module-docstring head + symbol names).
+      - ``manifest.json``   — per-file DETAILED symbol tree with docstrings/signatures/bodies/spans.
     Every in-scope file appears in all three — parsed files carry symbols, and files
     with no extractable symbols appear as ``unparsed: true`` records (still snapshotted
     as seen, so they never read as "changed").
@@ -82,8 +82,8 @@ def scan_and_write(scan_root: str | Path, storage: FlatFileStorage | None = None
 
     files = walk_all_files(root)
 
-    manifests: list[dict[str, Any]] = []
-    structures: dict[str, Any] = {}
+    index_rows: list[dict[str, Any]] = []
+    manifests: dict[str, Any] = {}
     snap_files: dict[str, Any] = {}
     total_symbols = 0
     skipped: list[str] = []
@@ -102,8 +102,8 @@ def scan_and_write(scan_root: str | Path, storage: FlatFileStorage | None = None
             "sha256": _hash_file(path),
         }
         total_symbols += len(extracted.searchable_symbols)
-        manifests.append(asdict(extracted))
-        structures[rel] = {
+        index_rows.append(asdict(extracted))
+        manifests[rel] = {
             "path": rel,
             "language": extracted.language,
             "doc": extracted.doc,
@@ -112,15 +112,20 @@ def scan_and_write(scan_root: str | Path, storage: FlatFileStorage | None = None
         }
 
     storage.write(ArtifactKind.SNAPSHOT, root, {"files": snap_files})
+    # Populate inbound references_count on the index (head) records (computed at scan
+    # time over the full corpus — free + never stale at full-scan scale).
+    from ._graph import apply_references
+
+    apply_references(index_rows)
+    storage.write(ArtifactKind.INDEX, root, {"files": index_rows})
     storage.write(ArtifactKind.MANIFEST, root, {"files": manifests})
-    storage.write(ArtifactKind.STRUCTURE, root, {"files": structures})
 
     from ._store import index_dir_for_scan_root  # public location helper
 
     return {
         "scan_root": str(root),
         "files_found": len(files),
-        "extracted": len(manifests),
+        "extracted": len(index_rows),
         "unparsed": unparsed,
         "skipped": skipped,
         "total_symbols": total_symbols,

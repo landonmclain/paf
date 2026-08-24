@@ -53,7 +53,7 @@ def test_write_then_read_roundtrip(tmp_path: Path) -> None:
 
 def test_read_missing_artifact_returns_none(tmp_path: Path) -> None:
     store = FlatFileStorage()
-    assert store.read(ArtifactKind.STRUCTURE, tmp_path) is None
+    assert store.read(ArtifactKind.INDEX, tmp_path) is None
 
 
 def test_read_block_byte_slice(tmp_path: Path) -> None:

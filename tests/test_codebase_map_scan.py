@@ -104,7 +104,7 @@ def test_scan_scope_in_scope_direct(tmp_path: Path) -> None:
 
 
 def test_scan_and_write_records_unparsed_files(tmp_path: Path) -> None:
-    """In-scope files with no parseable symbols appear in manifest + structure as
+    """In-scope files with no parseable symbols appear in index + manifest as
     unparsed:true, and are snapshotted as seen (so they never read as 'changed')."""
     root = tmp_path / "project"
     root.mkdir()
@@ -117,17 +117,17 @@ def test_scan_and_write_records_unparsed_files(tmp_path: Path) -> None:
     assert summary["files_found"] == 3
     assert set(summary["unparsed"]) == {"notes.md", "data.json"}
 
-    manifest = store.read(ArtifactKind.MANIFEST, root)["files"]
-    by_path = {m["path"]: m for m in manifest}
+    index = store.read(ArtifactKind.INDEX, root)["files"]
+    by_path = {m["path"]: m for m in index}
     assert by_path["mod.py"]["unparsed"] is False
     assert by_path["mod.py"]["symbols"] == ["f"]
     assert by_path["notes.md"]["unparsed"] is True
     assert by_path["notes.md"]["language"] is None
     assert by_path["data.json"]["unparsed"] is True
 
-    structure = store.read(ArtifactKind.STRUCTURE, root)["files"]
-    assert structure["notes.md"]["unparsed"] is True
-    assert structure["mod.py"]["unparsed"] is False
+    manifest = store.read(ArtifactKind.MANIFEST, root)["files"]
+    assert manifest["notes.md"]["unparsed"] is True
+    assert manifest["mod.py"]["unparsed"] is False
 
     # unparsed files are in the snapshot too -> seen, stable
     snapshot = store.read(ArtifactKind.SNAPSHOT, root)["files"]

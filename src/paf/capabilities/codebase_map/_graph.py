@@ -1,26 +1,148 @@
-"""Call graph + references (STUB — Phase 0 layout only).
+"""Call graph + references — Phase 2 (count first; edges come next).
 
-Planned (per Codebase-Map-Capability-Spec § `_graph.py` + §5.x): compute caller/callee
-edges and inbound-reference counts **on demand** from the per-file symbol index — NOT a
-persisted `call_graph.json` that goes stale (the freshness decision, 2026-08-22).
-Derivation happens when `callers` / `get_repo_map` / ref-weight ranking asks for it,
-feeding `mode="callers"` and `references_count`.
+Implemented now (per Landon, 2026-08-23):
+  - ``reference_counts``  — inbound-reference counts per FILE, computed at scan time
+    and persisted into each ``FileInfo.references_count`` in the index (head). At
+    full-scan scale (~114 files, sha256 full rewalk) this is free and never stale;
+    recomputed-at-scan beats §5.x's "derive on read" (which was written for a
+    file-watcher/incremental future we don't have).
 
-Phase 2 delivers this. Phase 0 is storage + schema + eval shell only; stub for layout.
+Deferred (key deliverable, comes next):
+  - ``build_edges``  — caller→callee edges (the real graph). The count here is a
+    *projection of the graph*: an incoming count is not independently maintainable
+    without the edge set (which files reference X). When edges land, the count
+    falls out of them trivially.
+
+Reference definition (file granularity, honest + cheap): a FILE ``A`` references
+FILE ``B`` when ``A`` mentions — in its imports or any of its own symbol
+bodies/signatures/docs — a symbol name that ``B`` *defines*. ``B``'s
+``references_count`` = the number of DISTINCT other files that so reference it.
+Self-references are excluded (a file doesn't count as its own referencer).
 """
 
 from __future__ import annotations
 
-from typing import Any
+import re
 
 from ._schema import FileInfo
 
+# Names that occur in this set are "references" a file makes to another file's
+# defined symbols. Cheap derived-string tokenizer: pull identifier runs so
+# `from x import Foo` contributes `Foo` and `Settings.consol_model` contributes
+# `Settings` + `consol_model` (the latter won't resolve to a defined symbol, so
+# it harmlessly no-ops).
+_REF_TOKEN_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
-def build_edges(files: list[FileInfo]) -> list[Any]:
-    """STUB — derive caller→callee edges from per-file symbols (Phase 2)."""
-    raise NotImplementedError("build_edges is not built until Phase 2")
+
+def _defined_name_map(files: list[FileInfo]) -> dict[str, str]:
+    """Map every defined symbol name → its defining file path.
+
+    First-writer wins (a name defined in multiple files resolves to the first
+    alphabetical file that defines it — an honest approximation for the count;
+    true disambiguation is the graph phase's job).
+    """
+    defined_by: dict[str, str] = {}
+    for f in files:
+        for name in f.symbols:
+            # skip dunder/module-internal noise that would mis-attribute
+            # references to the wrong file (e.g. `_private` used everywhere)
+            if name.startswith("__") and name.endswith("__"):
+                continue
+            defined_by.setdefault(name, f.path)
+    return defined_by
+
+
+def _file_referenced_names(f: FileInfo) -> set[str]:
+    """Distinct identifier names a file references (imports + its own symbol text)."""
+    names: set[str] = set()
+    # imports: `from x import Foo`, `import y`, `from z.a import b as c`
+    for imp in f.imports:
+        names.update(_REF_TOKEN_RE.findall(imp))
+    # the file's own symbol bodies/signatures/docs may *use* other files' symbols;
+    # capture those identifiers too (name tokens from body text).
+    for sym in f.searchable_symbols:
+        for field in (sym.signature, sym.body, sym.doc):
+            if field:
+                names.update(_REF_TOKEN_RE.findall(field))
+    return names
 
 
 def reference_counts(files: list[FileInfo]) -> dict[str, int]:
-    """STUB — inbound-reference counts per symbol, derived on read (Phase 2)."""
-    raise NotImplementedError("reference_counts is not built until Phase 2")
+    """Inbound-reference counts per file path (in-degree at file granularity).
+
+    ``A`` references ``B`` when A mentions (imports / bodies) a symbol B defines.
+    Returns ``{path: count}`` where count = number of DISTINCT other files that
+    reference at least one symbol defined by that path. Self-reference excluded.
+    """
+    defined_by = _defined_name_map(files)
+    # Every file starts at 0; only those actually referenced by others go positive.
+    counts: dict[str, int] = {f.path: 0 for f in files}
+    for f in files:
+        for name in _file_referenced_names(f):
+            defining_file = defined_by.get(name)
+            if defining_file is not None and defining_file != f.path:
+                counts[defining_file] = counts.get(defining_file, 0) + 1
+    return counts
+
+
+def apply_references(files: list[dict]) -> None:
+    """Populate ``references_count`` on the index (head) records IN PLACE.
+
+    ``files`` is the raw list of dict records as written by ``_scan.py``
+    (``asdict(FileInfo)`` each). Reads each record's ``symbols``/``imports``/
+    ``searchable_symbols`` to compute inbound counts, then sets
+    ``record["references_count"]`` on the *defining* record. Returns ``None``
+    (mutates the list so the caller's artifacts already carry the counts).
+    """
+    infos = [_fileinfo_from_record(r) for r in files]
+    counts = reference_counts(infos)
+    for record in files:
+        record["references_count"] = counts.get(record["path"], 0)
+
+
+def _fileinfo_from_record(record: dict) -> FileInfo:
+    """Build a ``FileInfo`` from a raw manifest dict record (reverse of asdict).
+
+    Rehydrates ``searchable_symbols`` (stored as dicts) back into ``SymbolInfo``
+    objects so ``reference_counts`` can walk their fields uniformly, and keeps the
+    ``span`` as a ``Span`` when present. ``children``/``parent`` are dropped for
+    the count pass (references walk top-level field text, not the tree).
+    """
+    from ._schema import Span, SymbolInfo
+
+    syms: list[SymbolInfo] = []
+    for s in record.get("searchable_symbols") or []:
+        span = s.get("span")
+        if isinstance(span, dict):
+            span = Span(**{k: v for k, v in span.items() if k in ("start_byte", "end_byte", "start_line", "end_line")})
+        syms.append(
+            SymbolInfo(
+                name=s.get("name", ""),
+                qualified=s.get("qualified"),
+                kind=s.get("kind", "OTHER"),
+                signature=s.get("signature"),
+                doc=s.get("doc"),
+                body=s.get("body"),
+                span=span,
+                visibility=s.get("visibility"),
+                children=[],
+                parent=s.get("parent"),
+            )
+        )
+    return FileInfo(
+        path=record.get("path", ""),
+        language=record.get("language"),
+        doc=record.get("doc"),
+        role=record.get("role"),
+        tags=record.get("tags") or [],
+        symbols=record.get("symbols") or [],
+        imports=record.get("imports") or [],
+        references_count=record.get("references_count", 0),
+        searchable_symbols=syms,
+        unparsed=record.get("unparsed", False),
+    )
+
+
+def build_edges(files: list[FileInfo]) -> list[dict]:
+    """STUB — caller→callee edges (Phase 2 graph, the key deliverable, next)."""
+    raise NotImplementedError("build_edges is not built until the graph phase")

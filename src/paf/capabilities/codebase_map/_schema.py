@@ -63,7 +63,7 @@ class SymbolInfo:
 
 @dataclass(frozen=True)
 class FileInfo:
-    """Per-file slim record (the search-facing surface; one row of manifest.json)."""
+    """Per-file head record (one row of index.json — the HEAD layer)."""
 
     path: str  # repo-relative
     language: str | None = None
