@@ -60,3 +60,4 @@ demo.db
 # derived output, not source. Regenerate via scan_and_write(); never commit.
 .agent-codeindex/
 
+.hermes-backups/
