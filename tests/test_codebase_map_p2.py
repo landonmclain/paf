@@ -29,6 +29,11 @@ def _file(
     imports: list[str] | None = None,
     doc: str = "",
 ) -> dict:
+    """A manifest-shaped record (the detail layer `apply_references` reads).
+
+    `symbols` here is the full asdict(SymbolInfo) list — the manifest record shape,
+    NOT the lean-index name list. `imports` feeds import-based reference counting.
+    """
     symbols = symbols or []
     imports = imports or []
     syms = [SymbolInfo(name=n, kind="FUNCTION", signature=f"def {n}()", body=f"def {n}(): ...") for n in symbols]
@@ -36,11 +41,9 @@ def _file(
         "path": rel,
         "language": "python",
         "doc": doc,
-        "role": None,
-        "tags": [],
-        "symbols": list(symbols),
         "imports": list(imports),
-        "searchable_symbols": [__import__("dataclasses").asdict(s) for s in syms],
+        "symbols": [__import__("dataclasses").asdict(s) for s in syms],
+        "references_count": 0,
         "unparsed": False,
     }
 

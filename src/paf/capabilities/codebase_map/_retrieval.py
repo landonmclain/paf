@@ -1,15 +1,18 @@
-"""Retrieval seam — the search-method extension point (BM25 first pass now live).
+"""Retrieval seam — the search-method extension point (tokens-backed now live).
 
 This is the *how queries are answered* seam (vs `_store.py`'s *where artifacts are
 stored* seam). ``RetrievalBackend`` is the designated drop point for a future
-semantic/vector backend; ``LexicalRetrieval`` is the default BM25-backed
-implementation (Phase 2 quick start, per Landon 2026-08-23): it loads the index
-(head) records and runs field-weighted BM25 rank over them, returning the universal
-``SearchHit`` shape. The resolved symbol graph + relationships (the key deliverable)
-replaces/augments this later.
+semantic/vector backend; ``LexicalRetrieval`` is the default implementation.
 
-``LexicalRetrieval`` reads only; it NEVER writes to storage (flat JSON stays the
-single source of truth).
+Under the LOCKED read-model (2026-08-23), ``search`` scores over **``tokens.json``**
+(the inverted, symbol-scoped search backend — name+sig+doc postings), presents the
+**``index`` HEAD** row for each surfaced file (path, language, module docstring,
+matched name lists), and dereferences ``manifest`` only on pick — progressive
+disclosure. Body text is deliberately not tokenized (grep-on-manifest / ``read_block``
+covers in-body). The lean head is the *presentation* layer, not the scoring source.
+
+``LexicalRetrieval`` reads only; it NEVER writes to storage (flat JSON stays the single
+source of truth).
 """
 
 from __future__ import annotations
@@ -17,9 +20,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol
 
-from ._rank import rank
-from ._schema import DistilledEntry, FileInfo, SearchHit
+from ._schema import DistilledEntry, SearchHit
 from ._store import ArtifactKind, FlatFileStorage
+from ._tokens import tokens_rank
 
 
 class RetrievalBackend(Protocol):
@@ -37,43 +40,13 @@ class RetrievalBackend(Protocol):
     def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry]: ...
 
 
-def _rehydrate(record: dict) -> FileInfo:
-    """Build a ``FileInfo`` from a raw manifest record dict (reverse of asdict)."""
-    from ._schema import SymbolInfo
-
-    syms: list[SymbolInfo] = []
-    for s in record.get("searchable_symbols") or []:
-        span = s.get("span")
-        syms.append(
-            SymbolInfo(
-                name=s.get("name", ""),
-                qualified=s.get("qualified"),
-                kind=s.get("kind", "OTHER"),
-                signature=s.get("signature"),
-                doc=s.get("doc"),
-                body=s.get("body"),
-                span=span,
-                visibility=s.get("visibility"),
-                children=[],
-                parent=s.get("parent"),
-            )
-        )
-    return FileInfo(
-        path=record.get("path", ""),
-        language=record.get("language"),
-        doc=record.get("doc"),
-        role=record.get("role"),
-        tags=record.get("tags") or [],
-        symbols=record.get("symbols") or [],
-        imports=record.get("imports") or [],
-        references_count=record.get("references_count", 0),
-        searchable_symbols=syms,
-        unparsed=record.get("unparsed", False),
-    )
-
-
 class LexicalRetrieval:
-    """Default: BM25 field-weighted search over the index (head) records (Phase 2 first pass)."""
+    """Default: field-weighted search over the ``tokens.json`` search backend.
+
+    Scores tokens (name > signature > doc) → annotates each hit with its ``index``
+    HEAD row (module-docstring head + matched name lists) → returns ``SearchHit``s
+    whose ``block`` collapses to the best-matched symbol's ``manifest_ref``.
+    """
 
     def __init__(
         self,
@@ -91,24 +64,35 @@ class LexicalRetrieval:
         scope: Any = None,
         limit: int = 20,
     ) -> list[SearchHit]:
-        """BM25-field-weighted lexical search over the index (head) records.
+        """Token-scored search over the search backend, presented as index heads.
 
-        ``mode`` is accepted for API compatibility; broad keyword ranking is the
-        Phase-2 first-pass behavior (exact/`callers`/graph modes come with the
-        graph phase). Reads the index artifact and ranks it.
+        ``mode`` is accepted for API compatibility; broad token ranking is the
+        Phase-3-adjacent first pass (exact/`callers`/graph modes come with the graph
+        phase). Scores ``tokens.json`` (the search backend) and presents each
+        surfaced file's lean ``index`` HEAD row (module docstring + matched names).
         """
-        records = self._index_records()
-        files = [_rehydrate(r) for r in records]
-        return rank(query, files, limit=limit)
+        tokens = self._tokens_payload()
+        return tokens_rank(query, tokens, limit=limit, heads=self._heads_by_path())
 
     def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry]:
         """STUB — ranked distilled map (Phase 4)."""
         raise NotImplementedError("distilled_map is not built until Phase 4")
 
-    def _index_records(self) -> list[dict]:
-        payload = self.storage.read(ArtifactKind.INDEX, self._scan_root())
-        records = (payload or {}).get("files", [])
-        return [r for r in records if isinstance(r, dict)]
+    # ---- reads --------------------------------------------------------------
+
+    def _tokens_payload(self) -> dict:
+        payload = self.storage.read(ArtifactKind.TOKENS, self._scan_root())
+        return payload if isinstance(payload, dict) else {}
+
+    def _heads_by_path(self) -> dict[str, dict]:
+        """Lean ``index`` HEAD rows keyed by path (the ``present the head`` layer)."""
+        index = self.storage.read(ArtifactKind.INDEX, self._scan_root())
+        rows = (index or {}).get("files", []) if isinstance(index, dict) else []
+        heads: dict[str, dict] = {}
+        for r in rows:
+            if isinstance(r, dict) and isinstance(r.get("path"), str):
+                heads[r["path"]] = r
+        return heads
 
     def _scan_root(self) -> Path:
         """The scan root we search. v1 is single-repo: explicit scan_root wins,

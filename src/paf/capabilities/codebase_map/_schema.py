@@ -68,8 +68,6 @@ class FileInfo:
     path: str  # repo-relative
     language: str | None = None
     doc: str | None = None  # module-level docstring (describes the whole file)
-    role: str | None = None  # role_guess/tags port from old rules
-    tags: list[str] = field(default_factory=list)
     symbols: list[str] = field(default_factory=list)  # name list
     imports: list[str] = field(default_factory=list)
     references_count: int = 0
@@ -78,6 +76,15 @@ class FileInfo:
     # produce symbols/imports (unknown/binary/oversized/unparseable). It is still
     # recorded so the corpus is complete and the file is stable, not "changed".
     unparsed: bool = False
+
+
+# The on-disk `index.json` HEAD is a LEAN serialization of a FileInfo — metadata +
+# module-docstring head + symbol NAME LISTS only (spec §3.2). The rich per-symbol
+# detail (body/signature/doc/span) lives in `manifest.json` (detail) and is
+# tokenized into `tokens.json` (search). `role`/`tags` were dropped from the design
+# (overview role_guess taxonomy removed); they are never populated.
+# We keep `FileInfo` rich in-memory (used by _analyze/_rank/_graph/tests) and emit
+# the lean head only at serialization time via `head_record()` (in _scan.py).
 
 
 @dataclass(frozen=True)

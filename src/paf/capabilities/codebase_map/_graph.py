@@ -86,13 +86,16 @@ def reference_counts(files: list[FileInfo]) -> dict[str, int]:
 
 
 def apply_references(files: list[dict]) -> None:
-    """Populate ``references_count`` on the index (head) records IN PLACE.
+    """Populate ``references_count`` on the manifest records IN PLACE.
 
-    ``files`` is the raw list of dict records as written by ``_scan.py``
-    (``asdict(FileInfo)`` each). Reads each record's ``symbols``/``imports``/
-    ``searchable_symbols`` to compute inbound counts, then sets
-    ``record["references_count"]`` on the *defining* record. Returns ``None``
-    (mutates the list so the caller's artifacts already carry the counts).
+    ``files`` is the raw list of dict records as written by ``_scan.py`` for
+    ``manifest.json`` (each carries full ``symbols`` as asdict(SymbolInfo) plus
+    ``imports``). Reads each record's ``symbols``/``imports`` to compute inbound
+    counts, then sets ``record['references_count']`` on the *defining* record.
+    Returns ``None`` (mutates the list so the caller's artifacts already carry the
+    counts). The scan driver then mirrors the counts onto the lean index HEAD rows
+    by path — reference counting needs symbol text, which the head deliberately
+    does not carry.
     """
     infos = [_fileinfo_from_record(r) for r in files]
     counts = reference_counts(infos)
@@ -101,17 +104,17 @@ def apply_references(files: list[dict]) -> None:
 
 
 def _fileinfo_from_record(record: dict) -> FileInfo:
-    """Build a ``FileInfo`` from a raw manifest dict record (reverse of asdict).
+    """Build a ``FileInfo`` from a raw manifest record dict (reverse of asdict).
 
-    Rehydrates ``searchable_symbols`` (stored as dicts) back into ``SymbolInfo``
-    objects so ``reference_counts`` can walk their fields uniformly, and keeps the
-    ``span`` as a ``Span`` when present. ``children``/``parent`` are dropped for
-    the count pass (references walk top-level field text, not the tree).
+    Rehydrates ``symbols`` (stored as full dicts) back into ``SymbolInfo`` objects so
+    ``reference_counts`` can walk their fields uniformly, and keeps the ``span`` as a
+    ``Span`` when present. ``children``/``parent`` are dropped for the count pass
+    (references walk top-level field text, not the tree).
     """
     from ._schema import Span, SymbolInfo
 
     syms: list[SymbolInfo] = []
-    for s in record.get("searchable_symbols") or []:
+    for s in record.get("symbols") or []:
         span = s.get("span")
         if isinstance(span, dict):
             span = Span(**{k: v for k, v in span.items() if k in ("start_byte", "end_byte", "start_line", "end_line")})
@@ -133,9 +136,7 @@ def _fileinfo_from_record(record: dict) -> FileInfo:
         path=record.get("path", ""),
         language=record.get("language"),
         doc=record.get("doc"),
-        role=record.get("role"),
-        tags=record.get("tags") or [],
-        symbols=record.get("symbols") or [],
+        symbols=[s.name for s in syms if s.name],
         imports=record.get("imports") or [],
         references_count=record.get("references_count", 0),
         searchable_symbols=syms,
