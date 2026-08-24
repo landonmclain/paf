@@ -287,6 +287,11 @@ class FlatFileStorage:
         here, and only for the range named. ``read_block`` (in ``_block.py``) handles
         the byte-slice and falls back to a line/whole read when offsets are absent.
         Returns ``None`` if the file doesn't exist.
+
+        Quirk of the seam: ``BlockRef.file`` reaching us must already be an **absolute**
+        path — the caller (the ``read_block`` tool) resolves the repo-relative pointer
+        against ``scan_root`` before crossing the seam, so a fully co-located backend
+        doesn't need its own scan_root to locate a file.
         """
         from ._block import read_block  # local import to avoid a cycle with _schema
 

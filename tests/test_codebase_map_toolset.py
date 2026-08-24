@@ -154,6 +154,51 @@ def test_read_block_path_escape_blocked(scanned: tuple[Path, CodebaseMapToolset]
     assert t.read_block("../outside.txt") is None
 
 
+class _FakeStorage(FlatFileStorage):
+    """Storage-seam fake: artifacts delegate to a real FlatFileStorage, but
+    ``read_block`` is fully overridden to serve canned bytes — proving the
+    toolset routes the pointer through the seam instead of touching the FS."""
+
+    def __init__(self, *, underlying: FlatFileStorage, canned: str):
+        self._underlying = underlying
+        self._canned = canned
+
+    # -- delegate artifact I/O to a real backend ---------------------------------
+    def read(self, kind, scan_root):
+        return self._underlying.read(kind, scan_root)
+
+    def write(self, kind, scan_root, payload):
+        self._underlying.write(kind, scan_root, payload)
+
+    def list_scan_roots(self):
+        return self._underlying.list_scan_roots()
+
+    def sync_changed(self, scan_root):
+        return self._underlying.sync_changed(scan_root)
+
+    # -- the point: source bytes come from THIS backend, not the local file ------
+    def read_block(self, block_ref) -> str | None:
+        return f"SERVED-BY-SEAM:{block_ref.file}"
+
+
+def test_read_block_routes_through_storage_seam(tmp_path: Path) -> None:
+    """A custom backend's read_block is honored: the toolset must NOT read the
+    local file directly, it must cross the seam (option 1 fix)."""
+    root = tmp_path / "project"
+    root.mkdir()
+    _seed(root, "src/a.py", "def f():\n    return 1\n")
+
+    real = FlatFileStorage()
+    fake = _FakeStorage(underlying=real, canned="SERVED")
+    t = CodebaseMapToolset(scan_root=root, storage=fake)  # type: ignore[arg-type]
+
+    out = t.read_block("src/a.py")
+    assert out is not None
+    assert out.startswith("SERVED-BY-SEAM:")
+    # the seam got the root-resolved absolute path, and the escape guard passed
+    assert (root / "src/a.py").resolve().as_posix() in out
+
+
 # ------------------------------------------------------------- search_codebase
 
 

@@ -28,7 +28,7 @@ from pathlib import Path
 
 from pydantic_ai.toolsets import FunctionToolset
 
-from ._block import read_block as _read_block_source
+from ._block import BlockRef
 from ._overview import build_overview, load_overview
 from ._retrieval import LexicalRetrieval
 from ._schema import Span
@@ -164,7 +164,7 @@ class CodebaseMapToolset(FunctionToolset):
         Returns ``None`` if the file does not exist.
         """
         file_part, _, line_part = block_ref.partition(":")
-        span: Span | None = None
+        span: Span = Span()
         if line_part:
             try:
                 a, _, b = line_part.partition("-")
@@ -173,14 +173,16 @@ class CodebaseMapToolset(FunctionToolset):
                     start_line=int(a), end_line=int(b) if b else int(a),
                 )
             except ValueError:
-                span = None
-        # resolve repo-relative path against the scan root, then read exact bytes
+                span = Span()  # unparseable range -> whole-file read
+        # resolve the repo-relative path against the scan root (with an escape guard),
+        # then cross the storage seam: the backend reads the exact source bytes.
         full = (self._scan_root / file_part).resolve()
         try:
             full.relative_to(self._scan_root)
         except ValueError:
             return None
-        return _read_block_source(full, span, limit_bytes=_MAX_SNIPPET_BYTES)
+        ref = BlockRef(file=str(full), span=span)
+        return self._storage.read_block(ref)
 
     def search_codebase(self, query: str, limit: int = 20) -> str:
         """Search the codebase for ``query`` and return the top hits.

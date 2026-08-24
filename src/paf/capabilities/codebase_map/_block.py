@@ -7,8 +7,10 @@ that materializes only the exact range a pointer names, on demand. This is the
 files.
 
 ``read_block`` here works on an **absolute** file path plus a ``Span``. The storage seam
-(``FlatFileStorage.read_block``) resolves the repo-relative ``BlockRef.file`` against
-``scan_root`` before delegating here (or callers pass an absolute path directly).
+(``FlatFileStorage.read_block``) receives a ``BlockRef`` whose ``file`` the caller has
+already resolved to an absolute path (the ``read_block`` tool resolves the repo-relative
+pointer against ``scan_root`` before crossing the seam) — or callers pass an absolute
+path directly.
 """
 
 from __future__ import annotations
