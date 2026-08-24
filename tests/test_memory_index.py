@@ -652,3 +652,148 @@ def test_run_consolidation_no_changes_when_clean(tmp_path) -> None:
     assert asyncio.run(run_consolidation(IndexStore(tmp_path))) == "no changes"
 
 
+# ---------------------------------------------------------------------------
+# Real-index regression fixtures — the exact dup shapes found live in
+# data/memory/memory-index.json (2026-08) that the single same-(type,subject)
+# rule MISSED because the organizer re-typed one fact across runs.
+# ---------------------------------------------------------------------------
+
+
+_REVIEW_FACT = (
+    "Landon is reviewing the paf codebase for poor code and doc/code "
+    "conflicts, starting with ui/web.py and then moving to runtime.py."
+)
+# The live triplet: identical sentence saved as three different types
+# (preference / current / task), all subject='Landon' — mem-8, mem-9, mem-10.
+_REVIEW_TRIPLET = [
+    ("preference", "Landon"),
+    ("current", "Landon"),
+    ("task", "Landon"),
+]
+
+
+def _seed(store, rows) -> None:
+    """Seed an index via the low-level Stage/NewDecision path (bypasses the
+    index_new guard, so it can store near-dup rows the guard would reject)."""
+    from paf.capabilities.memory._organize import NewDecision, Stage
+
+    stage = Stage(store)
+    for i, (type_, subject, fact) in enumerate(rows, start=1):
+        stage.apply(NewDecision(
+            line_no=i, type=type_, subject=subject, fact=fact,
+            born_on="2026-08-21T00:00:00+00:00", source_ref="run:0",
+        ))
+    stage.finalize(len(rows))
+
+
+def test_consolidation_folds_exact_verbatim_type_split_triplet(tmp_path) -> None:
+    """The mem-8/9/10 LIVE case: one verbatim sentence saved as preference /
+    current / task (same subject). The old same-(type,subject) rule saw three
+    separate buckets and never merged them; the verbatim tier must fold them
+    into one cluster."""
+    from paf.capabilities.memory._organize import (
+        IndexStore,
+        _find_consolidation_candidates,
+    )
+
+    store = IndexStore(tmp_path)
+    _seed(store, [(t, s, _REVIEW_FACT) for t, s in _REVIEW_TRIPLET])
+
+    clusters = _find_consolidation_candidates(store.load())
+    member_sets = sorted(sorted(e.id for e in c) for c in clusters)
+    # All three, regardless of their differing type labels, are one cluster.
+    assert member_sets == [["mem-1", "mem-2", "mem-3"]]
+
+
+def test_index_new_blocks_verbatim_restate_as_different_type(tmp_path) -> None:
+    """Adding the identical sentence but with a different `type` must be
+    rejected as a near-dup (verbatim tier), pointing at the existing entry —
+    not slipped through because the type label differs."""
+    import asyncio
+
+    from pydantic_ai import ModelRetry
+
+    from paf.capabilities.memory._organize import (
+        IndexStore,
+        _build_index_toolset,
+    )
+
+    store = IndexStore(tmp_path)
+    # Seed preference/Landon, then have a fresh toolset try task/Landon.
+    _seed(store, [("preference", "Landon", _REVIEW_FACT)])
+    ts = _build_index_toolset()(store)
+    try:
+        asyncio.run(ts.add_new(
+            {}, line_no=9, type="task", subject="Landon",
+            fact=_REVIEW_FACT,
+            born_on="2026-08-21T00:00:00+00:00", source_ref="run:1",
+        ))
+    except ModelRetry as e:
+        assert "mem-1" in str(e)
+        assert "index_confirm" in str(e) and "index_supersede" in str(e)
+    else:
+        raise AssertionError("verbatim restate with a different type was NOT blocked")
+
+
+def test_consolidation_near_verbatim_type_split_pair(tmp_path) -> None:
+    """The mem-40/43 LIVE case: two near-identical statements (overlap ~0.89)
+    typed fact vs event, same subject 'paf'. Verbatim tier must cluster them."""
+    from paf.capabilities.memory._organize import (
+        IndexStore,
+        _find_consolidation_candidates,
+    )
+
+    fact_a = (
+        "User's memory organizer was putting in the wrong memory type and "
+        "crashing instead of catching the error."
+    )
+    fact_b = (
+        "The user diagnosed a recurring error in paf: the memory organizer was "
+        "writing the wrong memory type and crashing instead of catching the "
+        "error — a bug in the memory layer, separate from the delegation "
+        "architecture."
+    )
+    store = IndexStore(tmp_path)
+    _seed(store, [
+        ("fact", "paf", fact_a),
+        ("event", "paf", fact_b),
+    ])
+
+    clusters = _find_consolidation_candidates(store.load())
+    member_sets = sorted(sorted(e.id for e in c) for c in clusters)
+    assert member_sets == [["mem-1", "mem-2"]]
+
+
+def test_consolidation_semantic_gap_not_clustered(tmp_path) -> None:
+    """Known limitation, documented: semantically-same-but-lexically-disjoint
+    facts (the get_repo_map LIVE shape) are NOT clustered by the lexical
+    tiers. Guards the boundary so a future semantic tier doesn't regress it
+    accidentally in either direction."""
+    from paf.capabilities.memory._organize import (
+        IndexStore,
+        _find_consolidation_candidates,
+    )
+
+    fact_a = (
+        "The project has a planned tool `get_repo_map` (codebase_map) marked "
+        "[NOT BUILT (Phase 4)]: a real, deliberate tool that pulls repo "
+        "artifacts into an overview but cannot hallucinate a manifest it did "
+        "not build."
+    )
+    fact_b = (
+        "The project has a get_repo_map tool that is NOT BUILT (Phase 4), "
+        "still live in the visible tool list alongside implemented tools."
+    )
+    # fact_b is a near-restatement of fact_a but shares little vocabulary;
+    # lexically they overlap well below the thresholds (deliberate gap).
+    store = IndexStore(tmp_path)
+    _seed(store, [
+        ("fact", "paf", fact_a),
+        ("fact", "paf", fact_b),
+    ])
+
+    clusters = _find_consolidation_candidates(store.load())
+    assert clusters == []  # correctly NOT merged by the lexical metric
+
+
+

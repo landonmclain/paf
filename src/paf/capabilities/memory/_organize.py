@@ -624,6 +624,14 @@ def render_index_text(entries: list[IndexEntry]) -> str:
 # "short fact fully contained in a richer one" shape (mem-2 vs mem-31-style,
 # high containment, low Jaccard) are caught.
 _NEAR_MATCH_THRESHOLD = 0.60
+# Overlap above which two facts are treated as the SAME statement even when
+# the organizer typed them differently (e.g. one as `preference/Landon`, the
+# next as `task/Landon`, the next as `current/Landon` — all the identical
+# sentence). At this overlap the surface wording is effectively verbatim, so
+# the type label is an organizer inconsistency, not a semantic distinction.
+# Same SUBJECT is still required (a near-identical sentence is only a dup of
+# the same topic, not of an unrelated subject that happens to share words).
+_VERBATIM_THRESHOLD = 0.85
 # Tokens too generic to discriminate facts (articles, auxiliaries, "has/a/the"…).
 _STOP = frozenset(
     "a an the and or but of to in for on with is are was were be been "
@@ -674,22 +682,44 @@ def _near_match(entries: list[IndexEntry], fact: str, *, type: str | None = None
     match means the model should have called ``index_confirm``/``index_supersede``
     against that entry instead of a fresh ``index_new``.
 
-    When ``type``/``subject`` are given, only entries of the SAME type and
-    subject are candidates (removes cross-topic false positives like a fact
-    about \"paf\" vs one about \"Hope Technologies\" that happen to share a few
-    generic tokens).
+    Matching is two-tier:
+
+    * **Verbatim tier** — any entry of the same ``subject`` whose fact overlaps
+      ``fact`` above ``_VERBATIM_THRESHOLD`` matches regardless of ``type``.
+      A re-phrasing that close is the same statement and the exact duplicate
+      triplet (one fact saved as ``preference``/``current``/``task``) is the
+      canonical case: the type labels differ but the text is identical.
+    * **Near tier** — otherwise, only entries of the SAME ``type`` and
+      ``subject`` with overlap above ``_NEAR_MATCH_THRESHOLD`` are candidates
+      (removes cross-topic false positives like a fact about ``paf`` vs one
+      about ``Hope Technologies`` that happen to share generic tokens).
     """
     tokens = _fact_tokens(fact)
     if not tokens:
         return None
+
+    def _score(e: IndexEntry, *, require_same_type: bool) -> float:
+        if subject is not None and e.subject != subject:
+            return 0.0
+        if require_same_type and type is not None and e.type != type:
+            return 0.0
+        return _overlap(tokens, _fact_tokens(e.fact))
+
+    # Verbatim tier first (type-insensitive, same subject).
+    best_verbatim: IndexEntry | None = None
+    best_vscore = _VERBATIM_THRESHOLD
+    for e in entries:
+        score = _score(e, require_same_type=False)
+        if score > best_vscore:
+            best_verbatim, best_vscore = e, score
+    if best_verbatim is not None:
+        return best_verbatim
+
+    # Near tier (same type + subject).
     best: IndexEntry | None = None
     best_score = _NEAR_MATCH_THRESHOLD
     for e in entries:
-        if type is not None and e.type != type:
-            continue
-        if subject is not None and e.subject != subject:
-            continue
-        score = _overlap(tokens, _fact_tokens(e.fact))
+        score = _score(e, require_same_type=True)
         if score > best_score:
             best, best_score = e, score
     return best
@@ -700,16 +730,50 @@ def _find_consolidation_candidates(
 ) -> list[list[IndexEntry]]:
     """Return connected near-duplicate clusters in ``entries`` (empty if none).
 
-    A cluster is a group of entries of the SAME ``type`` and ``subject`` whose
-    facts pairwise exceed the near-match overlap — i.e. they say the same thing
-    and only one should survive. Used by the organizer's second (consolidation)
-    pass to know which legacy/accumulated entries to fold together via
-    ``supersede`` + ``prune``.
+    A cluster is a group of entries that say the same thing and of which only
+    one should survive. Used by the organizer's second (consolidation) pass to
+    know which legacy/accumulated entries to fold together via ``supersede`` +
+    ``prune``.
+
+    Matching is two-tier, mirroring ``_near_match``:
+
+    * **Verbatim tier** — any two entries of the SAME ``subject`` whose facts
+      overlap above ``_VERBATIM_THRESHOLD`` cluster regardless of ``type``.
+      Catches the real-world exact-duplicate triplet (one fact saved as
+      ``preference/Landon``, ``current/Landon`` and ``task/Landon`` — identical
+      text, different type labels) and near-verbatim type-split pairs.
+    * **Near tier** — two entries of the SAME ``type`` and ``subject`` with
+      overlap above ``_NEAR_MATCH_THRESHOLD`` cluster (near-verbatim
+      paraphrases within one topic).
 
     Grouping is transitive (union-find): if A~B and B~C, all three form one
     cluster even if A and C are individually weaker matches, so a chain of
     paraphrases doesn't leave stragglers.
+
+    Known limitation: sematically-equivalent facts stated with disjoint
+    vocabulary (e.g. ``get_repo_map`` entries worded from different angles)
+    are NOT clustered — the lexically-based tiers above cannot see them. They
+    are a deliberate non-goal for now; see design notes.
     """
+    overlaps: dict[tuple[str, str], float] = {}
+    by_id: dict[str, IndexEntry] = {e.id: e for e in entries}
+    ids = [e.id for e in entries]
+    toks = {e.id: _fact_tokens(e.fact) for e in entries}
+
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = by_id[ids[i]], by_id[ids[j]]
+            ov = _overlap(toks[a.id], toks[b.id])
+            if ov <= _NEAR_MATCH_THRESHOLD:
+                continue
+            same_subject = a.subject == b.subject
+            same_type = a.type == b.type
+            # Verbatim tier: same subject, type-insensitive (catch type-split
+            # exact dups). Near tier: same type AND subject.
+            if (same_subject and ov > _VERBATIM_THRESHOLD) or \
+               (same_subject and same_type and ov > _NEAR_MATCH_THRESHOLD):
+                overlaps[(a.id, b.id)] = ov
+
     parent: dict[str, str] = {}
 
     def find(x: str) -> str:
@@ -724,17 +788,8 @@ def _find_consolidation_candidates(
         if ra != rb:
             parent[ra] = rb
 
-    by_key: dict[tuple[str, str], list[IndexEntry]] = {}
-    for e in entries:
-        by_key.setdefault((e.type, e.subject), []).append(e)
-
-    for _key, group in by_key.items():
-        toks = {e.id: _fact_tokens(e.fact) for e in group}
-        ids = [e.id for e in group]
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                if _overlap(toks[ids[i]], toks[ids[j]]) > _NEAR_MATCH_THRESHOLD:
-                    union(ids[i], ids[j])
+    for (a, b) in overlaps:
+        union(a, b)
 
     roots: dict[str, list[IndexEntry]] = {}
     for e in entries:
