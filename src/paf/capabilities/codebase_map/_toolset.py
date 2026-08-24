@@ -132,10 +132,13 @@ class CodebaseMapToolset(FunctionToolset):
           docstring, and its symbol NAME list (no bodies).
         - ``lookup_file(path, symbol=X)``          → just that symbol's head
           (name/kind/span) from the manifest.
-        - ``lookup_file(path, detail=True)``       → the file's full manifest block:
-          every symbol's docstring/signature/span.
+        - ``lookup_file(path, detail=True)``       → the file's manifest block as
+          METADATA: every symbol's kind/signature/docstring/span — **no bodies**, so
+          it stays bounded no matter how big the file is. Use ``read_block`` or the
+          symbol form for actual source/body text.
         - ``lookup_file(path, symbol=X, detail=True)`` → that symbol's full manifest
-          entry (docstring/signature/body/span).
+          entry **including its body** (docstring/signature/body/span) — the bounded
+          "read one symbol" form.
 
         ``path`` is repo-relative. Returns ``None`` for an unknown path/symbol.
         This is a *jump* to a known location — prefer ``get_overview`` to discover
@@ -306,7 +309,7 @@ class CodebaseMapToolset(FunctionToolset):
         if not syms:
             out.append("(no symbols)")
         for s in syms[: _MAX_LOOKUP_SYMBOLS]:
-            out.append(self._symbol_block(s))
+            out.append(self._symbol_meta(s))
         if len(syms) > _MAX_LOOKUP_SYMBOLS:
             out.append(f"... {len(syms) - _MAX_LOOKUP_SYMBOLS} more symbols")
         return "\n".join(out)
@@ -321,24 +324,36 @@ class CodebaseMapToolset(FunctionToolset):
         return f"{path}#{symbol}  ({sym.get('kind', '?')}{span})"
 
     def _format_symbol_manifest(self, manifest: dict | None, symbol: str, path: str) -> str | None:
+        """A single symbol's full manifest entry — INCLUDING its body.
+
+        The bounded "read one symbol" form: only the requested symbol's source/body is
+        returned, so it can't blow up context the way a whole-file dump can. Body text
+        is the weight-1 search field from the manifest (see _symbol_block)."""
         if manifest is None:
             return None
         sym = self._find_symbol(manifest.get("symbols") or [], symbol)
         if sym is None:
             return None
-        out = [f"# {path}#{symbol}"]
-        if sym.get("kind"):
-            out.append(f"kind: {sym['kind']}")
-        span = self._span_str(sym.get("span"))
-        if span:
-            out.append(f"span: {span}")
-        if sym.get("signature"):
-            out.append(f"signature: {sym['signature']}")
-        if sym.get("doc"):
-            out.append(f"docstring: {sym['doc']}")
-        return "\n".join(out)
+        return self._symbol_block(sym)
+
+    def _symbol_meta(self, s: dict) -> str:
+        """A symbol's manifest METADATA (kind/signature/docstring/span) — **no body**.
+
+        Used for the whole-file ``detail=True`` form, which must stay bounded no
+        matter how large the file is. Body/source text is served by ``read_block`` or
+        the single-symbol form (``_symbol_block``)."""
+        name = s.get("name", "?")
+        kind = s.get("kind", "?")
+        span = self._span_str(s.get("span"))
+        block = [f"## {name} ({kind}{span})"]
+        if s.get("signature"):
+            block.append(f"  {s['signature']}")
+        if s.get("doc"):
+            block.append(f"  {s['doc']}")
+        return "\n".join(block)
 
     def _symbol_block(self, s: dict) -> str:
+        """A symbol's full manifest entry including its body — the single-symbol form."""
         name = s.get("name", "?")
         kind = s.get("kind", "?")
         span = self._span_str(s.get("span"))

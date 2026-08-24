@@ -106,21 +106,26 @@ def test_lookup_file_unknown_path_is_none(scanned: tuple[Path, CodebaseMapToolse
     assert t.lookup_file("src/missing.py") is None
 
 
-def test_lookup_file_detail_has_signature_and_body(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_detail_has_signature_no_body(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    # Whole-file detail is METADATA only (kind/signature/docstring/span) — no bodies.
+    # It must stay bounded no matter the file size; source/body comes from read_block
+    # or the single-symbol form. See the lookup_file docstring contract.
     _, t = scanned
     out = t.lookup_file("src/a.py", detail=True)
     assert out is not None
     assert "make" in out
     assert "tool: str" in out  # signature
-    assert "made-" in out  # body text present
+    assert "made-" not in out  # body text must NOT be dumped
 
 
-def test_lookup_file_symbol_detail(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_symbol_detail_has_body(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    # The single-symbol form DOES include the body — the bounded "read one symbol".
     _, t = scanned
     out = t.lookup_file("src/a.py", symbol="helper", detail=True)
     assert out is not None
     assert "helper" in out
     assert "x: int" in out or "Add one" in out
+    assert "return x + 1" in out  # the specific symbol's body is present
 
 
 # ------------------------------------------------------------------ read_block
