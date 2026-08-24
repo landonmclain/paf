@@ -56,16 +56,6 @@ _COMPACTION_CAPABILITY = "Compaction"
 # consolidation owner and the assistant always target the same store.
 _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
-# Egress allowlist for the PlaywrightBrowser demo: local dev hosts only. The
-# docstring on allowed_domains matches each entry's exact host + subdomains
-# (port-independent), so these cover any port on loopback — e.g. the paf web UI
-# at 127.0.0.1:8080 or a Vite/dev-server on localhost. `block_private_addresses`
-# stays True, so the default policy STILL refuses the cloud-metadata endpoint,
-# RFC 1918 LAN ranges, and other non-globally-routable addresses: only the
-# loopback dev hosts named here are reachable, everything else stays locked down.
-# Extend this list when a local/staging host needs to be browsable.
-_PLAYWRIGHT_ALLOWED_DOMAINS = ["localhost", "127.0.0.1", "::1"]
-
 
 def _build_memory(store) -> Memory:
     """M2 journal-view durable memory, INJECT-ONLY for the assistant.
@@ -214,15 +204,17 @@ def _build_playwright(store) -> PlaywrightBrowser:
     browser to launch at all. This is an environment-dependent escape hatch, not
     a recommendation to weaken isolation — revisit when userns is enabled.
 
-    `block_private_addresses=True` (the default) STAYS on: the loopback dev
-    hosts in `_PLAYWRIGHT_ALLOWED_DOMAINS` are the ONLY private addresses
-    reachable. The cloud-metadata endpoint and LAN RFC-1918 ranges remain
-    refused, so SSRF defense is preserved while still browsing local sites.
+    `block_private_addresses=True` (the default) STAYS on: the hosts in
+    `settings.playwright_allowed_domains` (PLAYWRIGHT_ALLOWED_DOMAINS / .env —
+    configurable outside code) are the ONLY addresses reachable. The
+    cloud-metadata endpoint and LAN RFC-1918 ranges remain refused, so SSRF
+    defense is preserved while still browsing the allowlisted local/staging
+    sites.
     """
     return PlaywrightBrowser(
         headless=True,
         block_private_addresses=True,
-        allowed_domains=_PLAYWRIGHT_ALLOWED_DOMAINS,
+        allowed_domains=settings.playwright_allowed_domains,
         auto_install_chromium=False,
         chromium_sandbox=False,
     )

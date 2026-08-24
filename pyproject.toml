@@ -25,6 +25,14 @@ dependencies = [
     "rich",
     "python-dotenv",
     "typing-extensions",
+    # The Web capability (src/paf/capabilities/web/) — search_web_docs /
+    # search_official_docs / fetch_web_page — calls TavilyClient lazily at call
+    # time. Declared here (not ad-hoc) so `uv sync` stops silently dropping it
+    # from the venv; it was ad-hoc-only since the capability landed (2705c42),
+    # so the first `uv sync` after the 22bd6f4 upgrade purged it and the tools
+    # degraded to "tavily-python is not installed". Same rule as gradio below:
+    # no package the repo's own code imports may be ad-hoc only.
+    "tavily-python",
 ]
 
 [build-system]

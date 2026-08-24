@@ -65,6 +65,16 @@ class Settings(BaseSettings):
     # .env. Not the spec'd subject model, and NOT hardcoded in source.
     organize_model: str = ""
 
+    # Egress allowlist for the PlaywrightBrowser capability (build.py
+    # `_build_playwright` → `allowed_domains`). Local dev hosts by default so
+    # the headless browser can reach loopback (paf web UI / Vite); add an
+    # external staging/known host here (PLAYWRIGHT_ALLOWED_DOMAINS / .env, a
+    # JSON-encoded list, e.g. ["localhost","example.com"]) to let the browser
+    # navigate it too.
+    # `block_private_addresses=True` stays on regardless, so only these named
+    # hosts are reachable — keep the list as small as SSRF exposure allows.
+    playwright_allowed_domains: list[str] = ["localhost", "127.0.0.1", "::1"]
+
     # OpenRouter routing pin for the memory organizer, mirroring the `consol_*`
     # knobs (provider-order + quantization hard filter). Defaults to the owner's
     # provider order + fp8; set empty (ORGANIZE_PROVIDER_ORDER='') to disable
