@@ -10,7 +10,8 @@ Planned (per Codebase-Map-Capability-Spec § `_capability.py`): a `@dataclass`
 - `dependencies: set[str] | None` (tool dependency allowlist)
 
 Implements `from_spec` / `get_serialization_name` / `get_instructions` and exposes the
-toolset (search_codebase + get_repo_map). None of that is built in Phase 0 — Phase 0 is
+toolset (the locked navigation-first surface: get_overview + lookup_file + read_block +
+search_codebase + get_repo_map). None of that is built in Phase 0 — Phase 0 is
 storage + schema + eval shell only. This module exists so the full package layout is
 visible up front (per Landon: stub all files in Phase 0). Considered a stub until the
 capability is assembled in a later phase.
