@@ -31,11 +31,25 @@ _FIELD_WEIGHTS: dict[str, float] = {
     "doc": 2.0,
 }
 
+# High-frequency English function words that carry no search signal (Landon
+# 2026-08-23: tokens were "too verbose" — postings counted 25% stopwords).
+# Filtered at tokenize time in ``_tok`` so index BUILD and QUERY see the same
+# vocabulary (a stopword-only query must not match the same stopword in the
+# index). Curated conservatively: only unambiguous envelope words, never
+# meaningful identifiers (e.g. ``set``, ``get``, ``run``, ``call`` stay).
+_STOPWORDS: frozenset[str] = frozenset(
+    """a an and are as at be but by for from in is it of on or that the there this to was will with then than when where while your their its so such etc not if else elif i we you our they them me my his her no yes do does did has have had been being can could should would may might must into over under about up down out off again further once here all any both each few more most other some only own same too very just also however therefore because whereas whether although yet since during before after unless until despite still almost between among within without through above below around behind beside beyond inside outside near opposite across along""".split()
+)
+
+# Drop single/double-character tokens (``a``, ``to``, ``in``, ``is``, ``h``,
+# ``_``) — never query-worthy, pure index bloat.
+_MIN_TOKEN_LEN = 2
+
 
 def _tok(text: str) -> list[str]:
     from paf.capabilities.search._ranking import tokenize
 
-    return tokenize(text)
+    return [t for t in tokenize(text) if len(t) > _MIN_TOKEN_LEN and t not in _STOPWORDS]
 
 
 def build_tokens(files: list[FileInfo]) -> dict[str, Any]:

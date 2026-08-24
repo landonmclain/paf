@@ -47,7 +47,7 @@ def _sym(name: str, kind: str = "FUNCTION", **kw) -> SymbolInfo:
 def test_build_tokens_symbol_scoped_with_field_tags() -> None:
     fi = _fi(
         "a.py",
-        [_sym("widget", signature="def widget(a, b)", doc="make a widget")],
+        [_sym("widget", signature="def widget(maker, tool)", doc="make a widget")],
     )
     tok = build_tokens([fi])["files"]["a.py"]
     # the symbol name appears as a name-field posting
@@ -57,12 +57,34 @@ def test_build_tokens_symbol_scoped_with_field_tags() -> None:
     sig_posts = tok.get("widget", [])  # 'widget' appears in name + signature
     assert any(p["field"] == "signature" for p in sig_posts)
     # a signature-only word is tagged signature
-    assert any(p["field"] == "signature" for p in tok.get("a", []))
+    assert any(p["field"] == "signature" for p in tok.get("maker", []))
     # a doc-only word is tagged doc
     assert any(p["field"] == "doc" and p["symbol"] == "widget" for p in tok.get("make", []))
     # every posting carries a manifest_ref pointing at the symbol's block
     for post in tok.get("widget", []):
         assert post["manifest_ref"] == {"start_line": 3, "end_line": 10}
+
+
+def test_build_tokens_filters_stopwords_and_short_tokens() -> None:
+    fi = _fi(
+        "a.py",
+        [_sym("widget", doc="there is a widget in the systemzone")],
+    )
+    tok = build_tokens([fi])["files"]["a.py"]
+    # envelope words and short tokens are dropped from the index...
+    for noise in ("there", "is", "a", "in", "the"):
+        assert noise not in tok
+    # ...while the signal words survive
+    assert "widget" in tok and "systemzone" in tok
+
+
+def test_tokens_rank_stopword_query_is_empty() -> None:
+    # a query that is only stopwords must not match anything (vocabulary parity
+    # between build and query keeps a stopword-only query from matching the
+    # same stopword in the index)
+    a = _fi("a.py", [_sym("widget", doc="the there is")])
+    hits = tokens_rank("the there is", build_tokens([a]))
+    assert hits == []
 
 
 def test_build_tokens_excludes_body() -> None:
