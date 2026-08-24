@@ -75,6 +75,19 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
     memory_namespace: str = field(default="", kw_only=True)
     """Optional namespace prefix for the shared memory scope."""
 
+    # Monotonic rate-limit gate: the highest ``find_safe_cutoff`` (about-to-
+    # evict prefix) that has already been folded into durable memory by this
+    # window instance. The harness drives ``compact`` once per model request
+    # (before every tool round-trip), so a long tool-heavy turn can cross the
+    # token trigger several times and call ``compact`` repeatedly. Without a
+    # gate, each call would re-run the full owner->organizer->render LLM chain
+    # on the same/overlapping evictable slice (witnessed: 5 consolidations in
+    # one turn). Consolidation is made monotonic: we only fold when the
+    # about-to-evict prefix extends BEYOND what we already folded — i.e. when
+    # genuinely new material has accumulated. Re-invoking on a cutoff at or
+    # below the last folded point is a no-op (still trims, just skips memory).
+    _consolidated_cutoff: int | None = field(default=None, init=False, repr=False)
+
     async def compact(
         self,
         messages: list[ModelMessage],
@@ -89,9 +102,15 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         **index renderer** writes the root ``MEMORY.md`` from the index — the
         deduped view the assistant's read-only ``JournalViewStore`` injects.
         The journal render is NOT used here: the index is the curated source.
+
+        Consolidation is rate-limited to once per *eviction generation*: it
+        fires only when the about-to-evict prefix is longer than the last one
+        folded (fresh material), never on repeated calls over the same slice.
         """
         cutoff = find_safe_cutoff(messages, self.keep_messages)
-        if cutoff > 0:
+        if cutoff > 0 and (
+            self._consolidated_cutoff is None or cutoff > self._consolidated_cutoff
+        ):
             from ._consolidate import consolidate
             from ._journal import JournalStore
             from ._organize import IndexStore, run_consolidation, run_organizer
@@ -120,6 +139,7 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
                 index_store,
                 str(Path(self.memory_directory) / "MEMORY.md"),
             )
+            self._consolidated_cutoff = cutoff
         return await super().compact(messages, ctx)
 
     def _build_memory_store(self):

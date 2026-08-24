@@ -97,10 +97,13 @@ model_settings:
 # All keys optional; unset -> the builder's benchmark-tuned defaults.
 #
 # target_tokens: live-history size (tokens) that triggers compaction to start
-#   escalating. 20000 tokens (~80k chars at 4 chars/token) — normal demo turns
-#   stay well under this, so eviction only fires on genuinely long conversations
-#   instead of every request (the 2500 probe fired up to 3x per turn). At ~1/15
-#   of the 300k context, still conservative; can push toward ~50k later.
+#   escalating. 50000 tokens (~200k chars at 4 chars/token) — raised from 20000
+#   on 2026-08-24: at 20k a normal tool-heavy turn sat AT the ceiling and
+#   oscillated across it with every tool result, so `TieredCompaction` (which
+#   fires on `target_tokens` alone, bypassing per-tier triggers) re-ran the
+#   consolidation ladder repeatedly in ONE turn (witnessed 5x). 50k is ~1/6 of
+#   the 300k context — eviction only fires on genuinely huge turns. Can push
+#   further (e.g. ~100k) if heavy turns still oscillate.
 # window_max_messages / window_keep_messages: window trigger / tail. The
 #   sliding window keeps the 5 most-recent messages (+1 preserved first prompt)
 #   and drops the rest, so eviction trims hard and consolidation replays the
@@ -122,7 +125,7 @@ model_settings:
 #   M2 JournalStore + write_render, matching the benchmark path), so durable
 #   facts survive eviction instead of being lost.
 compact:
-  target_tokens: 20000
+  target_tokens: 50000
   window_max_messages: 150
   window_keep_messages: 5
   clear_tool_max_tokens: 5000

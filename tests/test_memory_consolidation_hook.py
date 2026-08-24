@@ -51,9 +51,11 @@ class _Gotcha:
         self.cutoff: int | None = None
         self.passed_messages: int = 0
         self.keep_tail: int = 0
+        self.call_count: int = 0
 
     async def __call__(self, messages, *, store, agent_name, namespace, keep_tail, journal=None):
         # Record exactly what _window.compact handed over.
+        self.call_count += 1
         self.passed_messages = len(messages)
         self.keep_tail = keep_tail
         self.cutoff = find_safe_cutoff(messages, keep_tail)
@@ -192,3 +194,57 @@ def test_compaction_hook_noop_when_nothing_to_evict(tmp_path, monkeypatch):
     # No consolidation, no memory write.
     assert got.cutoff is None, "consolidation must NOT fire when nothing is evicted"
     assert not (store_dir / "MEMORY.md").exists()
+
+
+def test_compaction_hook_rate_limits_within_one_turn(tmp_path, monkeypatch):
+    """Consolidation is rate-limited to once per eviction generation.
+
+    The harness drives `compact` once per model request, so a long tool-heavy turn
+    can cross the token trigger repeatedly and call `compact` several times over
+    roughly the same history (witnessed: 5 consolidations in one turn). The window
+    must fold the about-to-evict slice into memory only when it extends BEYOND what
+    was last folded — a repeat call over the same/smaller cutoff is a no-op (the
+    plain window still trims, but memory is not re-written).
+    """
+    store_dir = tmp_path / "memory"
+    store_dir.mkdir()
+
+    window = MemoryConsolidationWindow(
+        max_messages=5,
+        keep_messages=2,
+        memory_directory=str(store_dir),
+        memory_agent="assistant",
+    )
+
+    got = _Gotcha(store_dir)
+    monkeypatch.setattr(
+        "paf.capabilities.memory._consolidate.consolidate", got, raising=True
+    )
+    monkeypatch.setattr(
+        "paf.capabilities.memory._organize.run_organizer", _stub_organizer
+    )
+
+    fake_ctx = types.SimpleNamespace(messages=[], model=None)
+
+    # 1st fire: 8 messages -> cutoff 6, consolidates (fresh material).
+    m8 = _make_messages(8)
+    fake_ctx.messages = m8
+    asyncio.run(window.compact(m8, fake_ctx))  # type: ignore[arg-type]
+    assert got.cutoff == 6
+    assert got.call_count == 1
+
+    # 2nd fire, same turn: history re-inflated to the same size (a tool result
+    # pushed the estimate back over the token trigger). cutoff 6 is NOT beyond
+    # the last folded cutoff -> memory must NOT be re-consolidated.
+    m8b = _make_messages(8)
+    fake_ctx.messages = m8b
+    asyncio.run(window.compact(m8b, fake_ctx))  # type: ignore[arg-type]
+    assert got.call_count == 1, "repeat consolidation over same cutoff must be skipped"
+
+    # 3rd fire: genuinely new material accumulated (12 messages). cutoff 10
+    # exceeds the last folded 6 -> consolidates the newly-evictable prefix.
+    m12 = _make_messages(12)
+    fake_ctx.messages = m12
+    asyncio.run(window.compact(m12, fake_ctx))  # type: ignore[arg-type]
+    assert got.cutoff == 10
+    assert got.call_count == 2
