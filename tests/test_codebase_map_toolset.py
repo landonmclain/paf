@@ -66,13 +66,26 @@ def scanned(tmp_path: Path) -> tuple[Path, CodebaseMapToolset]:
 # ------------------------------------------------------------------ get_overview
 
 
-def test_get_overview_shows_tree(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_shows_nested_tree(scanned: tuple[Path, CodebaseMapToolset]) -> None:
     root, t = scanned
     out = t.get_overview()
     assert f"Overview of {root.resolve()}" in out
+    # Real nesting: dir header then its files indented underneath, basenames only
+    # (not the requalified paths repeated on every line).
     assert "src/  (2 files)" in out
-    assert "src/a.py" in out
+    assert "  a.py  (" in out  # a.py indented under src/
     assert "top.py" in out
+
+
+def test_get_overview_max_depth_folds_subdirs(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """max_depth caps the open tree: subdirs below the cap show their header with
+    contents folded (not expanded), keeping the overview bounded on big repos."""
+    _, t = scanned
+    out = t.get_overview(max_depth=1)
+    # depth-1 dirs show but their children (depth 2) are folded away.
+    assert "src/  (2 files)" in out
+    assert "  a.py  (" not in out  # depth-2 file under src/ is folded
+    assert "top.py" in out  # depth-1 file still visible
 
 
 # ------------------------------------------------------------------ lookup_file

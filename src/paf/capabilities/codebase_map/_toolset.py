@@ -26,6 +26,7 @@ present bounded heads/blocks.
 
 from __future__ import annotations
 
+import posixpath
 from pathlib import Path
 
 from pydantic_ai.toolsets import FunctionToolset
@@ -39,6 +40,14 @@ from ._store import ArtifactKind, FlatFileStorage, StorageService
 _MAX_SEARCH_HEAD = 200          # chars of module-doc head shown per search hit row
 _MAX_SNIPPET_BYTES = 65536      # read_block hard bound (matches _block limit_bytes)
 _MAX_LOOKUP_SYMBOLS = 120       # cap symbol name lists so a big head stays bounded
+
+
+def _parent_dir(path: str) -> str:
+    """Parent dir (``""`` at the root) of a repo-relative POSIX path.
+
+    E.g. ``capabilities/memory/_organize.py`` -> ``capabilities/memory``;
+    ``config.py`` -> ``""`` (a top-level entry, child of the root)."""
+    return posixpath.dirname(path)
 
 
 class CodebaseMapToolset(FunctionToolset):
@@ -86,7 +95,7 @@ class CodebaseMapToolset(FunctionToolset):
 
     # -- tools ----------------------------------------------------------------
 
-    def get_overview(self) -> str:
+    def get_overview(self, max_depth: int | None = None) -> str:
         """Orient to the top of the codebase: return the navigation tree.
 
         Use this FIRST, before any other tool, to see how the codebase is laid out
@@ -94,34 +103,64 @@ class CodebaseMapToolset(FunctionToolset):
         a tree you climb down, not a search. Once you know where you are, drill with
         ``lookup_file``.
 
-        Returns a tree of repo-relative ``path`` entries (dirs with ``file_count``,
-        files with ``line_count``), shallowest depth first, plus a top summary.
+        Returns a **nested tree** (children indented under their parent directory),
+        repo-relative: dirs show ``file_count``, files show ``line_count``.
+        ``max_depth`` caps how deep the tree opens (default: open fully; pass e.g.
+        ``max_depth=2`` on a big repo to see just the top directories + their files,
+        then drill deeper with ``lookup_file``).
         """
         overview = load_overview(self._storage, self._scan_root)
         if overview is None:
             # Not indexed yet — derive the tree on demand from the same walker.
             overview = build_overview(self._scan_root)
         tree = overview.get("tree", [])
-        dirs = [e for e in tree if e.get("type") == "dir"]
-        files = [e for e in tree if e.get("type") == "file"]
-        lines = [
-            (
-                f"{'  ' * (e.get('depth', 1) - 1)}{e['path']}/"
-                f"  ({e.get('file_count', 0)} files)"
-            )
-            for e in dirs
-        ] + [
-            (
-                f"{'  ' * (e.get('depth', 1) - 1)}{e['path']}"
-                f"  ({e.get('line_count', 0)} lines)"
-            )
-            for e in files
-        ]
         head = (
             f"Overview of {overview.get('scan_root', self._scan_root)}\n"
-            f"{len(dirs)} dirs, {len(files)} files\n"
+            f"{sum(1 for e in tree if e.get('type') == 'dir')} dirs, "
+            f"{sum(1 for e in tree if e.get('type') == 'file')} files\n"
         )
-        return head + "\n".join(lines)
+        rendered = self._render_tree(tree, max_depth=max_depth)
+        return head + rendered if rendered else head + "(empty)"
+
+    @staticmethod
+    def _render_tree(tree: list[dict], max_depth: int | None = None) -> str:
+        """Render the flat ``(depth, path)``-sorted entry list as a real nested tree.
+
+        Children are emitted indented under their parent directory (dirs before
+        files, alphabetical within each), instead of the prior flat "all dirs then
+        all files" dump with fully-requalified paths repeated on every line.
+        """
+        if not tree:
+            return ""
+        dirs: dict[str, list[dict]] = {}  # dir path -> its child entries (files + subdirs)
+        for e in tree:
+            path = e.get("path", "")
+            parent = _parent_dir(path)
+            dirs.setdefault(parent, []).append(e)
+        lines: list[str] = []
+
+        def _open_dir(dir_path: str, prefix: str) -> None:
+            children = sorted(
+                dirs.get(dir_path, []),
+                key=lambda e: (0 if e.get("type") == "dir" else 1, e.get("path", "")),
+            )
+            for e in children:
+                path = e.get("path", "")
+                depth = e.get("depth", 0)
+                if max_depth is not None and depth > max_depth:
+                    # Drill only into dirs above the cap; files deeper than max_depth
+                    # are folded away (a later `get_overview`/`lookup_file` reveals them).
+                    continue
+                name = path.rsplit("/", 1)[-1] if "/" in path else path
+                if e.get("type") == "dir":
+                    lines.append(f"{prefix}{name}/  ({e.get('file_count', 0)} files)")
+                    _open_dir(path, prefix + "  ")
+                else:
+                    lines.append(f"{prefix}{name}  ({e.get('line_count', 0)} lines)")
+
+        # The root's children are the top-level entries (depth 1); start there.
+        _open_dir("", "")
+        return "\n".join(lines)
 
 
     def lookup_file(self, path: str, symbol: str | None = None, detail: bool = False) -> str | None:
