@@ -39,6 +39,7 @@ from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
+from paf.capabilities.visual import Visual
 from paf.capabilities.web import Web
 
 # name -> capability type. The name is the serialization form used in a spec's
@@ -91,6 +92,13 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # search_official_docs / fetch_web_page). Adapted from coding_agent
     # web_search_tools. Reads TAVILY_API_KEY from the env at call time.
     "Web": Web,
+    # Vision-model description of captured screenshots (describe_screenshot).
+    # paf-native icon-capability (AbstractCapability + FunctionToolset, same
+    # shape as Web/FileSystem/Shell/Git). A single tool that sends base64 PNG
+    # image(s) + a prompt to a vision model and returns its text description —
+    # a contained side-call (NOT a sub-agent). Reads VISION_MODEL from the env
+    # at call time (default openrouter:xiaomi/mimo-v2.5). Built via build.py.
+    "Visual": Visual,
     # Playwright-driven browser automation (navigate/snapshot/click/type/screenshot
     # + 14 more tools) over a headless Chromium. A BUILTIN AbstractCapability from
     # the harness (NOT a paf icon-capability port, same as ToolOutputLimits /

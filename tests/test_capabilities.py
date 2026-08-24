@@ -18,6 +18,7 @@ from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.profiles import DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
+from paf.capabilities.visual import Visual
 
 
 def test_assistant_profile_names_all_exist_in_catalog() -> None:
@@ -104,6 +105,42 @@ def test_subagents_cataloged_and_wired() -> None:
     # A live toolset is produced so the delegate_task tool is actually exposed.
     toolset = subagents.get_toolset()
     assert toolset is not None
+
+
+def test_visual_cataloged_and_wired() -> None:
+    """Visual is a cataloged paf-native capability wired on the demo profile only.
+
+    Same icon-capability shape as Web/FileSystem/Shell/Git: cataloged (so the
+    allowlist + schema resolve) and built in Python (`_build_visual`) on the
+    demo profile, deliberately ABSENT from the clean assistant profile. It is a
+    contained image-in/text-out side-call, NOT a sub-agent -- a single
+    `describe_screenshot` tool, no child Agent, no delegation, no inherited
+    tools. The tool must degrade to a clear message on no valid base64 image
+    (not abort the run).
+    """
+    assert CAPABILITY_TYPES["Visual"] is Visual
+    assert "Visual" in DEMO_PROFILE.capability_names
+    assert "Visual" not in ASSISTANT_PROFILE.capability_names
+
+    from paf.capabilities.build import build_runtime_capabilities
+
+    built = build_runtime_capabilities(DEMO_PROFILE)
+    vis = next((c for c in built if isinstance(c, Visual)), None)
+    assert vis is not None
+
+    # Exactly one tool, named describe_screenshot.
+    toolset = vis.get_toolset()
+    assert toolset is not None
+    assert set(toolset.tools) == {"describe_screenshot"}
+
+    # Empty / non-PNG base64 degrades to a clear message, not a crash.
+    async def _run() -> str:
+        return await toolset.describe_screenshot("not a real image!!", "what is this?")
+
+    import asyncio
+
+    msg = asyncio.run(_run())
+    assert "no valid base64 PNG image" in msg
 
 
 def test_only_one_real_profile_for_m1() -> None:

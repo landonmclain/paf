@@ -127,6 +127,12 @@ DEMO_PROFILE = AgentProfile(
         # time; tools degrade to clear messages when key/package missing.
         # (Adapted from coding_agent web_search_tools.)
         "Web",
+        # Vision-model description of captured screenshots (describe_screenshot)
+        # — one tool that sends base64 PNG(s) + a prompt to a vision model and
+        # returns its text description. A contained side-call, NOT a sub-agent
+        # (no child run / no delegation / no inherited tools). Reads VISION_MODEL
+        # at call time (default openrouter:xiaomi/mimo-v2.5).
+        "Visual",
         # Playwright-driven headless browser automation (BUILTIN, not a paf port)
         # — ~18 browser tools (navigate/snapshot/click/type/press/select/hover/
         # wait_for/screenshot/get_text/scroll/back/forward/execute_js/console_

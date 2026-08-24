@@ -43,6 +43,7 @@ from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
+from paf.capabilities.visual import Visual as _Visual
 from paf.capabilities.web import Web as _Web
 from paf.config import PROJECT_ROOT, settings
 
@@ -173,6 +174,21 @@ def _build_web(store) -> _Web:
     and each tool reports the missing key/package rather than failing hard).
     """
     return _Web()
+
+
+def _build_visual(store) -> _Visual:
+    """Vision-model description of captured screenshots (a single tool).
+
+    `store` is accepted for a uniform builder signature but unused — vision
+    state is just the model slug, read lazily from `VISION_MODEL` at call time
+    (default `openrouter:xiaomi/mimo-v2.5`), so the capability constructs and
+    registers even before a key is configured and the tool reports a clear
+    message rather than failing hard. A contained image-in/text-out side-call,
+    deliberately NOT a sub-agent (per Landon): no child run, no delegation, no
+    inherited tools — the agent captures a screenshot, passes its base64 here,
+    and gets a description string back.
+    """
+    return _Visual()
 
 
 def _build_playwright(store) -> PlaywrightBrowser:
@@ -404,6 +420,8 @@ def build_runtime_capabilities(
         "CodebaseMap": _build_codebase_map,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,
+        # Vision-model description of captured screenshots (describe_screenshot).
+        "Visual": _build_visual,
         # Playwright-driven headless browser automation (BUILTIN import from harness).
         "PlaywrightBrowser": _build_playwright,
         # Skill library — list/load on demand + deterministic pointer trigger.
