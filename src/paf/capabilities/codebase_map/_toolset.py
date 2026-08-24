@@ -191,9 +191,10 @@ class CodebaseMapToolset(FunctionToolset):
 
         The thin escape hatch — use when you know a word/name but not where it lives.
         Scores over the symbol-scoped search index (name > signature > doc) and returns
-        ranked hits, each a repo-relative ``path`` + matched ``symbol`` + ``manifest_ref``
-        line range + module-doc head snippet. Then dereference the exact source with
-        ``read_block`` (or view a symbol's detail with ``lookup_file(path, symbol=...)``).
+        ranked hits. **Each hit includes a directly-usable ``read_block`` ref**
+        (``read: path:L1-L2``) — paste it straight into ``read_block`` to jump to the
+        exact matched symbol's source; no need to re-type the path. Also shows the
+        matched ``symbol``, ``manifest_ref`` line range, and module-doc head snippet.
         There is no mode menu — one fused search call.
 
         Args:
@@ -208,13 +209,34 @@ class CodebaseMapToolset(FunctionToolset):
         for h in hits:
             doc = (head.get(h.file, {}).get("doc") or "")[: _MAX_SEARCH_HEAD]
             sym = f"#{h.symbol}" if h.symbol else ""
+            # The whole point of the index: the hit collapses to a pointer. Hand it
+            # over as a paste-able read_block ref (prefer the resolved BlockRef span,
+            # fall back to the hit's own line fields).
+            ref = self._read_block_ref(h)
             lines.append(
                 f"- {h.file}{sym}  lines {h.start_line}-{h.end_line} "
                 f"(score {h.score:.2f})"
             )
+            if ref:
+                lines.append(f"    read: {ref}")
             if doc:
                 lines.append(f"    {doc}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _read_block_ref(h: object) -> str | None:
+        """Compact ``path:L1-L2`` ref for a hit's ``BlockRef`` (the pointer)."""
+        file = getattr(h, "file", None)
+        if not file:
+            return None
+        block = getattr(h, "block", None)
+        span = getattr(block, "span", None) if block is not None else None
+        if span is not None and getattr(span, "start_line", None) and getattr(span, "end_line", None):
+            return f"{file}:{span.start_line}-{span.end_line}"
+        sl, el = getattr(h, "start_line", None), getattr(h, "end_line", None)
+        if sl and el:
+            return f"{file}:{sl}-{el}"
+        return f"{file}"
 
     def get_repo_map(self, map_tokens: int | None = None, focus: str | None = None) -> str:
         """[NOT BUILT — Phase 4] Return a distilled orientation map of the codebase.

@@ -215,6 +215,23 @@ def test_search_codebase_no_results(scanned: tuple[Path, CodebaseMapToolset]) ->
     assert "No results" in t.search_codebase("zznotawordzz")
 
 
+def test_search_codebase_emits_pasteable_read_block_ref(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """The whole point of the index: a search hit collapses to a pointer. The hit
+    must expose a directly-usable ``read_block`` ref (``read: path:L1-L2``) so the
+    agent can paste it straight into ``read_block`` without re-typing the path."""
+    _, t = scanned
+    out = t.search_codebase("Widget")
+    assert "Widget" in out
+    assert "read: " in out
+    # Pull the first "read: <ref>" line and feed it back into read_block — it must
+    # resolve to the matched symbol's source region, not return None.
+    ref = next(line.strip().removeprefix("read: ") for line in out.splitlines() if "read: " in line)
+    assert ref.startswith("src/a.py:")
+    block = t.read_block(ref)
+    assert block is not None
+    assert "Widget" in block  # the source region actually contains the matched symbol
+
+
 # ------------------------------------------------------------------ get_repo_map
 
 
