@@ -1037,16 +1037,24 @@ async def run_organizer(
 def _pick_winner(cluster: list[IndexEntry]) -> IndexEntry:
     """Suggest the canonical survivor for a dup cluster.
 
-    Prefer the entry with the best-attested lineage (most source lines — it is
-    the entry the journal has reaffirmed most), then the richest fact (most
-    significant tokens — captures the most detail to preserve), then the
-    earliest-born as a stable tiebreak. This is only a hint: the organizer may
-    pick a different member when that is semantically more accurate/complete.
+    Prefer the freshest entry first: `updated_on` is the contract's designated
+    recency axis (date the CURRENT value last changed), so the most recently
+    updated statement is canonical — the journal's latest word on a fact is
+    the current one, and an older statement of the same idea is usually the
+    stale version. Then best-attested (most source lines — reaffirmed most),
+    then richest fact (most significant tokens — most detail to preserve), then
+    highest id as a final deterministic tiebreak (ids are monotonic, so the
+    highest id is the most recently created). This is only a hint: the
+    organizer may pick a different member when that is semantically more
+    accurate/complete.
     """
     return max(
         cluster,
-        key=lambda e: (len(e.source), len(_fact_tokens(e.fact)), e.born_on),
+        key=lambda e: (
+            e.updated_on, len(e.source), len(_fact_tokens(e.fact)), e.id,
+        ),
     )
+
 
 
 def _render_consolidation_candidates(clusters: list[list[IndexEntry]]) -> str:
@@ -1063,7 +1071,7 @@ def _render_consolidation_candidates(clusters: list[list[IndexEntry]]) -> str:
         sections.append(
             f"Cluster {i} — these {len(cl)} entries say the same thing "
             f"(type={winner.type!r}, subject={winner.subject!r}):\n{members}\n"
-            f"Suggested survivor: {winner.id} (best-attested, then richest). "
+            f"Suggested survivor: {winner.id} (freshest, then best-attested). "
             f"Prune the others ({losers}) unless they carry distinct detail that "
             f"must be folded into {winner.id} first."
         )
