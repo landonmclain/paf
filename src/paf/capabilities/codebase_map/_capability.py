@@ -29,6 +29,25 @@ from ._retrieval import LexicalRetrieval, RetrievalBackend
 from ._store import FlatFileStorage, StorageService
 from ._toolset import CodebaseMapToolset
 
+# Tool-choice steer: for *code-related* questions, reach for the codebase ladder
+# before the raw file tools. This exists because `search_codebase` / `lookup_file`
+# / `read_block` are scoped to the indexed repo and already skip ignored dirs
+# (`data/`, `.agent-codeindex/`), so they return less noise and fewer tokens than
+# a raw `search_files` / `read_file` over the whole tree. Steering (not removal):
+# the raw FileSystem tools stay for editing, non-code files, and anything outside
+# the code index.
+_CODEMAP_GUIDANCE = (
+    "Code-related questions. When the user is asking about source code -- where "
+    "something is defined or referenced, what a symbol does, how pieces fit "
+    "together -- start with the codebase tools, not the raw file tools: use "
+    "`get_overview` to orient, `search_codebase` to search, and `lookup_file` / "
+    "`read_block` to read. These are scoped to the indexed repo and already skip "
+    "build artifacts and ignored directories like `data/` and `.agent-codeindex/`, "
+    "so they return far less noise and fewer tokens than a raw `search_files` over "
+    "the whole tree (which sweeps those ignored dirs). Keep the raw FileSystem "
+    "tools for editing files, non-code files, and anything outside the code index."
+)
+
 
 @dataclass
 class CodebaseMap(AbstractCapability):
@@ -59,3 +78,13 @@ class CodebaseMap(AbstractCapability):
             storage=self.storage,
             retrieval=retrieval,  # type: ignore[arg-type]  # RetrievalBackend protocol
         )
+
+    def get_instructions(self) -> list[str] | None:
+        """Provide a tool-choice steer: for code questions, use the ladder first.
+
+        This is a static, additive nudge -- it does not touch the memory recall
+        ladder (that is owned by the ``Memory`` capability). It steers tool
+        selection toward the scoped, token-bounded codebase tools without removing
+        the raw FileSystem tools.
+        """
+        return [_CODEMAP_GUIDANCE]

@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from paf.capabilities.codebase_map import (
+    CodebaseMap,
     CodebaseMapToolset,
     FlatFileStorage,
 )
@@ -287,3 +288,23 @@ def test_run_codebase_map_reindexes(scanned: tuple[Path, CodebaseMapToolset]) ->
     assert "src/" in out or "files extracted" in out
     # After re-index, the new file is surfaced.
     assert t.lookup_file("src/late.py") is not None
+
+
+def test_codebase_map_capability_steers_code_questions_to_ladder(tmp_path: Path) -> None:
+    """The capability injects a tool-choice steer toward the ladder for code.
+
+    The steer (mere guidance, not removal) exists so the demo agent reaches for
+    the scoped codebase tools (which skip `data/`/`.agent-codeindex/`) instead of
+    a raw `search_files` over the whole tree on code-related questions.
+    """
+    cap = CodebaseMap(scan_root=tmp_path)
+    instructions = cap.get_instructions()
+    assert instructions is not None
+    text = " ".join(instructions)
+    assert "reach for the codebase tools" in text or "start with the codebase tools" in text
+    assert "get_overview" in text
+    assert "search_codebase" in text
+    assert "lookup_file" in text
+    assert "read_block" in text
+    # It steers, it does not remove — must not tell the model to avoid editing tools.
+    assert "Keep the raw FileSystem tools" in text
