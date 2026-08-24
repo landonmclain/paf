@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pydantic_ai_harness.planning import Planning
 from pydantic_ai_harness.playwright import PlaywrightBrowser
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
@@ -258,6 +259,34 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     return WarnOnCacheBusts()
 
 
+def _build_planning(store) -> Planning:
+    """Model-owned task plan for long turns (BUILTIN, not a paf port).
+
+    Gives the agent a structured, self-updating todo/plan it can create and edit
+    (``write_plan`` / ``read_plan`` / ``add_task`` / ``update_task_status`` /
+    ``remove_task``), surfaced back to the model every request as a cache-safe
+    tail reminder — so it never loses track of what it set out to do on a long
+    run, and plan edits don't invalidate the prompt cache (the reminder rides
+    behind a ``CachePoint`` breakpoint).
+
+    Store: a shared ``InMemoryPlanStore`` (not the persistence store). The plan
+    persists across turns/runs within this process via the single shared store
+    instance, which is what the demo needs to actually exercise long-turn
+    tracking. It is deliberately NOT wired to the flat-file ``FileStepStore``
+    (that's run-history JSONL, not a plan store) and NOT to Sqlite/Postgres for
+    now — durable cross-session plans are a future option
+    (``SqlitePlanStore('plan.db', session=...)``) if the demo proves out.
+
+    `store` is accepted for a uniform builder signature but unused — the plan
+    lives in the capability's own in-memory store, not the persistence store.
+    Consumed as a pydantic-ai AbstractCapability from the harness, same drop-in
+    pattern as ToolOutputLimits / WarnOnCacheBusts / Subagents per Landon.
+    """
+    from pydantic_ai_harness.planning import InMemoryPlanStore
+
+    return Planning(store=InMemoryPlanStore())
+
+
 # Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
 # variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
 # across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism (see
@@ -367,6 +396,8 @@ def build_runtime_capabilities(
         "WarnOnCacheBusts": _build_warn_on_cache_busts,
         # Sub-agent delegation (BUILTIN, not a paf port) — explicit child leaf agents.
         "Subagents": _build_subagents,
+        # Model-owned task plan for long turns (BUILTIN, not a paf port).
+        "Planning": _build_planning,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder: when ``Memory`` is

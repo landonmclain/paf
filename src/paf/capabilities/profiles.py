@@ -156,6 +156,11 @@ DEMO_PROFILE = AgentProfile(
         # `_build_subagents`) because the capability is not spec-serializable.
         # Demo: two named sub-agents sharing the demo model.
         "Subagents",
+        # Model-owned task plan for long turns (BUILTIN, not a paf port) —
+        # write_plan/read_plan/add_task/update_task_status/remove_task, surfaced
+        # each request as a cache-safe tail reminder. Built in Python (build.py
+        # `_build_planning`) so the profile gate controls it.
+        "Planning",
     ),
 )
 

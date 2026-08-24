@@ -24,6 +24,7 @@ from pydantic_ai_harness.compaction import (
     SlidingWindowCompaction,
     TieredCompaction,
 )
+from pydantic_ai_harness.planning import Planning
 from pydantic_ai_harness.playwright import PlaywrightBrowser
 from pydantic_ai_harness.step_persistence import StepPersistence
 from pydantic_ai_harness.subagents import SubAgents
@@ -128,4 +129,12 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # returns None), so it is ALWAYS built in Python (build.py `_build_subagents`) by
     # passing explicit child `SubAgent` entries; it can never resolve from a YAML spec.
     "Subagents": SubAgents,
+    # Model-owned task plan for long turns (BUILTIN, not a paf port). A structured,
+    # self-updating deadline/todo list surfaced back to the model every request as a
+    # cache-safe tail reminder (never invalidates the prompt cache). Tools:
+    # write_plan / read_plan / add_task / update_task_status / remove_task (+ subtask +
+    # dependency tools with enable_subtasks=True). Spec-serializable, so it can resolve
+    # from YAML, but paf wires it via the Python seam (build.py `_build_planning`) like
+    # the other BUILTIN harness caps so the profile gate controls it.
+    "Planning": Planning,
 }
