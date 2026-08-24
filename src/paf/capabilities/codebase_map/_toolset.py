@@ -219,8 +219,18 @@ class CodebaseMapToolset(FunctionToolset):
     def get_repo_map(self, map_tokens: int | None = None, focus: str | None = None) -> str:
         """[NOT BUILT — Phase 4] Return a distilled orientation map of the codebase.
 
-        Planned (aider ``--map-tokens``-style): a ranked distillation of the most
-        load-bearing files/symbols within a token budget. Not implemented yet.
+        **Intended shape (LOCKED 2026-08-24): a synthetic, zero-LLM orientation map.**
+        Bound by ``map_tokens`` (default 1000), optionally ``focus``-biased. Returns the
+        most load-bearing files/symbols as compact ``file.py: symbol(args) -> T`` lines,
+        ordered by ``references_count`` (in-degree) desc, with each file's module-docstring
+        head. Deliberately NO LLM summarization — everything shown is **real** data pulled
+        from existing artifacts (`overview.json` tree, `index.json` head + symbol name lists,
+        ``manifest`` signatures, ``references_count``), so it cannot hallucinate a summary or
+        freeze understanding at build time. It is the "here's the whole repo in N tokens"
+        view — the direct analog of a really good README. Computed on demand from artifacts
+        (optionally cached in ``distilled_map.json``). This is a mild superset of
+        ``get_overview`` (tree + rank + signature one-liners); the schema `DistilledEntry`
+        already matches. Not implemented yet.
         """
         raise NotImplementedError("get_repo_map is not built until Phase 4")
 

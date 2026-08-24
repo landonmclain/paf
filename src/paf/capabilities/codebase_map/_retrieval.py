@@ -75,7 +75,11 @@ class LexicalRetrieval:
         return tokens_rank(query, tokens, limit=limit, heads=self._heads_by_path())
 
     def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry]:
-        """STUB — ranked distilled map (Phase 4)."""
+        """STUB — ranked distilled map (Phase 4). Intended shape: zero-LLM synthetic
+        orientation map. Returns `DistilledEntry` records (rank/file/symbol/signature/
+        references_count/ref_weight) ordered by references_count desc within the
+        ``map_tokens`` budget, optionally ``focus``-biased — pulled from existing
+        artifacts only, never LLM-generated prose. See `get_repo_map` docstring."""
         raise NotImplementedError("distilled_map is not built until Phase 4")
 
     # ---- reads --------------------------------------------------------------
