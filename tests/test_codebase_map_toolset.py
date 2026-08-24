@@ -236,9 +236,28 @@ def test_search_codebase_emits_pasteable_read_block_ref(scanned: tuple[Path, Cod
 
 
 def test_get_repo_map_stub(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """The method still exists as a Phase-4 stub and raises NotImplementedError,
+    but it is deliberately NOT registered as an agent tool — hidden until it's built
+    (its long spec docstring would otherwise inflate every tool-list the agent sees)."""
     _, t = scanned
     with pytest.raises(NotImplementedError):
         t.get_repo_map()
+    # Hidden from the agent surface entirely.
+    names = sorted(t.tools)
+    assert "get_repo_map" not in names
+
+
+def test_search_exposed_tools_are_the_five_live_ladder(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """The agent-facing surface is exactly the five live tools — get_repo_map must not
+    leak in as a stub that raises NotImplementedError mid-conversation."""
+    _, t = scanned
+    assert sorted(t.tools) == [
+        "get_overview",
+        "lookup_file",
+        "read_block",
+        "run_codebase_map",
+        "search_codebase",
+    ]
 
 
 def test_run_codebase_map_reindexes(scanned: tuple[Path, CodebaseMapToolset]) -> None:

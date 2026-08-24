@@ -10,12 +10,13 @@ The model climbs a ladder instead of brute-forcing keyword scans:
 - ``lookup_file(...)``          — the bridge; 4 shapes head ↔ detail
 - ``read_block(block_ref)``     — the whole-file/region rung; the ONLY path to raw source
 - ``search_codebase(query)``    — the thin escape hatch over ``tokens.json``; NO mode menu
-- ``get_repo_map(...)``         — orient map (Phase 4; stub)
 - ``run_codebase_map()``        — (re)build the index artifacts for the rooted repo
 
-``callers``/``with_graph`` defer to the graph phase (YAGNI). A future ``semantic``
-backend is an alternative ``RetrievalBackend``, never a ``mode``. All hits collapse to
-the universal ``SearchHit``/``BlockRef`` shape.
+``get_repo_map`` (Phase-4 orient map, zero-LLM) exists as a method but is **not
+registered** as a tool — hidden until it's built (it currently raises
+NotImplementedError). ``callers``/``with_graph`` defer to the graph phase (YAGNI). A
+future ``semantic`` backend is an alternative ``RetrievalBackend``, never a ``mode``.
+All hits collapse to the universal ``SearchHit``/``BlockRef`` shape.
 
 Tools are **agent-facing** — every method returns a bounded, readable ``str`` (matching
 the git/fs/shell toolset convention), never raw dicts. The heavy source text is only
@@ -66,7 +67,9 @@ class CodebaseMapToolset(FunctionToolset):
         self.add_function(self.lookup_file, name="lookup_file")
         self.add_function(self.read_block, name="read_block")
         self.add_function(self.search_codebase, name="search_codebase")
-        self.add_function(self.get_repo_map, name="get_repo_map")
+        # get_repo_map is deliberately NOT registered: still a Phase-4 stub that
+        # raises NotImplementedError (and its long spec docstring would inflate every
+        # tool-list). Hidden from the agent until it's built — see get_repo_map().
         self.add_function(self.run_codebase_map, name="run_codebase_map")
 
     # -- presentation helpers -------------------------------------------------
