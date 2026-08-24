@@ -1111,7 +1111,7 @@ Current index (before this pass):
 async def run_consolidation(
     index_store: IndexStore,
     *,
-    agent_name: str = "memory-organizer",
+    agent_name: str = "memory-consolidator",
 ) -> str:
     """Second pass: consolidate near-duplicate entries already in the index.
 

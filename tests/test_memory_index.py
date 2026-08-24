@@ -652,6 +652,31 @@ def test_run_consolidation_no_changes_when_clean(tmp_path) -> None:
     assert asyncio.run(run_consolidation(IndexStore(tmp_path))) == "no changes"
 
 
+def test_run_consolidation_uses_distinct_agent_name(tmp_path) -> None:
+    """The consolidation pass builds its organizer under a distinct agent name
+    (``memory-consolidator``) so its run is unambiguous in observability traces,
+    separate from the first-pass ``run_organizer`` (``memory-organizer``). This
+    is a label-only change — same builder, same tools, same prompt contract."""
+    from paf.capabilities.memory._organize import (
+        _build_memory_organizer,
+        run_consolidation,
+        run_organizer,
+    )
+
+    # Pass 1 and pass 2 must produce distinguishable agent names.
+    org, _ = _build_memory_organizer(IndexStore(tmp_path), agent_name="memory-organizer")
+    con, _ = _build_memory_organizer(IndexStore(tmp_path), agent_name="memory-consolidator")
+    assert org.name == "memory-organizer"
+    assert con.name == "memory-consolidator"
+    assert org.name != con.name
+    # run_consolidation defaults to the distinct name; run_organizer keeps its own.
+    import inspect
+
+    src = inspect.signature(run_consolidation).parameters["agent_name"].default
+    assert src == "memory-consolidator"
+    assert inspect.signature(run_organizer).parameters["agent_name"].default == "memory-organizer"
+
+
 # ---------------------------------------------------------------------------
 # Real-index regression fixtures — the exact dup shapes found live in
 # data/memory/memory-index.json (2026-08) that the single same-(type,subject)
