@@ -33,6 +33,7 @@ from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
@@ -147,6 +148,20 @@ def _build_git(store) -> _Git:
     can never broad-`add -A` or wipe more than it named.
     """
     return _Git(root=PROJECT_ROOT)
+
+
+def _build_codebase_map(store) -> _CodebaseMap:
+    """Navigation-first codebase browser rooted at the project root.
+
+    `store` is accepted for a uniform builder signature but unused — the codebase
+    map reads/writes its own artifacts through the ``StorageService`` seam
+    (``FlatFileStorage`` default, co-located under ``.agent-codeindex/``), not the
+    persistence store. Rooting at PROJECT_ROOT indexes the repo the agent works in.
+    The index is **on-demand**: ``get_overview`` / the ``run_codebase_map`` tool
+    (re)build artifacts if missing or stale, so the capability constructs and
+    registers without a pre-scan.
+    """
+    return _CodebaseMap(scan_root=PROJECT_ROOT)
 
 
 def _build_web(store) -> _Web:
@@ -384,6 +399,9 @@ def build_runtime_capabilities(
         "Shell": _build_shell,
         # Safe git inspection + checkpoint tools rooted at the repo root.
         "Git": _build_git,
+        # Codebase-map: navigation-first codebase browser rooted at the repo root
+        # (overview/lookup_file/read_block/search_codebase + run_codebase_map).
+        "CodebaseMap": _build_codebase_map,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,
         # Playwright-driven headless browser automation (BUILTIN import from harness).

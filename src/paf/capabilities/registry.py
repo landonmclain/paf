@@ -31,6 +31,7 @@ from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
 from paf.capabilities.memory import Memory
@@ -79,6 +80,13 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # restore) rooted at a workspace dir. Adapted from coding_agent git_tools;
     # `get_toolset` so it resolves via build.py (and declaratively when rooted).
     "Git": Git,
+    # Codebase-map: navigation-first codebase browser (overview/lookup_file/
+    # read_block/search_codebase + run_codebase_map re-index). paf-owned
+    # icon-capability (AbstractCapability wrapping a FunctionToolset, same shape as
+    # Git/FileSystem/Shell). Needs a real scan_root + storage at build time
+    # (build.py `_build_codebase_map` roots it at PROJECT_ROOT), so it's built in
+    # Python, not spec-serialized.
+    "CodebaseMap": CodebaseMap,
     # Tavily-backed web search + page extraction (search_web_docs /
     # search_official_docs / fetch_web_page). Adapted from coding_agent
     # web_search_tools. Reads TAVILY_API_KEY from the env at call time.

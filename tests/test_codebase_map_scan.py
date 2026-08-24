@@ -18,6 +18,7 @@ from paf.capabilities.codebase_map import (
     ArtifactKind,
     FlatFileStorage,
     ScanScope,
+    run_codebase_map,
     walk_all_files,
 )
 from paf.capabilities.codebase_map._scan import scan_and_write
@@ -165,3 +166,26 @@ def test_sync_changed_ignores_out_of_scope_files(tmp_path: Path) -> None:
     changed = store.sync_changed(root)
     assert "mod.py" in changed
     assert not any(".venv" in c for c in changed)
+
+
+# ----------------------------------------------------------- run_codebase_map (entry point)
+
+
+def test_run_codebase_map_explicit_root(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    _seed(root, "mod.py", "def f():\n    return 1\n")
+    res = run_codebase_map(root)
+    assert res["extracted"] == 1
+    assert res["total_symbols"] >= 1
+    assert "mod.py" in str(res["index_dir"]) or Path(res["index_dir"]).exists()
+
+
+def test_run_codebase_map_defaults_to_cwd(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "cwdrepo"
+    root.mkdir()
+    _seed(root, "top.py", "def top():\n    return 1\n")
+    monkeypatch.chdir(root)
+    res = run_codebase_map()
+    assert Path(res["scan_root"]).resolve() == root.resolve()
+    assert res["extracted"] >= 1

@@ -8,6 +8,7 @@ Tests the agent-facing tools against a small synthetic fixture scanned with
 - ``read_block``        → exact source region + whole-file + missing-file
 - ``search_codebase``   → end-to-end over the built tokens.json, head snippets
 - ``get_repo_map``      → stub raises NotImplementedError (Phase 4)
+- ``run_codebase_map``  → re-indexes the rooted repo (new/changed files surfaced)
 
 All tool methods return bounded, readable ``str`` (None only for unknown
 path/symbol), matching the git/fs/shell toolset convention.
@@ -221,3 +222,14 @@ def test_get_repo_map_stub(scanned: tuple[Path, CodebaseMapToolset]) -> None:
     _, t = scanned
     with pytest.raises(NotImplementedError):
         t.get_repo_map()
+
+
+def test_run_codebase_map_reindexes(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    root, t = scanned
+    # A file added AFTER the initial scan won't be in the index yet.
+    _seed(root, "src/late.py", "def late_fn():\n    return 42\n")
+    assert t.lookup_file("src/late.py") is None  # not indexed yet
+    out = t.run_codebase_map()
+    assert "src/" in out or "files extracted" in out
+    # After re-index, the new file is surfaced.
+    assert t.lookup_file("src/late.py") is not None

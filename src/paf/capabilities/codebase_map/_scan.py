@@ -41,7 +41,7 @@ from typing import Any
 from ._analyze import analyze_file, detect_language
 from ._overview import build_overview
 from ._schema import FileInfo, path_rel_to_scan_root
-from ._store import ArtifactKind, FlatFileStorage, ScanScope
+from ._store import ArtifactKind, FlatFileStorage, ScanScope, StorageService
 from ._tokens import build_tokens
 
 # Unparsed files still get a language tag when we can guess one (for later
@@ -115,7 +115,7 @@ def _unparsed_record(path: Path, root: Path) -> FileInfo:
     )
 
 
-def scan_and_write(scan_root: str | Path, storage: FlatFileStorage | None = None) -> dict[str, Any]:
+def scan_and_write(scan_root: str | Path, storage: StorageService | None = None) -> dict[str, Any]:
     """Scan ``scan_root`` for in-scope files, extract, and write the artifacts.
 
     Returns a small summary dict (file count, symbol count, skipped, unparsed) for the

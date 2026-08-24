@@ -117,6 +117,11 @@ DEMO_PROFILE = AgentProfile(
         # paged), checkpoint (explicit paths only, no broad add), restore
         # (explicit paths only). (Adapted from coding_agent git_tools.)
         "Git",
+        # Codebase-map: navigation-first codebase browser rooted at the repo root
+        # — overview/lookup_file/read_block/search_codebase + run_codebase_map
+        # (re-index). Lets the model orient in a codebase by climbing a ladder
+        # instead of brute-force keyword scans.
+        "CodebaseMap",
         # Tavily-backed web search + page extraction — search_web_docs,
         # search_official_docs, fetch_web_page. Reads TAVILY_API_KEY at call
         # time; tools degrade to clear messages when key/package missing.

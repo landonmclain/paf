@@ -11,6 +11,7 @@ The model climbs a ladder instead of brute-forcing keyword scans:
 - ``read_block(block_ref)``     — the whole-file/region rung; the ONLY path to raw source
 - ``search_codebase(query)``    — the thin escape hatch over ``tokens.json``; NO mode menu
 - ``get_repo_map(...)``         — orient map (Phase 4; stub)
+- ``run_codebase_map()``        — (re)build the index artifacts for the rooted repo
 
 ``callers``/``with_graph`` defer to the graph phase (YAGNI). A future ``semantic``
 backend is an alternative ``RetrievalBackend``, never a ``mode``. All hits collapse to
@@ -66,6 +67,7 @@ class CodebaseMapToolset(FunctionToolset):
         self.add_function(self.read_block, name="read_block")
         self.add_function(self.search_codebase, name="search_codebase")
         self.add_function(self.get_repo_map, name="get_repo_map")
+        self.add_function(self.run_codebase_map, name="run_codebase_map")
 
     # -- presentation helpers -------------------------------------------------
 
@@ -221,6 +223,26 @@ class CodebaseMapToolset(FunctionToolset):
         load-bearing files/symbols within a token budget. Not implemented yet.
         """
         raise NotImplementedError("get_repo_map is not built until Phase 4")
+
+    def run_codebase_map(self) -> str:
+        """Re-scan the codebase root and (re)build the index artifacts.
+
+        Use this when the index is missing, stale, or you just edited many files and
+        want the map refreshed. Re-extracts every in-scope file and rewrites
+        ``overview.json`` / ``index.json`` / ``manifest.json`` / ``tokens.json`` /
+        ``snapshot.json`` for the rooted repo (``scan_root``). Returns a bounded
+        summary (files found/extracted, symbol count, unparsed) — not the index
+        contents (use ``get_overview``/``lookup_file``/``search_codebase`` to read).
+        """
+        from ._scan import scan_and_write
+
+        res = scan_and_write(self._scan_root, self._storage)
+        return (
+            f"Re-indexed {res['scan_root']}\n"
+            f"{res['extracted']} files extracted, {res['total_symbols']} symbols\n"
+            f"{len(res['unparsed'])} unparsed, {len(res['skipped'])} skipped\n"
+            f"index at {res['index_dir']}"
+        )
 
     # -- format helpers -------------------------------------------------------
 
