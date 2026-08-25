@@ -65,8 +65,8 @@ class Settings(BaseSettings):
     # .env. Not the spec'd subject model, and NOT hardcoded in source.
     organize_model: str = ""
 
-    # Egress allowlist for the PlaywrightBrowser capability (build.py
-    # `_build_playwright` → `allowed_domains`). Local dev hosts by default so
+    # Egress allowlist for the Browser capability (build.py
+    # `_build_browser` → `allowed_domains`). Local dev hosts by default so
     # the headless browser can reach loopback (paf web UI / Vite); add an
     # external staging/known host here (PLAYWRIGHT_ALLOWED_DOMAINS / .env, a
     # JSON-encoded list, e.g. ["localhost","example.com"]) to let the browser

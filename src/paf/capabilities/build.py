@@ -28,11 +28,11 @@ import os
 from pathlib import Path
 
 from pydantic_ai_harness.planning import Planning
-from pydantic_ai_harness.playwright import PlaywrightBrowser
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.capabilities.browser import Browser as _Browser
 from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
@@ -188,20 +188,21 @@ def _build_visual(store) -> _Visual:
     return _Visual()
 
 
-def _build_playwright(store) -> PlaywrightBrowser:
-    """Playwright-driven headless browser automation tools.
+def _build_browser(store) -> _Browser:
+    """Mobile-first, headless Chromium browser automation tools.
 
     `store` is accepted for a uniform builder signature but unused — browser
-    state lives in the PlaywrightBrowserSession, not the persistence store.
-    BUILTIN import from the harness (same pattern as ToolOutputLimits /
-    Subagents), not a paf port. Defaults keep egress locked down for a demo
-    agent: headless, private-address blocked (SSRF defense), an egress
-    **allowlist** of local dev hosts so the browser can reach sites being built
-    on this machine, and no auto-install (the browser must be present via
-    `playwright install chromium`). `headless` stays True so a chat-spawned CLI
-    never pops a window; `auto_install_chromium` stays False so a missing
-    browser raises a clear `playwright install chromium` hint instead of
-    silently fetching a ~150MB binary mid-session.
+    state lives in the BrowserSession, not the persistence store. A paf-owned
+    full copy of the harness `PlaywrightBrowser` (same copy-and-own pattern as
+    Memory / FileSystem / Shell), modified so the context is **mobile by default**
+    and a `set_viewport` tool switches profiles mid-run. Defaults keep egress
+    locked down for a demo agent: headless, private-address blocked (SSRF
+    defense), an egress **allowlist** of local dev hosts so the browser can reach
+    sites being built on this machine, and no auto-install (the browser must be
+    present via `playwright install chromium`). `headless` stays True so a
+    chat-spawned CLI never pops a window; `auto_install_chromium` stays False so
+    a missing browser raises a clear `playwright install chromium` hint instead
+    of silently fetching a ~150MB binary mid-session.
 
     `chromium_sandbox` is deliberately False: Chromium's sandbox is fatal at
     launch on Ubuntu 23.10+ hosts where AppArmor restricts unprivileged user
@@ -217,13 +218,30 @@ def _build_playwright(store) -> PlaywrightBrowser:
     cloud-metadata endpoint and LAN RFC-1918 ranges remain refused, so SSRF
     defense is preserved while still browsing the allowlisted local/staging
     sites.
+
+    Mobile is the default (viewport 390×844, `mobile=True`, retina scale 3, a
+    real iPhone user-agent so responsive sites serve their mobile layout) —
+    mobile is the only layout that matters — and is configurable on the
+    capability: flip `mobile=False` for desktop or change `viewport` for a
+    tablet, and the agent can switch these at runtime via the `set_viewport`
+    tool.
     """
-    return PlaywrightBrowser(
+    return _Browser(
         headless=True,
         block_private_addresses=True,
         allowed_domains=settings.playwright_allowed_domains,
         auto_install_chromium=False,
         chromium_sandbox=False,
+        viewport=(390, 844),
+        mobile=True,
+        is_mobile=True,
+        has_touch=True,
+        device_scale_factor=3,
+        user_agent=(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+            "Mobile/15E148 Safari/604.1"
+        ),
     )
 
 
@@ -421,8 +439,8 @@ def build_runtime_capabilities(
         "Web": _build_web,
         # Vision-model description of captured screenshots (describe_screenshot).
         "Visual": _build_visual,
-        # Playwright-driven headless browser automation (BUILTIN import from harness).
-        "PlaywrightBrowser": _build_playwright,
+        # Mobile-first headless browser automation (paf-owned copy, mobile default).
+        "Browser": _build_browser,
         # Skill library — list/load on demand + deterministic pointer trigger.
         "Skills": _build_skills,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).

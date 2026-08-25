@@ -25,12 +25,12 @@ from pydantic_ai_harness.compaction import (
     TieredCompaction,
 )
 from pydantic_ai_harness.planning import Planning
-from pydantic_ai_harness.playwright import PlaywrightBrowser
 from pydantic_ai_harness.step_persistence import StepPersistence
 from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.capabilities.browser import Browser
 from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
@@ -99,15 +99,17 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # a contained side-call (NOT a sub-agent). Reads VISION_MODEL from the env
     # at call time (default openrouter:xiaomi/mimo-v2.5). Built via build.py.
     "Visual": Visual,
-    # Playwright-driven browser automation (navigate/snapshot/click/type/screenshot
-    # + 14 more tools) over a headless Chromium. A BUILTIN AbstractCapability from
-    # the harness (NOT a paf icon-capability port, same as ToolOutputLimits /
-    # Subagents per Landon). Ships native SSRF defense (allowed_domains +
-    # block_private_addresses) and chromium_sandbox. Has `from_spec` AND
-    # `get_toolset`, so it resolves declaratively from a spec AND is built in
-    # Python (build.py) when the profile allowlists it. Requires the
-    # `pydantic-ai-harness[playwright]` extra + `playwright install chromium`.
-    "PlaywrightBrowser": PlaywrightBrowser,
+    # Mobile-first Chromium browser automation (navigate/snapshot/click/type/
+    # screenshot + set_viewport) over a headless Chromium. A paf-owned full copy
+    # of the harness PlaywrightBrowser (same copy-and-own pattern as Memory /
+    # FileSystem / Shell), modified so the context defaults to a 390×844 touch
+    # viewport with a mobile UA, and a `set_viewport` tool switches the
+    # viewport/mobile profile mid-run by recreating the context. Ships native
+    # SSRF defense (allowed_domains + block_private_addresses), chromium_sandbox,
+    # `from_spec` AND `get_toolset`, so it resolves declaratively from a spec AND
+    # is built in Python (build.py). Requires the `pydantic-ai-harness[playwright]`
+    # extra + `playwright install chromium`.
+    "Browser": Browser,
     # Framework-level tool-return reduction (truncate/summarize/spill oversized
     # tool results via after_tool_execute + a `read_tool_result` read-back tool).
     # A pydantic-ai AbstractCapability from the harness (NOT a paf icon-capability

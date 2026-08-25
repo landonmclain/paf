@@ -133,15 +133,17 @@ DEMO_PROFILE = AgentProfile(
         # (no child run / no delegation / no inherited tools). Reads VISION_MODEL
         # at call time (default openrouter:xiaomi/mimo-v2.5).
         "Visual",
-        # Playwright-driven headless browser automation (BUILTIN, not a paf port)
-        # — ~18 browser tools (navigate/snapshot/click/type/press/select/hover/
-        # wait_for/screenshot/get_text/scroll/back/forward/execute_js/console_
-        # messages/tabs/dialog/network) over a headless Chromium with native
-        # SSRF defense (allowed_domains + block_private_addresses) and
-        # chromium_sandbox. Requires the harness[playwright] extra + Chromium
-        # (`playwright install chromium`). Headless + private-address-blocked
-        # defaults set in build.py `_build_playwright`.
-        "PlaywrightBrowser",
+        # Mobile-first Chromium browser automation (paf-owned full copy of the
+        # harness PlaywrightBrowser) — ~19 browser tools (navigate/snapshot/click/
+        # type/press/select/hover/wait_for/screenshot/get_text/scroll/back/forward/
+        # execute_js/console_messages/tabs/dialog/network/set_viewport) over a
+        # headless Chromium with native SSRF defense (allowed_domains +
+        # block_private_addresses) and chromium_sandbox. The context is mobile by
+        # default (390×844 touch, retina scale) and `set_viewport` switches the
+        # viewport/mobile profile mid-run by recreating the context. Requires the
+        # harness[playwright] extra + Chromium (`playwright install chromium`).
+        # Headless + private-address-blocked defaults set in build.py `_build_browser`.
+        "Browser",
         # Skill library — LIST / LOAD on demand + deterministic POINTER trigger.
         # list_skills/load_skill keep the prompt thin; point_to_skill pre-arms
         # which skill a message needs (zero-LLM BM25, skill-note-hint re-homed).

@@ -22,6 +22,7 @@ from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
+from paf.capabilities.browser import Browser
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.profiles import DEMO_PROFILE, PROFILES
@@ -150,6 +151,43 @@ def test_visual_cataloged_and_wired() -> None:
 
     msg = asyncio.run(_run())
     assert "no screenshot found for ref" in msg
+
+
+def test_browser_cataloged_and_wired() -> None:
+    """Browser is a cataloged paf-owned capability on the demo profile only, mobile by default.
+
+    It replaces the harness `PlaywrightBrowser` on the demo agent (mobile is the
+    only layout that matters). Verify the catalog + profile wiring, that
+    `build_runtime_capabilities` constructs a real `Browser`, that its toolset
+    exposes the new `set_viewport` tool alongside the 18 standard browser tools,
+    and that the default session is a 390×844 touch mobile profile.
+    """
+    assert CAPABILITY_TYPES["Browser"] is Browser
+    assert "Browser" in DEMO_PROFILE.capability_names
+    assert "Browser" not in ASSISTANT_PROFILE.capability_names
+    assert "PlaywrightBrowser" not in CAPABILITY_TYPES
+
+    from paf.capabilities.build import build_runtime_capabilities
+
+    built = build_runtime_capabilities(DEMO_PROFILE)
+    browser = next((c for c in built if isinstance(c, Browser)), None)
+    assert browser is not None
+
+    # Mobile-first default: 390×844 touch viewport, retina scale 3.
+    assert browser.viewport == (390, 844)
+    assert browser.mobile is True
+    assert browser.is_mobile is True
+    assert browser.has_touch is True
+    assert browser.device_scale_factor == 3
+
+    # The toolset exposes the 18 standard browser tools plus set_viewport, and
+    # the session carries the mobile defaults.
+    toolset = browser.get_toolset()
+    assert toolset is not None
+    assert "set_viewport" in toolset.tools
+    assert len(toolset.tools) == 19
+    assert browser._session._mobile is True
+    assert browser._session._viewport == (390, 844)
 
 
 def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
