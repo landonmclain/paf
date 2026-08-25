@@ -198,13 +198,16 @@ limit a newly opened one is closed and recorded rather than tracked, so a site
 that opens windows in a loop costs a bounded amount instead of the host's memory.
 """
 
-_MAX_SCREENSHOT_BYTES = 5_000_000
+_MAX_SCREENSHOT_BYTES = 10_000_000
 """Largest screenshot PNG returned as image content.
 
 Screenshots bypass the textual token budget, and a full-page capture of a long
-page can exceed what model providers accept per image (5 MB is the strictest
-mainstream limit). An oversized capture becomes a bounded error string instead
-of a `BinaryContent` that would fail the next model request and abort the run.
+page can exceed what model providers accept per image. 10 MB is deliberately
+conservative: the vision model this pipeline targets (MiMo-V2.5) accepts a ~50
+MB image, so this guard errs well on the safe side while still letting large
+and mobile full-page captures through. An oversized capture becomes a bounded
+error string instead of a `BinaryContent` that would fail the next model
+request and abort the run.
 """
 
 
