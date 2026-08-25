@@ -34,44 +34,11 @@ if TYPE_CHECKING:
     from pydantic_ai.agent import AbstractAgent
 
 _INSTRUCTIONS = """\
-You have a real web browser powered by Playwright. Use it for pages the lighter tools cannot handle:
-pages behind login or session cookies, JavaScript-heavy SPAs, interactive multi-step flows (clicking,
-filling forms), and dynamically loaded content. For looking up information or reading a static, public
-URL, prefer web search or web fetch.
+You have a real browser for pages the lighter tools cannot handle — things behind
+login/session cookies, JavaScript-heavy SPA behavior, and interactive multi-step flows.
 
-Read: `navigate(url)`, `snapshot()`, `get_text(selector?)`, `screenshot(full_page?)`.
-Act: `click(selector)` (CSS selector, 'x,y' pixel coordinates, or an `aria-ref=` handle from
-`snapshot`), `type_text(selector, text, sequential?)`, `press_key(key, selector?)`,
-`select_option(selector, values)`, `hover(selector)`, `scroll(direction)`,
-`wait_for(selector?, text?, gone?)`, `go_back()`, `go_forward()`, `execute_js(script)`.
-Manage: `tabs(action, index?)`, `handle_next_dialog(accept, prompt_text?)`.
-Inspect: `console_messages(errors_only?)`, `network_requests(url_contains?, errors_only?)`.
-Every page action takes an optional `timeout_ms` override.
-
-Prefer `snapshot` to read the page structure and obtain `aria-ref` handles, then target elements by
-`aria-ref=` for reliable clicks. `type_text` fills a field but does not submit: use `press_key('Enter')`
-for a search box or form, and `sequential=True` for an autocomplete or masked field that reacts to
-each keystroke. Use `wait_for` for content that loads after an action and `wait_for(gone=True)` to
-wait out a spinner or overlay, and `screenshot` only for visual checks (charts, layout). A page that
-renders after it loads returns little text at first: read it again with `snapshot` or `get_text`, or
-`wait_for` something a snapshot showed you -- waiting for text you have only guessed at spends the
-whole timeout. A long list needs `scroll('down')` repeated, collecting what you need from each result as you
-go: `scroll` reports where the page now sits, and a feed that renders only the rows near the
-viewport drops the earlier ones, so jumping to `bottom` and reading once returns a fraction of it.
-
-Tools act on the active tab. When a link, sign-in popup or payment step opens a new one, `tabs('list')`
-shows what is open and `tabs('select', index)` moves there. A page dialog (`alert`, `confirm`,
-`prompt`) is dismissed unless you call `handle_next_dialog(accept=True)` before the action that
-opens it.
-
-When page text looks empty or is missing what you expect, the content is probably inside an iframe
-(embedded schedules, checkout steps, chat widgets). Call `snapshot`: refs inside an embed look like
-`f1e4` and work with `click`, `type_text`, `hover` and `get_text`, while a CSS selector does not reach
-there. If a page renders from an API, `network_requests` finds the request holding the data, which is
-often easier to read than the DOM.
-
-Textual tool results are truncated to roughly {max_content_tokens} tokens; use `get_text` with a
-selector to read a specific section of a large page. Allowed domains: {allowed_domains}.
+Textual tool results are truncated to roughly {max_content_tokens} tokens (use `get_text`
+with a selector to read a specific section of a large page). Allowed domains: {allowed_domains}.
 """
 
 

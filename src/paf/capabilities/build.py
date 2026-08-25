@@ -332,7 +332,16 @@ def _build_planning(store) -> Planning:
     """
     from pydantic_ai_harness.planning import InMemoryPlanStore
 
-    return Planning(store=InMemoryPlanStore())
+    # Thin guidance: the write_plan/read_plan/add_task/... tool schemas already
+    # document themselves, so just cue the model to plan multi-step work rather
+    # than repeat the harness's longer usage blurb in the instruction channel.
+    return Planning(
+        store=InMemoryPlanStore(),
+        guidance=(
+            "For multi-step work, lay out the steps up front with `write_plan` and "
+            "keep it current as you go."
+        ),
+    )
 
 
 # Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
