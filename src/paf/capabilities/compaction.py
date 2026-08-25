@@ -146,7 +146,7 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     clamp_head = cfg.clamp_head_chars if cfg.clamp_head_chars is not None else 2_000
     clamp_tail = cfg.clamp_tail_chars if cfg.clamp_tail_chars is not None else 2_000
     win_max = cfg.window_max_messages if cfg.window_max_messages is not None else 10
-    win_keep = cfg.window_keep_messages if cfg.window_keep_messages is not None else 5
+    win_keep = cfg.window_keep_messages if cfg.window_keep_messages is not None else 20
     consolidate = cfg.consolidate if cfg.consolidate is not None else bool(settings.consolidate)
 
     if consolidate:

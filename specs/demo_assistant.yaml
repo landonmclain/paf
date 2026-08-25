@@ -105,10 +105,13 @@ model_settings:
 #   the 300k context — eviction only fires on genuinely huge turns. Can push
 #   further (e.g. ~100k) if heavy turns still oscillate.
 # window_max_messages / window_keep_messages: window trigger / tail. The
-#   sliding window keeps the 5 most-recent messages (+1 preserved first prompt)
+#   sliding window keeps the 20 most-recent messages (+1 preserved first prompt)
 #   and drops the rest, so eviction trims hard and consolidation replays the
-#   about-to-evict slice into the journal each turn it fires. Again a probe, not
-#   tuned.
+#   about-to-evict slice into the journal each turn it fires. 20 was raised from
+#   5 on 2026-08-24: a 5-message tail dropped the current user prompt on a long
+#   run, so after eviction the model lost its task anchor and derailed (latched
+#   onto stale build.py facts in injected memory). 20 keeps the live prompt +
+#   recent exchange survivable. Still a probe, not tuned.
 # clear_tool_max_tokens: whole-context token trigger for ClearToolResults — when
 #   the entire live context (system + turns + tool results) exceeds this, the
 #   OLDEST tool results get collapsed to a placeholder. NOT per-tool-call. 5000 is
@@ -127,7 +130,7 @@ model_settings:
 compact:
   target_tokens: 50000
   window_max_messages: 150
-  window_keep_messages: 5
+  window_keep_messages: 20
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 20
   consolidate: true
