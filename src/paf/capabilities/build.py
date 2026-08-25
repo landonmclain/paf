@@ -167,16 +167,23 @@ def _build_web(store) -> _Web:
 
 
 def _build_visual(store) -> _Visual:
-    """Vision-model description of captured screenshots (a single tool).
+    """Vision routing for captured screenshots (a tool + a before_model_request hook).
 
     `store` is accepted for a uniform builder signature but unused — vision
     state is just the model slug, read lazily from `VISION_MODEL` at call time
     (default `openrouter:xiaomi/mimo-v2.5`), so the capability constructs and
     registers even before a key is configured and the tool reports a clear
-    message rather than failing hard. A contained image-in/text-out side-call,
-    deliberately NOT a sub-agent (per Landon): no child run, no delegation, no
-    inherited tools — the agent captures a screenshot, passes its base64 here,
-    and gets a description string back.
+    message rather than failing hard. The capability provides two behaviors:
+
+    - ``describe_screenshot`` tool — the model asks the vision model a TARGETED
+      question ("is the padding OK?") about a captured screenshot ref.
+    - ``before_model_request`` hook — when `VISION_MODEL` is set (text-only main
+      model), stashes raw capture pixels as `shot_...` refs and swaps them for
+      text stubs so the text-only model never crashes on BinaryContent. When
+      `VISION_MODEL` is unset the hook passes images through untouched.
+
+    A contained image-in/text-out side-call, deliberately NOT a sub-agent (per
+    Landon): no child run, no delegation, no inherited tools.
     """
     return _Visual()
 

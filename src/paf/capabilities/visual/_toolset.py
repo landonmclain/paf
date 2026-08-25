@@ -1,28 +1,32 @@
 """paf-owned visual toolset -- `describe_screenshot` over a vision model.
 
-A single tool that takes base64-encoded PNG(s) plus a text prompt, sends them to
-a vision-capable model, and returns the model's text description. The vision
-model and `pydantic-ai` are loaded lazily at call time (via `VISION_MODEL` /
-`os.getenv`), so the toolset constructs without a key and degrades to a clear,
-model-visible message on a missing model or a decode/API error -- the same
-recoverable-tool convention as `WebToolset`.
+A single tool that takes a stored screenshot reference (produced by the
+`Visual` capability's ``before_model_request`` hook, which stashes raw
+`screenshot`/`navigate` captures under a `shot_...` ref) plus a text prompt,
+sends the referenced PNG to a vision-capable model, and returns the model's
+text description. The vision model and `pydantic-ai` are loaded lazily at call
+time (via `VISION_MODEL` / `os.getenv`), so the toolset constructs without a
+key and degrades to a clear, model-visible message on a missing model or a
+decode/API error -- the same recoverable-tool convention as `WebToolset`.
 
 This is intentionally NOT a sub-agent: no child run, no delegation. It is a
 contained side-call that returns `str(result.output)` straight to the parent
 agent's context, keeping the parent model (deepseek) on its pinned,
-reproducible path.
+reproducible path. The parent model asks a TARGETED question (e.g. "is the
+padding OK?") and gets a targeted answer -- it never sees the raw pixels
+itself, which keeps a text-only main model from crashing on BinaryContent.
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
 import functools
 import os
 from collections.abc import Awaitable, Callable
 from typing import Concatenate, ParamSpec
 
 from pydantic_ai.toolsets import FunctionToolset
+
+from ._store import _store
 
 _P = ParamSpec('_P')
 
@@ -36,10 +40,10 @@ def _recoverable(  # noqa: UP047  # matches fs/shell/web `_recoverable` conventi
 ) -> Callable[Concatenate[VisualToolset, _P], Awaitable[str]]:
     """Let the model retry on transient, correctable vision failures.
 
-    A missing model, a base64 decode failure, or a provider error is signalled
-    through the returned string (matching the Web toolset convention), so the
-    model can explain/address it rather than the run aborting. Any other
-    exception still aborts.
+    A missing model, a missing ref, or a provider error is signalled through the
+    returned string (matching the Web toolset convention), so the model can
+    explain/address it rather than the run aborting. Any other exception still
+    aborts.
     """
 
     @functools.wraps(fn)
@@ -57,20 +61,25 @@ def _vision_model() -> str:
     return os.getenv('VISION_MODEL', _VISION_MODEL_DEFAULT)
 
 
-def _is_base64_png(token: str) -> bool:
-    """True when `token` cleanly decodes as base64 that starts with a PNG magic.
+async def _run_vision(images: list[bytes], prompt: str) -> str:
+    """Send `images` + `prompt` to the vision model and return its text.
 
-    A real PNG's decoded bytes begin with ``\\x89PNG\\r\\n\\x1a\\n``. Checking the
-    magic (not just decode-ability) filters whitespace/corrupt tokens so a
-    concatenated multi-image `images_b64` arg is split on real captures.
+    Shared by the `describe_screenshot` tool and (kept here so the capability
+    and toolset never duplicate the one vision side-call). The `Agent` and
+    message types are imported lazily so this module imports without a live key.
     """
-    if not token:
-        return False
-    try:
-        raw = base64.b64decode(token, validate=True)
-    except (binascii.Error, ValueError):
-        return False
-    return raw.startswith(b'\x89PNG\r\n\x1a\n')
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import BinaryContent, TextContent
+
+    if not images:
+        return 'Vision describe: no image bytes to describe.'
+
+    content: list[TextContent | BinaryContent] = [TextContent(prompt)]
+    content.extend(BinaryContent(data=raw, media_type='image/png') for raw in images)
+
+    agent = Agent(_vision_model())
+    result = await agent.run(content)
+    return str(result.output)
 
 
 class VisualToolset(FunctionToolset):
@@ -86,36 +95,24 @@ class VisualToolset(FunctionToolset):
         self.add_function(self.describe_screenshot, name='describe_screenshot')
 
     @_recoverable
-    async def describe_screenshot(self, images_b64: str, prompt: str) -> str:
-        """Describe one or more screenshots with a vision model.
+    async def describe_screenshot(self, ref: str, prompt: str) -> str:
+        """Describe a captured screenshot with a vision model.
 
         Args:
-            images_b64: One or more base64-encoded PNG images, concatenated
-                (each decoded independently). Pass the raw base64 from a prior
-                `screenshot` capture -- no `data:` prefix.
-            prompt: What you want to know about the image(s), e.g. "describe
-                this rendered page and identify anything broken".
+            ref: The `shot_<...>` reference for a screenshot captured earlier in
+                this run (see the stub text left in your context by the browser
+                `screenshot` route). Do not fabricate one.
+            prompt: What you want to know about the image, e.g. "is the padding
+                OK?" or "does the hero image look centered?".
 
         Returns:
-            The vision model's text description of the image(s).
+            The vision model's text answer to your prompt about that screenshot.
         """
-        from pydantic_ai import Agent
-        from pydantic_ai.messages import BinaryContent, TextContent
-
-        # Each whitespace-delimited token that decodes as a real PNG is one
-        # image, so a caller can pass several concatenated captures in one call.
-        tokens = images_b64.split()
-        images = [base64.b64decode(t) for t in tokens if _is_base64_png(t)]
-        if not images:
+        images = _store.get(ref)
+        if images is None:
             return (
-                'describe_screenshot: no valid base64 PNG image found in '
-                '`images_b64`. Pass the raw base64 from a prior `screenshot` '
-                'capture (no `data:` prefix).'
+                'describe_screenshot: no screenshot found for ref '
+                f'"{ref}". Use the ref shown in the [screenshot captured] stub '
+                'text from an earlier browser capture. Do not fabricate a ref.'
             )
-
-        content: list[TextContent | BinaryContent] = [TextContent(prompt)]
-        content.extend(BinaryContent(data=raw, media_type='image/png') for raw in images)
-
-        agent = Agent(_vision_model())
-        result = await agent.run(content)
-        return str(result.output)
+        return await _run_vision([images], prompt)

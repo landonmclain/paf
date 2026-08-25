@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 import pytest
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelRequest,
+    TextContent,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from pydantic_ai.models import ModelRequestContext
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
@@ -114,9 +122,10 @@ def test_visual_cataloged_and_wired() -> None:
     allowlist + schema resolve) and built in Python (`_build_visual`) on the
     demo profile, deliberately ABSENT from the clean assistant profile. It is a
     contained image-in/text-out side-call, NOT a sub-agent -- a single
-    `describe_screenshot` tool, no child Agent, no delegation, no inherited
-    tools. The tool must degrade to a clear message on no valid base64 image
-    (not abort the run).
+    `describe_screenshot` tool (ask the vision model a targeted question about
+    a captured screenshot ref), no child Agent, no delegation, no inherited
+    tools. The tool must degrade to a clear message on an unknown ref (not abort
+    the run).
     """
     assert CAPABILITY_TYPES["Visual"] is Visual
     assert "Visual" in DEMO_PROFILE.capability_names
@@ -133,14 +142,93 @@ def test_visual_cataloged_and_wired() -> None:
     assert toolset is not None
     assert set(toolset.tools) == {"describe_screenshot"}
 
-    # Empty / non-PNG base64 degrades to a clear message, not a crash.
+    # An unknown ref degrades to a clear message, not a crash.
     async def _run() -> str:
-        return await toolset.describe_screenshot("not a real image!!", "what is this?")
+        return await toolset.describe_screenshot("shot_deadbeef", "what is this?")
 
     import asyncio
 
     msg = asyncio.run(_run())
-    assert "no valid base64 PNG image" in msg
+    assert "no screenshot found for ref" in msg
+
+
+def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
+    """When VISION_MODEL is set, a screenshot BinaryContent becomes a text stub.
+
+    A text-only main model must never receive raw pixels (it 404s on image
+    input). The hook stashes the bytes and replaces the BinaryContent with a
+    `[screenshot captured: shot_...]` stub naming the ref, so the model can call
+    `describe_screenshot` with a targeted question.
+    """
+    import asyncio
+    import os
+
+    from paf.capabilities.visual._capability import Visual
+    from paf.capabilities.visual._store import _store
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    vis = Visual()
+
+    def _ctx(messages, *, vision):
+        if vision:
+            os.environ["VISION_MODEL"] = "openrouter:xiaomi/mimo-v2.5"
+        else:
+            os.environ.pop("VISION_MODEL", None)
+        return ModelRequestContext(
+            model="openrouter:deepseek/deepseek-v4-flash-0731",
+            messages=messages,
+            model_settings={},
+            model_request_parameters={},
+        )
+
+    tool_return = ToolReturnPart(
+        tool_name="screenshot",
+        tool_call_id="call_1",
+        content=[
+            TextContent("Screenshot captured. URL: http://example.com"),
+            BinaryContent(data=png, media_type="image/png"),
+        ],
+    )
+
+    async def _run() -> None:
+        # VISION_MODEL set -> pixels stashed, stub left behind, ref resolvable.
+        ctx = _ctx([ModelRequest(parts=[tool_return])], vision=True)
+        out = await vis.before_model_request(None, ctx)
+        content = out.messages[0].parts[0].content
+        assert not any(isinstance(p, BinaryContent) for p in content)
+        stub = next(
+            (p for p in content if isinstance(p, TextContent) and "screenshot captured" in p.content),
+            None,
+        )
+        assert stub is not None
+        ref = stub.content.split("shot_")[1].split("]")[0].strip()
+        assert _store.get(f"shot_{ref}") == png
+
+        # VISION_MODEL unset -> passthrough (image preserved for a multimodal main model).
+        ctx2 = _ctx([ModelRequest(parts=[tool_return])], vision=False)
+        out2 = await vis.before_model_request(None, ctx2)
+        content2 = out2.messages[0].parts[0].content
+        assert any(isinstance(p, BinaryContent) for p in content2)
+
+        # A screenshot ALSO surfaces as a UserPromptPart with multimodal content;
+        # the hook must strip it there too (the run-verified root cause of the
+        # original 404 -- deepseek still saw the image in the UserPromptPart).
+        ascii_png = b"\x89PNG\r\n\x1a\n" + b"\xaa" * 16
+        user_part = UserPromptPart(content=[BinaryContent(data=ascii_png, media_type="image/png")])
+        ctx3 = _ctx([ModelRequest(parts=[user_part])], vision=True)
+        out3 = await vis.before_model_request(None, ctx3)
+        new_parts = out3.messages[0].parts
+        assert len(new_parts) == 1
+        assert not any(
+            isinstance(p, BinaryContent)
+            for p in new_parts[0].content
+            if isinstance(new_parts[0], UserPromptPart)
+        )
+        kinds = [type(p).__name__ for p in new_parts[0].content]
+        assert all(k == "TextContent" for k in kinds)
+
+    asyncio.run(_run())
+
 
 
 def test_only_one_real_profile_for_m1() -> None:
