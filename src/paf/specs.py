@@ -142,15 +142,33 @@ def _spec_browser_config(spec_path: Path) -> dict | None:
           allowed_domains:
             - localhost
             - staging.example.com
+          block_private_addresses: false   # optional; default true
 
     ``allowed_domains`` is the Browser capability's egress allowlist — hosts
-    (and their subdomains) the browser may reach. Only ``allowed_domains`` is
-    exposed from the spec; every other Browser field (headless, mobile, sandbox,
-    …) stays a code-level default. A non-empty present list **wins** (overrides
-    the env-driven ``PLAYWRIGHT_ALLOWED_DOMAINS`` default); absent block, non-dict
-    block, or empty list -> ``None``, so `_build_browser` falls back to the env
-    default. Unknown keys inside ``browser:`` are ignored so the schema can grow
-    without breaking older spec files.
+    (and their subdomains) the browser may reach. ``block_private_addresses``
+    is the **mechanical** SSRF guard (refuses loopback/RFC-1918/link-local and
+    cloud-metadata addresses whether or not an allowlist names them). It
+    defaults to ``True`` — secure by default; only an explicit ``false`` here
+    loosens it so an allowlisted *private* host (local dev boxes, staging LAN
+    hosts) actually becomes reachable.
+
+    These are two independent trust decisions and are deliberately **not**
+    conflated: listing ``localhost`` in ``allowed_domains`` does **not**
+    release the private-address guard on its own (the guard outranks the
+    allowlist). To reach a local host the operator must BOTH name it in
+    ``allowed_domains`` AND set ``block_private_addresses: false``. This keeps
+    the secure default for every agent that merely inherits a ``browser:``
+    block, and makes "reach my own internal network" a conscious, explicit
+    choice.
+
+    ``cloud-metadata`` (``169.254.169.254`` — the IAM-credential theft vector
+    on cloud hosts) is **never** released by this flag and stays refused; see
+    ``EgressPolicy``. Unknown keys inside ``browser:`` are ignored so the
+    schema can grow without breaking older spec files.
+
+    Returns a dict (or ``None`` if the block is absent or unreadable). The
+    dict carries whatever was declared; absent members fall back to their
+    code-level defaults in `_build_browser`.
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -162,10 +180,16 @@ def _spec_browser_config(spec_path: Path) -> dict | None:
     block = data.get("browser")
     if not isinstance(block, dict):
         return None
+    cfg: dict[str, object] = {}
     domains = block.get("allowed_domains")
-    if not isinstance(domains, list) or not domains:
+    if isinstance(domains, list) and domains:
+        cfg["allowed_domains"] = [str(d) for d in domains]
+    block_private = block.get("block_private_addresses")
+    if isinstance(block_private, bool):
+        cfg["block_private_addresses"] = block_private
+    if not cfg:
         return None
-    return {"allowed_domains": [str(d) for d in domains]}
+    return cfg
 
 
 class AgentSpecNotFoundError(FileNotFoundError):

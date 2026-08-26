@@ -429,6 +429,44 @@ def is_blocked_address(host: str) -> bool:
     return not ip.is_global or ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
 
 
+def is_always_blocked_address(host: str) -> bool:
+    """Return whether `host` is refused unconditionally, even with ``block_private_addresses=False``.
+
+    This is the firebreak that ``block_private_addresses: false`` (the eager
+    override for reaching local dev boxes / a LAN) must NOT release. Link-local
+    addresses -- ``169.254.0.0/16``, which is where the **cloud-metadata
+    endpoint ``169.254.169.254``** lives -- are never something a browser
+    legitimately needs to reach, and on a cloud host the metadata endpoint is
+    the IAM-credential theft vector, the single worst SSRF outcome. Keeping
+    this range refuse-only even under the override means "open loopback for my
+    dev machine" can never silently graduate to "exfiltrate this box's cloud
+    role credentials to anybody who can inject a URL." Scoped narrowly to
+    link-local so ordinary loopback and RFC-1918 remain governed by the
+    override as the operator intended.
+    """
+    host = host.lower().rstrip('.')
+    if host == 'localhost' or host.endswith('.localhost'):
+        return False  # loopback is the operator's to release via the override
+    # Well-known cloud-metadata hostname aliases: caught here (no DNS needed)
+    # so the override can never reach them, matching the literal-IP firebreak.
+    # GCP and Azure both advertise metadata under a fixed RFC-6762-style name
+    # that resolves to 169.254.169.254 (AWS uses the numeral directly).
+    if host in (
+        'metadata.google.internal',
+        'metadata.azure.internal',
+        'metadata',
+        'metadata.ec2.internal',
+    ):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # a name; decided by resolution via refuse()
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_link_local
+
+
 def _is_ip_literal(host: str) -> bool:
     """Whether `host` is already an address, so no name resolution is needed."""
     try:
@@ -661,6 +699,17 @@ class EgressPolicy:
         if request.url == _BLANK_PAGE:
             return None
         host = _url_host(request.url)
+        # Firebreak: link-local (169.254.0.0/16, the cloud-metadata endpoint)
+        # is refused UNCONDITIONALLY, even when block_private_addresses is off.
+        # The override lets an operator reach loopback/RFC-1918 dev hosts, but
+        # must never make the cloud-metadata address reachable — that is the
+        # IAM-credential theft vector, the worst SSRF outcome. This catches IP
+        # literals and the common link-local hostname aliases; a *remote* name
+        # that resolves to 169.254.x remains a DNS-rebinding residual risk (not
+        # solvable without a proxy), which is why the link-local range is kept
+        # out of the override's release in the default path too.
+        if host is not None and is_always_blocked_address(host):
+            return _PRIVATE_ADDRESS_REASON
         if host is not None and self.block_private_addresses and is_blocked_address(host):
             return _PRIVATE_ADDRESS_REASON
         if self.block_private_addresses and request.resolution_failed:

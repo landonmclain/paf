@@ -54,16 +54,16 @@ def test_real_assistant_spec_exists_and_parses() -> None:
 
 
 def test_real_demo_spec_browser_block_parses() -> None:
-    """The demo spec's shipped `browser:` block resolves to an allowlist dict."""
+    """The demo spec's shipped `browser:` block resolves to ONLY allowed_domains.
+
+    The published spec declares public staging reach only, and does NOT disable
+    the private-address guard — `block_private_addresses` is absent, so the
+    secure default (true) holds. No loopback hosts sneak into the allowlist.
+    """
     cfg = _spec_browser_config(SPECS_DIR / "demo_assistant.yaml")
-    assert cfg == {
-        "allowed_domains": [
-            "localhost",
-            "127.0.0.1",
-            "::1",
-            "staging.example.com",
-        ]
-    }
+    assert cfg is not None
+    assert cfg == {"allowed_domains": ["staging.example.com"]}
+    assert "block_private_addresses" not in cfg  # secure default stays true
 
 
 def test_spec_browser_config_absent_block_returns_none(tmp_path: Path) -> None:
@@ -91,4 +91,29 @@ def test_spec_browser_config_unknown_keys_ignored(tmp_path: Path) -> None:
     )
     assert _spec_browser_config(tmp_path / "c.yaml") == {
         "allowed_domains": ["example.com", "api.example.com"]
+    }
+
+
+def test_spec_browser_config_private_override_false(tmp_path: Path) -> None:
+    """A spec declaring `block_private_addresses: false` threads it through."""
+    (tmp_path / "d.yaml").write_text(
+        "name: d\nmodel: test\nbrowser:\n"
+        "  allowed_domains:\n"
+        "    - localhost\n"
+        "  block_private_addresses: false\n"
+    )
+    assert _spec_browser_config(tmp_path / "d.yaml") == {
+        "allowed_domains": ["localhost"],
+        "block_private_addresses": False,
+    }
+
+
+def test_spec_browser_config_private_override_true(tmp_path: Path) -> None:
+    """`block_private_addresses: true` is explicit and never dissolved."""
+    (tmp_path / "e.yaml").write_text(
+        "name: e\nmodel: test\nbrowser:\n"
+        "  block_private_addresses: true\n"
+    )
+    assert _spec_browser_config(tmp_path / "e.yaml") == {
+        "block_private_addresses": True
     }

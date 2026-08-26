@@ -209,10 +209,21 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
     of silently fetching a ~150MB binary mid-session.
 
     `browser_config` is the spec's top-level ``browser:`` block (see
-    ``_spec_browser_config``). Only its ``allowed_domains`` is honored: a
-    non-empty list **wins** (overrides the env-driven
-    ``settings.playwright_allowed_domains`` / PLAYWRIGHT_ALLOWED_DOMAINS
-    default); absent/``None``/empty -> fall back to the env default.
+    ``_spec_browser_config``). Two independent trust decisions, neither of
+    which silently weakens the other:
+
+    - ``allowed_domains`` — a non-empty list **wins** (overrides the
+      env-driven ``settings.playwright_allowed_domains`` /
+      PLAYWRIGHT_ALLOWED_DOMAINS default); absent/``None``/empty -> the env
+      default.
+    - ``block_private_addresses`` — the **mechanical** SSRF guard (loopback /
+      RFC-1918 / link-local / cloud-metadata). **Stays ``True`` (secure
+      default) unless the spec explicitly declares ``false``.** Listing a
+      private host in ``allowed_domains`` does NOT release this guard on its
+      own — the guard outranks the allowlist, so both the allowlist entry
+      AND ``block_private_addresses: false`` are required to actually reach a
+      local host. Cloud-metadata (``169.254.169.254``) is never released by
+      the guard either way.
 
     `chromium_sandbox` is deliberately False: Chromium's sandbox is fatal at
     launch on Ubuntu 23.10+ hosts where AppArmor restricts unprivileged user
@@ -241,9 +252,18 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
     )
     if not allowed_domains:
         allowed_domains = settings.playwright_allowed_domains
+    # Secure by default: the private/loopback/link-local SSRF guard stays ON
+    # unless the spec explicitly opts out (block_private_addresses: false).
+    block_private = (
+        browser_config.get("block_private_addresses")
+        if browser_config
+        else None
+    )
+    if block_private is None:
+        block_private = True
     return _Browser(
         headless=True,
-        block_private_addresses=True,
+        block_private_addresses=bool(block_private),
         allowed_domains=allowed_domains,
         auto_install_chromium=False,
         chromium_sandbox=False,

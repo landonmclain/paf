@@ -23,6 +23,12 @@ from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.capabilities.browser import Browser
+from paf.capabilities.browser._toolset import (
+    EgressPolicy,
+    EgressRequest,
+    is_always_blocked_address,
+    is_blocked_address,
+)
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.profiles import DEMO_PROFILE, PROFILES
@@ -222,6 +228,45 @@ def test_browser_spec_config_wins_over_env_default() -> None:
     ]
 
 
+def test_browser_private_guard_default_and_override() -> None:
+    """`block_private_addresses` stays true (secure) unless the spec opts out.
+
+    Build-level check that the browser's policy reflects the safe default and
+    the explicit override. The real enforcement is exercised by the
+    EgressPolicy tests below; here we only assert the capability is wired to
+    the right flag.
+    """
+    from paf.capabilities.build import build_runtime_capabilities
+
+    # Secure default: no browser_config -> guard stays ON.
+    b_default = next(
+        c
+        for c in build_runtime_capabilities(DEMO_PROFILE)
+        if isinstance(c, Browser)
+    )
+    assert b_default.block_private_addresses is True
+
+    # Explicit override -> guard turns OFF (reaches loopback/LAN dev hosts).
+    b_open = next(
+        c
+        for c in build_runtime_capabilities(
+            DEMO_PROFILE, None, None, {"block_private_addresses": False}
+        )
+        if isinstance(c, Browser)
+    )
+    assert b_open.block_private_addresses is False
+
+    # Explicit true is honored but is the same as the default.
+    b_strict = next(
+        c
+        for c in build_runtime_capabilities(
+            DEMO_PROFILE, None, None, {"block_private_addresses": True}
+        )
+        if isinstance(c, Browser)
+    )
+    assert b_strict.block_private_addresses is True
+
+
 def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
     """When VISION_MODEL is set, a screenshot BinaryContent becomes a text stub.
 
@@ -335,3 +380,87 @@ def test_compaction_builds_real_strategy_objects() -> None:
     )
     assert len(compaction.tiers) == 3
     assert all(type(tier) in strategy_types for tier in compaction.tiers)
+
+
+# --- EgressPolicy: secure default, explicit override, metadata firebreak ----
+
+def _policy(*, block_private: bool, allowed: list[str] | None) -> EgressPolicy:
+    """A browser egress policy with the given guard + allowlist."""
+    return EgressPolicy(
+        allowed_domains=allowed, block_private_addresses=block_private
+    )
+
+
+def _req(url: str, kind: str = "navigation") -> EgressRequest:
+    """A minimal egress request, like the session's pre-navigation check."""
+    return EgressRequest(url=url, kind=kind)  # type: ignore[arg-type]
+
+
+def _refuse(policy: EgressPolicy, url: str) -> str | None:
+    """Whether the policy refuses `url` (kind navigation)."""
+    return policy.refuse(_req(url))
+
+
+def test_egress_default_blocks_private_and_metadata() -> None:
+    """Secure default: loopback, RFC-1918, and link-local/metadata are refused —
+    even when the allowlist names the loopback host. The guard outranks the
+    allowlist, so listing `localhost` does NOT make it reachable on its own.
+    """
+    # The guard's address classifier sees all three classes.
+    assert is_blocked_address("127.0.0.1")
+    assert is_blocked_address("localhost")
+    assert is_blocked_address("169.254.169.254")  # cloud metadata
+    assert is_blocked_address("192.168.1.50")
+
+    # refuse() refuses them under the default, even when allowlisted.
+    p = _policy(block_private=True, allowed=["localhost", "127.0.0.1"])
+    assert _refuse(p, "http://localhost:4321/") is not None
+    assert _refuse(p, "http://127.0.0.1:4321/") is not None
+    assert _refuse(p, "http://169.254.169.254/latest/meta-data/") is not None
+    assert _refuse(p, "http://192.168.1.50/admin") is not None
+
+    # A public host is allowed when named in the allowlist.
+    p_public = _policy(block_private=True, allowed=["staging.example.com"])
+    assert _refuse(p_public, "http://staging.example.com/") is None
+
+
+def test_egress_override_reaches_loopback_but_not_metadata() -> None:
+    """`block_private_addresses: false` (override) releases loopback/RFC-1918
+    for allowlisted dev hosts — but the cloud-metadata endpoint is STILL refused
+    (the firebreak can never be released by the override).
+    """
+    # Loopback and LAN are reachable once the override + allowlist both apply.
+    p_open = _policy(
+        block_private=False, allowed=["localhost", "127.0.0.1", "192.168.1.50"]
+    )
+    assert _refuse(p_open, "http://localhost:4321/") is None
+    assert _refuse(p_open, "http://127.0.0.1:4321/") is None
+    assert _refuse(p_open, "http://192.168.1.50/admin") is None
+
+    # But metadata is always blocked — link-local, literal and aliases.
+    assert is_always_blocked_address("169.254.169.254")
+    assert is_always_blocked_address("169.254.0.1")
+    assert is_always_blocked_address("metadata.google.internal")
+    assert is_always_blocked_address("metadata.azure.internal")
+    assert not is_always_blocked_address("localhost")  # override may release it
+
+    # ...and the policy refuses it even with the override + allowlist naming it.
+    p_meta = _policy(
+        block_private=False,
+        allowed=["localhost", "169.254.169.254", "metadata.google.internal"],
+    )
+    assert _refuse(p_meta, "http://169.254.169.254/latest/meta-data/iam/") is not None
+    assert _refuse(p_meta, "http://metadata.google.internal/computeMetadata/v1/") is not None
+
+
+def test_egress_metadata_always_blocked_even_when_allowlisted_default() -> None:
+    """Even under the SECURE default, refusing the metadata endpoint does not
+    depend on it being allowlisted — it is refused regardless (literal and the
+    known aliases), as the firebreak that SSRF worst-case cannot clear.
+    """
+    assert is_always_blocked_address("169.254.169.254")
+    assert is_always_blocked_address("metadata.ec2.internal")
+    assert is_always_blocked_address("metadata")
+
+    p = _policy(block_private=True, allowed=["169.254.169.254"])
+    assert _refuse(p, "http://169.254.169.254/latest/meta-data/") is not None
