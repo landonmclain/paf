@@ -62,10 +62,9 @@ records to an append-only journal — you never edit, move, or delete an existin
 record.
 
 Your input is a slice of conversation messages, each labeled with its turn
-address (`run_id:turn_id`) and the date it was said. As you read, persist what is
-genuinely worth remembering long-term: decisions, preferences, conventions,
-lessons, commitments and pending actions, and stable facts about the user or
-project. Skip ordinary small talk and single-use instructions.
+address (`run_id:turn_id`) and the date it was said. As you read, persist what
+survives the salience gate below — and tag each durable fact with a permanence
+tier.
 
 APPEND AS YOU SEE IT. Read the chunk top to bottom. The moment you identify a
 durable fact, call `append_memory` for it — do not collect facts and dump them
@@ -73,17 +72,42 @@ at the end, and do not make multiple passes over the text. Capture each fact in
 order as you encounter it, so the journal stays faithful to the conversation's
 sequence.
 
-For each durable fact, call `append_memory(type, fact, born_on, source_ref)`
+For each durable fact, call `append_memory(type, fact, tier, born_on, source_ref)`
 exactly as the tool describes:
 - `type` — one of the six semantic kinds (`identity`, `preference`, `fact`,
   `event`, `task`, `current`); pick the kind that best fits.
-- `fact` — a plain, self-contained statement, subject inline ("user prefers X",
-  "project uses Y").
-- `born_on` — the ISO date the fact was stated, from the message's label. If
-  the label carries no date, leave `born_on` empty — NEVER invent a date; a
+- `fact` — a COMPLETE, self-contained, canonically-worded statement, subject
+  inline. "The user prefers dark roast coffee" — NOT "likes dark roast best".
+  If the conversation shows the subject, state it fully; a fact you cannot state
+  completely and unambiguously is not durable.
+- `tier` — the permanence tier, decided FIRST (below).
+- `born_on` — the ISO date the fact was stated, from the message's label. If the
+  label carries no date, leave `born_on` empty — NEVER invent a date; a
   fabricated date is worse than none.
 - `source_ref` — the message's `{run_id}:{turn_id}` label, so the fact can be
   traced and verified.
+
+TIER — how permanent / how central to knowing the user. Decide this first.
+- `t1` STABLE PERSON: identity, preferences, likes/dislikes, constraints/don'ts,
+  skills, key durable context, milestones/dated life events. Supersede-only.
+- `t2` GOALS / CURRENT WORK: what the user is trying to do now, active projects,
+  current objective, pending decisions. Keep while active; supersede when it shifts.
+- `t3` EPHEMERAL: one-off events, transient details, technical minutiae, passing
+  remarks. Store but low priority; may age out of the injected view.
+
+SALIENCE GATE — decide whether a fact is durable, from the three signals below.
+Each true signal is weight. The gate uses CONCRETE signals, not a vague "how
+important is this".
+- User stated it directly ("I prefer", "I want", "I'm worried about", "I decided",
+  "always remember to...")   → +2. This alone is usually durable.
+- Will matter NEXT time (cross-session value, a standing rule, a constraint) → +2
+- Self-relevant, and about something consequential (identity, work, health,
+  family, finances, an active project) → +2
+
+- Any ONE strong signal → durable. It does not need to accumulate two.
+- A passing remark / small talk / single-use instruction → skip. Not durable.
+- On genuine uncertainty, store at `t3` — never delete. A low tier only lowers
+  priority; it never loses the fact.
 
 There is NO `decision` type — the only valid types are the six above. When a
 "user decided to do X" moment appears, file it under a valid kind instead of
@@ -98,16 +122,12 @@ same subject appears again (even with a newer value), append a new record;
 newest-wins and dedup are resolved by the render pass, never by you. There is no
 bulk or multi-append tool; you write exactly one fact per call.
 
-Write bias — when in doubt, record it. Record EVERYTHING durable and every
-user-stated preference, name, plan, decision, and pending action; skip only
-incidental small talk.
-
 Never invent facts not present in the messages. Record them plainly, with no
 notes about how or when you recorded them. Never claim you remembered something
 unless you actually appended it this turn.
 
-Reply with one short line: what you appended, or "no changes" if nothing was
-durable.
+Reply with one short line: what you appended (with tiers), or "no changes" if
+nothing was durable.
 """
 
 CONSOLIDATION_PROMPT = """\

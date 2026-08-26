@@ -27,7 +27,7 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from typing_extensions import TypedDict
 
-from ._journal import MEMORY_TYPES, JournalStore
+from ._journal import MEMORY_TIERS, MEMORY_TYPES, JournalStore
 from ._store import MemoryStore
 
 MAIN_FILENAME = "MEMORY.md"
@@ -245,6 +245,7 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
         ctx: RunContext[AgentDepsT],
         type: str,
         fact: str,
+        tier: str,
         born_on: str,
         source_ref: str,
     ) -> MemoryWriteResult:
@@ -259,8 +260,10 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
         Args:
             type: One of the six semantic kinds — ``identity``, ``preference``,
                 ``fact``, ``event``, ``task``, ``current``.
-            fact: A plain, self-contained durable statement, subject inline
-                ("user prefers X", "project uses Y").
+            fact: A COMPLETE, self-contained, canonically-worded durable
+                statement, subject inline ("user prefers dark roast coffee").
+            tier: Permanence tier — ``t1`` stable person, ``t2`` goals/current
+                work, ``t3`` ephemeral (may age out of the injected view).
             born_on: The ISO date the fact was stated, from the message's label.
             source_ref: The message's ``{run_id}:{turn_id}`` label, so the fact
                 can be traced and verified via ``read_turn``.
@@ -272,17 +275,22 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
                 raise ModelRetry(
                     f"invalid memory type {type!r}; expected one of {sorted(MEMORY_TYPES)}"
                 )
+            if tier not in MEMORY_TIERS:
+                raise ModelRetry(
+                    f"invalid memory tier {tier!r}; expected one of {sorted(MEMORY_TIERS)}"
+                )
             try:
                 self._journal.append(
                     type=type,
                     fact=fact,
+                    tier=tier,
                     born_on=born_on,
                     source_ref=source_ref,
                 )
             except ValueError as exc:
                 raise ModelRetry(str(exc)) from exc
             if span.is_recording():
-                span.set_attributes({"memory.append.type": type})
+                span.set_attributes({"memory.append.type": type, "memory.append.tier": tier})
             return {
                 "memory": fact,
                 "file": MAIN_FILENAME,

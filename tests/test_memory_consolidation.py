@@ -85,7 +85,7 @@ def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
         journal.append(
             type="fact",
             fact="durable fact alpha",
-            born_on="2023-08-20",
+            tier="t1", born_on="2023-08-20",
             source_ref="test:0",
         )
 

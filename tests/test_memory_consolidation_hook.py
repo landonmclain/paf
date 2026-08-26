@@ -65,7 +65,7 @@ class _Gotcha:
         journal.append(
             type="fact",
             fact=f"consolidated {self.cutoff} evicted messages",
-            born_on="2023-08-20",
+            tier="t1", born_on="2023-08-20",
             source_ref="test:0",
         )
         return None

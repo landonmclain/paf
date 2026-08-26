@@ -30,7 +30,7 @@ def test_run_organizer_caught_up_returns_no_changes(tmp_path) -> None:
     # Index already progressed past every journal record -> nothing new.
     journal = JournalStore(tmp_path)
     journal.append(type="fact", fact="already indexed",
-                   born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+                   tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
     idx = IndexStore(tmp_path)
     # Advance the index watermark past line 1 without entries (simulate prior run).
     idx._save([], watermark=1, next_id=1)
@@ -41,8 +41,8 @@ def test_render_journal_tail_shows_only_new_lines() -> None:
     from paf.capabilities.memory._journal import MemoryRecord
 
     recs = [
-        (1, MemoryRecord(type="fact", fact="old", born_on="2026-08-16T00:00:00Z", source_ref="r:0")),
-        (2, MemoryRecord(type="fact", fact="new", born_on="2026-08-17T00:00:00Z", source_ref="r:1")),
+        (1, MemoryRecord(type="fact", fact="old", tier="t1", born_on="2026-08-16T00:00:00Z", source_ref="r:0")),
+        (2, MemoryRecord(type="fact", fact="new", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="r:1")),
     ]
     out = render_journal_tail(recs, watermark=1)
     assert "line 2" in out

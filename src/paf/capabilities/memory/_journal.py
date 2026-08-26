@@ -58,13 +58,23 @@ MEMORY_TYPES: frozenset[str] = frozenset(
     {"identity", "preference", "fact", "event", "task", "current"}
 )
 
+# Permanence tiers (added 2026-08-25 for the owner importance rubric). Perpendicular
+# to `type`: type says *what kind of thing* a fact is (for search), tier says *how
+# permanent / how central to knowing the user* (for bounded, tier-sorted injection).
+# t1 = stable person (identity/preferences/constraints/skills/milestones; supersede-only)
+# t2 = goals / current work (active projects, current objective; superseded when it shifts)
+# t3 = ephemeral (one-off events, transient details, technical minutiae; ages out of inject)
+MEMORY_TIERS: frozenset[str] = frozenset({"t1", "t2", "t3"})
+
 
 class MemoryRecord:
     """One immutable journal record: a durable fact, append-only.
 
-    Fields (LOCKED 2026-08-17):
+    Fields (LOCKED 2026-08-17; ``tier`` added 2026-08-25):
       type       -- one of ``MEMORY_TYPES`` (identity|preference|fact|event|task|current)
       fact       -- the durable statement; subject lives inline (no entity field)
+      tier       -- one of ``MEMORY_TIERS`` (t1|t2|t3); permanence for bounded injection.
+                    REQUIRED (we start fresh — no legacy rows without a tier).
       born_on    -- ISO datetime of the source message (corpus clock, not wall-clock)
       source_ref -- ``{run_id}:{turn_id}`` turn addressing, read_turn-resolvable
 
@@ -72,19 +82,24 @@ class MemoryRecord:
     by :meth:`JournalStore.append`/``.append_many``.
     """
 
-    __slots__ = ("type", "fact", "born_on", "source_ref")
+    __slots__ = ("type", "fact", "tier", "born_on", "source_ref")
 
     def __init__(
         self,
         *,
         type: str,
         fact: str,
+        tier: str,
         born_on: str | datetime | None = None,
         source_ref: str,
     ) -> None:
         if type not in MEMORY_TYPES:
             raise ValueError(
                 f"invalid memory type {type!r}; expected one of {sorted(MEMORY_TYPES)}"
+            )
+        if tier not in MEMORY_TIERS:
+            raise ValueError(
+                f"invalid memory tier {tier!r}; expected one of {sorted(MEMORY_TIERS)}"
             )
         fact = (fact or "").strip()
         if not fact:
@@ -94,6 +109,7 @@ class MemoryRecord:
             raise ValueError("source_ref must be non-empty")
         self.type = type
         self.fact = fact
+        self.tier = tier
         self.born_on = _normalize_born_on(born_on)
         self.source_ref = source_ref
 
@@ -103,6 +119,7 @@ class MemoryRecord:
         return {
             "type": self.type,
             "fact": self.fact,
+            "tier": self.tier,
             "born_on": self.born_on,
             "source_ref": self.source_ref,
         }
@@ -112,6 +129,7 @@ class MemoryRecord:
         return cls(
             type=row["type"],
             fact=row["fact"],
+            tier=row["tier"],
             born_on=row["born_on"],
             source_ref=row["source_ref"],
         )
@@ -122,13 +140,14 @@ class MemoryRecord:
         return (
             self.type == other.type
             and self.fact == other.fact
+            and self.tier == other.tier
             and self.born_on == other.born_on
             and self.source_ref == other.source_ref
         )
 
     def __repr__(self) -> str:
         return (
-            f"MemoryRecord(type={self.type!r}, fact={self.fact!r}, "
+            f"MemoryRecord(type={self.type!r}, fact={self.fact!r}, tier={self.tier!r}, "
             f"born_on={self.born_on!r}, source_ref={self.source_ref!r})"
         )
 
@@ -226,11 +245,12 @@ class JournalStore:
         *,
         type: str,
         fact: str,
+        tier: str,
         born_on: str | datetime,
         source_ref: str,
     ) -> MemoryRecord:
         """Append one record; returns it. Its id is the new line number."""
-        record = MemoryRecord(type=type, fact=fact, born_on=born_on, source_ref=source_ref)
+        record = MemoryRecord(type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref)
         with self._lock:
             line = json.dumps(record.to_row(), ensure_ascii=False)
             _append_block_atomic(self._path, [line + "\n"])
@@ -241,6 +261,7 @@ class JournalStore:
         return self.append(
             type=record.type,
             fact=record.fact,
+            tier=record.tier,
             born_on=record.born_on,
             source_ref=record.source_ref,
         )
