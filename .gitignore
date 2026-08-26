@@ -22,33 +22,17 @@ wheels/
 # traversable so the `!` exceptions can re-include a subtree.
 data/*
 !.env.example
-!data/benchmarks/
-data/benchmarks/*
-!data/benchmarks/generated/
-# Journal-sandbox oracle stem: OUR derived data (copy of lme_oracle.json under
-# a distinct stem so journal-format durables namespace to memory-lme_oracle_journal/).
-# Tracked so a fresh clone can restore those journal durables and re-run the
-# soft-verify/prompt experiments. The upstream lme_oracle.json bank stays ignored.
-!data/benchmarks/lme_oracle_journal.json
-# Durable seed summaries under generated/ are auto-persisted by run_lmem.py
-# (_persist_durable_summary) per seeded question and TRACKED so a fresh clone
-# re-runs zero-live-summarizer. They rename only when a question's seed turns
-# change. Keep any non-summary churn (e.g. transient run dumps) out via
-# explicit ignores below.
-data/benchmarks/generated/*
-!data/benchmarks/generated/*.jsonl
 
-# Durable per-question memory snapshots are auto-persisted by run_lmem.py
-# (_persist_durable_memory) per seeded question and TRACKED so a fresh clone
-# re-runs with ZERO owner/consolidation tokens. Each <qid>/ holds the
-# owner-produced memory store (assistant/MEMORY.md + assistant/.memory-state.json).
-# The split (oracle vs _s/_m) is namespaced by the LME data-file stem:
-# memory-lme_oracle/ , memory-longmemeval_s_cleaned/ , etc. The negation below
-# re-includes the memory-*/ dir that `data/benchmarks/*` would ignore; once the
-# dir is included git descends and tracks everything under it. Refresh via
-# PAF_FRESH_MEMORY=1 (or LME_QIDS=<qid> PAF_FRESH_MEMORY=1), which re-consolidates
-# and overwrites the snapshot.
-!data/benchmarks/memory-*/
+# Benchmark data — all derived, regenerable artifacts: the upstream oracle
+# bank (lme_oracle.json), per-question durable memory snapshots
+# (memory-*/<qid>/), seed summaries (generated/), and the journal oracle copy.
+# None of these are source; they're byte-produced by re-running the harness
+# and were untracked 2026-08-26 because (a) a fresh clone can't meaningfully
+# re-run the benchmark without the oracle questions (which stay upstream /
+# uncommitted) and (b) the durables are large, low-information churn. Regenerate
+# via PAF_FRESH_MEMORY=1 (or LME_QIDS=<qid> PAF_FRESH_MEMORY=1). Run outputs
+# (result JSON) are ignored separately under tests/results/.
+data/benchmarks/
 
 # Generated benchmark run outputs (graded runner writes JSON per full run).
 tests/results/
