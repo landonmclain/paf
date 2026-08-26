@@ -93,19 +93,27 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         messages: list[ModelMessage],
         ctx: RunContext,
     ) -> list[ModelMessage]:
-        """Consolidate, organize, render, then trim.
+        """Consolidate, render, then trim.
 
-        Flow (chosen with Landon 2026-08-21): the **owner** wraps the
-        about-to-evict slice into journal records (append-only
-        ``memory-journal.jsonl``); the **organizer** reconciles the new journal
-        tail into the curated ``memory-index.json`` (dedup/supersede); and the
-        **index renderer** writes the root ``MEMORY.md`` from the index — the
-        deduped view the assistant's read-only ``JournalViewStore`` injects.
-        The journal render is NOT used here: the index is the curated source.
+        Flow (chosen with Landon 2026-08-21, render source updated 2026-08-25):
+        the **owner** wraps the about-to-evict slice into journal records
+        (append-only ``memory-journal.jsonl``), and the **deterministic journal
+        renderer** writes the root ``MEMORY.md`` straight from that journal —
+        the view the assistant's read-only ``JournalViewStore`` injects. The
+        journal is the sole source; the organizer's curated index and the
+        consolidation second pass are NO LONGER WIRED here (see below).
 
         Consolidation is rate-limited to once per *eviction generation*: it
         fires only when the about-to-evict prefix is longer than the last one
         folded (fresh material), never on repeated calls over the same slice.
+
+        .. note:: The organizer (``run_organizer``) and consolidation second
+           pass (``run_consolidation``) were UNHOOKED 2026-08-25 — they were
+           context-blind by construction and drove index churn, so ``MEMORY.md``
+           is now rendered deterministically from the append-only journal
+           instead of from a curated LLM-built index. Dedup/supersede/
+           tier-sorting will return as a deterministic index *derivation*
+           (pure code), not an LLM pass.
         """
         cutoff = find_safe_cutoff(messages, self.keep_messages)
         if cutoff > 0 and (
@@ -113,8 +121,7 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         ):
             from ._consolidate import consolidate
             from ._journal import JournalStore
-            from ._organize import IndexStore, run_consolidation, run_organizer
-            from ._render import write_index_render
+            from ._render import write_render
 
             journal = JournalStore(self.memory_directory)
             await consolidate(
@@ -125,20 +132,14 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
                 keep_tail=self.keep_messages,
                 journal=journal,
             )
-            # Organize the new journal tail into the curated index, then
-            # materialize MEMORY.md from THAT (not the raw journal, which
-            # repeats facts as it grows). Same atomic-write guarantee.
-            index_store = IndexStore(self.memory_directory)
-            await run_organizer(journal, index_store=index_store)
-            # Second pass: fold any near-duplicate entries already in the index
-            # into one canonical survivor each. Runs every organize (even when
-            # the journal tail was already folded) so the curated index never
-            # accumulates duplicate facts over time. No-op (0 tokens) when clean.
-            await run_consolidation(index_store)
-            write_index_render(
-                index_store,
-                str(Path(self.memory_directory) / "MEMORY.md"),
-            )
+            # Materialize MEMORY.md deterministically from the append-only
+            # journal (the sole source). The organizer and consolidation second
+            # pass are UNHOOKED (2026-08-25): they were context-blind by
+            # construction and drove index churn; the journal render is pure,
+            # deterministic, and needs no model. Dedup/supersede/tier-sorting
+            # will be re-introduced later as a deterministic index derivation,
+            # not an LLM pass.
+            write_render(journal, str(Path(self.memory_directory) / "MEMORY.md"))
             self._consolidated_cutoff = cutoff
         return await super().compact(messages, ctx)
 

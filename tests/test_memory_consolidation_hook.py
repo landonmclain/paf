@@ -71,39 +71,6 @@ class _Gotcha:
         return None
 
 
-async def _stub_organizer(journal, *, index_store, agent_name="memory-organizer"):
-    """Deterministic stand-in for the real (LLM) organizer.
-
-    Mirrors what an organizer pass does at the seam we need to pin: it reads the
-    journal records the owner just appended and curates them into the index —
-    here, trivially one ``IndexEntry`` per journal record (no dedup/supersede,
-    which is the LLM's job and out of scope for a hermetic test). __window.compact
-    lazy-imports ``run_organizer`` per call, so patching the module attribute is
-    picked up — same pattern as the ``consolidate`` patch.
-    """
-    from paf.capabilities.memory._journal import _normalize_born_on
-    from paf.capabilities.memory._organize import IndexEntry
-
-    entries = []
-    nid = 1
-    for _, rec in journal.read_all():
-        entries.append(
-            IndexEntry(
-                id=f"mem-{nid}",
-                type=rec.type,
-                subject="consolidation",
-                fact=rec.fact,
-                born_on=_normalize_born_on(rec.born_on),
-                updated_on=_normalize_born_on(rec.born_on),
-                source_ref=rec.source_ref,
-                source=[nid],
-            )
-        )
-        nid += 1
-    index_store._save(entries, watermark=len(entries), next_id=nid)
-    return f"organized {len(entries)} entries"
-
-
 def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch):
     # The shared Markdown store the window targets for memory.
     store_dir = tmp_path / "memory"
@@ -121,15 +88,12 @@ def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch
     messages = _make_messages(8)
 
     # Substitute the real owner consolidation (model call) with a deterministic
-    # recording write, and the real organizer (also a model call) with a stub
-    # that curates the journal into the index. `_window.compact` lazy-imports
-    # both per call, so patching the module attributes is picked up.
+    # recording write. `_window.compact` lazy-imports `consolidate` per call, so
+    # patching the module attribute is picked up. (The organizer/consolidation
+    # passes are unhooked in the window, so no organizer stub is needed.)
     got = _Gotcha(store_dir)
     monkeypatch.setattr(
         "paf.capabilities.memory._consolidate.consolidate", got, raising=True
-    )
-    monkeypatch.setattr(
-        "paf.capabilities.memory._organize.run_organizer", _stub_organizer
     )
 
     # `MemoryConsolidationWindow.compact` never dereferences `ctx` fields (it only
@@ -150,13 +114,14 @@ def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch
     assert got.keep_tail == 2
 
     # 2. Durable memory was written into the shared store, through the new
-    #    owner → organizer → index-render path: MEMORY.md comes from the curated
-    #    index (the distilled fact), not the raw journal.
+    #    owner → journal-render path: MEMORY.md comes from the append-only
+    #    journal, not a curated LLM index.
     assert (store_dir / "MEMORY.md").is_file()
     md = (store_dir / "MEMORY.md").read_text(encoding="utf-8")
     assert f"consolidated {expected_cutoff} evicted messages" in md
-    # The index file itself was produced by the organizer step.
-    assert (store_dir / "memory-index.json").is_file()
+    # The journal is the sole source and the index is no longer produced.
+    assert (store_dir / "memory-journal.jsonl").is_file()
+    assert not (store_dir / "memory-index.json").exists()
 
     # 3. The window still performed the trim (the contract of the base window):
     #    the about-to-evict prefix is gone and only the tail remains.
@@ -219,9 +184,6 @@ def test_compaction_hook_rate_limits_within_one_turn(tmp_path, monkeypatch):
     got = _Gotcha(store_dir)
     monkeypatch.setattr(
         "paf.capabilities.memory._consolidate.consolidate", got, raising=True
-    )
-    monkeypatch.setattr(
-        "paf.capabilities.memory._organize.run_organizer", _stub_organizer
     )
 
     fake_ctx = types.SimpleNamespace(messages=[], model=None)
