@@ -100,6 +100,18 @@ recall/answer phase reads the same durable memory and a fresh consolidation is
 unneeded overhead (and an extra fragile live-LLM step). Only force fresh memory
 when the consolidation output itself is the thing under test.
 
+> **TWO-PASS CONVENTION (the operating rule, verified via traces 2026-08-25):**
+> **build once, then recall read-only.** On a restored durable snapshot the
+> `memory-owner` does **NOT** fire — the recall trace is inject-only (`memory.inject`
+> → `JournalViewStore`, `outcome=ok`, `main_truncated=false`, zero `memory-owner run`
+> observations), which is the cheap/desirable path. Fresh-built qids each carry one
+> `memory-owner run` (the build cost) — so the memory-owner firing on a recall turn
+> is *always* a sign that qid had no durable snapshot yet (a build pass), never a
+> bug. To batch-run questions with minimal owner cost, let the first run build their
+> durables, then a second run on the same questions is owner-free recall. Only add
+> `PAF_FRESH_MEMORY=1` when the consolidation output itself is under test — a fresh
+> consolidation on a restored qid is a redundant live-LLM cost.
+
 **Chunked seed consolidation (2026-08-16, DEFAULTS ON):** the owner now
 consolidates the seed in **token-bounded, message-boundary-aligned chunks**
 (`consolidate_conversation_chunked`, `src/paf/capabilities/memory/_consolidate.py`)
@@ -167,14 +179,27 @@ retrieved context never states the fact but single-mindedly implies one answer
 retailer appears), give the hedged inference — *"Most likely Target, but you
 never told me the exact location"* — rather than a bare refusal.
 
-Verified: `51a45a95` flipped judge WRONG→CORRECT with this rule (gold=Target is
-an *inference*, never stated; the model's earlier honest "not on record" answer
+Verified: `51a45a95` flipped judge WRONG→CORRECT with this rule (gold=Target is an
+*inference*, never stated; the model's earlier honest "not on record" answer
 was marked wrong by the judge). The three rules collide on exactly these
 inference-answer questions — UNANSWERABLE's honesty and the eval's reward for
 asserting the implied answer can't both fully win; the INFERENCE RULE is the
 compromise (keeps the honesty floor via "most likely", but leads with the useful
 answer so the judge sees it). `_INSTRUCTIONS` is a raw-string block; keep it
 that way (parens-tuple fragment editing trips on backslash escapes).
+
+> **MEASURED DOWNSIDE of INFERENCE+ORDER (accepted 2026-08-25):** on the
+> *unanswerable* ordering class (two events in separate sessions with no shared
+> timeline, gold=`None`, e.g. `gpt4_70e84552` "fixing fence or trimming hooves
+> first"), the INFERENCE rule ("prefer hedged inference over bare refusal") +
+> ORDER rule ("state the dates being compared before giving the order") push the
+> model to **over-commit and fabricate an ordering it can't justify** even when it
+> had the right instinct ("I want to be honest about the second part"). Result:
+> it answers instead of declaring unanswerable → judge marks it wrong.
+> **Decision (Landon, definitive):** leave the prompt as-is; accept
+> temporal-reasoning/unanswerable as a **known-miss-by-design** class — not a
+> TODO, not a regression. The tier-render work targets factual/preference/
+> knowledge-update classes, not this ordering class.
 
 ### Durable seed store (replay = near-zero seed tokens) — READ BEFORE CHANGING KNOBS
 
@@ -338,7 +363,51 @@ provider={"order": ["DeepInfra", "Parasail", "CoreWeave"],
 **Caveat:** pinning a single provider trades uptime for determinism (a pinned host down = run fails,
 no graceful route). For a reproducibility benchmark that is the correct tradeoff.
 
+## Memory render path (current architecture — 2026-08, tier-sorted)
+
+The persisted memory a recall turn sees is a **deterministic, pure-journal render** —
+no LLM, no index in the path. This supersedes the earlier organizer/index stage (see
+the deprecation note under "Memory organizer live test" below).
+
+- **Append-only journal** (`memory-journal.jsonl`) is the **sole source of truth**.
+  The memory-owner consolidates new seed turns ONCE into journal rows that each carry
+  a **required `tier`** (`MEMORY_TIERS = {t1, t2, t3}` in `_journal.py` — no default,
+  no backward-compat), plus intent/importance rubric in `_consolidate.py`:
+  - **t1 = stable/person-level** (supersede-only): identity, preferences, constraints.
+  - **t2 = goals/current-work** (superseded on shift): objectives, active context.
+  - **t3 = ephemeral/recent** (uncertainty never drops, it goes here).
+  - Completeness rule = canonical self-contained facts; uncertainty → t3.
+- **`write_render(journal, path)`** (`_window.py`) renders `MEMORY.md` deterministically:
+  groups rows by type, sorts by `born_on`, emits `## t1 / ## t2 / ## t3` sections,
+  **newest-first (`born_on` desc) within tier**, line shape
+  `- <fact> — <born_on> — <source_ref>`. **Decouples tier position from recency** — a
+  newer t3 line appears AFTER all t1/t2 lines; true recency is the `born_on` date.
+- **The unhook (commit `10addf6`):** the organizer and the owner/consolidator second
+  pass no longer run in `MemoryConsolidationWindow.compact()`. `compact()` calls the
+  owner-only consolidate → append-only journal, then `write_render` → `MEMORY.md`.
+  No `IndexStore`, no `run_organizer`, no `write_index_render`. Rationale: the owner is
+  context-blind by construction (extracts with full conversation, reconciles from
+  strings+index only) → index churn + reliability failures (lost good facts). Any future
+  dedup/supersede/tier-sort must be a **deterministic pure-code derivation**, never an
+  LLM pass.
+- **`JournalViewStore` (`_view.py`)** reads the root `MEMORY.md` verbatim for injection —
+  producer-agnostic; a recall agent always sees the last rendered file. `render_journal_tail`
+  reads only `type/fact/born_on/source_ref`. The benchmark `SUBJECT_SYSTEM_PROMPT`
+  (in `tests/framework.py`, the IN CONTEXT+MEMORY rule) names this tier ladder and the
+  `t1→t2→t3` ordering + target_tokens budget.
+- **Living-branch fact:** this is all on `feature/m2-prod-sync` (live branch); the owner
+  tier rubric + `_journal.tier` landed in `d340b75`, the deterministic render+unhook in
+  `10addf6`/`64d5f32`. Benchmarks on a **fresh durable stem** (`LME_DATA_FILE=...` →
+  `data/benchmarks/memory-<stem>/`) exercise the tier render end-to-end.
+
 ## Memory organizer live test — `tests/run_organizer_live.py`
+
+> **DEPRECATED / SUPERSEDED (2026-08-25):** the organizer and `memory-index.json` were
+> **unhooked** from the memory path (`10addf6`) — compaction no longer runs
+> `run_organizer`/`write_index_render`; the journal + `write_render` replace it. This
+> section is retained only as historical reference for running the (now-orphaned)
+> organizer classify brain if it's ever resurrected as a deterministic derivation. It
+> does NOT reflect the current benchmark memory path.
 
 The memory **organizer** (`src/paf/capabilities/memory/_organize.py`) is the
 sibling sub-agent that maintains the curated `memory-index.json` from the
