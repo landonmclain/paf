@@ -120,6 +120,26 @@ web:
     - api.composer.trade
 
 # ---------------------------------------------------------------------------
+# Browser egress allowlist (option B — lives in the spec, not in Python). Read
+# by `build_agent` -> `_spec_browser_config` -> the Browser capability's
+# `allowed_domains`. A non-empty list here WINS (overrides the env-driven
+# PLAYWRIGHT_ALLOWED_DOMAINS default); absent/null/empty -> the env default.
+#
+# `allowed_domains` bounds which hosts (and their subdomains) the browser may
+# navigate to and which request kinds that move data (fetch, XHR, EventSource,
+# WebSocket, sendBeacon) may reach. `block_private_addresses=True` (a code
+# default, not set here) independently refuses the cloud-metadata endpoint,
+# loopback, and RFC-1918 LAN ranges, so SSRF defense holds even where this list
+# is loosened. Curate here per agent: add a local/staging host the agent should
+# be able to open in a real browser; drop one it no longer needs.
+browser:
+  allowed_domains:
+    - localhost
+    - 127.0.0.1
+    - "::1"
+    - staging.example.com
+
+# ---------------------------------------------------------------------------
 # Per-assistant context-compaction tuning (option B — lives in the spec, not in
 # Python). Read by `build_agent` -> `CompactionConfig` -> the no-summary ladder
 # in `build_compaction()`. The `demo` profile allowlists `Compaction`, so this

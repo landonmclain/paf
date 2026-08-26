@@ -10,6 +10,7 @@ from pydantic_ai import AgentSpec
 from paf.config import SPECS_DIR
 from paf.specs import (
     AgentSpecNotFoundError,
+    _spec_browser_config,
     get_spec_path,
     load_agent_spec,
 )
@@ -50,3 +51,44 @@ def test_real_assistant_spec_exists_and_parses() -> None:
     spec = load_agent_spec("assistant", SPECS_DIR)
     assert isinstance(spec, AgentSpec)
     assert spec.name == "assistant"
+
+
+def test_real_demo_spec_browser_block_parses() -> None:
+    """The demo spec's shipped `browser:` block resolves to an allowlist dict."""
+    cfg = _spec_browser_config(SPECS_DIR / "demo_assistant.yaml")
+    assert cfg == {
+        "allowed_domains": [
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "staging.example.com",
+        ]
+    }
+
+
+def test_spec_browser_config_absent_block_returns_none(tmp_path: Path) -> None:
+    """A spec with no `browser:` block yields None (fall back to env default)."""
+    (tmp_path / "a.yaml").write_text("name: a\nmodel: test\n")
+    assert _spec_browser_config(tmp_path / "a.yaml") is None
+
+
+def test_spec_browser_config_empty_list_returns_none(tmp_path: Path) -> None:
+    """An empty `allowed_domains` yields None (fall back to env default)."""
+    (tmp_path / "b.yaml").write_text(
+        "name: b\nmodel: test\nbrowser:\n  allowed_domains: []\n"
+    )
+    assert _spec_browser_config(tmp_path / "b.yaml") is None
+
+
+def test_spec_browser_config_unknown_keys_ignored(tmp_path: Path) -> None:
+    """Unknown keys inside `browser:` are ignored; allowed_domains still read."""
+    (tmp_path / "c.yaml").write_text(
+        "name: c\nmodel: test\nbrowser:\n"
+        "  allowed_domains:\n"
+        "    - example.com\n"
+        "    - api.example.com\n"
+        "  future_field: true\n"
+    )
+    assert _spec_browser_config(tmp_path / "c.yaml") == {
+        "allowed_domains": ["example.com", "api.example.com"]
+    }

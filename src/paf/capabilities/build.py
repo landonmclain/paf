@@ -192,7 +192,7 @@ def _build_visual(store) -> _Visual:
     return _Visual()
 
 
-def _build_browser(store) -> _Browser:
+def _build_browser(store, browser_config: dict | None = None) -> _Browser:
     """Mobile-first, headless Chromium browser automation tools.
 
     `store` is accepted for a uniform builder signature but unused — browser
@@ -208,6 +208,12 @@ def _build_browser(store) -> _Browser:
     a missing browser raises a clear `playwright install chromium` hint instead
     of silently fetching a ~150MB binary mid-session.
 
+    `browser_config` is the spec's top-level ``browser:`` block (see
+    ``_spec_browser_config``). Only its ``allowed_domains`` is honored: a
+    non-empty list **wins** (overrides the env-driven
+    ``settings.playwright_allowed_domains`` / PLAYWRIGHT_ALLOWED_DOMAINS
+    default); absent/``None``/empty -> fall back to the env default.
+
     `chromium_sandbox` is deliberately False: Chromium's sandbox is fatal at
     launch on Ubuntu 23.10+ hosts where AppArmor restricts unprivileged user
     namespaces (`kernel.apparmor_restrict_unprivileged_userns=1`, the default).
@@ -216,12 +222,10 @@ def _build_browser(store) -> _Browser:
     browser to launch at all. This is an environment-dependent escape hatch, not
     a recommendation to weaken isolation — revisit when userns is enabled.
 
-    `block_private_addresses=True` (the default) STAYS on: the hosts in
-    `settings.playwright_allowed_domains` (PLAYWRIGHT_ALLOWED_DOMAINS / .env —
-    configurable outside code) are the ONLY addresses reachable. The
-    cloud-metadata endpoint and LAN RFC-1918 ranges remain refused, so SSRF
-    defense is preserved while still browsing the allowlisted local/staging
-    sites.
+    `block_private_addresses=True` (the default) STAYS on: the hosts in the
+    resolved allowlist are the ONLY addresses reachable. The cloud-metadata
+    endpoint and LAN RFC-1918 ranges remain refused, so SSRF defense is
+    preserved while still browsing the allowlisted local/staging sites.
 
     Mobile is the default (viewport 390×844, `mobile=True`, retina scale 3, a
     real iPhone user-agent so responsive sites serve their mobile layout) —
@@ -230,10 +234,17 @@ def _build_browser(store) -> _Browser:
     tablet, and the agent can switch these at runtime via the `set_viewport`
     tool.
     """
+    allowed_domains = (
+        browser_config.get("allowed_domains")
+        if browser_config
+        else None
+    )
+    if not allowed_domains:
+        allowed_domains = settings.playwright_allowed_domains
     return _Browser(
         headless=True,
         block_private_addresses=True,
-        allowed_domains=settings.playwright_allowed_domains,
+        allowed_domains=allowed_domains,
         auto_install_chromium=False,
         chromium_sandbox=False,
         viewport=(390, 844),
@@ -414,6 +425,7 @@ def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
     web_search_domains: list[str] | None = None,
+    browser_config: dict | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -483,6 +495,8 @@ def build_runtime_capabilities(
             capabilities.append(_conversation_search_suppressed(store))
         elif name == "Web":
             capabilities.append(_build_web(store, web_search_domains))
+        elif name == "Browser":
+            capabilities.append(_build_browser(store, browser_config))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

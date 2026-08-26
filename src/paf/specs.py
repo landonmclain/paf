@@ -131,6 +131,43 @@ def _spec_web_config(spec_path: Path) -> list[str] | None:
     return [str(d) for d in domains]
 
 
+def _spec_browser_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``browser:`` block into a Browser config dict.
+
+    Mirrors ``_spec_compaction_config`` / ``_spec_web_config``: pydantic-ai's
+    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
+    YAML separately for per-agent browser egress policy. The block shape:
+
+        browser:
+          allowed_domains:
+            - localhost
+            - staging.example.com
+
+    ``allowed_domains`` is the Browser capability's egress allowlist — hosts
+    (and their subdomains) the browser may reach. Only ``allowed_domains`` is
+    exposed from the spec; every other Browser field (headless, mobile, sandbox,
+    …) stays a code-level default. A non-empty present list **wins** (overrides
+    the env-driven ``PLAYWRIGHT_ALLOWED_DOMAINS`` default); absent block, non-dict
+    block, or empty list -> ``None``, so `_build_browser` falls back to the env
+    default. Unknown keys inside ``browser:`` are ignored so the schema can grow
+    without breaking older spec files.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("browser")
+    if not isinstance(block, dict):
+        return None
+    domains = block.get("allowed_domains")
+    if not isinstance(domains, list) or not domains:
+        return None
+    return {"allowed_domains": [str(d) for d in domains]}
+
+
 class AgentSpecNotFoundError(FileNotFoundError):
     """Raised when an agent specification cannot be found."""
 
@@ -201,6 +238,10 @@ def build_agent(
     # declares the extract allowlist for `fetch_web_page`; absent -> the
     # PREFERRED_DOC_DOMAINS default (see _spec_web_config). Open search is open.
     web_config = _spec_web_config(spec_path)
+    # Per-assistant browser egress allowlist: the spec's top-level `browser:`
+    # block overrides the env-driven PLAYWRIGHT_ALLOWED_DOMAINS default when it
+    # declares a non-empty `allowed_domains` (see _spec_browser_config).
+    browser_config = _spec_browser_config(spec_path)
     # Default: apply the OpenRouter provider/quantization pin (temp 0,
     # top_p 1.0, seed, pinned provider chain) unless the caller supplies their own
     # `model_settings` override. Agent.from_spec shallow-merges this over the spec's
@@ -218,6 +259,6 @@ def build_agent(
         # spec-declared ones via Agent.from_spec. The profile is the gatekeeper:
         # only capabilities in its allowlist are built (see build.py). The spec's
         # `compact:` block (if any) drives the compaction tiers.
-        capabilities=build_runtime_capabilities(profile, compaction_config, web_config),
+        capabilities=build_runtime_capabilities(profile, compaction_config, web_config, browser_config),
         **overrides,
     )
