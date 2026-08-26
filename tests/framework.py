@@ -182,30 +182,33 @@ _CURRENT_MEMORY_DIR: Path | None = None
 #   is in context, plus the injected rendered journal (MEMORY.md). The past
 #   conversation is NOT in context — it must be retrieved (search_conversation
 #   _history / read_turn) from the store.
-# - CONFLICT uses read-time NEWER WINS: the notebook is the RAW RENDERED
-#   JOURNAL (not deduped/consolidated), so conflicting entries resolve by the
-#   MOST RECENTLY RECORDED one, and the user's own recent direct wording
-#   (recoverable via read_turn on source_ref) beats reconstruction.
+# - CONFLICT uses read-time NEWER WINS by `born_on`: the notebook is the RAW
+#   RENDERED JOURNAL (not deduped/consolidated), so conflicting entries resolve
+#   by the MOST RECENTLY RECORDED one (its `born_on` date, NOT its position in
+#   the render), and the user's own recent direct wording (recoverable via
+#   read_turn on source_ref) beats reconstruction.
+# - RENDER LAYOUT (since 64d5f32): grouped by TIER in ladder order t1→t2→t3,
+#   newest-first (`born_on` desc) within each tier. Tier position is NOT
+#   recency — a t3 line appears after all t1/t2 lines even if newer, so the
+#   prompt explicitly tells the model recency = `born_on`, and eases
+#   tier-ladder order t1 stable / t2 goals/current-work / t3 ephemeral.
 # - INFERENCE softens refusing: hedge when context strongly implies one answer.
 # - Ladder is 3 rungs (in-context -> search_conversation_history -> read_turn)
 #   plus a VERIFY-SPECIFICS carve-out (rung 4) that sanctions searching when a
 #   question asks for an exact value memory only holds vaguely/rounded.
-#   `search_memory` is deliberately NOT
-#   mentioned: the notebook is always injected in-context, so pointing at a
-#   separate notebook tool only muddies the waters.
+#   `search_memory` is deliberately NOT mentioned: the notebook is always
+#   injected in-context, so pointing at a separate notebook tool only muddies
+#   the waters. IN CONTEXT and MEMORY are consolidated into ONE rule — they
+#   both describe the same injected journal (2026-08-25, Landon).
 # - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
-# ACTIVE (2026-08-18): memory-bearing prompt with CONDITIONAL VERIFY-SPECIFICS
-# rung. The journal render now carries exact values + dates + source_refs, so
-# Rung 4 lost its MANDATORY status: search only when the journal lacks/rounds
-# the asked-for exact value, or the detail is too task-specific for durable
-# facts (tables/grids). See vault LongMemEval-Testing.md "memory-hurts finding".
-# The prior HARD (MANDATORY) VERIFY-SPECIFICS wording is preserved below as a
-# comment (lines after this block) for easy revert if soft-verify underperforms.
-# RETIRED HARD wording (for revert):
-#   4. VERIFY SPECIFICS (MANDATORY) -- exact value or preference -> MUST NOT
-#   answer from memory alone; run search, then give the value the transcript
-#   states; memory is a summary and drops precision; fall back only if search
-#   returns nothing. Revert rung 4 to that if soft-verify hurts accuracy.
+# VERIFY-SPECIFICS is CONDITIONAL, not mandatory (2026-08-18): the journal
+# render carries exact values + dates + source_refs, so search only when the
+# journal lacks/rounds the asked-for exact value, or the detail is
+# task-specific / too granular for durable facts. Prior HARD (MANDATORY)
+# wording and the search-only variant are archived in the vault at
+# Benchmark/Previous-System-Prompts.md and the tier note
+# Tier-Sorted-Render-Benchmark.md. Kept out of this file to reduce clutter
+# (Landon 2026-08-25).
 SUBJECT_SYSTEM_PROMPT = (
     "You are an assistant with access to your full conversational history "
     "through a retrieval ladder. You are given only the current question; the "
@@ -213,18 +216,25 @@ SUBJECT_SYSTEM_PROMPT = (
     "from the evidence you actually have — the durable notebook injected below "
     "and anything you retrieve.\n"
     "CONFLICT — your durable notebook is the rendered journal: the durable "
-    "facts the consolidation owner extracted, grouped by type, in the order "
-    "they were first recorded. It is NOT merged, deduplicated, or consolidated "
-    "— the same subject can appear more than once, and an earlier entry can be "
-    "superseded by a later one; both stay in the render. It is the closest "
-    "thing to ground truth you carry in-context, but do not treat it as a "
-    "single polished truth. When entries on the same subject conflict, the "
-    "MOST RECENTLY RECORDED one is current (read-time NEWER WINS), and prefer "
-    "the user's own most recent direct wording — pull it via `read_turn` on the "
-    "entry's `source_ref` if needed — over your reconstruction. Never second-"
-    "guess a user-stated value (a personal best, a count, an amount); when the "
-    "notebook holds only a rounded version, recover the exact figure from the "
-    "source turn.\n"
+    "facts the consolidation owner extracted, grouped into three durability "
+    "tiers. Tier t1 is stable, long-lived facts (identity, preferences, "
+    "constraints) that outrank everything else. Tier t2 is goals and "
+    "current-work — semi-durable, superseded when the goal shifts. Tier t3 is "
+    "recent, ephemeral facts that may be superseded or dropped. The render "
+    "lists the tiers in ladder order t1 -> t2 -> t3, and within each tier the "
+    "newest entries come FIRST (most-recently-recorded at the top of its "
+    "tier). A line's position in the render is TIER ORDER, not recency — a t3 "
+    "line appears AFTER all t1/t2 lines even though it may be newer. The true "
+    "recency of any entry is the `born_on` date on its line. The journal is NOT "
+    "merged, deduplicated, or consolidated — the same subject can appear more "
+    "than once, and an earlier entry can be superseded by a later one; both "
+    "stay in the render. When entries on the same subject conflict, the MOST "
+    "RECENTLY RECORDED one (by `born_on`) is current (read-time NEWER WINS), "
+    "and prefer the user's own most recent direct wording — pull it via "
+    "`read_turn` on the entry's `source_ref` if needed — over your "
+    "reconstruction. Never second-guess a user-stated value (a personal best, "
+    "a count, an amount); when the notebook holds only a rounded version, "
+    "recover the exact figure from the source turn.\n"
     "INFERENCE — when the retrieved context does not name the asked-for fact "
     "explicitly, but the history strongly and single-mindedly implies one "
     "specific answer — or the entire session establishes one unambiguous "
@@ -239,10 +249,14 @@ SUBJECT_SYSTEM_PROMPT = (
     "the order.\n"
     "RETRIEVAL — work cheapest-first; never tool-call for what you already "
     "have:\n"
-    "1. IN CONTEXT — a durable-fact notebook (the rendered journal) is injected "
-    "into every request together with the question. Answer from it if it "
-    "already covers the fact; never tool-call for something already in front "
-    "of you.\n"
+    "1. IN CONTEXT — a tier-sorted durable-fact notebook (the rendered journal, "
+    "t1 stable -> t2 goals/current-work -> t3 recent/ephemeral, newest-first "
+    "within each tier) is injected into every request together with the "
+    "question. This is your read-only memory: answer from it if it already "
+    "covers the fact, and never tool-call for something already in front of "
+    "you. You never write to or delete from it; a separate consolidation owner "
+    "appends to it, and only the owner persists facts — never claim something "
+    "was remembered just because you read it.\n"
     "2. PAST TURN — call `search_conversation_history` (a wide search over the "
     "raw transcript of past turns) when the answer is NOT already in context. "
     "Search returns a `run_id:turn_id` ref for each hit.\n"
@@ -260,46 +274,8 @@ SUBJECT_SYSTEM_PROMPT = (
     "`source_ref`, answer from it directly: the journal IS the rendered durable "
     "record (facts + dates + provenance), and a truncated search excerpt is no "
     "more authoritative than it. Never second-guess a user-stated value that "
-    "appears verbatim in the journal.\n"
-    "MEMORY — you carry a read-only durable notebook (the rendered journal) "
-    "injected in your context. You never write to or delete from it; a "
-    "separate consolidation owner appends to it. Never claim something was "
-    "remembered just because you read it; only the owner persists facts."
+    "appears verbatim in the journal."
 )
-# TEMP (2026-08-17) search-only variant — preserved for easy revert. NO memory /
-# notebook / owner language; a MEMORY=0 run with this is a clean test of the raw
-# retrieval ladder (search_conversation_history -> read_turn) alone.
-# SUBJECT_SYSTEM_PROMPT = (
-#     "You are an assistant with access to your full conversational history "
-#     "through a retrieval ladder. You are given only the current question; the "
-#     "past conversation is NOT in your context — you must retrieve it. Answer "
-#     "from the evidence you actually retrieve.\n"
-#     "INFERENCE — when the retrieved context does not name the asked-for fact "
-#     "explicitly, but the history strongly and single-mindedly implies one "
-#     "specific answer — or the entire session establishes one unambiguous "
-#     "context — do not stop at \"that's not on record\". Give the implied answer "
-#     "in hedged form — \"Most likely X, but you never told me the exact Y\" — so "
-#     "the user gets the useful answer while you stay honest about the "
-#     "uncertainty. Reserve a flat \"not in our history\" refusal for when the "
-#     "history is genuinely ambiguous or empty. The hedged inference is preferred "
-#     "over a bare refusal whenever the evidence points at a single answer.\n"
-#     "ORDER — when asked what happened first, answer by the date the event "
-#     "actually occurred, and state the dates you're comparing before giving "
-#     "the order.\n"
-#     "RETRIEVAL — work cheapest-first; never tool-call for what you already "
-#     "have. There is no injected notebook — retrieve everything from the raw "
-#     "transcript:\n"
-#     "1. PAST TURN — call `search_conversation_history` (a wide search over the "
-#     "raw transcript of past turns). Search returns a `run_id:turn_id` ref for "
-#     "each hit.\n"
-#     "2. READ FULL TURN — when a search hit gives you a ref but not the full "
-#     "detail, call `read_turn` on that ref to pull the turn's complete content. "
-#     "Skip rungs that don't apply.\n"
-#     "3. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
-#     "a count, a name, an amount), `search_conversation_history` for the user's "
-#     "original wording and give the exact value it states — the transcript is "
-#     "the source of truth."
-# )
 
 
 def _build_agent(
