@@ -284,26 +284,30 @@ def test_source_ref_and_type_preserved_through_append(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _rec(type, fact, born_on, source_ref="run:0"):
-    return MemoryRecord(type=type, fact=fact, tier="t1", born_on=born_on, source_ref=source_ref)
+def _rec(type, fact, born_on, source_ref="run:0", tier="t1"):
+    return MemoryRecord(type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref)
 
 
-def test_render_groups_by_type_and_sorts_by_born(tmp_path) -> None:
+def test_render_groups_by_tier_and_sorts_newest_first(tmp_path) -> None:
     store = JournalStore(tmp_path)
     store.append_many([
-        _rec("preference", "later pref", "2026-08-17T00:00:00Z"),
-        _rec("preference", "earlier pref", "2026-08-16T00:00:00Z"),
-        _rec("preference", "middle pref", "2026-08-16T12:00:00Z"),
-        _rec("fact", "a plain fact", "2026-08-15T00:00:00Z"),
-        _rec("task", "a pending task", "2026-08-17T00:00:00Z"),
+        _rec("preference", "t1 older pref", "2026-08-16T00:00:00Z"),
+        _rec("preference", "t1 newer pref", "2026-08-17T00:00:00Z"),
+        _rec("preference", "t1 middle pref", "2026-08-16T12:00:00Z"),
+        _rec("fact", "a t3 ephemeral fact", "2026-08-15T00:00:00Z", tier="t3"),
+        _rec("task", "a t2 goal", "2026-08-17T00:00:00Z", tier="t2"),
     ])
     md = render_journal_memory(store)
 
-    # Sections, sorted by type name: fact, preference, task (identity/etc absent).
-    assert md.index("## fact") < md.index("## preference") < md.index("## task")
-    # Within each section, birth-ascending.
-    pref_block = md.split("## preference", 1)[1].split("## ", 1)[0]
-    assert pref_block.index("earlier pref") < pref_block.index("middle pref") < pref_block.index("later pref")
+    # Tier sections, in fixed ladder order: t1 first, then t2, then t3.
+    assert md.index("## t1") < md.index("## t2") < md.index("## t3")
+    # Within each tier, most-recent-first (birth-descending).
+    t1_block = md.split("## t1", 1)[1].split("## ", 1)[0]
+    assert (
+        t1_block.index("t1 newer pref")
+        < t1_block.index("t1 middle pref")
+        < t1_block.index("t1 older pref")
+    )
 
 
 def test_render_each_line_carries_fact_date_source(tmp_path) -> None:
@@ -322,22 +326,22 @@ def test_render_each_line_carries_fact_date_source(tmp_path) -> None:
     assert "seed-lmem-a1b2c3d4:12" in line
 
 
-def test_render_omits_absent_types(tmp_path) -> None:
+def test_render_omits_absent_tiers(tmp_path) -> None:
     store = JournalStore(tmp_path)
     store.append(type="fact", fact="only a fact", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
     md = render_journal_memory(store)
-    assert "## fact" in md
-    for absent in ("## identity", "## preference", "## event", "## task", "## current"):
+    assert "## t1" in md
+    for absent in ("## t2", "## t3"):
         assert absent not in md
 
 
 def test_render_is_deterministic(tmp_path) -> None:
     store = JournalStore(tmp_path)
     store.append_many([
-        _rec("preference", "a", "2026-08-17T00:00:00Z"),
-        _rec("fact", "b", "2026-08-15T00:00:00Z"),
-        _rec("task", "c", "2026-08-16T00:00:00Z"),
-        _rec("event", "d", "2026-08-14T00:00:00Z"),
+        _rec("preference", "a", "2026-08-17T00:00:00Z", tier="t1"),
+        _rec("fact", "b", "2026-08-15T00:00:00Z", tier="t2"),
+        _rec("task", "c", "2026-08-16T00:00:00Z", tier="t3"),
+        _rec("event", "d", "2026-08-14T00:00:00Z", tier="t1"),
     ])
     assert render_journal_memory(store) == render_journal_memory(store)
 
@@ -350,13 +354,13 @@ def test_render_empty_journal_is_empty_string(tmp_path) -> None:
 def test_render_from_explicit_record_list(tmp_path) -> None:
     """render_journal_memory also accepts a record list (no disk needed)."""
     records = [
-        _rec("current", "currently rebuilding staging.com", "2026-08-17T00:00:00Z"),
-        _rec("current", "newer current state", "2026-08-17T01:00:00Z"),
+        _rec("current", "newer current state", "2026-08-17T01:00:00Z", tier="t2"),
+        _rec("current", "currently rebuilding staging.com", "2026-08-17T00:00:00Z", tier="t2"),
     ]
     md = render_journal_memory(records)
-    assert "## current" in md
-    # Within a type, birth-ascending: older record renders first.
-    assert md.index("currently rebuilding") < md.index("newer current state")
+    assert "## t2" in md
+    # Within a tier, most-recent-first: newer record renders first.
+    assert md.index("newer current state") < md.index("currently rebuilding")
 
 
 def test_write_render_writes_atomic_md(tmp_path) -> None:
