@@ -8,7 +8,7 @@ the current rendered notebook inserted into `<memory>` on every request.
 
 That insertion goes through this view reader on the *rendered output only*:
 read() returns the top-level ``MEMORY.md`` file content verbatim -- the exact md
-that ``write_render``/``write_index_render`` produced -- and the capability
+that ``write_render`` produced -- and the capability
 injects that text in full. No scope/agent
 pathing, no protocol indirection: read the file, insert the text.
 

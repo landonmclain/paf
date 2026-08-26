@@ -5,11 +5,13 @@ harness memory marker (``pydantic-ai-harness.memory.v1:<scope_hash>``) so any
 reader (the search corpus) recognizes and strips it. The strip sites
 (``capabilities/_markers``, ``search/_render``) already drop injected memory.
 
-The M2 three-layer model: the **owner** appends immutable facts to the
-append-only **journal** (``JournalStore``); the **organizer** reconciles the
-journal tail into the curated **index** (``IndexStore`` / ``IndexEntry``); and
-the **index renderer** materializes the root ``MEMORY.md`` (``write_index_render``)
-that the assistant's read-only ``JournalViewStore`` injects.
+The M2 memory model: the **owner** appends immutable facts to the append-only
+**journal** (``JournalStore``); the **renderer** (``write_render``) materializes
+the root ``MEMORY.md`` deterministically from the journal, which the assistant's
+read-only ``JournalViewStore`` injects. There is **no curated index** — the
+organizer / index / consolidation-second-pass that maintained ``memory-index.json``
+were **unhooked 2026-08-25 and archived** to ``archive/organizer/``; the journal
+is the sole source of truth.
 
 The legacy rehomed pydantic-ai builtin surface (the ``FileStore`` SQLite-journal
 backend, ``MarkdownStorage``, the 4-tool ``MemoryToolset``, and the
@@ -21,35 +23,19 @@ read-only ``JournalViewStore`` of the rendered journal.
 - ``_store``     -- ``MemoryStore``/``SearchableMemoryStore`` protocols, shared
                     record types, ``lexical_search``, validation.
 - ``_journal``   -- append-only ``JournalStore`` (source of truth).
-- ``_organize``  -- ``run_organizer`` + ``IndexStore`` (curated index).
-- ``_render``    -- ``write_render`` / ``write_index_render`` (MEMORY.md).
+- ``_render``    -- ``write_render`` / ``render_journal_memory`` (MEMORY.md).
 - ``_view``      -- ``JournalViewStore`` (read-only injection seam).
 - ``_toolset``   -- ``JournalAppendToolset`` (the owner's only tool) + render helpers.
 - ``_capability``-- the ``Memory`` capability.
+- ``archive/organizer/`` -- ARCHIVED curated index + organizer + consolidation
+                            second pass (unhooked; kept importable for revival).
 """
 
 from __future__ import annotations
 
 from ._capability import Memory
 from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord
-from ._organize import (
-    ConfirmDecision,
-    IndexEntry,
-    IndexStore,
-    NewDecision,
-    Stage,
-    SupersedeDecision,
-    render_index_text,
-    render_journal_tail,
-    run_consolidation,
-    run_organizer,
-)
-from ._render import (
-    render_index,
-    render_journal_memory,
-    write_index_render,
-    write_render,
-)
+from ._render import render_journal_memory, write_render
 from ._store import (
     MemoryConflictError,
     MemoryFile,
@@ -74,9 +60,6 @@ from ._toolset import (
 )
 
 __all__ = [
-    "ConfirmDecision",
-    "IndexEntry",
-    "IndexStore",
     "JournalAppendToolset",
     "JournalStore",
     "MAIN_FILENAME",
@@ -92,22 +75,13 @@ __all__ = [
     "MemorySearchResult",
     "MemoryStore",
     "MemoryWriteResult",
-    "NewDecision",
     "SearchableMemoryStore",
-    "Stage",
-    "SupersedeDecision",
     "lexical_search",
     "list_subfiles",
     "normalize_filename",
-    "render_index",
-    "render_index_text",
     "render_journal_memory",
-    "render_journal_tail",
     "render_memory_prompt",
-    "run_consolidation",
-    "run_organizer",
     "validate_store_path",
     "validate_store_prefix",
-    "write_index_render",
     "write_render",
 ]

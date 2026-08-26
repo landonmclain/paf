@@ -43,11 +43,15 @@ from typing import cast
 
 from pydantic_ai import Agent, ModelRetry, ModelSettings
 
+from paf.capabilities.memory._atomic import read_json, write_json_atomic
+from paf.capabilities.memory._journal import (
+    MEMORY_TYPES,
+    JournalStore,
+    MemoryRecord,
+    _normalize_born_on,
+)
+from paf.capabilities.memory._toolset import MemoryWriteResult
 from paf.config import settings
-
-from ._atomic import read_json, write_json_atomic
-from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord, _normalize_born_on
-from ._toolset import MemoryWriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -511,7 +515,7 @@ def organize_model() -> str:
     """
     if settings.organize_model:
         return settings.organize_model.strip()
-    from ._consolidate import consolidate_model
+    from paf.capabilities.memory._consolidate import consolidate_model
 
     return consolidate_model()
 

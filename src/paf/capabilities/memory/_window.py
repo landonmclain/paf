@@ -113,7 +113,8 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
            is now rendered deterministically from the append-only journal
            instead of from a curated LLM-built index. Dedup/supersede/
            tier-sorting will return as a deterministic index *derivation*
-           (pure code), not an LLM pass.
+           (pure code), not an LLM pass. The removed code is preserved in
+           ``archive/organizer/`` (kept importable for revival).
         """
         cutoff = find_safe_cutoff(messages, self.keep_messages)
         if cutoff > 0 and (

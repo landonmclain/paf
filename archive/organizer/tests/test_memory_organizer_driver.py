@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import asyncio
 
-from paf.capabilities.memory import IndexStore
+from archive.organizer import IndexStore
+from archive.organizer._organize import render_journal_tail, run_organizer
 from paf.capabilities.memory._journal import JournalStore
-from paf.capabilities.memory._organize import render_journal_tail, run_organizer
 
 
 def _rec(type, fact, born_on="2026-08-17T00:00:00Z", source_ref="run:0"):

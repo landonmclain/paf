@@ -1,7 +1,7 @@
 """Shared typed memory records, protocols, and validation for the memory capability.
 
 This module retains the load-bearing shared types the live M2 memory
-spine needs (``_journal``, ``_organize``, ``_render``, ``_view``, the owner's
+spine needs (``_journal``, ``_render``, ``_view``, the owner's
 ``JournalAppendToolset``):
 
 - ``MemoryFile`` / ``MemoryOperation`` / ``MemoryMutation`` / ``MemorySearchMatch``
@@ -19,9 +19,11 @@ The heavy legacy rehomed backends grew out of here and were removed with the
 rest of the rehomed pydantic-ai builtin surface: ``FileStore`` (flat ``.md`` +
 hidden SQLite journal + a bespoke ``_atomic_write``) and ``MarkdownStorage``
 (in the retired ``_markdown.py``). None is used by the M2 journal model — the
-owner appends to ``JournalStore`` (JSONL), the organizer maintains
-``IndexStore``, and ``JournalViewStore`` renders ``MEMORY.md``. Atomic writes
-now come from the single shared ``_atomic.py`` (the port of ``agent-foundation``).
+owner appends to ``JournalStore`` (JSONL) and ``JournalViewStore`` renders
+``MEMORY.md`` deterministically. The curated ``IndexStore`` / organizer /
+consolidation second pass were **unhooked 2026-08-25 and archived** to
+``archive/organizer/``. Atomic writes now come from the single shared
+``_atomic.py`` (the port of ``agent-foundation``).
 """
 
 from __future__ import annotations

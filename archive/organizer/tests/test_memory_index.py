@@ -31,7 +31,7 @@ import json
 
 import pytest
 
-from paf.capabilities.memory import (
+from archive.organizer import (
     ConfirmDecision,
     IndexEntry,
     IndexStore,
@@ -336,7 +336,7 @@ def test_write_uses_atomic_staging(tmp_path) -> None:
 
 def _make_reconcile(store: IndexStore):
     """Bound ``reconcile`` to a store for concise tests."""
-    from paf.capabilities.memory._organize import reconcile as _reconcile
+    from archive.organizer._organize import reconcile as _reconcile
 
     def reconcile(decisions, *, end_line=None, watermark=None):
         return _reconcile(store, [], decisions, end_line=end_line, watermark=watermark)
@@ -351,7 +351,7 @@ def test_index_new_rejects_composite_type_with_retry_guidance(tmp_path) -> None:
 
     from pydantic_ai import ModelRetry
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     toolset = _build_index_toolset()(IndexStore(tmp_path))
     # The prod bug: model emitted type="fact/paf" (topic folded into type).
@@ -371,7 +371,7 @@ def test_index_new_accepts_bare_type_and_subject(tmp_path) -> None:
     """`index_new` accepts a valid bare `type` with the topic in `subject`."""
     import asyncio
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     toolset = _build_index_toolset()(IndexStore(tmp_path))
     out = asyncio.run(toolset.add_new(
@@ -391,7 +391,7 @@ def test_index_result_returns_live_staged_view(tmp_path) -> None:
     has already added this run and avoid re-adding the same fact."""
     import asyncio
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     toolset = _build_index_toolset()(IndexStore(tmp_path))
     out1 = asyncio.run(toolset.add_new(
@@ -424,7 +424,7 @@ def test_index_confirm_diff_names_target(tmp_path) -> None:
     """`index_confirm` diff names the confirmed entry id + source line."""
     import asyncio
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     toolset = _build_index_toolset()(IndexStore(tmp_path))
     asyncio.run(toolset.add_new(
@@ -445,7 +445,7 @@ def test_index_new_rejects_near_dup_and_points_at_entry(tmp_path) -> None:
 
     from pydantic_ai import ModelRetry
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     toolset = _build_index_toolset()(IndexStore(tmp_path))
     asyncio.run(toolset.add_new(
@@ -470,7 +470,7 @@ def test_index_new_allows_genuinely_distinct_fact(tmp_path) -> None:
     """A fact that is not a near-dup passes the guard (no false positive)."""
     import asyncio
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     toolset = _build_index_toolset()(IndexStore(tmp_path))
     asyncio.run(toolset.add_new(
@@ -508,7 +508,7 @@ def test_index_new_rejects_dup_of_existing_disk_entry(tmp_path) -> None:
 
     from pydantic_ai import ModelRetry
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     ts1 = _build_index_toolset()(IndexStore(tmp_path))
     asyncio.run(ts1.add_new(
@@ -540,7 +540,7 @@ def test_index_new_containment_catches_rich_vs_short_repeat(tmp_path) -> None:
 
     from pydantic_ai import ModelRetry
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     ts1 = _build_index_toolset()(IndexStore(tmp_path))
     asyncio.run(ts1.add_new(
@@ -568,7 +568,7 @@ def test_index_new_cross_topic_same_words_not_blocked(tmp_path) -> None:
     to same type+subject removes cross-topic false positives."""
     import asyncio
 
-    from paf.capabilities.memory._organize import _build_index_toolset
+    from archive.organizer._organize import _build_index_toolset
 
     ts1 = _build_index_toolset()(IndexStore(tmp_path))
     asyncio.run(ts1.add_new(
@@ -598,7 +598,7 @@ def test_find_consolidation_candidates_finds_dup_clusters(tmp_path) -> None:
     and cross-topic entries do not. Builds the index via the low-level
     ``Stage``/``NewDecision`` path (bypassing the ``index_new`` guard, which
     correctly rejects a second near-dup at add time)."""
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         IndexStore,
         NewDecision,
         Stage,
@@ -634,7 +634,7 @@ def test_run_consolidation_no_changes_when_clean(tmp_path) -> None:
     """A non-duplicate index yields 'no changes' with zero LLM interaction."""
     import asyncio
 
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         _build_index_toolset,
         run_consolidation,
     )
@@ -657,7 +657,7 @@ def test_run_consolidation_uses_distinct_agent_name(tmp_path) -> None:
     (``memory-consolidator``) so its run is unambiguous in observability traces,
     separate from the first-pass ``run_organizer`` (``memory-organizer``). This
     is a label-only change — same builder, same tools, same prompt contract."""
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         _build_memory_organizer,
         run_consolidation,
         run_organizer,
@@ -700,7 +700,7 @@ _REVIEW_TRIPLET = [
 def _seed(store, rows) -> None:
     """Seed an index via the low-level Stage/NewDecision path (bypasses the
     index_new guard, so it can store near-dup rows the guard would reject)."""
-    from paf.capabilities.memory._organize import NewDecision, Stage
+    from archive.organizer._organize import NewDecision, Stage
 
     stage = Stage(store)
     for i, (type_, subject, fact) in enumerate(rows, start=1):
@@ -716,7 +716,7 @@ def test_consolidation_folds_exact_verbatim_type_split_triplet(tmp_path) -> None
     current / task (same subject). The old same-(type,subject) rule saw three
     separate buckets and never merged them; the verbatim tier must fold them
     into one cluster."""
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         IndexStore,
         _find_consolidation_candidates,
     )
@@ -738,7 +738,7 @@ def test_index_new_blocks_verbatim_restate_as_different_type(tmp_path) -> None:
 
     from pydantic_ai import ModelRetry
 
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         IndexStore,
         _build_index_toolset,
     )
@@ -763,7 +763,7 @@ def test_index_new_blocks_verbatim_restate_as_different_type(tmp_path) -> None:
 def test_consolidation_near_verbatim_type_split_pair(tmp_path) -> None:
     """The mem-40/43 LIVE case: two near-identical statements (overlap ~0.89)
     typed fact vs event, same subject 'paf'. Verbatim tier must cluster them."""
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         IndexStore,
         _find_consolidation_candidates,
     )
@@ -794,7 +794,7 @@ def test_consolidation_semantic_gap_not_clustered(tmp_path) -> None:
     facts (the get_repo_map LIVE shape) are NOT clustered by the lexical
     tiers. Guards the boundary so a future semantic tier doesn't regress it
     accidentally in either direction."""
-    from paf.capabilities.memory._organize import (
+    from archive.organizer._organize import (
         IndexStore,
         _find_consolidation_candidates,
     )

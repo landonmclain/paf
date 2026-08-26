@@ -9,7 +9,7 @@ recency axis is ``updated_on`` (bump-on-change), not ``born_on``.
 
 from __future__ import annotations
 
-from paf.capabilities.memory import (
+from archive.organizer import (
     IndexEntry,
     IndexStore,
     render_index,

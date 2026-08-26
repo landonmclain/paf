@@ -51,7 +51,7 @@ def _load_index(store) -> list:
 
 
 def run(mem_dir: Path, *, copy: bool = False) -> int:
-    from paf.capabilities.memory import IndexStore
+    from archive.organizer import IndexStore
     from paf.capabilities.memory._journal import JournalStore
 
     target = mem_dir
@@ -132,7 +132,7 @@ def await_run(target, journal, index_store):
     """Async wrapper so the runner keeps a clean sync main()."""
     import asyncio
 
-    from paf.capabilities.memory._organize import run_organizer
+    from archive.organizer._organize import run_organizer
 
     return asyncio.run(run_organizer(journal, index_store=index_store))
 
