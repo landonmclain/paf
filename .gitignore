@@ -17,22 +17,8 @@ wheels/
 .hermes/
 
 # Persistence store — runtime state, not source. Historically a sqlite db;
-# now the harness FileStepStore writes a directory of JSON/JSONL under
-# data/paf/. Ignore the runtime tree. `data/*` (not `data/`) keeps the root
-# traversable so the `!` exceptions can re-include a subtree.
-data/*
+data
 !.env.example
-
-# Benchmark data — all derived, regenerable artifacts: the upstream oracle
-# bank (lme_oracle.json), per-question durable memory snapshots
-# (memory-*/<qid>/), seed summaries (generated/), and the journal oracle copy.
-# None of these are source; they're byte-produced by re-running the harness
-# and were untracked 2026-08-26 because (a) a fresh clone can't meaningfully
-# re-run the benchmark without the oracle questions (which stay upstream /
-# uncommitted) and (b) the durables are large, low-information churn. Regenerate
-# via PAF_FRESH_MEMORY=1 (or LME_QIDS=<qid> PAF_FRESH_MEMORY=1). Run outputs
-# (result JSON) are ignored separately under tests/results/.
-data/benchmarks/
 
 # Generated benchmark run outputs (graded runner writes JSON per full run).
 tests/results/
