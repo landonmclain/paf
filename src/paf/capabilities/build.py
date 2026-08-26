@@ -155,15 +155,19 @@ def _build_codebase_map(store) -> _CodebaseMap:
     return _CodebaseMap(scan_root=PROJECT_ROOT)
 
 
-def _build_web(store) -> _Web:
+def _build_web(store, search_domains: list[str] | None = None) -> _Web:
     """Tavily-backed web search + page extraction tools.
 
     `store` is accepted for a uniform builder signature but unused — web tool
     state is just the Tavily client, read lazily from `TAVILY_API_KEY` at call
     time (so the capability constructs and registers even before a key exists,
     and each tool reports the missing key/package rather than failing hard).
+
+    `search_domains` is the extract trust boundary for `fetch_web_page`,
+    declared per-spec (`web.search_domains` in the spec YAML); None -> the
+    `PREFERRED_DOC_DOMAINS` default. Open web *search* is never restricted.
     """
-    return _Web()
+    return _Web(search_domains=search_domains)
 
 
 def _build_visual(store) -> _Visual:
@@ -409,6 +413,7 @@ def _build_subagents(store) -> SubAgents:
 def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
+    web_search_domains: list[str] | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -476,6 +481,8 @@ def build_runtime_capabilities(
             continue
         if name == "ConversationSearch" and has_memory:
             capabilities.append(_conversation_search_suppressed(store))
+        elif name == "Web":
+            capabilities.append(_build_web(store, web_search_domains))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

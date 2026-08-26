@@ -88,9 +88,9 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # (build.py `_build_codebase_map` roots it at PROJECT_ROOT), so it's built in
     # Python, not spec-serialized.
     "CodebaseMap": CodebaseMap,
-    # Tavily-backed web search + page extraction (search_web_docs /
-    # search_official_docs / fetch_web_page). Adapted from coding_agent
-    # web_search_tools. Reads TAVILY_API_KEY from the env at call time.
+    # Tavily-backed web search + page extraction (search_web / fetch_web_page).
+    # Adapted from coding_agent web_search_tools. Reads TAVILY_API_KEY from the
+    # env at call time. fetch_web_page is domain-gated (per-spec trust boundary).
     "Web": Web,
     # Vision-model description of captured screenshots (describe_screenshot).
     # paf-native icon-capability (AbstractCapability + FunctionToolset, same

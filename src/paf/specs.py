@@ -94,6 +94,43 @@ def _spec_compaction_config(spec_path: Path) -> CompactionConfig:
     return CompactionConfig.from_mapping(block)
 
 
+def _spec_web_config(spec_path: Path) -> list[str] | None:
+    """Read the spec's top-level ``web:`` block into an extract domain list.
+
+    Mirrors ``_spec_compaction_config``: pydantic-ai's ``AgentSpec`` drops
+    unknown top-level keys, so `build_agent` reads the raw YAML separately for
+    the per-agent web trust boundary. The block shape:
+
+        web:
+          search_domains:
+            - docs.pydantic.dev
+            - github.com
+
+    ``search_domains`` is the **extract** allowlist for ``fetch_web_page``
+    (which domains may be pulled into context). Open web *search* is never
+    restricted by it.
+
+    Absent/unreadable block or empty list -> None, which makes
+    ``build_runtime_capabilities`` -> ``_build_web`` fall back to the
+    ``PREFERRED_DOC_DOMAINS`` default. Unknown keys inside ``web:`` are ignored
+    so the schema can grow without breaking older spec files.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("web")
+    if not isinstance(block, dict):
+        return None
+    domains = block.get("search_domains")
+    if not isinstance(domains, list) or not domains:
+        return None
+    return [str(d) for d in domains]
+
+
 class AgentSpecNotFoundError(FileNotFoundError):
     """Raised when an agent specification cannot be found."""
 
@@ -160,6 +197,10 @@ def build_agent(
     # off disk to extract `compact:` (lenient: unknown keys inside ignored;
     # absent block -> CompactionConfig() -> builder's benchmark defaults).
     compaction_config = _spec_compaction_config(spec_path)
+    # Per-assistant web trust boundary: the spec's top-level `web:` block
+    # declares the extract allowlist for `fetch_web_page`; absent -> the
+    # PREFERRED_DOC_DOMAINS default (see _spec_web_config). Open search is open.
+    web_config = _spec_web_config(spec_path)
     # Default: apply the OpenRouter provider/quantization pin (temp 0,
     # top_p 1.0, seed, pinned provider chain) unless the caller supplies their own
     # `model_settings` override. Agent.from_spec shallow-merges this over the spec's
@@ -177,6 +218,6 @@ def build_agent(
         # spec-declared ones via Agent.from_spec. The profile is the gatekeeper:
         # only capabilities in its allowlist are built (see build.py). The spec's
         # `compact:` block (if any) drives the compaction tiers.
-        capabilities=build_runtime_capabilities(profile, compaction_config),
+        capabilities=build_runtime_capabilities(profile, compaction_config, web_config),
         **overrides,
     )

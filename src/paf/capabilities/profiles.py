@@ -122,8 +122,8 @@ DEMO_PROFILE = AgentProfile(
         # (re-index). Lets the model orient in a codebase by climbing a ladder
         # instead of brute-force keyword scans.
         "CodebaseMap",
-        # Tavily-backed web search + page extraction — search_web_docs,
-        # search_official_docs, fetch_web_page. Reads TAVILY_API_KEY at call
+        # Tavily-backed web search + page extraction — search_web (open) +
+        # fetch_web_page (domain-gated extract). Reads TAVILY_API_KEY at call
         # time; tools degrade to clear messages when key/package missing.
         # (Adapted from coding_agent web_search_tools.)
         "Web",

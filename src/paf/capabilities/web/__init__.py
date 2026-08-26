@@ -2,8 +2,8 @@
 
 paf-owned adaptation of `coding_agent/app/tools/web_search_tools.py`, surfaced
 through the standard capability seam (`AbstractCapability` + `FunctionToolset` +
-registry + profile allowlist + builder). Exposes `search_web_docs`,
-`search_official_docs`, and `fetch_web_page`. The `TAVILY_API_KEY` is read from
+registry + profile allowlist + builder). Exposes `search_web` (open web search)
+and `fetch_web_page` (domain-gated extract). The `TAVILY_API_KEY` is read from
 the environment at call time; tools degrade to clear messages when it or
 `tavily-python` is missing.
 """

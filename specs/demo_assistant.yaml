@@ -91,6 +91,35 @@ model_settings:
 #       size: 1024x1024
 
 # ---------------------------------------------------------------------------
+# Web trust boundary (option B — lives in the spec, not in Python). Read by
+# `build_agent` -> `_spec_web_config` -> the `fetch_web_page` extract allowlist.
+#
+# `search_domains` gates EXTRACT only (which domains `fetch_web_page` may pull
+# full page content from into context — the real prompt-injection surface).
+# Open web SEARCH is never restricted: `search_web` returns only low-risk
+# snippets/pills. So a general assistant can search anything, but can only
+# *read* pages from these trusted source domains.
+#
+# Absent block -> the built-in PREFERRED_DOC_DOMAINS default (same list).
+# Curate here per agent: add a domain when you trust its source content with
+# model attention; drop one you no longer want readable in-context.
+web:
+  search_domains:
+    - docs.pydantic.dev
+    - ai.pydantic.dev
+    - docs.streamlit.io
+    - docs.tavily.com
+    - docs.python.org
+    - github.com
+    - developer.mozilla.org
+    - nodejs.org
+    - nextjs.org
+    - react.dev
+    - playwright.dev
+    - pytest.org
+    - api.composer.trade
+
+# ---------------------------------------------------------------------------
 # Per-assistant context-compaction tuning (option B — lives in the spec, not in
 # Python). Read by `build_agent` -> `CompactionConfig` -> the no-summary ladder
 # in `build_compaction()`. The `demo` profile allowlists `Compaction`, so this
