@@ -191,8 +191,8 @@ def _module_assignments(recovery: QueryRecovery) -> list[SymbolInfo]:
     ``signature`` is the type annotation when present; ``doc`` is the preceding
     ``#`` comment line when one is attached (reuses the comment-association
     machinery); ``body`` is the assignment source (weight-1 field). Returns [] for
-    non-python (module assignment capture is python-only for now — other languages
-    deferred per "one language at a time").
+    languages where module-assignment capture isn't implemented yet (python,
+    typescript, tsx, javascript today; others deferred per "one language at a time").
     """
     out: list[SymbolInfo] = []
     for (name, start, end, type_ann) in recovery.module_assignments():

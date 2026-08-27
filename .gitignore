@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+# code_search_eval real-repo fixture (pinned clone of vercel/chatbot)
+tests/fixtures/chatbot/
 
 # Secrets
 .env

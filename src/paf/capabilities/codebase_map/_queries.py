@@ -121,6 +121,42 @@ _MODULE_ASSIGN_SUB = (
     "(assignment left: (identifier) @name (type (_) @type)?)"
 )
 
+# TS/TSX/JS module-level named assignments: `const x = ...` / `let x = ...` /
+# `export const x = ...`. Tree shapes differ from Python (lexical_declaration +
+# variable_declarator, not bare `assignment`); and `export const x = ...` is an
+# `export_statement` WRAPPING a `lexical_declaration` (export is an anonymous child,
+# not a named field — using a field name here is invalid, see the probe).
+#
+# CRITICAL — name must be captured IN THE SAME match as the decl, anchored to the
+# lexical_declaration's OWN direct `variable_declarator`. A separate byte-scoped
+# sub-query is WRONG here: a `const X = () => { ...long body... }` arrow component
+# spans thousands of bytes and the scoped sub-query matches EVERY nested
+# `variable_declarator` inside that body (isUser, widthClass, …), returning a
+# nondeterministic one (tree-sitter gives children in hash order). Anchoring the
+# `variable_declarator name:` to the lexical_declaration root is deterministic
+# (verified 15x stable across fresh recoveries on a big TSX component).
+#
+# The enumerator is ANCHORED TO `program` (both disjuncts) so ONLY module-scope
+# declarations match — without the anchor, `(lexical_declaration)` also matches
+# locals inside function/arrow bodies. `export default defineConfig(...)` has no
+# `variable_declarator`/identifier -> correctly excluded (not named). `export
+# type X = ...` is a `type_alias_declaration` -> excluded (v2 concern). NOTE: with
+# tree-sitter 0.26 QueryCursor, a node type captured in multiple disjuncts must be
+# in a single combined pattern (not separate queries) or it dedupes to nothing.
+_MODULE_ASSIGN_TS = (
+    "[(program (lexical_declaration (variable_declarator name: (identifier) @name) "
+    " (type_annotation)? @type) @decl)"
+    " (program (export_statement (lexical_declaration "
+    " (variable_declarator name: (identifier) @name) (type_annotation)? @type)) @decl)]"
+)
+# JS grammar has NO `type_annotation` node at all (JS is untyped) — same enumerator
+# minus the type capture (the `(type_annotation)?` is invalid node type in JS).
+_MODULE_ASSIGN_JS = (
+    "[(program (lexical_declaration (variable_declarator name: (identifier) @name)) @decl)"
+    " (program (export_statement (lexical_declaration "
+    " (variable_declarator name: (identifier) @name))) @decl)]"
+)
+
 # Comment-node type(s) per language (VERIFIED: rust/java use line_comment/block_comment,
 # not `comment`; the rest use `comment`).
 _COMMENT_NODE = {
@@ -286,18 +322,28 @@ class QueryRecovery:
         return _dedent(_strip_quotes(self._slice(s, e)))
 
     def module_assignments(self) -> list[tuple[str, int, int, str | None]]:
-        """Recover module-level named assignments (python) as ``(name, start, end, type)``.
+        """Recover module-level named assignments as ``(name, start, end, type)``.
 
         ``start``/``end`` are the whole assignment node's byte span (so ``_analyze.py``
         can build a ``Span`` for ``read_block`` and slice the assignment source as the
         weight-1 ``body``). ``type`` is the type annotation text (``NAME: TYPE = ...``)
         or ``None`` for unannotated assignments. Nested assignments (inside functions /
-        class bodies) are excluded — only direct children of ``module`` match. Dunder
-        names (``__x__``) and the throwaway ``_`` are skipped, but leading-single-underscore
-        names (``_MAX_SOURCE_BYTES``) ARE kept (they're real constants).
+        class bodies) are excluded — only direct children of ``module`` / ``program``
+        match. Dunder names (``__x__``) and the throwaway ``_`` are skipped, but
+        leading-single-underscore names (``_MAX_SOURCE_BYTES``) ARE kept (they're real
+        constants).
+
+        Python: ``assignment`` nodes that are direct children of ``module``. Typescript
+        / tsx / javascript: ``lexical_declaration`` nodes at ``program`` scope, bare or
+        wrapped in ``export_statement`` — they carry ``variable_declarator`` names.
         """
-        if self.language != "python":
-            return []
+        if self.language == "python":
+            return self._python_module_assignments()
+        if self.language in ("typescript", "tsx", "javascript"):
+            return self._ts_module_assignments()
+        return []
+
+    def _python_module_assignments(self) -> list[tuple[str, int, int, str | None]]:
         caps = self._captures(_MODULE_ASSIGN)
         out: list[tuple[str, int, int, str | None]] = []
         for (as_, ae) in caps.get("assign", []):
@@ -314,6 +360,41 @@ class QueryRecovery:
             typ = sub.get("type")
             type_ann = self._slice(typ[0][0], typ[0][1]).strip() if typ else None
             out.append((name, as_, ae, type_ann))
+        return out
+
+    def _ts_module_assignments(self) -> list[tuple[str, int, int, str | None]]:
+        # Combined enumerator emits @decl/@name/(@type) captures in source order,
+        # ONE of each per match (a lexical_declaration has a single direct
+        # variable_declarator). So index i of @decl ↔ index i of @name (verified:
+        # each name[i] is byte-inside decl[i]). Type annotations are mapped to their
+        # containing decl by byte span (they follow the name inside the decl).
+        query = _MODULE_ASSIGN_JS if self.language == "javascript" else _MODULE_ASSIGN_TS
+        caps = self._captures(query)
+        decls = caps.get("decl", [])
+        names = caps.get("name", [])
+        types = caps.get("type", [])
+        # map each type_annotation to the decl whose span contains it (one per decl)
+        type_by_decl: dict[int, tuple[int, int]] = {}
+        for (ts_, te) in types:
+            containing = [ds for (ds, de) in decls if ds <= ts_ < de]
+            if containing:
+                type_by_decl[min(containing)] = (ts_, te)
+
+        out: list[tuple[str, int, int, str | None]] = []
+        for i, (ds, de) in enumerate(decls):
+            if i >= len(names):
+                continue
+            name = self._slice(names[i][0], names[i][1])
+            if name == "_" or (name.startswith("__") and name.endswith("__")):
+                continue
+            type_ann = None
+            typ = type_by_decl.get(ds)
+            if typ:
+                t = self._slice(typ[0], typ[1]).strip()
+                if t.startswith(":"):
+                    t = t[1:].strip()
+                type_ann = t or None
+            out.append((name, ds, de, type_ann))
         return out
 
     def _preceding_comment(self, start_byte: int) -> str | None:
