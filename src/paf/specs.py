@@ -192,6 +192,115 @@ def _spec_browser_config(spec_path: Path) -> dict | None:
     return cfg
 
 
+def _spec_vault_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``vault:`` block into a Vault config dict.
+
+    Mirrors ``_spec_browser_config`` / ``_spec_web_config``: pydantic-ai's
+    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
+    YAML separately for per-agent vault config. The block shape:
+
+        vault:
+          root: /home/user/Documents/notes
+          allow:            # optional; absent = whole root
+            - Notes/**
+          deny:             # optional; always wins over allow
+            - "**/.trash/**"
+
+    ``root`` is the vault directory the capability confines itself to; ``allow``
+    /``deny`` are optional glob subtree patterns expressing a workspace-vs-personal
+    boundary inside that root. Unknown keys inside ``vault:`` are ignored so the
+    schema can grow without breaking older spec files.
+
+    Returns a dict (or ``None`` when the block is absent/unreadable). Absent
+    members fall back to their code-level defaults in ``_build_vault`` (whose
+    default root is the paf-owned ``data/vault/`` playground — the real vault is
+    ONLY reached via an explicit ``root`` here).
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("vault")
+    if not isinstance(block, dict):
+        return None
+    cfg: dict[str, object] = {}
+    root = block.get("root")
+    if isinstance(root, str) and root:
+        cfg["root"] = root
+    for key in ("allow", "deny"):
+        val = block.get(key)
+        if isinstance(val, list) and val:
+            cfg[key] = [str(v) for v in val]
+    if not cfg:
+        return None
+    return cfg
+
+
+def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict | None:
+    """Read one per-capability root block from a spec into a config dict.
+
+    Shared reader for the root-bearing capabilities (filesystem / shell / git /
+    codebase_map). Mirrors ``_spec_vault_config`` / ``_spec_browser_config`` in
+    shape and intent: pydantic-ai's ``AgentSpec`` drops unknown top-level keys,
+    so `build_agent` reads the raw YAML separately for per-agent scoping.
+
+    The block shape (per capability):
+
+        filesystem:
+          root_dir: ~/projects/Personal/landonmclain-site
+        shell:
+          cwd: ~/projects/Personal/landonmclain-site
+
+    ``root_key`` is the member inside the block that carries the path
+    (``root_dir`` / ``cwd`` / ``root`` / ``scan_root``). Only that key is
+    validated and copied — unknown keys *inside* the block are ignored so the
+    schema can grow (e.g. shell ``allowed_commands`` / ``denied_commands``)
+    without breaking older spec files.
+
+    Returns a dict (or ``None`` when the block is absent / unreadable / has no
+    usable root). Absent members fall back to the builder's `PROJECT_ROOT`
+    default — so a spec block is purely additive and never silently weakens a
+    secure default.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get(block_name)
+    if not isinstance(block, dict):
+        return None
+    root = block.get(root_key)
+    if not isinstance(root, str) or not root.strip():
+        return None
+    return {root_key: root}
+
+
+def _spec_filesystem_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``filesystem:`` block (root_dir)."""
+    return _spec_rooted_config(spec_path, "filesystem", "root_dir")
+
+
+def _spec_shell_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``shell:`` block (cwd)."""
+    return _spec_rooted_config(spec_path, "shell", "cwd")
+
+
+def _spec_git_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``git:`` block (root)."""
+    return _spec_rooted_config(spec_path, "git", "root")
+
+
+def _spec_codebase_map_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``codebase_map:`` block (scan_root)."""
+    return _spec_rooted_config(spec_path, "codebase_map", "scan_root")
+
+
 class AgentSpecNotFoundError(FileNotFoundError):
     """Raised when an agent specification cannot be found."""
 
@@ -266,6 +375,19 @@ def build_agent(
     # block overrides the env-driven PLAYWRIGHT_ALLOWED_DOMAINS default when it
     # declares a non-empty `allowed_domains` (see _spec_browser_config).
     browser_config = _spec_browser_config(spec_path)
+    # Per-assistant vault config: the spec's top-level `vault:` block names the
+    # vault root (+ optional allow/deny subtree patterns). Absent -> the paf-owned
+    # data/vault/ playground default (see _spec_vault_config / _build_vault).
+    vault_config = _spec_vault_config(spec_path)
+    # Per-assistant root scoping: the spec's top-level `filesystem:`/`shell:`/
+    # `git:`/`codebase_map:` blocks point each root-bearing capability at a
+    # working directory other than PROJECT_ROOT (see _spec_rooted_config).
+    # Absent block -> the builder's PROJECT_ROOT default. Lets a single agent
+    # instance be pointed "at" another repo without touching a global default.
+    filesystem_config = _spec_filesystem_config(spec_path)
+    shell_config = _spec_shell_config(spec_path)
+    git_config = _spec_git_config(spec_path)
+    codebase_map_config = _spec_codebase_map_config(spec_path)
     # Default: apply the OpenRouter provider/quantization pin (temp 0,
     # top_p 1.0, seed, pinned provider chain) unless the caller supplies their own
     # `model_settings` override. Agent.from_spec shallow-merges this over the spec's
@@ -283,6 +405,16 @@ def build_agent(
         # spec-declared ones via Agent.from_spec. The profile is the gatekeeper:
         # only capabilities in its allowlist are built (see build.py). The spec's
         # `compact:` block (if any) drives the compaction tiers.
-        capabilities=build_runtime_capabilities(profile, compaction_config, web_config, browser_config),
+        capabilities=build_runtime_capabilities(
+            profile,
+            compaction_config,
+            web_config,
+            browser_config,
+            vault_config,
+            filesystem_config=filesystem_config,
+            shell_config=shell_config,
+            git_config=git_config,
+            codebase_map_config=codebase_map_config,
+        ),
         **overrides,
     )

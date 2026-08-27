@@ -39,6 +39,7 @@ from paf.capabilities.memory._window import MemoryConsolidationWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
+from paf.capabilities.vault import Vault
 from paf.capabilities.visual import Visual
 from paf.capabilities.web import Web
 
@@ -88,6 +89,13 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # (build.py `_build_codebase_map` roots it at PROJECT_ROOT), so it's built in
     # Python, not spec-serialized.
     "CodebaseMap": CodebaseMap,
+    # Navigation-first note ladder over an Obsidian-style markdown vault
+    # (vault_overview/lookup_note/read_note + note_find/note_search). paf-owned
+    # icon-capability (AbstractCapability wrapping a FunctionToolset), same shape
+    # as CodebaseMap/FileSystem/Shell. Needs a real vault_root + allow/deny at
+    # build time (build.py `_build_vault` reads the spec `vault:` block, defaulting
+    # to the paf-owned playground), so it's built in Python, not spec-serialized.
+    "Vault": Vault,
     # Tavily-backed web search + page extraction (search_web / fetch_web_page).
     # Adapted from coding_agent web_search_tools. Reads TAVILY_API_KEY from the
     # env at call time. fetch_web_page is domain-gated (per-spec trust boundary).

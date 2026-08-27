@@ -43,6 +43,7 @@ from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
+from paf.capabilities.vault import Vault as _Vault
 from paf.capabilities.visual import Visual as _Visual
 from paf.capabilities.web import Web as _Web
 from paf.config import PROJECT_ROOT, settings
@@ -102,7 +103,7 @@ def _conversation_search_suppressed(store):
     )
 
 
-def _build_filesystem(store) -> _FileSystem:
+def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSystem:
     """Scoped filesystem access rooted at the project root (paf-owned copy).
 
     `store` is accepted for a uniform builder signature but unused — the
@@ -111,11 +112,22 @@ def _build_filesystem(store) -> _FileSystem:
     edit/list/search/find) while the harness toolset's traversal prevention +
     protected-pattern defaults (`.git/`, `.env`, keys, secrets read-only) keep it
     confined and safe.
+
+    `filesystem_config` is the spec's top-level ``filesystem:`` block (see
+    ``specs._spec_filesystem_config``): ``root_dir`` overrides the default
+    ``PROJECT_ROOT`` so an agent can be pointed at a specific working repo.
+    Absent/``None`` -> ``PROJECT_ROOT``. Traversal/symlink/protected-pattern
+    gates always apply, whichever root is in effect.
     """
-    return _FileSystem(root_dir=PROJECT_ROOT)
+    root_dir = PROJECT_ROOT
+    if isinstance(filesystem_config, dict) and isinstance(
+        filesystem_config.get("root_dir"), str
+    ) and filesystem_config.get("root_dir"):
+        root_dir = Path(os.path.expanduser(filesystem_config["root_dir"]))
+    return _FileSystem(root_dir=root_dir)
 
 
-def _build_shell(store) -> _Shell:
+def _build_shell(store, shell_config: dict | None = None) -> _Shell:
     """Shell command execution rooted at the project root (paf-owned copy).
 
     `store` is accepted for a uniform builder signature but unused — the shell
@@ -125,11 +137,19 @@ def _build_shell(store) -> _Shell:
     output truncation keep it bounded. Environment defaults to inheriting the
     parent, so host secrets (incl. LLM API keys) remain present unless a caller
     opts into `denied_env_patterns=LLM_API_KEY_ENV_PATTERNS`.
+
+    `shell_config` is the spec's top-level ``shell:`` block (see
+    ``specs._spec_shell_config``): ``cwd`` overrides the default ``PROJECT_ROOT``.
+    Absent/``None`` -> ``PROJECT_ROOT``. The built-in deny-list and
+    interactive-command block always apply; this knob only moves the cwd.
     """
-    return _Shell(cwd=PROJECT_ROOT)
+    cwd = PROJECT_ROOT
+    if isinstance(shell_config, dict) and isinstance(shell_config.get("cwd"), str) and shell_config.get("cwd"):
+        cwd = Path(os.path.expanduser(shell_config["cwd"]))
+    return _Shell(cwd=cwd)
 
 
-def _build_git(store) -> _Git:
+def _build_git(store, git_config: dict | None = None) -> _Git:
     """Safe git inspection + checkpoint tools rooted at the project root.
 
     `store` is accepted for a uniform builder signature but unused — git
@@ -137,11 +157,20 @@ def _build_git(store) -> _Git:
     toolset confines every user-supplied path to this root; the two write tools
     (git_checkpoint / git_restore_paths) refuse empty path lists so the agent
     can never broad-`add -A` or wipe more than it named.
+
+    `git_config` is the spec's top-level ``git:`` block (see
+    ``specs._spec_git_config``): ``root`` overrides the default ``PROJECT_ROOT``
+    so the capability can operate over another repo. Absent/``None`` ->
+    ``PROJECT_ROOT``. Path-confinement to the root always applies; `root` never
+    weakens it.
     """
-    return _Git(root=PROJECT_ROOT)
+    root = PROJECT_ROOT
+    if isinstance(git_config, dict) and isinstance(git_config.get("root"), str) and git_config.get("root"):
+        root = Path(os.path.expanduser(git_config["root"]))
+    return _Git(root=root)
 
 
-def _build_codebase_map(store) -> _CodebaseMap:
+def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _CodebaseMap:
     """Navigation-first codebase browser rooted at the project root.
 
     `store` is accepted for a uniform builder signature but unused — the codebase
@@ -151,8 +180,18 @@ def _build_codebase_map(store) -> _CodebaseMap:
     The index is **on-demand**: ``get_overview`` / the ``run_codebase_map`` tool
     (re)build artifacts if missing or stale, so the capability constructs and
     registers without a pre-scan.
+
+    `codebase_map_config` is the spec's top-level ``codebase_map:`` block (see
+    ``specs._spec_codebase_map_config``): ``scan_root`` overrides the default
+    ``PROJECT_ROOT``. Absent/``None`` -> ``PROJECT_ROOT``. Index artifacts always
+    land under ``.agent-codeindex/`` inside whichever root is in effect.
     """
-    return _CodebaseMap(scan_root=PROJECT_ROOT)
+    scan_root = PROJECT_ROOT
+    if isinstance(codebase_map_config, dict) and isinstance(
+        codebase_map_config.get("scan_root"), str
+    ) and codebase_map_config.get("scan_root"):
+        scan_root = Path(os.path.expanduser(codebase_map_config["scan_root"]))
+    return _CodebaseMap(scan_root=scan_root)
 
 
 def _build_web(store, search_domains: list[str] | None = None) -> _Web:
@@ -168,6 +207,35 @@ def _build_web(store, search_domains: list[str] | None = None) -> _Web:
     `PREFERRED_DOC_DOMAINS` default. Open web *search* is never restricted.
     """
     return _Web(search_domains=search_domains)
+
+
+# Vault capability default root (no spec `vault:` block): a paf-owned playground
+# under the repo's data/ tree — clean, deterministic, safe for tests. The real
+# vault is ONLY reachable via an explicit `vault: root:` in an agent spec, never a
+# hardcoded test/tool target.
+_DEFAULT_VAULT_ROOT = PROJECT_ROOT / "data" / "vault"
+
+
+def _build_vault(store, vault_config: dict | None = None) -> _Vault:
+    """Navigation-first note ladder over a markdown vault (Tier A read tools).
+
+    `store` is accepted for a uniform builder signature but unused — the vault
+    reads/writes its own flat-file index through the ``FlatFileVaultStorage``
+    seam (co-located under ``.paf-vault/``), not the persistence store.
+
+    `vault_config` is the spec's top-level ``vault:`` block (see
+    ``specs._spec_vault_config``): ``root`` (vault directory), optional
+    ``allow``/``deny`` glob subtree patterns. Absent/empty block -> the paf-owned
+    ``data/vault/`` playground default (never the user's real vault, which must be
+    named explicitly in a spec).
+    """
+    is_dict = isinstance(vault_config, dict)
+    root: Path | str = _DEFAULT_VAULT_ROOT
+    if is_dict and isinstance(vault_config.get("root"), str) and vault_config.get("root"):
+        root = vault_config["root"]
+    allow = [str(p) for p in vault_config.get("allow", [])] if is_dict and vault_config.get("allow") else []
+    deny = [str(p) for p in vault_config.get("deny", [])] if is_dict and vault_config.get("deny") else []
+    return _Vault(vault_root=root, allow=allow, deny=deny)
 
 
 def _build_visual(store) -> _Visual:
@@ -446,6 +514,11 @@ def build_runtime_capabilities(
     compaction_config=None,
     web_search_domains: list[str] | None = None,
     browser_config: dict | None = None,
+    vault_config: dict | None = None,
+    filesystem_config: dict | None = None,
+    shell_config: dict | None = None,
+    git_config: dict | None = None,
+    codebase_map_config: dict | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -481,6 +554,9 @@ def build_runtime_capabilities(
         # Codebase-map: navigation-first codebase browser rooted at the repo root
         # (overview/lookup_file/read_block/search_codebase + run_codebase_map).
         "CodebaseMap": _build_codebase_map,
+        # Vault: navigation-first note ladder over a markdown vault (Tier A read
+        # tools) — vault_overview/lookup_note/read_note + note_find/note_search.
+        "Vault": _build_vault,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,
         # Vision-model description of captured screenshots (describe_screenshot).
@@ -517,6 +593,16 @@ def build_runtime_capabilities(
             capabilities.append(_build_web(store, web_search_domains))
         elif name == "Browser":
             capabilities.append(_build_browser(store, browser_config))
+        elif name == "Vault":
+            capabilities.append(_build_vault(store, vault_config))
+        elif name == "FileSystem":
+            capabilities.append(_build_filesystem(store, filesystem_config))
+        elif name == "Shell":
+            capabilities.append(_build_shell(store, shell_config))
+        elif name == "Git":
+            capabilities.append(_build_git(store, git_config))
+        elif name == "CodebaseMap":
+            capabilities.append(_build_codebase_map(store, codebase_map_config))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

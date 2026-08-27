@@ -122,6 +122,12 @@ DEMO_PROFILE = AgentProfile(
         # (re-index). Lets the model orient in a codebase by climbing a ladder
         # instead of brute-force keyword scans.
         "CodebaseMap",
+        # Vault: navigation-first note ladder over a markdown vault. Roots at
+        # the spec `vault:` block (default paf-owned data/vault/ playground) —
+        # vault_overview/lookup_note/read_note + note_find/note_search. Lets the
+        # model navigate and read an Obsidian-style vault instead of brute-force
+        # scans. Tier B (graph) / Tier C (writes) are later phases.
+        "Vault",
         # Tavily-backed web search + page extraction — search_web (open) +
         # fetch_web_page (domain-gated extract). Reads TAVILY_API_KEY at call
         # time; tools degrade to clear messages when key/package missing.
