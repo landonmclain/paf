@@ -93,6 +93,17 @@ class Settings(BaseSettings):
     # (TURN_INDEX_DIR), consistent with persistence_dir.
     turn_index_dir: str = "data/.turn-index"
 
+    # Vault capability flat-file index root. A DIRECTORY of per-vault-root JSON
+    # artifacts (`<this dir>/<sha256(vault_root)>/{index,snapshot}.json`), keyed
+    # by the vault root's normalized absolute path so every distinct vault —
+    # the playground, a per-project temp vault, or a pointed-at Obsidian
+    # subfolder — gets its own stable index area while the artifacts stay in the
+    # paf repo, NOT co-located inside the vault. Relative paths resolve against
+    # PROJECT_ROOT like persistence_dir; gitignored via the `data` entry.
+    # Overridable via env / .env (VAULT_INDEX_DIR). An explicit
+    # `FlatFileVaultStorage(index_root=...)` still wins over this default.
+    vault_index_dir: str = "data/.paf-vault-index"
+
     # Observability (Langfuse OTLP). Provide these in .env / the environment —
     # they are secrets + host config, NOT meant to be entered here. All three
     # blank = tracing off entirely (setup_observability no-ops); providing keys

@@ -221,7 +221,9 @@ def _build_vault(store, vault_config: dict | None = None) -> _Vault:
 
     `store` is accepted for a uniform builder signature but unused — the vault
     reads/writes its own flat-file index through the ``FlatFileVaultStorage``
-    seam (co-located under ``.paf-vault/``), not the persistence store.
+    seam, stored repo-owned under ``data/.paf-vault-index/`` (keyed by the vault
+    root's hash, NOT co-located inside the vault tree), not the persistence
+    store.
 
     `vault_config` is the spec's top-level ``vault:`` block (see
     ``specs._spec_vault_config``): ``root`` (vault directory), optional

@@ -2,12 +2,21 @@
 
 A small, inspectable, editable index of a vault's notes — the flat-file-first
 philosophy locked across paf (memory, codebase_map). The index is a single JSON
-file plus a snapshot (per-note fingerprint) for freshness, co-located under the
-vault root (``.paf-vault/``, like codebase_map's ``.agent-codeindex/``):
+file plus a snapshot (per-note fingerprint) for freshness, stored under the paf
+repo's ``data/.paf-vault-index/`` (like codebase_map's ``.agent-codeindex/`` but
+decoupled from the vault tree):
 
-- ``index.json``      — per-note rows: path, frontmatter meta (title/tags/aliases),
-                        heading list, wikilinks-out, line count.
-- ``snapshot.json``   — ``{path: {mtime, size, sha256}}`` freshness fingerprints.
+- ``<vault_index_dir>/<sha256(vault_root)>/index.json``
+  — per-note rows: path, frontmatter meta (title/tags/aliases), heading list,
+  wikilinks-out, line count.
+- ``.../snapshot.json`` — ``{path: {mtime, size, sha256}}`` freshness
+  fingerprints.
+
+The index is keyed by the vault root's normalized absolute path and lives in the
+paf repo (NOT co-located inside the vault), so pointing ``vault.root`` at a real
+Obsidian vault — or a per-project/temp vault anywhere — never drops artifacts
+into that tree. ``gitignore`` via the ``data`` entry. An explicit
+``FlatFileVaultStorage(index_root=...)`` overrides this default location.
 
 Everything is deterministic, hand-editable, and diffable. No opaque DB, no
 embeddings, no LLM in the read path.
@@ -25,9 +34,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from paf.config import PROJECT_ROOT, settings
+
 from ._markdown import extract_wikilinks, parse_frontmatter
 
-_INDEX_SUBDIR = ".paf-vault"
 _VERSION = 1
 
 
@@ -132,14 +142,21 @@ def _sha256_of_path(root: str | Path) -> str:
 
 
 def index_dir_for_root(root: str | Path) -> Path:
-    return Path(root).resolve() / _INDEX_SUBDIR / _sha256_of_path(root)
+    """Index dir for a vault root: repo-owned, keyed by the root's hash.
+
+    Lives under ``<data/vault_index_dir>/<sha256(root)>/`` in the paf repo —
+    NOT co-located inside the vault tree — so pointing a vault at a real
+    Obsidian vault or any per-project/temp tree never drops artifacts into it.
+    ``FlatFileVaultStorage(index_root=...)`` overrides this default.
+    """
+    return Path(PROJECT_ROOT) / Path(settings.vault_index_dir) / _sha256_of_path(root)
 
 
 class FlatFileVaultStorage:
-    """Default storage: flat JSON under the co-located ``.paf-vault/`` dir.
+    """Default storage: flat JSON under the repo-owned index dir (see class module).
 
     Reads/writes never raise on a missing/corrupt artifact — ``read_*`` returns
-    ``None`` so callers treat \"not indexed yet\" and \"corrupt once\" the same.
+    ``None`` so callers treat "not indexed yet" and "corrupt once" the same.
     """
 
     def __init__(self, index_root: str | Path | None = None) -> None:

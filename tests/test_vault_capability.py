@@ -260,6 +260,63 @@ def test_vault_capability_get_toolset_and_instructions() -> None:
     assert instr and any("vault_overview" in i for i in instr)
 
 
+# ------------------------------------------------------------------ index location (repo-owned, keyed by vault root)
+
+
+def test_index_root_override_wins(tmp_path: Path) -> None:
+    """An explicit FlatFileVaultStorage(index_root=...) controls where the index lives."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    _seed(root, "Index.md", _IDX)
+    idx = tmp_path / "custom-idx"
+    store = FlatFileVaultStorage(index_root=idx)
+    vs = VaultToolset(vault_root=root, storage=store)
+    vs.vault_overview()  # forces index build
+    assert (idx / "index.json").exists()
+    assert (idx / "snapshot.json").exists()
+    # nothing co-located in the vault tree
+    assert not (root / ".paf-vault").exists()
+    assert not (root / "data").exists()
+
+
+def test_default_index_is_repo_owned_not_in_vault(tmp_path: Path) -> None:
+    """With default storage, the index is keyed under the paf repo's
+    data/.paf-vault-index/, not co-located inside the vault tree."""
+    from paf.capabilities.vault._store import FlatFileVaultStorage as FFS
+    from paf.capabilities.vault._store import index_dir_for_root
+    from paf.config import PROJECT_ROOT, settings
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    _seed(root, "Index.md", _IDX)
+    store = FFS()  # default storage -> repo-owned index
+    build_index(root, ScanScope(root), store)
+    expected = PROJECT_ROOT / Path(settings.vault_index_dir) / index_dir_for_root(root).name
+    assert expected == index_dir_for_root(root)
+    # index built at the repo-owned location, keyed by the vault root's hash
+    assert (index_dir_for_root(root) / "index.json").exists()
+    # no index artifacts leak into the vault tree
+    assert not (root / ".paf-vault").exists()
+    assert not (root / "data").exists()
+
+
+def test_default_index_keyed_per_vault_root(tmp_path: Path) -> None:
+    """Distinct vault roots get distinct hash-keyed index dirs under the repo area."""
+    from paf.capabilities.vault._store import index_dir_for_root
+
+    a = tmp_path / "vault-a"
+    b = tmp_path / "vault-b"
+    a.mkdir()
+    b.mkdir()
+    _seed(a, "Index.md", _IDX)
+    _seed(b, "Index.md", _IDX)
+    da = index_dir_for_root(a)
+    db = index_dir_for_root(b)
+    assert da != db
+    # both are keyed under the same repo-owned base
+    assert da.parent == db.parent
+
+
 # ------------------------------------------------------------------ Tier B: note_links / note_backlinks
 
 
