@@ -55,6 +55,16 @@ def _yaml_list(values: list[str]) -> str:
     return json.dumps(values, ensure_ascii=False)
 
 
+class PathRefMiss(Exception):
+    """A path-like note ref (contains ``/``) did not match any note path.
+
+    Raised instead of falling back to a basename-only match, so a mistyped or
+    over-prefixed path can never silently read a *different* note that happens
+    to share the target's basename (e.g. many notes titled ``Index.md``).
+    Callers translate it into a regrounding hint for the model.
+    """
+
+
 class VaultToolset(FunctionToolset):
     """Navigation-first vault ladder rooted at a vault root.
 
@@ -103,9 +113,15 @@ class VaultToolset(FunctionToolset):
     def _resolve(self, ref: str) -> str | None:
         """Resolve a note reference: a path, a title, or a [[wikilink]] target.
 
-        Prefers an exact path; falls back to a case-insensitive title/wikilink
-        match against the index. Returns a repo-relative path or ``None``.
-        Refuses path-traversal and absolute refs outright.
+        Prefers an exact path. A **path-like** ref (one containing ``/``) is
+        resolved strictly: exact path, or the same path with ``.md`` appended —
+        nothing else. On a genuine path-like miss it raises ``PathRefMiss`` (a
+        clean miss), so a mistyped or over-prefixed path can never silently
+        read a *different* note that happens to share the target's basename.
+        A **bare title/wikilink** (no ``/``) falls back to the case-insensitive
+        basename matcher (Obsidian semantics). Returns a repo-relative path or
+        ``None`` (the latter only for traversal/absolute rejects). Refuses
+        path-traversal and absolute refs outright.
         """
         ref = ref.strip()
         if ref.startswith("[[") and ref.endswith("]]"):
@@ -118,6 +134,16 @@ class VaultToolset(FunctionToolset):
         if ".." in parts or (parts and parts[0].endswith(":")):
             return None
         notes = self._notes()
+        # A path-like ref resolves strictly: exact path, else same path + ".md".
+        # It must NOT fall through to a basename-only match, which would hand
+        # back the first note with that name anywhere in the vault (e.g. 28
+        # "Index"s). A genuine miss raises so the caller can reground the model.
+        if "/" in ref:
+            for cand in (ref, ref + ".md"):
+                for row in notes:
+                    if row.get("path") == cand:
+                        return cand
+            raise PathRefMiss(ref)
         for row in notes:
             if row.get("path") == ref:
                 return ref
@@ -142,13 +168,21 @@ class VaultToolset(FunctionToolset):
         down, not a search. ``max_depth`` caps how deep the tree opens (default:
         open fully; pass e.g. ``max_depth=2`` on a big vault to see the top
         folders, then drill with ``lookup_note``/``read_note``).
+
+        The tree is relative to the vault root; the second line always states the
+        root's absolute path and reminds you NOT to prepend the root folder name
+        to paths you pass to ``read_note``/``lookup_note`` (e.g. apex ``Projects``
+        means the root *is* Projects — addressable paths start one level down).
         """
         self._ensure_index()
         notes = self._notes()
         if not notes:
             return f"Vault at {self._root} is empty (no in-scope .md notes)."
         # Build the nested folder tree from note paths.
-        lines: list[str] = [f"{self._root.name}  ({len(notes)} notes)"]
+        lines: list[str] = [
+            f"{self._root.name}  ({len(notes)} notes)",
+            f"root: {self._root}  (paths below are relative to this root — do NOT prepend the root folder name)",
+        ]
 
         def _emit(dir_rel: str, prefix: str) -> None:
             # direct .md files in this exact dir
@@ -176,6 +210,15 @@ class VaultToolset(FunctionToolset):
         _emit("", "")
         return "\n".join(lines)
 
+    def _path_miss_hint(self, ref: str) -> str:
+        """Reground the model on a path-like miss (never guesses a target)."""
+        return (
+            f"No note found at path '{ref}'. Paths are relative to the vault root "
+            f"({self._root}) — do NOT prepend the root folder name. Re-check the "
+            f"exact path from vault_overview, or locate the note with note_find / "
+            f"note_search."
+        )
+
     def lookup_note(self, path: str, detail: bool = False) -> str | None:
         """Look up a note's head (frontmatter, headings, links-out).
 
@@ -185,7 +228,10 @@ class VaultToolset(FunctionToolset):
         Use ``read_note`` when you need the whole body. Returns ``None`` for an
         unknown note.
         """
-        rel = self._resolve(path)
+        try:
+            rel = self._resolve(path)
+        except PathRefMiss as e:
+            return self._path_miss_hint(str(e))
         if rel is None:
             return None
         for n in self._notes():
@@ -200,7 +246,10 @@ class VaultToolset(FunctionToolset):
         target. Returns the entire note contents (frontmatter included). Returns
         ``None`` for an unknown note or one outside the vault root.
         """
-        rel = self._resolve(path)
+        try:
+            rel = self._resolve(path)
+        except PathRefMiss as e:
+            return self._path_miss_hint(str(e))
         if rel is None:
             return None
         full = self._abs(rel)
@@ -311,7 +360,10 @@ class VaultToolset(FunctionToolset):
         (dangling links are shown with their raw target marked ``(unresolved)``).
         Returns ``None`` for an unknown note.
         """
-        rel = self._resolve(path)
+        try:
+            rel = self._resolve(path)
+        except PathRefMiss as e:
+            return self._path_miss_hint(str(e))
         if rel is None:
             return None
         notes = self._notes()
@@ -334,7 +386,10 @@ class VaultToolset(FunctionToolset):
         Returns every other note whose wikilinks resolve to this note (its
         inbound references). Returns ``(no backlinks)`` when nothing points in.
         """
-        rel = self._resolve(path)
+        try:
+            rel = self._resolve(path)
+        except PathRefMiss as e:
+            return self._path_miss_hint(str(e))
         if rel is None:
             return f"(unknown note: {path})"
         notes = self._notes()

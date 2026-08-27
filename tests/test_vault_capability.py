@@ -139,6 +139,44 @@ def test_read_note_outside_root_rejected(vault: tuple[Path, VaultToolset]) -> No
     assert toolset.read_note("../Index.md") is None
 
 
+def test_resolve_pathlike_miss_is_hard_never_basename_match(tmp_path: Path) -> None:
+    """A path-like ref that isn't an exact index path is a clean miss that
+    regrounds — it returns a hint, and NEVER silently reads a *different* note
+    sharing the same basename (e.g. 28 notes titled ``Index``). A bare title
+    still uses the Obsidian basename matcher."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    _seed(root, "Index.md", _IDX)                       # first in scan order
+    _seed(root, "Investigations/Foo/Index.md", _IDX)    # also basename "Index"
+    _seed(root, "Portfolio-GitHub/Index.md", _IDX)      # the intended target
+    store = FlatFileVaultStorage(index_root=tmp_path / "idx")
+    build_index(root, ScanScope(root), store)
+    toolset = VaultToolset(vault_root=root, storage=store)
+
+    # Exact path-like target → resolves to that note.
+    assert toolset.read_note("Portfolio-GitHub/Index.md") is not None
+
+    # Path-like ref may drop the ".md" extension.
+    assert toolset.read_note("Portfolio-GitHub/Index") is not None
+
+    # Over-prefixed / wrong-folder path-like ref → regrounding hint (a string),
+    # NOT the first-note-with-that-basename (would have been Investigations/Foo).
+    hint = toolset.read_note("Projects/Portfolio-GitHub/Index.md")
+    assert hint is not None
+    assert "do NOT prepend the root folder name" in hint
+    assert "Investigations" not in hint
+    assert "No note found" in hint
+
+    # Bare basename still uses the Obsidian title matcher (no hard miss).
+    assert toolset.read_note("Index") is not None
+
+    # A different over-prefix also regrounds — same recovery hint, never a leak.
+    hint2 = toolset.read_note("Personal/Portfolio-GitHub/Index.md")
+    assert hint2 is not None
+    assert "do NOT prepend the root folder name" in hint2
+    assert "Investigations" not in hint2
+
+
 # ------------------------------------------------------------------ note_find
 
 
