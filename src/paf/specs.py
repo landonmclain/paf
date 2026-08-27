@@ -200,7 +200,7 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
     YAML separately for per-agent vault config. The block shape:
 
         vault:
-          root: /home/user/Documents/notes
+          root: ~/Documents/notes   # `~` expands via os.path.expanduser
           allow:            # optional; absent = whole root
             - Notes/**
           deny:             # optional; always wins over allow
@@ -229,7 +229,7 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
     cfg: dict[str, object] = {}
     root = block.get("root")
     if isinstance(root, str) and root:
-        cfg["root"] = root
+        cfg["root"] = os.path.expanduser(root)
     for key in ("allow", "deny"):
         val = block.get(key)
         if isinstance(val, list) and val:

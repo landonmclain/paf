@@ -6,6 +6,9 @@
 #
 # Sources the project .env (exports OPENROUTER_API_KEY / OPENAI_API_KEY etc.)
 # and execs the venv python so the service holds the real PID.
+# 
+# sytemd command: 
+# systemctl --user restart paf-web.service && sleep 4 && systemctl --user is-active paf-web.service && systemctl --user status paf-web.service --no-pager -n 12
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

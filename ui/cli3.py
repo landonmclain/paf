@@ -8,8 +8,9 @@ is surfaced as a banner (no viewing of old sessions) — use `/history`,
 
 Usage:
     python ui/cli2.py [agent_name]
-    # default agent_name "assistant" (specs/assistant.yaml); use "demo_assistant"
-    # (specs/demo_assistant.yaml) to poke at the lean demo profile's capabilities.
+    # default agent_name "demo_assistant" (specs/demo_assistant.yaml) — the
+    # lean demo profile; pass "assistant" (specs/assistant.yaml) explicitly to
+    # run the full M1 profile instead.
     # conversation_id defaults to cli-{agent_name}. Slash commands (/help) are
     # handled locally and never sent to the model.
 
@@ -37,7 +38,7 @@ from paf.capabilities import PROFILES
 from paf.config import PROJECT_ROOT
 from paf.runtime import Session, StreamEvent
 
-DEFAULT_AGENT = "assistant"
+DEFAULT_AGENT = "demo_assistant"
 
 # conversation_id derived per agent so each agent keeps its own history lane
 # (cli-assistant, cli-demo_assistant, ...).

@@ -56,40 +56,6 @@ model_settings:
   openrouter_cache_messages: true
   openrouter_cache_tool_definitions: true
 
-# Native capabilities — all resolve from YAML, no Python needed. The
-# `capabilities:` list is intentionally ABSENT when every entry is commented
-# out (an empty list is invalid). Uncomment the `capabilities:` line AND the
-# rows you want to poke at.
-#
-# capabilities:
-#   # Web search over the open web. `defer_loading` keeps it out of the prompt
-#   # until the model asks for it.
-#   - WebSearch:
-#       defer_loading: true
-#   - WebFetch:
-#       defer_loading: true
-#   - XSearch:
-#       defer_loading: true
-#
-#   # Extended reasoning. Effort: low | medium | high (or true/false).
-#   - Thinking:
-#       effort: high
-#
-#   # Connect to an MCP server (streamable HTTP). `server` is the URL; pairs
-#   # with `allowed_tools` to scope which tools the model sees.
-#   - MCP:
-#       server: http://localhost:8000/mcp
-#
-#   # On-demand tool discovery over a large/flexible tool catalog via
-#   # `search_tools`. `max_results` caps how many results per search.
-#   - ToolSearch:
-#       max_results: 10
-#       defer_loading: true
-#
-#   # Provider-native image generation (or a local `image_model`).
-#   - ImageGeneration:
-#       size: 1024x1024
-
 # ---------------------------------------------------------------------------
 # Web trust boundary (option B — lives in the spec, not in Python). Read by
 # `build_agent` -> `_spec_web_config` -> the `fetch_web_page` extract allowlist.
@@ -118,7 +84,10 @@ web:
     - playwright.dev
     - pytest.org
     - api.composer.trade
-
+    - astro.build
+    - docs.astro.build
+    - developers.cloudflare.com
+    - example.com
 # ---------------------------------------------------------------------------
 # Browser egress policy (option B — lives in the spec, not in Python). Read by
 # `build_agent` -> `_spec_browser_config` -> the Browser capability's egress
@@ -148,6 +117,46 @@ web:
 browser:
   allowed_domains:
     - staging.example.com
+    - example.com
+    - localhost
+    - 127.0.0.1
+  block_private_addresses: false   # local troubleshooting: release the SSRF guard for loopback only
+
+# ---------------------------------------------------------------------------
+# Per-assistant root scoping (option B — lives in the spec, not in Python). Read
+# by `build_agent` -> `_spec_{filesystem,shell,git,codebase_map}_config` -> the
+# root-bearing builders in build.py. These point each capability at a working
+# directory OTHER than PROJECT_ROOT (the paf repo itself).
+#
+# The demo agent is currently pointed at the `landonmclain-site` Astro repo so
+# we can work WITH paf to build it. Absent block -> the builder's PROJECT_ROOT
+# (paf repo) default, so a spec block is purely additive and never weakens a
+# secure default.
+#
+# Filesystem traversal/symlink/protected-pattern gates, Shell deny-list +
+# interactive-command block, and Git path-confinement ALWAYS apply — these
+# blocks only move the base path, they never loosen those gates.
+#
+# Shell note: do NOT set `allowed_commands` here. Shell's `__post_init__` turns
+# OFF the built-in destructive deny-list (rm/dd/shutdown/...) whenever an
+# allowlist is set, and this build agent needs git/curl/npm/node — allowlisting
+# them would strip exactly the protection we want on. Keep the default deny-list
+# and move only `cwd`.
+filesystem:
+  root_dir: ~/projects/Personal/landonmclain-site
+shell:
+  cwd: ~/projects/Personal/landonmclain-site
+git:
+  root: ~/projects/Personal/landonmclain-site
+codebase_map:
+  scan_root: ~/projects/Personal/landonmclain-site
+# Vault: the real Obsidian vault. `~` expands via os.path.expanduser. Deliberate
+# departure from the other four roots (which point at the site repo) — the vault
+# cap is a separate navigation-first note ladder over markdown, rooted here.
+# Absent `allow` = the whole root is readable; add allow/deny glob subtrees to
+# scope a workspace-vs-personal boundary (e.g. `Hermes/Projects/**`).
+# vault:
+#   root: ~/Documents/notes
 
 # ---------------------------------------------------------------------------
 # Per-assistant context-compaction tuning (option B — lives in the spec, not in
