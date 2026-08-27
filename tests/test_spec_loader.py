@@ -54,16 +54,34 @@ def test_real_assistant_spec_exists_and_parses() -> None:
 
 
 def test_real_demo_spec_browser_block_parses() -> None:
-    """The demo spec's shipped `browser:` block resolves to ONLY allowed_domains.
+    """The demo spec's shipped `browser:` block resolves as declared.
 
-    The published spec declares public staging reach only, and does NOT disable
-    the private-address guard — `block_private_addresses` is absent, so the
-    secure default (true) holds. No loopback hosts sneak into the allowlist.
+    ⚠️ TEMPORARY CONTRACT (2026-08-27): the demo spec currently declares
+    loopback + the private-address guard disabled (`block_private_addresses:
+    false`) so the demo agent can reach local/loopback targets while building
+    the landonmclain-site Astro repo. This is a LOCAL-TROUBLESHOOTING release
+    of the SSRF guard — it MUST be reverted to the secure public contract
+    (drop localhost/127.0.0.1 + `block_private_addresses: false`, keep only
+    public-reach domains) BEFORE the repo goes public.
+
+    Tracks: Portfolio-GitHub/Publish.md SCRUB pre-flight; see vault
+    Tier-Sorted-Render-Benchmark / publish notes for the revert gate.
+
+    Secure contract it returns to (the intent this test used to enforce):
+    only public staging/reach domains, `block_private_addresses` absent so the
+    secure default (true) holds, no loopback hosts in the allowlist.
     """
     cfg = _spec_browser_config(SPECS_DIR / "demo_assistant.yaml")
     assert cfg is not None
-    assert cfg == {"allowed_domains": ["staging.example.com"]}
-    assert "block_private_addresses" not in cfg  # secure default stays true
+    assert cfg == {
+        "allowed_domains": [
+            "staging.example.com",
+            "example.com",
+            "localhost",
+            "127.0.0.1",
+        ],
+        "block_private_addresses": False,
+    }
 
 
 def test_spec_browser_config_absent_block_returns_none(tmp_path: Path) -> None:
