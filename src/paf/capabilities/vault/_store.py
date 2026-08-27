@@ -75,10 +75,14 @@ class ScanScope:
 
     def _allowed(self, path: Path) -> bool:
         rel = path.relative_to(self.root).as_posix()
-        if self.deny and self._matches_any(rel, self.deny):
+        return self._allowed_rel(rel)
+
+    def _allowed_rel(self, rel_posix: str) -> bool:
+        """Scope check on a vault-relative POSIX path (used for prospective writes)."""
+        if self.deny and self._matches_any(rel_posix, self.deny):
             return False
         if self.allow:
-            return self._matches_any(rel, self.allow)
+            return self._matches_any(rel_posix, self.allow)
         return True
 
     def iter_notes(self) -> list[Path]:

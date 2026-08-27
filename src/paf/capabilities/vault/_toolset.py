@@ -12,11 +12,14 @@ rather than brute-forcing keyword scans:
 - ``read_note``       — the whole note body (resolves [[wikilink]] → path).
 - ``note_find``       — Obsidian-style lookup by title/tag/frontmatter.
 - ``note_search``     — content search with optional tag/folder filter.
+- ``note_links``      — a note's outgoing wikilinks, resolved to paths.
+- ``note_backlinks``  — what links TO a note (reverse edges of the note graph).
+- ``note_create``     — add a note (frontmatter + body), scope-guarded.
+- ``note_rename``     — rename a note and rewrite inbound wikilinks atomically.
 
-Tier B (graph: note_backlinks/note_links/note_rename/note_create) and Tier C
-(writes: vault_write/vault_patch) are later phases — deliberately NOT registered
-here yet (YAGNI). Tools are agent-facing: every method returns a bounded,
-readable ``str``, never raw dicts.
+Tier C (raw content writes: vault_write/vault_patch with CAS) is a later phase
+— deliberately NOT registered here yet (YAGNI). Tools are agent-facing: every
+method returns a bounded, readable ``str``, never raw dicts.
 
 Index freshness is lazy: before a read, we ``sync_changed`` against the snapshot
 and rebuild the index rows for any changed/added notes (stat gate, hash confirm),
@@ -25,12 +28,13 @@ so the ladder always reflects the on-disk vault without a full pre-scan.
 
 from __future__ import annotations
 
+import os
 import posixpath
 from pathlib import Path
 
 from pydantic_ai.toolsets import FunctionToolset
 
-from ._markdown import resolve_note
+from ._markdown import rename_note_title, resolve_note, rewrite_wikilink_target
 from ._store import (
     FlatFileVaultStorage,
     ScanScope,
@@ -42,6 +46,13 @@ _MAX_HEAD_LINES = 15   # lines of note body shown in lookup_note at default
 _MAX_SEARCH_HITS = 20  # note_search cap
 
 _INSERT = "  "  # tree indent
+
+
+def _yaml_list(values: list[str]) -> str:
+    """Render a list as a YAML flow sequence for frontmatter (safe for one word)."""
+    import json
+
+    return json.dumps(values, ensure_ascii=False)
 
 
 class VaultToolset(FunctionToolset):
@@ -69,6 +80,10 @@ class VaultToolset(FunctionToolset):
         self.add_function(self.read_note, name="read_note")
         self.add_function(self.note_find, name="note_find")
         self.add_function(self.note_search, name="note_search")
+        self.add_function(self.note_links, name="note_links")
+        self.add_function(self.note_backlinks, name="note_backlinks")
+        self.add_function(self.note_create, name="note_create")
+        self.add_function(self.note_rename, name="note_rename")
 
     # -- index freshness -----------------------------------------------------
 
@@ -255,6 +270,192 @@ class VaultToolset(FunctionToolset):
         for path, snip in hits:
             out.append(f"- {path}\n    …{snip}…")
         return "\n".join(out)
+
+    # -- Tier B: note graph ----------------------------------------------------
+    # These are the graph-aware operations: they read or maintain the links
+    # between notes, not just raw bytes. note_create/note_rename are scope-
+    # guarded (confined to the root and to allow/deny) and written atomically.
+
+    def _in_scope_path(self, rel: str) -> Path | None:
+        """Absolute path for a prospective write ref, or None if out of scope.
+
+        Rejects traversal/absolute refs, paths escaping the root, and paths the
+        ``ScanScope`` would not include (allow/deny). Returns the confined
+        absolute path (the note need not exist yet for create).
+        """
+        rel = rel.strip()
+        if rel.startswith("/") or "\\" in rel:
+            return None
+        parts = Path(rel).parts
+        if not parts or ".." in parts or parts[0].endswith(":"):
+            return None
+        full = self._abs(rel)
+        if full is None:
+            return None
+        if not self._scope._allowed_rel(rel):
+            return None
+        return full
+
+    def _write_note_atomic(self, full: Path, content: str) -> None:
+        """Write a note's contents to disk atomically (staging + rename)."""
+        full.parent.mkdir(parents=True, exist_ok=True)
+        staging = full.with_name(f".{full.name}.staging")
+        staging.write_text(content, encoding="utf-8")
+        os.replace(staging, full)
+
+    def note_links(self, path: str) -> str | None:
+        """List a note's outgoing wikilinks, resolved to vault-relative paths.
+
+        ``path`` is a vault-relative path, a title, or a ``[[wikilink]]``.
+        Returns each link target the note points at, resolved to its note path
+        (dangling links are shown with their raw target marked ``(unresolved)``).
+        Returns ``None`` for an unknown note.
+        """
+        rel = self._resolve(path)
+        if rel is None:
+            return None
+        notes = self._notes()
+        row = next((n for n in notes if n["path"] == rel), None)
+        if row is None:
+            return None
+        raw = row.get("links") or []
+        if not raw:
+            return f"{rel} links to nothing."
+        resolved: list[str] = []
+        for target in raw:
+            hit = resolve_note(target, notes)
+            resolved.append(hit if hit else f"{target} (unresolved)")
+        return "\n".join(resolved)
+
+    def note_backlinks(self, path: str) -> str:
+        """What links TO a note — the reverse edges of the note graph.
+
+        ``path`` is a vault-relative path, a title, or a ``[[wikilink]]``.
+        Returns every other note whose wikilinks resolve to this note (its
+        inbound references). Returns ``(no backlinks)`` when nothing points in.
+        """
+        rel = self._resolve(path)
+        if rel is None:
+            return f"(unknown note: {path})"
+        notes = self._notes()
+        inbound: list[str] = []
+        for n in notes:
+            if n["path"] == rel:
+                continue
+            for link in n.get("links") or []:
+                if resolve_note(link, notes) == rel:
+                    inbound.append(n["path"])
+                    break
+        if not inbound:
+            return f"{rel} has no backlinks."
+        return "\n".join(inbound)
+
+    def note_create(
+        self,
+        path: str,
+        body: str | None = None,
+        tags: list[str] | None = None,
+        alias: str | None = None,
+    ) -> str:
+        """Create a new note in the vault (scope-guarded).
+
+        ``path`` is a vault-relative path ending in ``.md`` (nested folders are
+        created as needed). Writes an optional YAML frontmatter block (title
+        derived from the basename; ``tags``/``alias`` are optional) followed by
+        ``body``. Refuses to overwrite an existing note, to write outside the
+        vault root, or into a folder excluded by the vault's allow/deny scope.
+        Returns a confirmation naming the created path.
+        """
+        # Normalize: require a .md extension.
+        rel = path.strip()
+        if not rel.endswith(".md"):
+            rel = rel + ".md"
+        full = self._in_scope_path(rel)
+        if full is None:
+            return f"Refusing to create {path!r}: outside the vault root or excluded by scope."
+        if full.exists():
+            return f"Refusing to create {rel!r}: a note already exists there."
+        title = Path(rel).stem
+        parts: list[str] = ["---", f"title: {title}"]
+        if tags:
+            parts.append(f"tags: {_yaml_list(tags)}")
+        if alias:
+            parts.append(f"aliases: {_yaml_list([alias])}")
+        parts.append("---")
+        if body:
+            content = "\n".join(parts) + "\n\n" + body.rstrip() + "\n"
+        else:
+            content = "\n".join(parts) + "\n"
+        self._write_note_atomic(full, content)
+        return f"Created {rel} ({len(content)} bytes)."
+
+    def note_rename(self, path: str, new_path: str) -> str:
+        """Rename a note and rewrite every inbound wikilink to match.
+
+        ``path`` is the existing note (vault-relative path, title, or
+        ``[[wikilink]]``); ``new_path`` is its new vault-relative path. Moves the
+        file, then updates each other note that links to it so ``[[Old Name]]``
+        (and ``[[Old Name|alias]]``) becomes ``[[New Name]]`` — keeping the note
+        graph consistent. Atomic on both the move and each rewrite. Refuses a
+        rename that escapes scope or collides with an existing note.
+        """
+        old_rel = self._resolve(path)
+        if old_rel is None:
+            return f"(unknown note: {path})"
+        new_rel = new_path.strip()
+        if not new_rel.endswith(".md"):
+            new_rel = new_rel + ".md"
+        if new_rel.lower() == old_rel.lower():
+            return "New path is the same as the old path; nothing to do."
+        new_full = self._in_scope_path(new_rel)
+        if new_full is None:
+            return f"Refusing to rename to {new_path!r}: outside the vault root or excluded by scope."
+        if new_full.exists():
+            return f"Refusing to rename to {new_rel!r}: a note already exists there."
+
+        old_full = self._abs(old_rel)
+        if old_full is None or not old_full.is_file():
+            return f"(note not found on disk: {old_rel})"
+
+        old_target = Path(old_rel).stem
+        new_target = Path(new_rel).stem
+
+        # 1. Rewrite inbound links in every other note BEFORE the move, so we
+        # fail safely (no partial rename) if a rewrite errors out.
+        notes = self._notes()
+        rewritten: list[str] = []
+        for n in notes:
+            if n["path"] == old_rel:
+                continue
+            if not any(resolve_note(link, notes) == old_rel for link in (n.get("links") or [])):
+                continue
+            full = self._abs(n["path"])
+            if full is None or not full.is_file():
+                continue
+            text = full.read_text(encoding="utf-8", errors="replace")
+            updated = rewrite_wikilink_target(text, old_target, new_target)
+            if updated != text:
+                self._write_note_atomic(full, updated)
+                rewritten.append(n["path"])
+
+        # 2. Move the note file itself, then align its frontmatter title with
+        # the new stem (only when the title was auto-derived, i.e. == old stem).
+        new_full.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(old_full, new_full)
+        try:
+            moved_text = new_full.read_text(encoding="utf-8", errors="replace")
+            updated_text = rename_note_title(moved_text, old_target, new_target)
+            if updated_text != moved_text:
+                self._write_note_atomic(new_full, updated_text)
+        except OSError:
+            pass  # the rename already succeeded; a title-fix failure is non-fatal
+
+        head = f"Renamed {old_rel} → {new_rel}."
+        if rewritten:
+            head += f" Rewrote inbound links in {len(rewritten)} note(s): " + ", ".join(rewritten) + "."
+        else:
+            head += " No inbound links to rewrite."
+        return head
 
     # -- formatting ----------------------------------------------------------
 

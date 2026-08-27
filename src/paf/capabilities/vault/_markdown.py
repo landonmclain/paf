@@ -29,7 +29,7 @@ except Exception:  # pragma: no cover - yaml is a hard dep of paf
     yaml = None  # type: ignore[assignment]
 
 _FRONTMATTER_RE = re.compile(r"\A\s*---\s*\n(.*?)\n\s*---\s*\n?", re.DOTALL)
-_WIKILINK_RE = re.compile(r"\[\[([^\[\]|]+)(?:\|[^\]]+)?\]\]")
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]|]+)((?:\|[^\]]+)?)\]\]")
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -72,6 +72,58 @@ def extract_wikilinks(text: str) -> list[str]:
 def _index_key(name: str) -> str:
     """Normalize a note name for matching: lowercased basename without ``.md``."""
     return Path(name).stem.lower()
+
+
+def rewrite_wikilink_target(text: str, old_target: str, new_target: str) -> str:
+    """Rewrite every ``[[old_target]]``/``[[old_target|alias]]`` link to ``new_target``.
+
+    Matches the link target case-insensitively against ``old_target`` (Obsidian
+    resolves links by note name, case-insensitive). ``[[Old|alias]]`` keeps its
+    ``|alias`` (only the target half changes). Used by ``note_rename`` to update
+    inbound wikilinks when a note is moved. The plain ``[[old_target]]`` (no
+    alias) is rewritten to ``[[new_target]]`` verbatim.
+    """
+    if not old_target or old_target == new_target:
+        return text
+
+    def _sub(m: re.Match) -> str:
+        target = m.group(1)
+        alias = m.group(2)  # may be None
+        if target.lower() != old_target.lower():
+            return m.group(0)
+        return f"[[{new_target}{alias or ''}]]"
+
+    return _WIKILINK_RE.sub(_sub, text)
+
+
+def rename_note_title(text: str, old_stem: str, new_stem: str) -> str:
+    """Update a note's frontmatter ``title:`` to its new stem after a rename.
+
+    Only rewrites when the frontmatter ``title:`` equals the old stem (i.e. it
+    was auto-derived from the filename, not a hand-set display name). A *custom*
+    ``title:`` that differs from the old stem is left untouched — the user set
+    it deliberately and a rename shouldn't clobber it.
+    """
+    if old_stem == new_stem:
+        return text
+    meta, body = parse_frontmatter(text)
+    if meta.get("title") != old_stem:
+        return text  # no frontmatter title, or a custom one — leave it
+    # Rebuild frontmatter: strip the leading --- block, swap the title line.
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return text
+    raw = m.group(1)
+    # Replace only the top-level `title: <old>` line (not nested, not quoted
+    # as a list). Keep formatting of the rest of the YAML.
+    new_raw = re.sub(
+        r"^(title\s*:\s*).*$",
+        lambda mm: f"{mm.group(1)}{new_stem}",
+        raw,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    return text.replace(raw, new_raw, 1)
 
 
 def resolve_note(target: str, notes: list[dict]) -> str | None:

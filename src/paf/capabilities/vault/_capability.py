@@ -13,9 +13,10 @@ codebase-map ladder LOCKED 2026-08-23, applied to *notes* instead of *symbols*):
   workspace-vs-personal boundary inside a root.
 - ``storage``     : the flat-file seam (``FlatFileVaultStorage`` default).
 
-Search is the *secondary* escape hatch; navigation is primary. Tier B (note
-graph: backlinks/rename), Tier C (writes), and shared machinery with
-codebase_map are later phases — not built here (YAGNI).
+Search is the *secondary* escape hatch; navigation is primary. Tier B (the
+note graph: ``note_links``/``note_backlinks``/``note_create``/``note_rename``)
+is built. Tier C (raw content writes) and shared machinery with codebase_map
+are later phases — not built here (YAGNI).
 """
 
 from __future__ import annotations
@@ -33,21 +34,24 @@ _VAULT_GUIDANCE = (
     "in a markdown vault (Obsidian-style) -- which note covers a topic, what a "
     "note says, what links to what -- start with the vault tools, not the raw "
     "file tools: use `vault_overview` to orient, `lookup_note` / `read_note` to "
-    "read, and `note_find` / `note_search` to locate notes. These are scoped to "
-    "the configured vault and already respect its folder boundaries, so they "
-    "return far less noise than a raw `search_files` over the whole tree. Keep "
-    "the raw FileSystem tools for editing files, non-note documents, and "
-    "anything outside the vault."
+    "read, `note_find` / `note_search` to locate, and `note_links` / "
+    "`note_backlinks` to follow the note graph. To add or rename a note, use "
+    "`note_create` / `note_rename` (these keep inbound wikilinks consistent) "
+    "rather than raw file writes. These are scoped to the configured vault and "
+    "already respect its folder boundaries, so they return far less noise than "
+    "a raw `search_files` over the whole tree. Keep the raw FileSystem tools "
+    "for editing files, non-note documents, and anything outside the vault."
 )
 
 
 @dataclass
 class Vault(AbstractCapability):
-    """Navigation-first vault: overview → lookup → read + find/search over notes.
+    """Navigation-first vault: overview → lookup → read + find/search + note graph.
 
-    Exposes the five-tool ladder (`vault_overview`, `lookup_note`, `read_note`,
-    `note_find`, `note_search`). All reads go through the flat-file index and are
-    confined to ``vault_root``, honoring ``allow``/``deny``.
+    Exposes the nine-tool ladder (`vault_overview`, `lookup_note`, `read_note`,
+    `note_find`, `note_search`, `note_links`, `note_backlinks`, `note_create`,
+    `note_rename`). Reads go through the flat-file index and are confined to
+    ``vault_root``; writes (create/rename) are scope-guarded and atomic.
     """
 
     vault_root: str | Path

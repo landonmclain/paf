@@ -258,3 +258,142 @@ def test_vault_capability_get_toolset_and_instructions() -> None:
     assert isinstance(ts, VaultToolset)
     instr = cap.get_instructions()
     assert instr and any("vault_overview" in i for i in instr)
+
+
+# ------------------------------------------------------------------ Tier B: note_links / note_backlinks
+
+
+def test_note_links_resolves_outgoing(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_links("Index")
+    assert out is not None
+    assert "Grounding.md" in out
+    assert "Concepts/Memory Design.md" in out
+
+
+def test_note_links_marks_dangling(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    _seed(vault[0], "Dangling.md", "---\ntitle: Dangling\n---\nPoints to [[Nowhere]].\n")
+    out = toolset.note_links("Dangling")
+    assert out is not None
+    assert "Nowhere (unresolved)" in out
+
+
+def test_note_backlinks_reverse_edges(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # Grounding.md is linked from Index.md, Concepts/Memory Design.md, and
+    # Concepts/Nested Note.md
+    out = toolset.note_backlinks("Grounding")
+    assert "Index.md" in out
+    assert "Concepts/Memory Design.md" in out
+    assert "Concepts/Nested Note.md" in out
+    assert "Grounding.md" not in out.splitlines()  # no self-link
+
+
+def test_note_backlinks_none(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # nothing in the seed links to Nested Note
+    assert "no backlinks" in toolset.note_backlinks("Concepts/Nested Note")
+
+    # ------------------------------------------------------------------ Tier B: note_create
+
+
+def test_note_create_writes_note_with_frontmatter(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_create("Concepts/New Idea", body="Fresh idea.", tags=["draft"])
+    assert "Created Concepts/New Idea.md" in out
+    text = (vault[0] / "Concepts/New Idea.md").read_text(encoding="utf-8")
+    assert "title: New Idea" in text
+    assert "Fresh idea." in text
+    # the new note is now visible to the read ladder
+    assert "New Idea.md" in toolset.vault_overview()
+
+
+def test_note_create_refuses_overwrite(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_create("Index")
+    assert "already exists" in out
+
+
+def test_note_create_refuses_outside_root(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_create("../evil.md")
+    assert "outside the vault root" in out
+    assert not (vault[0].parent / "evil.md").exists()
+
+
+def test_note_create_refuses_denied_scope(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    _seed(root, "Index.md", _IDX)
+    store = FlatFileVaultStorage(index_root=tmp_path / "ci")
+    build_index(root, ScanScope(root, deny=["Private/**"]), store)
+    toolset = VaultToolset(vault_root=root, storage=store, deny=["Private/**"])
+    out = toolset.note_create("Private/hidden")
+    assert "excluded by scope" in out
+    assert not (root / "Private/hidden.md").exists()
+
+
+# ------------------------------------------------------------------ Tier B: note_rename
+
+
+def test_note_rename_rewrites_inbound_links(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # 'Grounding' is pointed at by Index, Memory Design, and Nested Note.
+    out = toolset.note_rename("Grounding", "Foundations")
+    assert "Renamed Grounding.md → Foundations.md" in out
+    assert "Rewrote inbound links in 3 note(s)" in out
+    # the file itself moved
+    assert not (vault[0] / "Grounding.md").exists()
+    assert (vault[0] / "Foundations.md").exists()
+    # one of the inbounds (Memory Design) now points at Foundations
+    md = (vault[0] / "Concepts/Memory Design.md").read_text(encoding="utf-8")
+    assert "[[Foundations]]" in md
+    # the index reflects the move (foundations reachable by its new title)
+    assert toolset.lookup_note("Foundations") is not None
+
+
+def test_note_rename_updates_auto_title_keeps_custom(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    toolset.note_create("Auto", body="x")
+    toolset.note_rename("Auto", "AutoRenamed")
+    assert "title: AutoRenamed" in (vault[0] / "AutoRenamed.md").read_text(encoding="utf-8")
+    # a note with a hand-set display title keeps it
+    _seed(vault[0], "Concept.md", "---\ntitle: My Display Name\n---\nbody")
+    toolset.note_rename("Concept", "ConceptRenamed")
+    assert "title: My Display Name" in (vault[0] / "ConceptRenamed.md").read_text(encoding="utf-8")
+
+
+def test_note_rename_refuses_collision_and_escape(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_rename("Index", "Grounding")  # collides with existing Grounding.md
+    assert "already exists" in out
+    assert (vault[0] / "Index.md").exists()  # untouched
+    out2 = toolset.note_rename("Index", "../escape.md")
+    assert "outside the vault root" in out2
+    assert not (vault[0].parent / "escape.md").exists()
+
+
+# ------------------------------------------------------------------ Tier B: markdown rewrite helpers
+
+
+def test_rewrite_wikilink_target_handles_alias() -> None:
+    from paf.capabilities.vault import rewrite_wikilink_target
+
+    out = rewrite_wikilink_target(
+        "see [[Memory Design]] and [[Memory Design|MD]] and [[Index]]",
+        "Memory Design",
+        "Memory Architecture",
+    )
+    assert "[[Memory Architecture]]" in out
+    assert "[[Memory Architecture|MD]]" in out
+    assert "[[Index]]" in out  # untouched
+
+
+def test_rename_note_title_preserves_custom() -> None:
+    from paf.capabilities.vault import rename_note_title
+
+    auto = "---\ntitle: Old\n---\nbody"
+    assert "title: New" in rename_note_title(auto, "Old", "New")
+    custom = "---\ntitle: Hand Tuned\n---\nbody"
+    assert "Hand Tuned" in rename_note_title(custom, "Old", "New")
