@@ -1,0 +1,215 @@
+"""Engine tests for paf.background — concurrency semantics with a synthetic job type.
+
+These tests exercise the generic engine only (no memory import) so they stay
+valid even as memory consumers evolve. A simple ``EchoQueue`` subclass records
+the order jobs were processed so tests can assert FIFO and concurrency
+behaviour.
+
+NOTE: the repo has no pytest-asyncio plugin (and runs the default suite with
+``-m 'not live'``). The established convention is sync ``def test_*`` functions
+that drive async scenarios via ``asyncio.run(...)`` (see ``tests/test_runtime.py``).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+
+from paf.background import BackgroundQueueService, QueueState, QueueStatus
+
+
+@dataclass
+class EchoJob:
+    value: str
+
+
+class EchoQueue(BackgroundQueueService[EchoJob]):
+    """Synthetic queue: records processing order.
+
+    Plain class (not a dataclass) — a consumer that subclasses
+    :class:`BackgroundQueueService` must call ``super().__init__()`` so the
+    engine's ``_states`` dict is created. Declaring this a ``@dataclass`` with
+    its own fields would generate an ``__init__`` that skips the base.
+    """
+
+    def __init__(self, name: str = "echo") -> None:
+        super().__init__()
+        self.name = name
+        self.processed: list[str] = []
+
+    async def process_job(
+        self,
+        session_id: str,
+        job: EchoJob,
+        state: QueueState[EchoJob],
+    ) -> None:
+        self.processed.append(job.value)
+
+
+def test_enqueue_processes_job() -> None:
+    processed: list[str] = []
+
+    class Recorder(EchoQueue):
+        async def process_job(self, session_id, job, state) -> None:
+            processed.append(job.value)
+
+    async def scenario() -> None:
+        q = Recorder()
+        q.enqueue("s1", EchoJob("a"))
+        await q.drain("s1")
+
+    asyncio.run(scenario())
+    assert processed == ["a"]
+
+
+def test_fifo_order_within_session() -> None:
+    processed: list[str] = []
+
+    class Recorder(EchoQueue):
+        async def process_job(self, session_id, job, state) -> None:
+            processed.append(job.value)
+
+    async def scenario() -> None:
+        q = Recorder()
+        for v in ["a", "b", "c"]:
+            q.enqueue("s1", EchoJob(v))
+        await q.drain("s1")
+
+    asyncio.run(scenario())
+    assert processed == ["a", "b", "c"]
+
+
+def test_sessions_are_isolated() -> None:
+    processed: list[str] = []
+
+    class Recorder(EchoQueue):
+        async def process_job(self, session_id, job, state) -> None:
+            processed.append(job.value)
+
+    async def scenario() -> None:
+        q = Recorder()
+        q.enqueue("s1", EchoJob("a"))
+        q.enqueue("s2", EchoJob("b"))
+        await asyncio.gather(q.drain("s1"), q.drain("s2"))
+
+    asyncio.run(scenario())
+    assert processed == ["a", "b"]
+
+
+def test_status_reports_queued_and_not_running() -> None:
+    async def scenario() -> tuple[EchoQueue, QueueStatus]:
+        q = EchoQueue()
+        return q, q.status("s1")
+
+    _q, status = asyncio.run(scenario())
+    assert status.name == "echo"
+    assert status.queued == 0
+    assert status.running is False
+    assert status.idle is True
+
+
+def test_drain_with_timeout_returns_false_for_long_job() -> None:
+    class NeverQueue(BackgroundQueueService[str]):
+        name = "never"
+
+        async def process_job(self, session_id, job, state) -> None:
+            await asyncio.sleep(30)
+
+    async def scenario() -> bool:
+        q = NeverQueue()
+        q.enqueue("s1", "job")
+        result = await q.drain_with_timeout("s1", 0.05)
+        # cancel the pending worker so the loop closes cleanly
+        state = q.get_state("s1")
+        if state.worker_task:
+            state.worker_task.cancel()
+            try:
+                await state.worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        return result
+
+    assert asyncio.run(scenario()) is False
+
+
+def test_active_jobs_reflects_running_processing() -> None:
+    seen: list[str] = []
+    release = asyncio.Event()
+
+    class SlowQueue(BackgroundQueueService[str]):
+        name = "slow"
+
+        async def process_job(self, session_id, job, state) -> None:
+            seen.append(job)
+            await release.wait()
+
+    async def scenario() -> tuple[QueueState[str], list[str]]:
+        q = SlowQueue()
+        q.enqueue("s1", "j1")
+        q.enqueue("s1", "j2")
+        await asyncio.sleep(0)  # let the worker start j1
+        state = q.get_state("s1")
+
+        attempts = 0
+        while state.active_jobs == 0 and attempts < 10:
+            await asyncio.sleep(0.01)
+            attempts += 1
+        assert state.active_jobs == 1
+        assert state.queue.qsize() == 1
+        status = q.status("s1")
+        assert status.queued == 1
+        assert status.running is True
+        assert status.idle is False
+
+        release.set()  # let j1 finish; worker advances to j2
+        await q.drain("s1")
+        return state, seen
+
+    state, seen = asyncio.run(scenario())
+    assert seen == ["j1", "j2"]
+    assert state.active_jobs == 0
+
+
+def test_worker_idles_out_after_timeout() -> None:
+    class FastIdleQueue(BackgroundQueueService[str]):
+        name = "fastidle"
+        IDLE_TIMEOUT_S = 0.05
+
+        async def process_job(self, session_id, job, state) -> None:
+            pass  # nothing to do; keep the engine warm for the timeout check
+
+    async def scenario() -> asyncio.Task | None:
+        q = FastIdleQueue()
+        q.enqueue("s1", "j")  # starts the worker
+        await q.drain("s1")
+        # after draining, the worker returns to queue.get() and idle-exits
+        await asyncio.sleep(0.2)
+        state = q.get_state("s1")
+        return state.worker_task
+
+    worker = asyncio.run(scenario())
+    assert worker is not None
+    assert worker.done() is True
+
+
+def test_two_independent_queues_run_concurrently() -> None:
+    """Separate instances == concurrent workers (the composition model)."""
+
+    class TaggedQueue(EchoQueue):
+        pass
+
+    async def drive() -> tuple[list[str], list[str]]:
+        a = TaggedQueue(name="a")
+        b = TaggedQueue(name="b")
+
+        async def run(q: TaggedQueue, tag: str) -> list[str]:
+            for i in range(5):
+                q.enqueue("s1", EchoJob(f"{tag}{i}"))
+            await q.drain("s1")
+            return q.processed
+
+        return await asyncio.gather(run(a, "A"), run(b, "B"))
+
+    ra, rb = asyncio.run(drive())
+    assert ra == ["A0", "A1", "A2", "A3", "A4"]
+    assert rb == ["B0", "B1", "B2", "B3", "B4"]
