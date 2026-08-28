@@ -492,3 +492,106 @@ def test_rename_note_title_preserves_custom() -> None:
     assert "title: New" in rename_note_title(auto, "Old", "New")
     custom = "---\ntitle: Hand Tuned\n---\nbody"
     assert "Hand Tuned" in rename_note_title(custom, "Old", "New")
+
+
+# ------------------------------------------------------------------ Tier C: read_note version header
+
+
+def test_read_note_reports_content_version_header(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.read_note("Grounding")
+    assert out is not None
+    lines = out.splitlines()
+    # first line is the version header; the body follows intact
+    assert lines[0].startswith("[path: Grounding.md | version:")
+    assert "version:" in lines[0]
+    # body still fully present (substring survives the added header)
+    assert "See [[Index]]." in out
+
+
+def test_read_note_version_matches_content_hash(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    import hashlib
+
+    out = toolset.read_note("Grounding")
+    assert out is not None
+    version = out.splitlines()[0].rsplit("version: ", 1)[1].rstrip("]")
+    raw = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    assert version == hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+# ------------------------------------------------------------------ Tier C: note_edit
+
+
+def test_note_edit_replaces_exact_once_and_returns_new_version(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_edit("Grounding", "See [[Index]].", "See [[Foundations]].")
+    assert "Edited Grounding.md" in out
+    assert "[version:" in out
+    text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    assert "See [[Foundations]]." in text
+    assert "See [[Index]]." not in text
+    # the index reflects the new link so the read ladder stays consistent
+    assert "Foundations" in toolset.lookup_note("Grounding")
+
+
+def test_note_edit_version_chaining_read_edit_edit(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    read = toolset.read_note("Grounding")
+    assert read is not None
+    v1 = read.splitlines()[0].rsplit("version: ", 1)[1].rstrip("]")
+    r1 = toolset.note_edit("Grounding", "See [[Index]].", "First pass.", expected_version=v1)
+    v2 = r1.rsplit("version:", 1)[1].strip("]")
+    # second edit with the freshly returned version succeeds
+    r2 = toolset.note_edit("Grounding", "First pass.", "Second pass.", expected_version=v2)
+    assert "Edited Grounding.md" in r2
+    assert "Second pass." in (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+
+
+def test_note_edit_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_edit(
+        "Grounding", "See [[Index]].", "Changed.", expected_version="stale-deadbeef"
+    )
+    assert "Conflict" in out
+    assert "changed" in out
+    # the note was NOT modified
+    text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    assert "See [[Index]]." in text
+    assert "Changed." not in text
+
+
+def test_note_edit_no_expected_version_allowed(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # expected_version is optional when the caller doesn't need CAS
+    out = toolset.note_edit("Grounding", "See [[Index]].", "See [[Index]] fine.")
+    assert "Edited Grounding.md" in out
+
+
+def test_note_edit_old_text_not_found(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_edit("Grounding", "no such text anywhere", "x")
+    assert "old_text not found" in out
+    assert "See [[Index]]." in (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+
+
+def test_note_edit_old_text_not_unique(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # 'Index' appears in both the frontmatter title and the heading; ask to
+    # replace it → must refuse because the match isn't unique.
+    out = toolset.note_edit("Index", "Index", "IDX")
+    assert "times" in out
+    assert "more surrounding context" in out
+    assert "IDX" not in (vault[0] / "Index.md").read_text(encoding="utf-8")
+
+
+def test_note_edit_unknown_or_outside_root(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # out-of-root traversal is rejected without touching anything
+    out = toolset.note_edit("../Index.md", "a", "b")
+    assert "(unknown note" in out or "vault" in out
+    out2 = toolset.note_edit("Does Not Exist", "a", "b")
+    assert "unknown" in out2.lower() or "not found" in out2.lower()
+    # unknown path-like ref regrounds rather than guessing
+    out3 = toolset.note_edit("Projects/Index.md", "a", "b")
+    assert "do NOT prepend" in out3

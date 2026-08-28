@@ -16,10 +16,14 @@ rather than brute-forcing keyword scans:
 - ``note_backlinks``  — what links TO a note (reverse edges of the note graph).
 - ``note_create``     — add a note (frontmatter + body), scope-guarded.
 - ``note_rename``     — rename a note and rewrite inbound wikilinks atomically.
+- ``note_edit``       — edit a note by exact string replacement, guarded by an
+  optimistic-concurrency ``expected_version`` (CAS against the content hash
+  that ``read_note`` reports) — refuses stale writes, never edits blindly.
 
-Tier C (raw content writes: vault_write/vault_patch with CAS) is a later phase
-— deliberately NOT registered here yet (YAGNI). Tools are agent-facing: every
-method returns a bounded, readable ``str``, never raw dicts.
+Content writes beyond ``note_edit`` (full-content ``note_write`` / structural
+``note_patch``) stay a later phase — deliberately NOT registered here (YAGNI).
+Tools are agent-facing: every method returns a bounded, readable ``str``, never
+raw dicts.
 
 Index freshness is lazy: before a read, we ``sync_changed`` against the snapshot
 and rebuild the index rows for any changed/added notes (stat gate, hash confirm),
@@ -28,6 +32,7 @@ so the ladder always reflects the on-disk vault without a full pre-scan.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import posixpath
 from pathlib import Path
@@ -53,6 +58,16 @@ def _yaml_list(values: list[str]) -> str:
     import json
 
     return json.dumps(values, ensure_ascii=False)
+
+
+def _content_hash(content: str) -> str:
+    """Short content hash — the CAS version token for note writes.
+
+    Mirrors ``fs._content_hash`` (sha256 truncated to 12 hex chars): opaque,
+    cheap, and stable for a given note body. ``read_note`` reports it so the
+    model can pass it back as ``expected_version`` to ``note_edit``.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
 
 
 class PathRefMiss(Exception):
@@ -94,6 +109,7 @@ class VaultToolset(FunctionToolset):
         self.add_function(self.note_backlinks, name="note_backlinks")
         self.add_function(self.note_create, name="note_create")
         self.add_function(self.note_rename, name="note_rename")
+        self.add_function(self.note_edit, name="note_edit")
 
     # -- index freshness -----------------------------------------------------
 
@@ -243,8 +259,11 @@ class VaultToolset(FunctionToolset):
         """Read the full body of a note.
 
         ``path`` is a vault-relative path, a note title, or a ``[[wikilink]]``
-        target. Returns the entire note contents (frontmatter included). Returns
-        ``None`` for an unknown note or one outside the vault root.
+        target. Returns the entire note contents (frontmatter included),
+        prefixed with a one-line header carrying the note's current content
+        ``version`` — the token to pass back as ``expected_version`` to
+        ``note_edit`` for an optimistic-concurrency write. Returns ``None``
+        for an unknown note or one outside the vault root.
         """
         try:
             rel = self._resolve(path)
@@ -255,7 +274,9 @@ class VaultToolset(FunctionToolset):
         full = self._abs(rel)
         if full is None or not full.is_file():
             return None
-        return full.read_text(encoding="utf-8", errors="replace")
+        body = full.read_text(encoding="utf-8", errors="replace")
+        version = _content_hash(body)
+        return f"[path: {rel} | version: {version}]\n{body}"
 
     def note_find(
         self, title: str | None = None, tag: str | None = None, folder: str | None = None
@@ -511,6 +532,76 @@ class VaultToolset(FunctionToolset):
         else:
             head += " No inbound links to rewrite."
         return head
+
+    # -- Tier C: content write --------------------------------------------------
+    # note_edit is the single content-write tool. It mirrors fs.edit_file: an
+    # exact-once string replacement guarded by an optimistic-concurrency
+    # ``expected_version`` (the note's content hash, reported by read_note).
+    # note_write / note_patch (full-content CAS & structural patches) remain
+    # deferred (YAGNI) — note_create covers new notes.
+
+    def note_edit(
+        self,
+        path: str,
+        old_text: str,
+        new_text: str,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
+        """Edit a note by exact string replacement, with conflict detection.
+
+        Replaces the first occurrence of ``old_text`` with ``new_text`` inside
+        the note. ``old_text`` must appear exactly once; include enough
+        surrounding context to make it unique (passing a string that appears
+        zero or multiple times is an error, so you never edit blindly).
+
+        ``expected_version`` is the note's content version reported by
+        ``read_note`` (the ``version:`` in the read header). If provided, the
+        edit is REJECTED when the note's current version has changed — someone
+        (e.g. a human in Obsidian) edited it since you read it. Re-read the
+        note and retry with the fresh version. Returns a confirmation carrying
+        the new version for your next edit.
+        """
+        try:
+            rel = self._resolve(path)
+        except PathRefMiss as e:
+            return self._path_miss_hint(str(e))
+        if rel is None:
+            return f"(unknown note: {path})"
+        full = self._abs(rel)
+        if full is None or not full.is_file():
+            return f"(note not found on disk: {rel})"
+
+        text = full.read_text(encoding="utf-8", errors="replace")
+        current_version = _content_hash(text)
+
+        # Optimistic concurrency: reject stale edits against the read version.
+        if expected_version is not None and current_version != expected_version:
+            return (
+                f"Conflict: note {rel!r} has changed (expected version: "
+                f"{expected_version}, got version: {current_version}). "
+                f"Re-read the note with read_note and retry."
+            )
+
+        count = text.count(old_text)
+        if count == 0:
+            return f"old_text not found in {rel}."
+        if count > 1:
+            return (
+                f"old_text found {count} times in {rel}. "
+                f"Include more surrounding context to make the match unique."
+            )
+
+        new_content = text.replace(old_text, new_text, 1)
+        self._write_note_atomic(full, new_content)
+
+        # Refresh this note's index row + snapshot so read_note / note_find /
+        # note_search reflect the new content on the next call.
+        self._storage.sync_changed(self._root, self._scope)
+        build_index(self._root, self._scope, self._storage)
+
+        new_version = _content_hash(new_content)
+        return f"Edited {rel}. [version:{new_version}]"
 
     # -- formatting ----------------------------------------------------------
 
