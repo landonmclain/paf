@@ -155,8 +155,8 @@ codebase_map:
 # cap is a separate navigation-first note ladder over markdown, rooted here.
 # Absent `allow` = the whole root is readable; add allow/deny glob subtrees to
 # scope a workspace-vs-personal boundary (e.g. `Hermes/Projects/**`).
-# vault:
-#   root: ~/Documents/notes
+vault:
+  root: ~/Documents/notes
 
 # ---------------------------------------------------------------------------
 # Per-assistant context-compaction tuning (option B — lives in the spec, not in

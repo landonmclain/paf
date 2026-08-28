@@ -40,9 +40,11 @@ from pydantic_ai import (
     PartStartEvent,
 )
 from pydantic_ai.messages import (
+    ModelRequest,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    UserPromptPart,
 )
 from pydantic_ai_harness.step_persistence import continue_run
 
@@ -77,6 +79,23 @@ class StreamEvent:
     text: str = ""
     tool_name: str = ""
     args: str = ""
+
+
+def _is_turn_start(msg: Any) -> bool:
+    """True if ``msg`` is a user request that opens a fresh turn.
+
+    A `ModelRequest` opens a new turn only when it carries a real string
+    `UserPromptPart` (the user's own prompt) — versus an injected/context
+    part whose content is a non-str list. This intentionally mirrors the web
+    renderer's turn-boundary test so `resume_window` rounding and the UI see
+    the same turns.
+    """
+    if not isinstance(msg, ModelRequest):
+        return False
+    return any(
+        isinstance(p, UserPromptPart) and isinstance(p.content, str)
+        for p in (getattr(msg, "parts", None) or [])
+    )
 
 
 class Session:
@@ -223,7 +242,26 @@ class Session:
             if not history:
                 return
             if self.resume_window is not None and self.resume_window >= 0:
-                history = history[-self.resume_window:] if self.resume_window else []
+                if not self.resume_window:
+                    history = []
+                else:
+                    # Trim to the last N messages, then round the window start
+                    # back up to the nearest complete user turn. `resume_window`
+                    # guards model context size, but a strict N-message slice can
+                    # cut mid-turn: the UI (and the model) would then see a
+                    # dangling assistant turn with no preceding user prompt — and
+                    # lose the user's own message entirely. Walk backward from the
+                    # trim point to the most recent ModelRequest carrying a real
+                    # UserPromptPart and begin there, so every retained turn is
+                    # complete and reads as user-prompt → assistant
+                    # (2026-08-28). Mirrors the renderer's turn boundary test.
+                    start = max(0, len(history) - self.resume_window)
+                    if start > 0 and not _is_turn_start(history[start]):
+                        for i in range(start - 1, -1, -1):
+                            if _is_turn_start(history[i]):
+                                start = i
+                                break
+                    history = history[start:]
             self.history = history
             self._restored = True
         except Exception:  # noqa: BLE001 - resume is sugar; never break the run

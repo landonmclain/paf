@@ -9,8 +9,13 @@ accordions instead of Rich panels:
     response  -> normal assistant markdown message
 
 While a tool runs the accordion shows a live spinner (``status: "pending"``,
-open); on ``tool_result`` it flips to ``status: "done"`` and the accordion
-closes. The bot function is an **async generator** — it ``await``-iterates paf's
+open); on ``tool_result`` it flips to ``status: "done"``. LANDED on OPEN
+(2026-08-27): done THINKING blocks omit ``status`` so the accordion inits
+EXPANDED by default (user wants to read the thoughts); done TOOL blocks send
+``status: "done"`` so they init COLLAPSED (open on click). Gradio 6.25 inits
+an accordion closed on ``status: "done"``, open on omitted status (no spinner),
+and open-with-spinner on ``"pending"``. The bot function is
+an **async generator** — it ``await``-iterates paf's
 ``Session.stream`` and yields the growing message list on every event, which
 Gradio consumes for live streaming.
 
@@ -41,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 import gradio as gr
+from gradio.components.chatbot import MetadataDict as GradioMetadataDict
 
 from paf.capabilities import PROFILES
 from paf.runtime import Session, StreamEvent
@@ -128,6 +134,96 @@ input[type="search"] {
    wasted space on mobile (2026-08-21). */
 footer {
     display: none !important;
+}
+
+/* Borderless mode (2026-08-27): strip the remaining borders so the whole chat
+   reads edge-to-edge with no visible boxes. Kills the message-bubble borders,
+   the thinking/tool accordion borders, and the text-input field border. Class
+   names (user/bot/thought-group/input-container) are semantic in Gradio 6.25;
+   the hashed *-svelte suffixes pin to this Gradio version like the siq5d6 one
+   above. */
+.user.message,
+.bot.message,
+.thought-group,
+.input-container {
+    border: none !important;
+}
+/* Light contact so the thought/tool groups still read as a unit without a hard
+   box (subtle no-fill). The 6px vertical margin is what separates each
+   thinking/tool accordion from the next — zero it so thinking and tool calls
+   stack flush. Zero the internal padding too so the group text isn't wrapped in
+   a padded box (override of the shipped `padding: var(--spacing-md)`) — the
+   shifted exposure is down to the bot bubble padding + label spacing
+   (2026-08-27). */
+.thought-group {
+    background: transparent !important;
+    box-shadow: none !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+}
+/* The FIRST accordion of a thinking/tool turn is currently flush (0px top
+   margin) because Gradio's 4px inter-row gap only applies BETWEEN sibling
+   `.message` rows — the leading row has no preceding sibling so it gets none,
+   unlike every accordion after it. Give the first thought-group the same 4px
+   so the turn's leading thinking block breathes like the rest (2026-08-27).
+   Scoped to a first-of-type `.message` that actually holds a `.thought-group`
+   so an answer-only turn is untouched. */
+.bot .message:has(.thought-group):first-of-type {
+    margin-top: 4px !important;
+}
+/* Draw a thin hairline between the tool calls (last thinking/tool accordion)
+   and the final assistant answer. DOM (Gradio 6.25, verified): within a bot
+   bubble the accordions sit in ONE `.message` wrapper and the answer's
+   `.message-content` lives in a SEPARATE, later `.message` wrapper (both are
+   siblings under `.bot`). So: select a `.message-content` inside a `.message`
+   that is the later sibling of the `.message` holding the last `.thought-group`
+   (2026-08-27). */
+.bot .message:has(.thought-group:last-child) ~ .message .message-content,
+.bot .message:has(.thought-group:last-of-type) ~ .message .message-content {
+    border-top: 1px solid grey;
+    border-bottom: 1px solid grey;
+    padding-top: 15px;
+    padding-bottom: 15px;
+    margin-top: 15px;
+    margin-bottom: 15px;
+}
+/* Mirror the same hairline treatment onto the FIRST thinking/tool accordion of
+   each turn, so the leading thought-group is boxed like the answer is — the
+   first-of-type `.message` holding a `.thought-group` is the turn's opening
+   accordion (2026-08-27). */
+.bot .message:has(.thought-group):first-of-type .message-content {
+    border-top: 1px solid grey;
+    border-bottom: 1px solid grey;
+    padding-top: 15px;
+    padding-bottom: 15px;
+    margin-top: 15px;
+    margin-bottom: 15px;
+}
+/* Accordion text (thinking + tool calls): bump to text-md and full brightness.
+   Default Gradio sizes the accordion label AND its body prose at --text-sm
+   (12px) with opacity 0.8 — small and dim next to the 16px answer. Gradio's
+   wildcard rule `.content.svelte-18cn3o3 * { font-size: var(--text-sm) }`
+   targets the body's child elements (p/li/code/…) DIRECTLY, so it beats any
+   font-size set on the parent `.prose` (a direct style on the child always
+   beats an inherited one). Therefore the size must be applied directly to
+   `.content` and every descendant too — `.content * !important` out-weights
+   Gradio's non-important wildcard. Scope to everything inside a `.thought-group`
+   (every accordion is one) so thinking AND tool text is 14px and bright, while
+   the final answer — in a separate `.message` OUTSIDE any `.thought-group` —
+   is untouched. text-md = --text-md = 14px; opacity 1 = full brightness
+   (2026-08-27). */
+.thought-group .chatbot.prose,
+.thought-group .content,
+.thought-group .content * {
+    font-size: var(--text-md, 14px) !important;
+}
+/* Body prose (reasoning/tool text): 90% opacity so it reads as secondary —
+   same white hue as the answer but slightly softer. Label stays at full
+   opacity so "🧠 Thinking" headers still stand out (2026-08-27). */
+.thought-group .content,
+.thought-group .content * {
+    opacity: 0.9 !important;
 }
 """
 
@@ -380,13 +476,19 @@ def _thinking_message(block: ThinkingBlock, done: bool, now: float | None = None
         title += " " + _elapsed_label(block.started, now)
     elif block.elapsed is not None:
         title += " " + _done_label(block.elapsed)
+    # Gradio 6.25 ChatMessage metadata: `status: "pending"` opens the accordion
+    # with a spinner; `status: "done"` initializes it CLOSED; and omitting
+    # `status` initializes it OPEN with no spinner. LANDED on OPEN (2026-08-27):
+    # done thinking blocks OMIT `status` so they expand by default (user wants
+    # to see the thoughts); done TOOL blocks keep `status: "done"` to stay
+    # collapsed. Pending blocks keep `status: "pending"` for the live spinner.
+    metadata: GradioMetadataDict = {"title": title}
+    if not done:
+        metadata["status"] = "pending"
     return gr.ChatMessage(
         role="assistant",
         content=block.text or "…",
-        metadata={
-            "title": title,
-            "status": "done" if done else "pending",
-        },
+        metadata=metadata,
     )
 
 
@@ -396,13 +498,18 @@ def _tool_message(block: ToolBlock, done: bool, now: float | None = None) -> gr.
         title += " " + _elapsed_label(block.started, now)
     elif block.elapsed is not None:
         title += " " + _done_label(block.elapsed)
+    # TOOL accordions stay COLLAPSED by default (2026-08-27): send `status`
+    # ``"done"`` so Gradio 6.25 initializes them closed (they still collapse
+    # cleanly and open on click). Thinking accordions (in _thinking_message)
+    # are the ones expanded by default.
+    metadata: GradioMetadataDict = {
+        "title": f"🛠️ {title}",
+        "status": "done" if done else "pending",
+    }
     return gr.ChatMessage(
         role="assistant",
         content=body,
-        metadata={
-            "title": f"🛠️ {title}",
-            "status": "done" if done else "pending",
-        },
+        metadata=metadata,
     )
 
 
@@ -412,15 +519,20 @@ def _response_message(out: TurnStream) -> gr.ChatMessage:
 
 
 def turn_to_messages(out: TurnStream) -> list[gr.ChatMessage]:
-    """Render the accumulated turn. Done thinking/tool accordions collapse;
-    pending ones carry a live spinner. The response renders last."""
+    """Render the accumulated turn. Done THINKING accordions stay EXPANDED by
+    default (omitted status → open); done TOOL accordions stay collapsed (open
+    on click). Pending ones carry a live spinner. The response renders last —
+    but only when there's actual response text, so tool-heavy turns (where the
+    answer got routed to a thinking block) don't emit a phantom "…" placeholder
+    (mirrors the live path's `if out.response:` guard in _assistant_messages)."""
     messages: list[gr.ChatMessage] = []
     for block in out.blocks:
         if isinstance(block, ThinkingBlock):
             messages.append(_thinking_message(block, done=True))
         elif isinstance(block, ToolBlock):
             messages.append(_tool_message(block, done=(block.status == "done")))
-    messages.append(_response_message(out))
+    if "".join(out.response).strip():
+        messages.append(_response_message(out))
     return messages
 
 
@@ -466,7 +578,7 @@ def _render_session_history(session: Session) -> list[dict]:
     history looks identical to a freshly-streamed turn:
 
         user  ->  "reply pong"
-        🧠 Thinking      (accordion, collapsed)
+        🧠 Thinking      (accordion, expanded by default)
         🛠️ read_file…   (accordion, collapsed)
         assistant        "pong"
 
