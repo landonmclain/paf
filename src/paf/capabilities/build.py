@@ -57,8 +57,14 @@ _COMPACTION_CAPABILITY = "Compaction"
 # consolidation owner and the assistant always target the same store.
 _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
+# Default cadence for background memory consolidation (owner runs ahead of
+# eviction: with the window keeping `window_keep_messages` (20) recent messages,
+# firing every ~10 turns keeps the owner ahead of the drop). Memory owns this
+# value; the spec's `memory: {consolidate_every: N}` overrides it per agent.
+DEFAULT_CONSOLIDATE_EVERY = 10
 
-def _build_memory(store) -> Memory:
+
+def _build_memory(store, memory_config: dict | None = None) -> Memory:
     """M2 journal-view durable memory, INJECT-ONLY for the assistant.
 
     Mirrors the benchmark assembly in `tests/framework.py`: the model carries
@@ -73,8 +79,24 @@ def _build_memory(store) -> Memory:
     signature but unused. inject_memory=True, writable=False, and an empty
     guidance string mirror _build_agent; max_lines=1_000_000 / max_tokens=65_536
     are high, non-evicting caps so the full rendered journal always shows.
+
+    `memory_config` is the spec's top-level ``memory:`` block (see
+    ``specs._spec_memory_config``). **Memory owns every memory config
+    variable** — here ``consolidate_every``, the background-consolidation
+    cadence. Absent/``None`` -> the Memory capability's code-level default. The
+    background consolidation queue (a framework-level service, NOT a
+    capability) is never handed the config to read itself; when it gets a live
+    construction site, Memory hands it the values it needs as injected
+    constructor args (``consolidate_every``, ``memory_directory``,
+    ``span_source``).
     """
     from paf.capabilities.memory._view import JournalViewStore
+
+    consolidate_every = DEFAULT_CONSOLIDATE_EVERY
+    if isinstance(memory_config, dict):
+        every = memory_config.get("consolidate_every")
+        if isinstance(every, int) and not isinstance(every, bool) and every > 0:
+            consolidate_every = every
 
     return Memory(
         store=JournalViewStore(_MEMORY_DIR),
@@ -84,6 +106,7 @@ def _build_memory(store) -> Memory:
         max_lines=1_000_000,
         max_tokens=65_536,
         guidance="",
+        consolidate_every=consolidate_every,
     )
 
 
@@ -517,6 +540,7 @@ def build_runtime_capabilities(
     web_search_domains: list[str] | None = None,
     browser_config: dict | None = None,
     vault_config: dict | None = None,
+    memory_config: dict | None = None,
     filesystem_config: dict | None = None,
     shell_config: dict | None = None,
     git_config: dict | None = None,
@@ -605,6 +629,12 @@ def build_runtime_capabilities(
             capabilities.append(_build_git(store, git_config))
         elif name == "CodebaseMap":
             capabilities.append(_build_codebase_map(store, codebase_map_config))
+        elif name == "Memory":
+            # Memory owns every memory config variable (e.g. `consolidate_every`
+            # — the background-consolidation cadence) read from the spec's
+            # top-level `memory:` block. The background queue is a separate
+            # framework-level service the Memory capability hands values down to.
+            capabilities.append(_build_memory(store, memory_config))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

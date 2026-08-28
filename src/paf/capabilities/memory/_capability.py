@@ -201,6 +201,19 @@ class Memory(AbstractCapability[AgentDepsT]):
     ``append_memory`` via the journal toolset).
     """
 
+    consolidate_every: int = 10
+    """Background-consolidation cadence: fire every N user-turns past the
+    memory watermark.
+
+    **Memory owns every memory config variable** — this is the capability's
+    knob for how often the background consolidation owner runs (decoupled from
+    eviction). It is handed to the background queue as an injected constructor
+    arg when that service gets its live construction site; the queue never
+    reads spec/env for itself. Must be > 0. Injected from the spec's top-level
+    ``memory: {consolidate_every: N}`` block via ``_build_memory``; default 10
+    keeps the owner ahead of the eviction window (which keeps ~20 messages).
+    """
+
     journal: JournalStore | None = field(default=None, kw_only=True)
     """Optional append-only journal the owner writes through the model.
 
@@ -223,6 +236,7 @@ class Memory(AbstractCapability[AgentDepsT]):
         _validate_positive("max_search_results", self.max_search_results)
         _validate_positive("max_search_result_chars", self.max_search_result_chars)
         _validate_positive("max_search_files", self.max_search_files)
+        _validate_positive("consolidate_every", self.consolidate_every)
         if self.injection_errors not in ("ignore", "raise"):
             raise ValueError("injection_errors must be 'ignore' or 'raise'")
 
@@ -438,6 +452,7 @@ class Memory(AbstractCapability[AgentDepsT]):
         max_search_results: int = 10,
         max_search_result_chars: int = 4_000,
         max_search_files: int = 1_000,
+        consolidate_every: int = 10,
         guidance: str | None = None,
         injection_errors: Literal["ignore", "raise"] = "ignore",
         writable: bool = True,
@@ -465,6 +480,7 @@ class Memory(AbstractCapability[AgentDepsT]):
             max_search_results=max_search_results,
             max_search_result_chars=max_search_result_chars,
             max_search_files=max_search_files,
+            consolidate_every=consolidate_every,
             guidance=guidance,
             injection_errors=injection_errors,
             writable=writable,

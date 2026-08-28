@@ -239,6 +239,50 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
     return cfg
 
 
+def _spec_memory_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``memory:`` block into a Memory config dict.
+
+    Mirrors ``_spec_vault_config`` / ``_spec_browser_config``: pydantic-ai's
+    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
+    YAML separately for per-agent memory tuning. The block shape:
+
+        memory:
+          consolidate_every: 10   # optional; background consolidation cadence
+
+    ``consolidate_every`` is the number of user-turns that must accumulate past
+    the memory watermark before a background consolidation job fires (the
+    owner runs ahead of eviction). It lives on **Memory** — the capability owns
+    every memory config variable — and is handed to the background queue (a
+    dumb service) only as an injected construction arg, never read by the
+    queue itself.
+
+    Unknown keys inside ``memory:`` are ignored so the schema can grow without
+    breaking older spec files.
+
+    Returns a dict (or ``None`` when the block is absent/unreadable). Absent
+    members fall back to their code-level defaults in ``_build_memory`` / the
+    ``Memory`` capability (``consolidate_every`` defaults to
+    ``_DEFAULT_CONSOLIDATE_EVERY``).
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("memory")
+    if not isinstance(block, dict):
+        return None
+    cfg: dict[str, object] = {}
+    every = block.get("consolidate_every")
+    if isinstance(every, int) and not isinstance(every, bool) and every > 0:
+        cfg["consolidate_every"] = every
+    if not cfg:
+        return None
+    return cfg
+
+
 def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict | None:
     """Read one per-capability root block from a spec into a config dict.
 
@@ -379,6 +423,13 @@ def build_agent(
     # vault root (+ optional allow/deny subtree patterns). Absent -> the paf-owned
     # data/vault/ playground default (see _spec_vault_config / _build_vault).
     vault_config = _spec_vault_config(spec_path)
+    # Per-assistant memory config: the spec's top-level `memory:` block tunes
+    # the Memory capability (e.g. `consolidate_every` — the background
+    # consolidation cadence). Absent -> the Memory capability's code-level
+    # default (see _spec_memory_config / _build_memory). All memory variables
+    # live on Memory; anything the background queue needs is handed down as an
+    # injected construction arg.
+    memory_config = _spec_memory_config(spec_path)
     # Per-assistant root scoping: the spec's top-level `filesystem:`/`shell:`/
     # `git:`/`codebase_map:` blocks point each root-bearing capability at a
     # working directory other than PROJECT_ROOT (see _spec_rooted_config).
@@ -411,6 +462,7 @@ def build_agent(
             web_config,
             browser_config,
             vault_config,
+            memory_config=memory_config,
             filesystem_config=filesystem_config,
             shell_config=shell_config,
             git_config=git_config,

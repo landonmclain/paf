@@ -208,3 +208,20 @@ compact:
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 20
   consolidate: true
+
+# Per-assistant memory tuning (option B — lives in the spec, not in Python).
+# Read by `build_agent` -> `_spec_memory_config` -> `_build_memory` -> the
+# Memory capability. Memory owns every memory config variable; the background
+# consolidation queue (a framework-level service) never reads the spec itself —
+# it is handed these values as injected constructor args when it gets a live
+# construction site.
+#
+# consolidate_every: how many user-turns must accumulate past the memory
+#   watermark before the background consolidation owner fires (decoupled from
+#   eviction, so the owner runs ahead of it). Keep below
+#   `compact.window_keep_messages` (20) so consolidation always runs BEFORE the
+#   sliding window drops messages. Absent -> the Memory capability's default (10).
+#   NOTE: not yet live-driven — the queue's construction site lands when the
+#   background consumer is wired; this just establishes the declarative surface.
+memory:
+  consolidate_every: 10
