@@ -247,14 +247,19 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     YAML separately for per-agent memory tuning. The block shape:
 
         memory:
-          consolidate_every: 10   # optional; background consolidation cadence
+          consolidate_every: 10      # optional; background consolidation cadence
+          max_memory_size: 65536     # optional; per-read char cap for MEMORY.md
+          max_tokens: 65536          # optional; token ceiling for injected section
+          max_lines: 1000000         # optional; line cap for injected section
 
     ``consolidate_every`` is the number of user-turns that must accumulate past
     the memory watermark before a background consolidation job fires (the
-    owner runs ahead of eviction). It lives on **Memory** — the capability owns
-    every memory config variable — and is handed to the background queue (a
-    dumb service) only as an injected construction arg, never read by the
-    queue itself.
+    owner runs ahead of eviction). ``max_memory_size`` / ``max_tokens`` /
+    ``max_lines`` bound how much of the rendered journal is injected into each
+    request (see ``JournalViewStore.read`` / ``render_memory_prompt``). They
+    live on **Memory** — the capability owns every memory config variable —
+    and are handed to the background queue (a dumb service) only as injected
+    construction args, never read by the queue itself.
 
     Unknown keys inside ``memory:`` are ignored so the schema can grow without
     breaking older spec files.
@@ -262,7 +267,8 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     Returns a dict (or ``None`` when the block is absent/unreadable). Absent
     members fall back to their code-level defaults in ``_build_memory`` / the
     ``Memory`` capability (``consolidate_every`` defaults to
-    ``_DEFAULT_CONSOLIDATE_EVERY``).
+    ``DEFAULT_CONSOLIDATE_EVERY``; the injection bounds default to the
+    high, non-evicting caps in ``build.py``).
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -275,9 +281,10 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     if not isinstance(block, dict):
         return None
     cfg: dict[str, object] = {}
-    every = block.get("consolidate_every")
-    if isinstance(every, int) and not isinstance(every, bool) and every > 0:
-        cfg["consolidate_every"] = every
+    for key in ("consolidate_every", "max_memory_size", "max_tokens", "max_lines"):
+        value = block.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            cfg[key] = value
     if not cfg:
         return None
     return cfg

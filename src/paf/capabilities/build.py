@@ -63,6 +63,24 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 # value; the spec's `memory: {consolidate_every: N}` overrides it per agent.
 DEFAULT_CONSOLIDATE_EVERY = 10
 
+# Default injection bounds for the assistant's Memory capability. Mirrors the
+# benchmark assembly: high, non-evicting caps so the full rendered journal
+# always shows in prod unless a spec's `memory:` block tunes them down.
+# `max_memory_size` is the per-read char cap JournalViewStore truncates to;
+# `max_tokens` / `max_lines` bound the rendered <memory> section. Memory owns
+# every memory config variable; the spec overrides per agent.
+DEFAULT_MEMORY_MAX_SIZE = 65_536
+DEFAULT_MEMORY_MAX_TOKENS = 65_536
+DEFAULT_MEMORY_MAX_LINES = 1_000_000
+
+
+def _read_positive_int(memory_config: dict, key: str, default: int) -> int:
+    """Read a positive-int knob from the spec's ``memory:`` block."""
+    value = memory_config.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return default
+
 
 def _build_memory(store, memory_config: dict | None = None) -> Memory:
     """M2 journal-view durable memory, INJECT-ONLY for the assistant.
@@ -77,34 +95,41 @@ def _build_memory(store, memory_config: dict | None = None) -> Memory:
 
     `store` (the shared persistence store) is accepted for a uniform builder
     signature but unused. inject_memory=True, writable=False, and an empty
-    guidance string mirror _build_agent; max_lines=1_000_000 / max_tokens=65_536
-    are high, non-evicting caps so the full rendered journal always shows.
+    guidance string mirror _build_agent; max_lines / max_tokens / max_memory_size
+    default to high, non-evicting caps so the full rendered journal always
+    shows, and are overridable per agent from the spec's ``memory:`` block.
 
     `memory_config` is the spec's top-level ``memory:`` block (see
     ``specs._spec_memory_config``). **Memory owns every memory config
-    variable** — here ``consolidate_every``, the background-consolidation
-    cadence. Absent/``None`` -> the Memory capability's code-level default. The
-    background consolidation queue (a framework-level service, NOT a
-    capability) is never handed the config to read itself; when it gets a live
-    construction site, Memory hands it the values it needs as injected
-    constructor args (``consolidate_every``, ``memory_directory``,
-    ``span_source``).
+    variable** — ``consolidate_every`` (background-consolidation cadence) plus
+    the injection bounds ``max_memory_size`` / ``max_tokens`` / ``max_lines``.
+    Absent/``None`` -> the code-level defaults above. The background
+    consolidation queue (a framework-level service, NOT a capability) is never
+    handed the config to read itself; when it gets a live construction site,
+    Memory hands it the values it needs as injected constructor args
+    (``consolidate_every``, ``memory_directory``, ``span_source``).
     """
     from paf.capabilities.memory._view import JournalViewStore
 
-    consolidate_every = DEFAULT_CONSOLIDATE_EVERY
-    if isinstance(memory_config, dict):
-        every = memory_config.get("consolidate_every")
-        if isinstance(every, int) and not isinstance(every, bool) and every > 0:
-            consolidate_every = every
+    cfg = memory_config if isinstance(memory_config, dict) else {}
+
+    consolidate_every = _read_positive_int(
+        cfg, "consolidate_every", DEFAULT_CONSOLIDATE_EVERY
+    )
+    max_memory_size = _read_positive_int(
+        cfg, "max_memory_size", DEFAULT_MEMORY_MAX_SIZE
+    )
+    max_tokens = _read_positive_int(cfg, "max_tokens", DEFAULT_MEMORY_MAX_TOKENS)
+    max_lines = _read_positive_int(cfg, "max_lines", DEFAULT_MEMORY_MAX_LINES)
 
     return Memory(
         store=JournalViewStore(_MEMORY_DIR),
         inject_memory=True,
         writable=False,
         expose_tools=False,
-        max_lines=1_000_000,
-        max_tokens=65_536,
+        max_lines=max_lines,
+        max_tokens=max_tokens,
+        max_memory_size=max_memory_size,
         guidance="",
         consolidate_every=consolidate_every,
     )

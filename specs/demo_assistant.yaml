@@ -219,9 +219,17 @@ compact:
 # consolidate_every: how many user-turns must accumulate past the memory
 #   watermark before the background consolidation owner fires (decoupled from
 #   eviction, so the owner runs ahead of it). Keep below
-#   `compact.window_keep_messages` (20) so consolidation always runs BEFORE the
-#   sliding window drops messages. Absent -> the Memory capability's default (10).
+# `compact.window_keep_messages` (20) so consolidation always runs BEFORE the
+#   sliding window drops messages. Absent -> default (10).
 #   NOTE: not yet live-driven — the queue's construction site lands when the
 #   background consumer is wired; this just establishes the declarative surface.
+# - max_memory_size (65536)  chars: per-read cap JournalViewStore truncates MEMORY.md to.
+# - max_tokens (65536)       tokens: token ceiling for the injected <memory> section.
+# - max_lines (1000000)      lines: line cap applied by render_memory_prompt.
+#   Absent -> the high, non-evicting defaults in build.py (full journal shows).
+#   Tune down per agent to bound how much memory is injected into each request.
 memory:
   consolidate_every: 10
+  # max_memory_size: 65536
+  # max_tokens: 65536
+  # max_lines: 1000000
