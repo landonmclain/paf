@@ -582,7 +582,7 @@ def main() -> int:
         return 2
     conversation_id = f"cli2-{agent_name}"
 
-    with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15) as session:
+    with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15, memory_consolidation=True) as session:
         _startup_banner(session)
         console.print("type a message, or \"quit\" to exit")
 

@@ -40,22 +40,134 @@ from typing import TYPE_CHECKING
 
 from paf.background import BackgroundQueueService, QueueState
 
+from .._turns import user_anchor_indices
 from ._journal import JournalStore
 from ._watermark import _WATERMARK_FILENAME, MemoryWatermark
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage  # noqa: F401
+    from pydantic_ai_harness.conversation_search import HistorySource
 
 log = logging.getLogger(__name__)
+
+
+def _turn_bounds(anchors: list[int], turn: int, n: int) -> tuple[int, int]:
+    """Inclusive ``[start, end)`` message-slice for one user-turn's turn record.
+
+    A turn spans from its user-prompt anchor to just before the next anchor.
+    ``anchors[turn]`` is the anchor message index; the turn ends at the next
+    anchor (or the end of the run).
+    """
+    start = anchors[turn] if 0 <= turn < len(anchors) else n
+    end = anchors[turn + 1] if turn + 1 < len(anchors) else n
+    return start, end
+
+
+@dataclass(frozen=True)
+class ResolvedSpan:
+    """The persisted span to fold, plus where the watermark must advance to.
+
+    ``messages`` are the ordered messages of **complete** turns: every full,
+    settled turn newer than the stored watermark and strictly older than the
+    in-flight tip turn (so a turn that is still being answered is never folded).
+    ``watermark`` is the ``{run_id, turn_id}`` ref of the last complete turn
+    included — the position the durable watermark advances to.
+    """
+
+    messages: list[ModelMessage]
+    watermark: MemoryWatermark
+
+
+async def resolve_unseen_span(
+    source: HistorySource,
+    watermark: MemoryWatermark,
+    *,
+    tip_run: str,
+    tip_turn: int,
+) -> ResolvedSpan:
+    """Resolve the persisted span the owner hasn't yet consumed — **full turns only**.
+
+    Reads the real persistent store — ``list_runs`` (ascending by ``started_at``)
+    then ``run_history`` per run — and returns, as :class:`ResolvedSpan`, the
+    ordered messages of complete turns that are:
+
+      * strictly newer than the watermark's consumed position, **and**
+      * strictly older than the in-flight tip ``(tip_run, tip_turn)``.
+
+    The final turn (the one currently being answered, whose response has not
+    settled) is deliberately **excluded** — the fold stops on the second-to-last
+    turn — so only finished turns enter the journal. A single-turn transcript
+    therefore folds nothing.
+
+    The watermark is a ``{run_id, turn_id}`` ref (see ``_watermark.py``):
+      - runs strictly before the watermark's run: fully consumed, skipped;
+      - the watermark's run: turns ``<= turn_id`` consumed, the tail is new;
+      - runs after, and a fresh watermark (nothing consumed): everything up to
+        (but not including) the tip is new.
+
+    Relies on the store's natural ordering — ``list_runs`` sorted by
+    ``started_at`` ascending and turns ordinal within a run — so **ref alone
+    anchors the watermark**; no timestamp is required (per design).
+    """
+    runs = await source.list_runs()
+
+    tip_idx = next(
+        (i for i, r in enumerate(runs) if r.run_id == tip_run),
+        len(runs) - 1,
+    )
+    wm_idx = next(
+        (i for i, r in enumerate(runs) if r.run_id == watermark.run_id), None
+    )
+
+    collected: list[ModelMessage] = []
+    last_complete: MemoryWatermark | None = None
+
+    for i, r in enumerate(runs):
+        # Runs strictly before the watermark run are fully consumed.
+        if wm_idx is not None and i < wm_idx:
+            continue
+
+        hist = await source.run_history(run_id=r.run_id)
+        if not hist:
+            continue
+
+        anchors = user_anchor_indices(hist)
+        if not anchors:
+            continue
+
+        n = len(hist)
+        for t in range(len(anchors)):
+            # Skip turns already consumed by the watermark.
+            if (
+                wm_idx is not None
+                and i == wm_idx
+                and watermark.turn_id is not None
+                and t <= watermark.turn_id
+            ):
+                continue
+            # Fold full turns only: stop strictly before the in-flight tip. A
+            # turn at or after (tip_idx, tip_turn) has not finished settling.
+            if (i, t) >= (tip_idx, tip_turn):
+                break
+            start, end = _turn_bounds(anchors, t, n)
+            collected.extend(hist[start:end])
+            last_complete = MemoryWatermark(run_id=r.run_id, turn_id=t)
+
+    # Fresh watermark with nothing folded keeps its ref (never points past the
+    # consumed position; an empty span leaves it untouched).
+    final_wm = last_complete if last_complete is not None else watermark
+    return ResolvedSpan(messages=collected, watermark=final_wm)
+
 
 
 @dataclass(frozen=True)
 class ConsolidationJob:
     """A request to fold the unseen persisted span into durable memory.
 
-    ``run_id`` / ``turn_id`` mark the *current* position; the worker folds
-    everything strictly newer than the stored watermark, then advances the
-    watermark to ``turn_id``.
+    ``run_id`` / ``turn_id`` mark the current (in-flight) tip position; the
+    worker folds complete turns strictly newer than the stored watermark and
+    strictly older than the tip, then advances the watermark to the last
+    complete turn folded.
     """
 
     run_id: str
@@ -63,9 +175,10 @@ class ConsolidationJob:
 
 
 #: Type of the span-source seam: resolve "(run_id, up_to_turn_id)" into the
-#: ordered messages to fold. This is where the real persistence read sits
-#: (``TurnFinder``/``read_turn``); a test supplies a synthetic list.
-SpanSource = Callable[[str, int], Awaitable[list["ModelMessage"]]]
+#: :class:`ResolvedSpan` (complete-turn messages + the advance-to watermark).
+#: This is where the real persistence read sits (``SnapshotHistorySource`` /
+#: ``resolve_unseen_span``); a test supplies a synthetic span.
+SpanSource = Callable[[str, int], Awaitable[ResolvedSpan]]
 
 #: Type of the consolidate seam: fold a span's messages into the journal.
 #: Defaults to the real owner; a test injects a journal-fenced stand-in.
@@ -143,7 +256,8 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 session_id, job.run_id, job.turn_id,
             )
             return
-        messages = await self.span_source(job.run_id, job.turn_id)
+        messages_span = await self.span_source(job.run_id, job.turn_id)
+        messages = messages_span.messages
 
         # Fold into the journal (append-only; dedup/supersede at render).
         if self.consolidate_span is not None:
@@ -153,9 +267,11 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 messages, directory, watermark
             )
 
-        # Advance the watermark past what we just consumed.
-        watermark.run_id = job.run_id
-        watermark.turn_id = job.turn_id
+        # Advance the watermark past what we just consumed — to the last
+        # COMPLETE turn folded (the resolver already stopped before the
+        # in-flight tip, so its watermark ref is exactly that position).
+        watermark.run_id = messages_span.watermark.run_id
+        watermark.turn_id = messages_span.watermark.turn_id
         watermark.save(directory)
 
         # Materialize MEMORY.md deterministically from the append-only journal —

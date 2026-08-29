@@ -283,6 +283,35 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     return cfg
 
 
+def resolve_memory_config(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> dict:
+    """Resolve the spec's ``memory:`` block into the values a consumer needs.
+
+    Public seam the runtime Session uses to reach the background-consolidation
+    cadence WITHOUT poking pydantic-ai's private capability registry. It reads
+    the exact same ``_spec_memory_config`` path ``_build_memory`` uses and
+    applies the same code-level default, so the Session's trigger cadence can
+    never drift from the ``Memory`` capability's ``consolidate_every`` — Memory
+    stays the owner, this is just a non-invasive read of the resolved value.
+
+    Returns ``{"consolidate_every": int}`` (always present, default applied).
+    """
+    from paf.capabilities.build import DEFAULT_CONSOLIDATE_EVERY
+
+    every = DEFAULT_CONSOLIDATE_EVERY
+    try:
+        cfg = _spec_memory_config(get_spec_path(agent_name, spec_directory))
+    except Exception:  # noqa: BLE001 - spec read is best-effort sugar
+        cfg = None
+    if isinstance(cfg, dict):
+        candidate = cfg.get("consolidate_every")
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+            every = candidate
+    return {"consolidate_every": every}
+
+
 def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict | None:
     """Read one per-capability root block from a spec into a config dict.
 

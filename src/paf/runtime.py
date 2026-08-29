@@ -46,8 +46,17 @@ from pydantic_ai.messages import (
     ThinkingPartDelta,
     UserPromptPart,
 )
+from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import continue_run
 
+from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities.memory._background import (
+    ConsolidationJob,
+    MemoryConsolidationQueue,
+    resolve_unseen_span,
+)
+from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
+from paf.capabilities.memory._window import DEFAULT_MEMORY_DIR
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
     _json_dumps,
@@ -55,7 +64,7 @@ from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
-from paf.specs import build_agent
+from paf.specs import build_agent, resolve_memory_config
 
 
 @dataclass(frozen=True)
@@ -131,6 +140,9 @@ class Session:
         resume: bool = True,
         resume_window: int | None = None,
         store=None,
+        memory_consolidation: bool = False,
+        memory_directory: str | None = None,
+        consolidate_span=None,
     ) -> None:
         self.agent_name = agent_name
         self.profile = profile
@@ -160,6 +172,25 @@ class Session:
         # ``_ensure_resumed`` from durable storage on the first run (if resume)
         # and then accumulated per-turn.
         self.history: list = []
+
+        # Background memory consolidation: when enabled, after each completed
+        # turn a tiny hook fires the trigger; if enough turns have accumulated
+        # since the durable watermark, it enqueues a job for a self-contained
+        # worker (constructed lazily, bound to ``self._store``) that folds the
+        # persisted span of COMPLETE turns into the journal. Fire-and-forget:
+        # the worker is the engine's own asyncio task, never on the turn path.
+        # The cadence (``consolidate_every``) is resolved from the agent's spec
+        # through the same ``memory:`` block ``_build_memory`` reads, so Memory
+        # stays the owner and the Session never pokes pydantic-ai's private
+        # capability registry.
+        self.memory_consolidation = memory_consolidation
+        self.consolidate_every = resolve_memory_config(agent_name)["consolidate_every"]
+        # Memory directory the worker targets; injectable for hermetic tests,
+        # defaults to the canonical shared journal/MEMORY.md directory.
+        self._memory_directory = memory_directory or DEFAULT_MEMORY_DIR
+        # Optional journal-fenced consolidate seam (tests) — default None = real owner.
+        self._consolidate_span = consolidate_span
+        self._memory_queue: MemoryConsolidationQueue | None = None
 
     # -- introspection -------------------------------------------------------
 
@@ -267,6 +298,74 @@ class Session:
         except Exception:  # noqa: BLE001 - resume is sugar; never break the run
             self._restored = False
 
+    # -- background memory consolidation ------------------------------------
+
+    @property
+    def memory_queue(self) -> MemoryConsolidationQueue | None:
+        """The lazily-built background consolidation queue (None until first use)."""
+        return self._memory_queue
+
+    def _ensure_memory_queue(self) -> MemoryConsolidationQueue:
+        """Build the self-contained worker queue, bound to ``self._store``.
+
+        One queue == one worker per session (the engine's composition model).
+        The worker is given a ``span_source`` that resolves the persisted span
+        of complete turns from the same ``HistorySource`` the search capability
+        holds (``SnapshotHistorySource`` over ``self._store``) — it never reads
+        in-memory ``self.history``, so folding stays fully off the critical path
+        and resilient to what the Session may or may not have cached.
+        """
+        if self._memory_queue is None:
+            source = SnapshotHistorySource(self._store)
+
+            async def span_source(run_id: str, up_to_turn_id: int):
+                wm = MemoryWatermark.load(self._memory_directory, run_id=run_id)
+                return await resolve_unseen_span(
+                    source, wm, tip_run=run_id, tip_turn=up_to_turn_id
+                )
+
+            self._memory_queue = MemoryConsolidationQueue(
+                memory_directory=self._memory_directory,
+                agent_name=self.agent_name,
+                span_source=span_source,
+                consolidate_span=self._consolidate_span,
+            )
+        return self._memory_queue
+
+    async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
+        """Fire the background-consolidation hook after a completed turn.
+
+        Off the critical path by design: compute the current in-flight tip turn
+        from ``self.history``, ask the pure ``should_fire`` predicate whether
+        enough turns have accumulated since the durable watermark, and if so
+        ``enqueue`` a job. The engine's own asyncio worker drains it in the
+        background — nothing here awaits the fold.
+        """
+        if not self.memory_consolidation or cid is None:
+            return
+
+        anchors = user_anchor_indices(self.history)
+        if not anchors:
+            return
+        tip_turn = len(anchors) - 1  # 0-based last (in-flight) turn
+
+        # Current run = the most recently persisted one for this conversation.
+        runs = await self._store.list_runs(conversation_id=cid)
+        if not runs:
+            return
+        tip_run = runs[-1].run_id
+
+        wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
+        if not should_fire(wm, current_turn_id=tip_turn, every=self.consolidate_every):
+            return
+
+        queue = self._ensure_memory_queue()
+        queue.enqueue(
+            # Session's own identity; only one queue per session.
+            self.agent_name,
+            ConsolidationJob(run_id=tip_run, turn_id=tip_turn),
+        )
+
     # -- async core ----------------------------------------------------------
 
     async def stream(
@@ -369,6 +468,11 @@ class Session:
         # ACKNOWLEDGE (cli_demo): result.new_messages() is ONLY this turn; older
         # history lives in self.history. Accumulate, don't overwrite.
         self.history = [*self.history, *result.new_messages()]
+        # Fire the background memory-consolidation trigger (if enabled): the
+        # just-settled turn is now in history and persisted; a due job is
+        # enqueued for the worker to fold off the critical path.
+        await self._maybe_trigger_consolidation(cid)
+
     async def run(
         self,
         prompt: str,

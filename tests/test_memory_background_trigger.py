@@ -30,6 +30,7 @@ import pytest
 from paf.capabilities.memory._background import (
     ConsolidationJob,
     MemoryConsolidationQueue,
+    ResolvedSpan,
 )
 from paf.capabilities.memory._journal import JournalStore, MemoryRecord
 from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
@@ -99,11 +100,24 @@ def test_watermark_file_lives_at_memory_dir(tmp_path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _synthetic_span_source(messages: list[MemoryRecord]):
-    """Return an async span source that hands back pre-built records as facts."""
+def _synthetic_span_source():
+    """Return an async span source reporting a fully-settled span.
 
-    async def span_source(run_id: str, up_to_turn_id: int) -> list:
-        return messages
+    Returns a :class:`ResolvedSpan` reporting the tip position as fully settled
+    (synthetic seam — the real resolver decides completeness; here the stand-in
+    just affirms the job's ``up_to_turn_id``). The fence-consolidate writes its
+    own records, so the message content itself is irrelevant to the
+    service-mechanics assertions these tests make.
+    """
+
+    async def span_source(run_id: str, up_to_turn_id: int) -> ResolvedSpan:
+        # The stand-in reports the foldable span; the fence-consolidate writes
+        # its own records, so the message content here is irrelevant to the
+        # service-mechanics assertions this test makes.
+        return ResolvedSpan(
+            messages=[],
+            watermark=MemoryWatermark(run_id=run_id, turn_id=up_to_turn_id),
+        )
 
     return span_source
 
@@ -144,7 +158,7 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
     async def scenario() -> None:
         q = Q(
             memory_directory=str(tmp_path),
-            span_source=_synthetic_span_source(records),
+            span_source=_synthetic_span_source(),
             consolidate_span=_journal_fence_consolidate(records),
         )
         # The trigger decides a job is due (10 turns accumulated):
