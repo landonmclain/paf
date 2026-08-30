@@ -145,5 +145,49 @@ def _fileinfo_from_record(record: dict) -> FileInfo:
 
 
 def build_edges(files: list[FileInfo]) -> list[dict]:
-    """STUB — caller→callee edges (Phase 2 graph, the key deliverable, next)."""
-    raise NotImplementedError("build_edges is not built until the graph phase")
+    """Symbol-bearing directional reference edges (file→file, the real graph).
+
+    For every file ``A``, resolve each identifier ``A`` references (imports +
+    its own symbol bodies/signatures/docs) to the file that *defines* it; emit
+    one edge ``{source, target, symbols}`` per distinct (``A`` → defining-file)
+    pair, where ``symbols`` is the set of names carried across that edge.
+    Self-edges (``A`` → ``A``) are excluded, as are dunder names.
+
+    This is the enrich-all-edges form of ``reference_counts``: each target's
+    in-degree *is* ``|{distinct sources that reach it}|``, and the referenced
+    symbol names ride along so a caller can answer "who uses *which* name, from
+    which file" — not just "how many files reference B."
+
+    ``kind`` is ``"reference"`` for all edges today — the honest, cheap
+    identifier-resolution level (a file *uses* a symbol B defines; whether that
+    use is a true *call* needs call-site resolution, a later refinement). The
+    field is present so call edges can be added without changing the shape.
+
+    Determinism: iteration order is the input file order; per-file names are a
+    ``set``, so emitted ``symbols`` are sorted. Callers must sort the result if
+    they need a stable global order (tests do).
+    """
+    defined_by = _defined_name_map(files)
+    edges: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for f in files:
+        by_target: dict[str, set[str]] = {}
+        for name in _file_referenced_names(f):
+            defining_file = defined_by.get(name)
+            if defining_file is None or defining_file == f.path:
+                continue
+            by_target.setdefault(defining_file, set()).add(name)
+        for target, names in by_target.items():
+            key = (f.path, target)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append(
+                {
+                    "source": f.path,
+                    "target": target,
+                    "kind": "reference",
+                    "symbols": sorted(names),
+                }
+            )
+    return edges

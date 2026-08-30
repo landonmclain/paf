@@ -11,6 +11,11 @@ wheels/
 # code_search_eval real-repo fixture (pinned clone of vercel/chatbot)
 tests/fixtures/chatbot/
 
+# code_search_eval Python fixture (snapshot of this repo's own src/paf, used as
+# the Python graph/map gold corpus). Regenerate; never commit (test corpus stays
+# independent of live refactors — rematerialize per tests/fixtures/README.md)
+tests/fixtures/paf-src/
+
 # Secrets
 .env
 
