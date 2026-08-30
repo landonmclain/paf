@@ -144,8 +144,11 @@ def _fileinfo_from_record(record: dict) -> FileInfo:
     )
 
 
-def build_edges(files: list[FileInfo]) -> list[dict]:
-    """Symbol-bearing directional reference edges (file→file, the real graph).
+def build_edges(
+    files: list[FileInfo],
+    sources: dict[str, str] | None = None,
+) -> list[dict]:
+    """Symbol-bearing edges (file→file), reference- and/or call-level.
 
     For every file ``A``, resolve each identifier ``A`` references (imports +
     its own symbol bodies/signatures/docs) to the file that *defines* it; emit
@@ -153,23 +156,33 @@ def build_edges(files: list[FileInfo]) -> list[dict]:
     pair, where ``symbols`` is the set of names carried across that edge.
     Self-edges (``A`` → ``A``) are excluded, as are dunder names.
 
-    This is the enrich-all-edges form of ``reference_counts``: each target's
-    in-degree *is* ``|{distinct sources that reach it}|``, and the referenced
-    symbol names ride along so a caller can answer "who uses *which* name, from
-    which file" — not just "how many files reference B."
+    Call refinement (Phase 1.2): when ``sources`` (repo-relative path → raw
+    source) is supplied, ``_calls.call_edge_set`` re-parses each file and finds
+    which edges are *provable* call reachability (a call site resolved through
+    an import to a defining symbol). Those edges are marked ``kind: "call"``
+    with ``call_symbols`` = the subset of ``symbols`` that are verified calls.
+    Edges that resolve—or files whose source is absent—stay ``kind: "reference"``
+    (``call_symbols`` empty). This is the honest B1 carve: never guess a call;
+    uncertain resolution remains reference.
 
-    ``kind`` is ``"reference"`` for all edges today — the honest, cheap
-    identifier-resolution level (a file *uses* a symbol B defines; whether that
-    use is a true *call* needs call-site resolution, a later refinement). The
-    field is present so call edges can be added without changing the shape.
+    With no ``sources``, every edge is ``kind: "reference"`` and the output is
+    byte-identical to the pre-Phase-1.2 build_edges (graceful degradation).
 
-    Determinism: iteration order is the input file order; per-file names are a
-    ``set``, so emitted ``symbols`` are sorted. Callers must sort the result if
-    they need a stable global order (tests do).
+    Determinism: iteration order is the input file order; per-file names are
+    sorted at emission. Callers must sort the result for a stable global order
+    (tests do).
     """
+    from ._calls import call_edge_set
+
     defined_by = _defined_name_map(files)
     edges: list[dict] = []
     seen: set[tuple[str, str]] = set()
+
+    # call reachability, keyed by (source, target) -> {called symbols}
+    call_map: dict[tuple[str, str], set[str]] = {}
+    if sources:
+        call_map = call_edge_set(files, sources)
+
     for f in files:
         by_target: dict[str, set[str]] = {}
         for name in _file_referenced_names(f):
@@ -182,12 +195,15 @@ def build_edges(files: list[FileInfo]) -> list[dict]:
             if key in seen:
                 continue
             seen.add(key)
+            called = call_map.get(key, set())
+            kind = "call" if called else "reference"
             edges.append(
                 {
                     "source": f.path,
                     "target": target,
-                    "kind": "reference",
+                    "kind": kind,
                     "symbols": sorted(names),
+                    "call_symbols": sorted(called),
                 }
             )
     return edges
