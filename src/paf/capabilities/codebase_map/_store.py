@@ -68,8 +68,8 @@ class ArtifactKind(StrEnum):
     INDEX = "index"  # index.json       — per-file HEAD (metadata + docstring head + symbol names)
     SEARCH = "search"  # search_index.json — flattened keyword index rows (future/legacy slot, not yet written; superseded by TOKENS)
     TOKENS = "tokens"  # tokens.json     — inverted symbol-scoped search index (the search backend)
-    GRAPH = "graph"  # call_graph.json — caller→callee edges (DERIVED on read, §5.x)
-    MAP = "map"  # distilled_map.json — ranked distilled map (optional cache)
+    GRAPH = "graph"  # call_graph.json — caller→callee edges (persisted at scan time, §5.x)
+    MAP = "map"  # repo_map.json — ranked zero-LLM orientation map (written by get_repo_map on demand)
 
 
 # kind -> file basename (kept here so the mapping is one obvious place).
@@ -81,7 +81,7 @@ _ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
     ArtifactKind.SEARCH: "search_index.json",
     ArtifactKind.TOKENS: "tokens.json",
     ArtifactKind.GRAPH: "call_graph.json",
-    ArtifactKind.MAP: "distilled_map.json",
+    ArtifactKind.MAP: "repo_map.json",
 }
 
 _INDEX_SUBDIR = ".agent-codeindex"

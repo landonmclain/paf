@@ -26,6 +26,7 @@ present bounded heads/blocks.
 from __future__ import annotations
 
 import posixpath
+from dataclasses import asdict
 from pathlib import Path
 
 from pydantic_ai.toolsets import FunctionToolset
@@ -320,11 +321,11 @@ class CodebaseMapToolset(FunctionToolset):
             f"Repo map of {self._scan_root} ({len(entries)} symbols, "
             f"{budget}-token budget)\n"
         )
-        lines: list[str] = []
+        body_lines: list[str] = []
         cur = None
         for e in entries:
             if e.file != cur:
-                lines.append(f"{e.file}:")
+                body_lines.append(f"{e.file}:")
                 cur = e.file
             # manifest signature already embeds the symbol name — render only its
             # first line (a multiline signature's body comment is noise in a
@@ -333,8 +334,27 @@ class CodebaseMapToolset(FunctionToolset):
             shown = e.signature if e.signature else e.symbol
             if shown:
                 shown = shown.splitlines()[0].rstrip()
-            lines.append(f"    {shown}")
-        return head + "\n".join(lines)
+            body_lines.append(f"    {shown}")
+        rendered = head + "\n".join(body_lines)
+
+        # Persist the map so it exists as a real artifact on disk (repo_map.json) —
+        # the structured entries (reusable) + the rendered text + metadata. It is a
+        # cheap cache of real artifact data, overwritten on each successful render.
+        try:
+            self._storage.write(
+                ArtifactKind.MAP,
+                self._scan_root,
+                {
+                    "scan_root": str(self._scan_root),
+                    "map_tokens": budget,
+                    "focus": focus if focus and focus.strip() else None,
+                    "entries": [asdict(e) for e in entries],
+                    "rendered": rendered,
+                },
+            )
+        except Exception:  # pragma: no cover - cache write must never break the tool
+            pass  # the map still returns; persistence is best-effort
+        return rendered
 
     def run_codebase_map(self) -> str:
         """Re-scan the codebase root and (re)build the index artifacts.
