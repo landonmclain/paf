@@ -7,7 +7,7 @@ Tests the agent-facing tools against a small synthetic fixture scanned with
 - ``lookup_file``       → 4 shapes (head / symbol head / detail / symbol detail)
 - ``read_block``        → exact source region + whole-file + missing-file
 - ``search_codebase``   → end-to-end over the built tokens.json, head snippets
-- ``get_repo_map``      → stub raises NotImplementedError (Phase 4)
+- ``get_repo_map``      → ranked zero-LLM orient map (Phase 2), budget-bound
 - ``run_codebase_map``  → re-indexes the rooted repo (new/changed files surfaced)
 
 All tool methods return bounded, readable ``str`` (None only for unknown
@@ -254,24 +254,24 @@ def test_search_codebase_emits_pasteable_read_block_ref(scanned: tuple[Path, Cod
 # ------------------------------------------------------------------ get_repo_map
 
 
-def test_get_repo_map_stub(scanned: tuple[Path, CodebaseMapToolset]) -> None:
-    """The method still exists as a Phase-4 stub and raises NotImplementedError,
-    but it is deliberately NOT registered as an agent tool — hidden until it's built
-    (its long spec docstring would otherwise inflate every tool-list the agent sees)."""
+def test_get_repo_map_built(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """get_repo_map is now BUILT (Phase 2): produces a ranked zero-LLM map over the
+    scanned fixture (a fresh scan carries call_graph.json), no longer a stub."""
     _, t = scanned
-    with pytest.raises(NotImplementedError):
-        t.get_repo_map()
-    # Hidden from the agent surface entirely.
-    names = sorted(t.tools)
-    assert "get_repo_map" not in names
+    out = t.get_repo_map(map_tokens=20)
+    assert "Repo map of" in out
+    assert "symbols" in out
+    # The fixture is ranked: src/a.py (Widget + helper, referenced by others) should
+    # appear; and it must be real manifest data, not an error message.
+    assert "src/a.py" in out or "capabilities" in out
 
 
-def test_search_exposed_tools_are_the_five_live_ladder(scanned: tuple[Path, CodebaseMapToolset]) -> None:
-    """The agent-facing surface is exactly the five live tools — get_repo_map must not
-    leak in as a stub that raises NotImplementedError mid-conversation."""
+def test_search_exposed_tools_are_the_six_live_ladder(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """The agent-facing surface is the six live tools — get_repo_map is registered."""
     _, t = scanned
     assert sorted(t.tools) == [
         "get_overview",
+        "get_repo_map",
         "lookup_file",
         "read_block",
         "run_codebase_map",

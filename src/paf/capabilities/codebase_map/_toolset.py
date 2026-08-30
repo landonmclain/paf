@@ -12,9 +12,8 @@ The model climbs a ladder instead of brute-forcing keyword scans:
 - ``search_codebase(query)``    — the thin escape hatch over ``tokens.json``; NO mode menu
 - ``run_codebase_map()``        — (re)build the index artifacts for the rooted repo
 
-``get_repo_map`` (Phase-4 orient map, zero-LLM) exists as a method but is **not
-registered** as a tool — hidden until it's built (it currently raises
-NotImplementedError). ``callers``/``with_graph`` defer to the graph phase (YAGNI). A
+``get_repo_map`` (ranked zero-LLM orient map) is a registered tool — see below.
+``callers``/``with_graph`` defer to the graph phase (YAGNI). A
 future ``semantic`` backend is an alternative ``RetrievalBackend``, never a ``mode``.
 All hits collapse to the universal ``SearchHit``/``BlockRef`` shape.
 
@@ -76,9 +75,7 @@ class CodebaseMapToolset(FunctionToolset):
         self.add_function(self.lookup_file, name="lookup_file")
         self.add_function(self.read_block, name="read_block")
         self.add_function(self.search_codebase, name="search_codebase")
-        # get_repo_map is deliberately NOT registered: still a Phase-4 stub that
-        # raises NotImplementedError (and its long spec docstring would inflate every
-        # tool-list). Hidden from the agent until it's built — see get_repo_map().
+        self.add_function(self.get_repo_map, name="get_repo_map")
         self.add_function(self.run_codebase_map, name="run_codebase_map")
 
     # -- presentation helpers -------------------------------------------------
@@ -284,22 +281,60 @@ class CodebaseMapToolset(FunctionToolset):
         return f"{file}"
 
     def get_repo_map(self, map_tokens: int | None = None, focus: str | None = None) -> str:
-        """[NOT BUILT — Phase 4] Return a distilled orientation map of the codebase.
+        """Orient to the whole codebase in one shot: ranked, zero-LLM distilled map.
 
-        **Intended shape (LOCKED 2026-08-24): a synthetic, zero-LLM orientation map.**
-        Bound by ``map_tokens`` (default 1000), optionally ``focus``-biased. Returns the
-        most load-bearing files/symbols as compact ``file.py: symbol(args) -> T`` lines,
-        ordered by ``references_count`` (in-degree) desc, with each file's module-docstring
-        head. Deliberately NO LLM summarization — everything shown is **real** data pulled
-        from existing artifacts (`overview.json` tree, `index.json` head + symbol name lists,
-        ``manifest`` signatures, ``references_count``), so it cannot hallucinate a summary or
-        freeze understanding at build time. It is the "here's the whole repo in N tokens"
-        view — the direct analog of a really good README. Computed on demand from artifacts
-        (optionally cached in ``distilled_map.json``). This is a mild superset of
-        ``get_overview`` (tree + rank + signature one-liners); the schema `DistilledEntry`
-        already matches. Not implemented yet.
+        Use this when you need the "here's the whole repo" picture — the direct analog
+        of a really good README — rather than climbing the tree one rung at a time.
+        Higher-level than ``get_overview`` (which is a bare navigation tree): this ranks
+        the most load-bearing files/symbols and gives each a one-line signature.
+
+        Ranking is **call-weighted** (Phase 1.2): files that other code *provably
+        invokes* (orchestrators, helpers, constructors) outrank files that are merely
+        imported as types. Everything rendered is **real** data pulled from the manifest
+        (signatures) and the persisted graph (in-degree) — never LLM prose — so it cannot
+        hallucinate a summary.
+
+        Bound by ``map_tokens`` (default 1000; ~one signature per token). Pass
+        ``focus=capabilities/memory`` (a repo-relative path prefix) to orient to just
+        that subtree.
         """
-        raise NotImplementedError("get_repo_map is not built until Phase 4")
+        budget = int(map_tokens) if map_tokens is not None else 1000
+        if budget < 1:
+            budget = 1
+        entries = self._retrieval.distilled_map(
+            map_tokens=budget,
+            focus=(focus if focus and focus.strip() else None),
+        )
+        if entries is None:
+            return (
+                f"No call graph for {self._scan_root} — the index predates the graph "
+                "artifact. Run `run_codebase_map` to re-index (it now persists "
+                "call_graph.json), then call get_repo_map again."
+            )
+        if not entries:
+            return (
+                f"No repo map for {self._scan_root} — run `run_codebase_map` to build "
+                "the manifest + graph first."
+            )
+        head = (
+            f"Repo map of {self._scan_root} ({len(entries)} symbols, "
+            f"{budget}-token budget)\n"
+        )
+        lines: list[str] = []
+        cur = None
+        for e in entries:
+            if e.file != cur:
+                lines.append(f"{e.file}:")
+                cur = e.file
+            # manifest signature already embeds the symbol name — render only its
+            # first line (a multiline signature's body comment is noise in a
+            # budget-bounded one-liner map; full detail is one lookup_file away).
+            # Fall back to the bare name for symbols with no signature.
+            shown = e.signature if e.signature else e.symbol
+            if shown:
+                shown = shown.splitlines()[0].rstrip()
+            lines.append(f"    {shown}")
+        return head + "\n".join(lines)
 
     def run_codebase_map(self) -> str:
         """Re-scan the codebase root and (re)build the index artifacts.

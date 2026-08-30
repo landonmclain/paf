@@ -24,6 +24,32 @@ from ._schema import DistilledEntry, SearchHit
 from ._store import ArtifactKind, FlatFileStorage, StorageService
 from ._tokens import tokens_rank
 
+# Weightings for the zero-LLM distilled-map ranking (call-weighted in-degree).
+# A PROVEN call edge (Phase 1.2, kind="call") counts for CALL_WEIGHT; a mere
+# reference/type-import edge counts for REFERENCE_WEIGHT. Chose 3:1 so files the
+# agent actually invokes outrank files it merely annotates — without drowning the
+# reference signal entirely (focus on the *hub* files, not the noise).
+CALL_WEIGHT = 3.0
+REFERENCE_WEIGHT = 1.0
+
+
+def _weighted_in_degree(edges: list[dict]) -> dict[str, float]:
+    """Call-weighted in-degree per target file.
+
+    Each edge ``{source, target, kind}`` adds ``CALL_WEIGHT`` when ``kind == "call"``
+    else ``REFERENCE_WEIGHT`` to its target's score. Self-edges are already excluded
+    upstream. Returns ``{target_path: weighted_score}``. Degenerates gracefully to a
+    flat in-degree when every edge is ``reference`` (all weights 1.0).
+    """
+    out: dict[str, float] = {}
+    for e in edges:
+        t = e.get("target")
+        if not isinstance(t, str) or not t:
+            continue
+        w = CALL_WEIGHT if e.get("kind") == "call" else REFERENCE_WEIGHT
+        out[t] = out.get(t, 0.0) + w
+    return out
+
 
 class RetrievalBackend(Protocol):
     """Search-method seam. A future semantic backend implements these two methods."""
@@ -37,7 +63,7 @@ class RetrievalBackend(Protocol):
         limit: int = 20,
     ) -> list[SearchHit]: ...
 
-    def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry]: ...
+    def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry] | None: ...
 
 
 class LexicalRetrieval:
@@ -74,13 +100,74 @@ class LexicalRetrieval:
         tokens = self._tokens_payload()
         return tokens_rank(query, tokens, limit=limit, heads=self._heads_by_path())
 
-    def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry]:
-        """STUB — ranked distilled map (Phase 4). Intended shape: zero-LLM synthetic
-        orientation map. Returns `DistilledEntry` records (rank/file/symbol/signature/
-        references_count/ref_weight) ordered by references_count desc within the
-        ``map_tokens`` budget, optionally ``focus``-biased — pulled from existing
-        artifacts only, never LLM-generated prose. See `get_repo_map` docstring."""
-        raise NotImplementedError("distilled_map is not built until Phase 4")
+    def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry] | None:
+        """Zero-LLM synthetic orientation map: the whole repo in `map_tokens` tokens.
+
+        Ranks files by **call-weighted in-degree** from the persisted graph artifact:
+        an incoming edge contributes ``CALL_WEIGHT`` (3.0) when it is a provable call
+        (Phase 1.2 ``kind: "call"``) and ``REFERENCE_WEIGHT`` (1.0) otherwise. Files the
+        agent actually *invokes* (orchestrators, helpers, constructors) therefore outrank
+        files that are merely *type-annotated / imported* — the ARB-adjacent structural
+        signal, no tokens spent on embeddings.
+
+        Within the budget it walks files in descending score and emits one
+        ``DistilledEntry`` per searchable symbol, pulling the real ``signature`` from the
+        manifest. ``focus`` (a repo-relative path prefix) biases candidates to that
+        subtree so a caller can orient to just one area. Everything rendered is **real
+        artifact data** — never LLM prose — so the map cannot hallucinate or freeze
+        understanding at build time.
+        """
+        graph = self.storage.read(ArtifactKind.GRAPH, self._scan_root()) or {}
+        edges = graph.get("edges", []) if isinstance(graph, dict) else []
+        if graph is None or not isinstance(graph, dict) or "edges" not in graph:
+            # No persisted call graph — the index predates Phase 2 (or was never
+            # scanned). Ranking needs edges; refuse to emit a misleading
+            # alphabetical "map" instead of the real in-degree order. Caller
+            # (get_repo_map) surfaces this as "reindex needed".
+            return None
+        manifest = self.storage.read(ArtifactKind.MANIFEST, self._scan_root()) or {}
+        files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
+        coming = _weighted_in_degree(edges)  # path -> weighted score
+
+        def select(path: str) -> bool:
+            if not focus:
+                return True
+            fp = focus.rstrip("/")
+            return path == fp or path.startswith(fp + "/")
+
+        scored = sorted(
+            (p for p in files if select(p)),
+            key=lambda p: (-coming.get(p, 0.0), p),
+        )
+
+        entries: list[DistilledEntry] = []
+        budget = max(1, int(map_tokens))
+        rank = 0
+        for path in scored:
+            rec = files.get(path) or {}
+            sig = rec.get("signature") or ""
+            for sym in rec.get("symbols", []) or []:
+                if not isinstance(sym, dict):
+                    continue
+                name = sym.get("name")
+                if not name:
+                    continue
+                rank += 1
+                s = sym.get("signature") or sig
+                entries.append(
+                    DistilledEntry(
+                        rank=rank,
+                        file=path,
+                        symbol=name,
+                        signature=s,
+                        references_count=rec.get("references_count", 0),
+                        ref_weight=coming.get(path, 0.0),
+                    )
+                )
+                budget -= 1
+                if budget <= 0:
+                    return entries
+        return entries
 
     # ---- reads --------------------------------------------------------------
 

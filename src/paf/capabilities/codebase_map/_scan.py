@@ -137,6 +137,7 @@ def scan_and_write(scan_root: str | Path, storage: StorageService | None = None)
     manifests: dict[str, Any] = {}          # path -> DETAILED record
     snap_files: dict[str, Any] = {}
     rich: list[FileInfo] = []               # in-memory records (tokens + refs source)
+    sources: dict[str, str] = {}            # repo-relative path -> raw source (graph edges)
     total_symbols = 0
     skipped: list[str] = []
     unparsed: list[str] = []
@@ -155,6 +156,7 @@ def scan_and_write(scan_root: str | Path, storage: StorageService | None = None)
         }
         total_symbols += len(extracted.searchable_symbols)
         rich.append(extracted)
+        sources[rel] = path.read_text(encoding="utf-8", errors="replace")
 
         # Lean HEAD (name lists only) + DETAILED manifest (full symbol records + imports).
         index_rows.append(head_record(extracted))
@@ -184,6 +186,12 @@ def scan_and_write(scan_root: str | Path, storage: StorageService | None = None)
     storage.write(ArtifactKind.MANIFEST, root, {"files": manifests})
     storage.write(ArtifactKind.TOKENS, root, build_tokens(rich))
     storage.write(ArtifactKind.OVERVIEW, root, build_overview(root))
+
+    # Persist the symbol-bearing edge set (reference + Phase-1.2 call refinement) so
+    # get_repo_map / distilled_map read it as a first-class artifact instead of re-parsing.
+    from ._graph import build_edges
+
+    storage.write(ArtifactKind.GRAPH, root, {"edges": build_edges(rich, sources)})
 
     from ._store import index_dir_for_scan_root  # public location helper
 
