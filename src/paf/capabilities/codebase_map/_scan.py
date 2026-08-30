@@ -165,6 +165,7 @@ def scan_and_write(scan_root: str | Path, storage: StorageService | None = None)
             "language": extracted.language,
             "doc": extracted.doc,
             "imports": list(extracted.imports),
+            "import_names": list(extracted.import_names),
             "unparsed": extracted.unparsed,
             "symbols": [asdict(s) for s in extracted.searchable_symbols],
         }

@@ -33,19 +33,34 @@ CALL_WEIGHT = 3.0
 REFERENCE_WEIGHT = 1.0
 
 
+def _split_dir(path: str) -> str:
+    """Containing directory of a repo-relative POSIX path (``\"\"`` at the root)."""
+    i = path.rfind("/")
+    return path[:i] if i >= 0 else ""
+
+
 def _weighted_in_degree(edges: list[dict]) -> dict[str, float]:
-    """Call-weighted in-degree per target file.
+    """Cross-module, call-weighted in-degree per target file.
 
     Each edge ``{source, target, kind}`` adds ``CALL_WEIGHT`` when ``kind == "call"``
-    else ``REFERENCE_WEIGHT`` to its target's score. Self-edges are already excluded
-    upstream. Returns ``{target_path: weighted_score}``. Degenerates gracefully to a
-    flat in-degree when every edge is ``reference`` (all weights 1.0).
+    else ``REFERENCE_WEIGHT`` to its target's score — **but only when source and target
+    live in different directories**. Edges *within* the same module are orientation
+    noise: a 16-file module that imports its own ``_schema``/``_store`` heavily would
+    otherwise inflate those files' in-degree purely via self-reference, drowning the
+    true repo-wide hubs (config, the turns anchor, shared rankers). Restricting to
+    cross-module edges measures real hub-ness: "files other parts of the codebase
+    depend on". Self-edges are already excluded upstream. Returns ``{target: score}``.
     """
     out: dict[str, float] = {}
     for e in edges:
+        s = e.get("source")
         t = e.get("target")
         if not isinstance(t, str) or not t:
             continue
+        if not isinstance(s, str):
+            continue
+        if s and _split_dir(s) == _split_dir(t):
+            continue  # same-directory coupling is not cross-codebase hub-ness
         w = CALL_WEIGHT if e.get("kind") == "call" else REFERENCE_WEIGHT
         out[t] = out.get(t, 0.0) + w
     return out

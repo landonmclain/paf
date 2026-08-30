@@ -62,22 +62,28 @@ def scanned(tmp_path_factory) -> tuple[Path, CodebaseMapToolset]:
 
 
 def test_repo_map_center_of_gravity(scanned) -> None:
-    """The call-hub files outrank leaf/rarely-invoked files in the ranking."""
+    """Genuine cross-codebase hubs rank above intra-module self-coupling."""
     _, t = scanned
-    out = t.get_repo_map(map_tokens=300)  # generous so schema/store both fit
+    out = t.get_repo_map(map_tokens=300)  # generous so multiple hubs fit
     lines = out.splitlines()
-    # Find the index of each hub's header line within the ranked output.
-    schema_idx = next(i for i, line in enumerate(lines) if line.startswith("capabilities/codebase_map/_schema.py:"))
-    store_idx = next(i for i, line in enumerate(lines) if line.startswith("capabilities/codebase_map/_store.py:"))
-    # A low-degree leaf that should rank far below the hubs.
-    leaf_idx = next(
-        (i for i, line in enumerate(lines) if line.startswith("capabilities/codebase_map/cli.py:")),
+    # True repo-wide hubs (referenced/called from many different modules) must appear.
+    hub_idx = None
+    for hub in ("capabilities/_turns.py:", "config.py:", "capabilities/visual/_store.py:"):
+        try:
+            hub_idx = next(i for i, line in enumerate(lines) if line.startswith(hub))
+            break
+        except StopIteration:
+            continue
+    assert hub_idx is not None, "no cross-module hub (_turns/config/visual) in the map"
+    # The first codebase_map file present must rank BELOW a cross-module hub — not dominate.
+    cb_idx = next(
+        (i for i, line in enumerate(lines) if line.startswith("capabilities/codebase_map/")),
         len(lines),
     )
-    assert schema_idx < leaf_idx, "schema.py (top in-degree) must rank above the cli leaf"
-    assert store_idx < leaf_idx, "store.py (storage seam) must rank above the cli leaf"
-    # The output is clearly ranked (not alphabetical): schema before store is fine,
-    # but the real signal is both before the leaf.
+    assert hub_idx < cb_idx, (
+        f"cross-module hub must outrank the first codebase_map file (hub@{hub_idx} vs cb@{cb_idx})"
+    )
+    # The output is clearly ranked, not alphabetical.
     assert "Repo map of" in out
 
 

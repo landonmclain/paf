@@ -32,6 +32,11 @@ from ._schema import FileInfo
 # `Settings` + `consol_model` (the latter won't resolve to a defined symbol, so
 # it harmlessly no-ops).
 _REF_TOKEN_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+# Python/TS import-statement keywords that are never symbol references. Used only by
+# the backward-compat fallback when a hand-built FileInfo lacks structured import_names.
+_IMPORT_KEYWORDS = {
+    "from", "import", "as", "export", "default", "type", "return", "def", "class",
+}
 
 
 def _defined_name_map(files: list[FileInfo]) -> dict[str, str]:
@@ -53,17 +58,48 @@ def _defined_name_map(files: list[FileInfo]) -> dict[str, str]:
 
 
 def _file_referenced_names(f: FileInfo) -> set[str]:
-    """Distinct identifier names a file references (imports + its own symbol text)."""
-    names: set[str] = set()
-    # imports: `from x import Foo`, `import y`, `from z.a import b as c`
-    for imp in f.imports:
-        names.update(_REF_TOKEN_RE.findall(imp))
-    # the file's own symbol bodies/signatures/docs may *use* other files' symbols;
-    # capture those identifiers too (name tokens from body text).
+    """Distinct identifier names a file references (imports + its own symbol text).
+
+    Imports come from the STRUCTURED ``import_names`` (the imported symbol names,
+    populated from tree-sitter ``ImportInfo.items``/``alias`` at analyze time) — NOT a
+    regex over the raw import string. Regex over the string leaks module-path basenames
+    (``. _store``, ``./lib``) as if they were symbols, which then false-collide with any
+    file that happens to define a symbol of that name (Phase-1.1 bug, fixed here). Module
+    references proper are the import-resolution job; this name-match layer only claims
+    *symbol* references, so it stays language-agnostic and honest.
+
+    The file's own symbol bodies/signatures/docs may *use* other files' symbols; capture
+    those identifiers too (name tokens from body text, an acceptable approximation).
+    """
+    names: set[str] = set(f.import_names)
+    # Backward-compat fallback: hand-built FileInfo (e.g. older tests) populate
+    # `imports` with bare referenced names but no `import_names`. Only then derive
+    # from the import strings — stripping path segments/keywords/attribute tails so
+    # we never re-introduce the basename-leak bug. Analyzed files always carry
+    # `import_names`, so this branch is dead in production.
+    if not f.import_names:
+        for imp in f.imports:
+            for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", imp):
+                tok = m.group()
+                if tok in _IMPORT_KEYWORDS:
+                    continue
+                if m.start() > 0 and imp[m.start() - 1] == ".":
+                    continue  # dotted module path segment
+                names.add(tok)
     for sym in f.searchable_symbols:
         for field in (sym.signature, sym.body, sym.doc):
-            if field:
-                names.update(_REF_TOKEN_RE.findall(field))
+            if not field:
+                continue
+            # A name is a *symbol reference* only when it does NOT sit on the right
+            # of an attribute access (`self._store`, `x.shared`, `Settings.MODE`).
+            # The RHS token is a member/attribute of some owner — resolving it as a
+            # standalone module-level name false-collides (e.g. `self._store` matching
+            # visual's `_store` module var). Tokenize WITH the preceding char so we can
+            # drop `.X` tails.
+            for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", field):
+                if m.start() > 0 and field[m.start() - 1] == ".":
+                    continue  # right-hand side of attribute access -> not a symbol ref
+                names.add(m.group())
     return names
 
 
@@ -138,6 +174,7 @@ def _fileinfo_from_record(record: dict) -> FileInfo:
         doc=record.get("doc"),
         symbols=[s.name for s in syms if s.name],
         imports=record.get("imports") or [],
+        import_names=record.get("import_names") or [],
         references_count=record.get("references_count", 0),
         searchable_symbols=syms,
         unparsed=record.get("unparsed", False),

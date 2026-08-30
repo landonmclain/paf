@@ -157,6 +157,7 @@ def analyze_file(
         doc=recovery.module_docstring(),
         symbols=[s.name for s in symbols if s.name],
         imports=imports,
+        import_names=_map_import_names(res.imports),
         searchable_symbols=assign_searchable + searchable,
     )
 
@@ -265,6 +266,42 @@ def _map_imports(imports) -> list[str]:
         elif items:
             out.extend(items)
     # dedupe preserving order (Go quirk: `import "fmt"` -> source AND bare node)
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def _map_import_names(imports) -> list[str]:
+    """The imported SYMBOL names (structured), for graph reference resolution.
+
+    Unlike ``_map_imports`` (which keeps raw statement strings for display), this
+    returns the actual *things bound into scope* by each import — the items from
+    ``from m import A, B`` (A, B), and the alias from ``import m as A`` (A). A bare
+    ``import m`` brings a MODULE into scope (``m``), not a symbol — and resolving
+    a module name globally is exactly the false-collision trap (``. _store`` vs the
+    ``_store`` module var), so it is DELIBERATELY excluded here: module references
+    are the graph phase's import-resolution job, not name-matched symbol references.
+
+    This is language-agnostic because tree-sitter fills ``ImportInfo.items`` for
+    every language (Python + JS/TS confirmed; other languages yield items only when
+    the grammar surfaces them — exactly what the reference resolver can trust).
+    """
+    out: list[str] = []
+    for imp in imports:
+        items = list(getattr(imp, "items", None) or [])
+        alias = getattr(imp, "alias", None)
+        stmt = (imp.source or "").strip()
+        if stmt.startswith("import ") and alias and not items:
+            # `import m as A` -> A is the local symbol binding
+            out.append(alias)
+        else:
+            # `from m import A, B` / `import { A } from "..."` -> the items
+            out.extend(it for it in items if it and it != "*")
+    # dedupe preserving order
     seen: set[str] = set()
     uniq: list[str] = []
     for x in out:
