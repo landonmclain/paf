@@ -204,15 +204,20 @@ CONTEXTBENCH_PROFILE = AgentProfile(
         # Codebase-map: navigation-first browser over the indexed snapshot
         # (get_overview/lookup_file/read_block/search_codebase/get_repo_map).
         "CodebaseMap",
+        # --- map-arm test: the other surfaces are COMMENTED OUT so the model
+        #     MUST navigate purely by the codebase-map ladder. No shell, no raw
+        #     filesystem, no git — if it can't find the fix via the map alone, we
+        #     see that failure instead of a quiet fallback to grep/cat.
+        #     (The cold-start shell arm re-enables "Shell" when we want it.)
+        #
         # Bare shell — the cold-start discovery toolset (ls/find/rg/cat/sed),
-        # rooted at the snapshot via the spec `shell:` block. Deny-list stays ON
-        # (no `allowed_commands` in the spec) so destructive commands are blocked.
-        "Shell",
+        # rooted at the snapshot via the spec `shell:` block. Deny-list stays ON.
+        # "Shell",
         # Scoped filesystem access for reading/editing files under the snapshot.
-        "FileSystem",
+        # "FileSystem",
         # Safe git inspection (status/changed/diff) — snapshots are real git
         # worktrees at a base_commit, so git reads are useful for orientation.
-        "Git",
+        # "Git",
     ),
 )
 
