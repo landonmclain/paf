@@ -69,8 +69,58 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 - **CLIs:** `ui/cli2.py demo_assistant` = demo profile (fs/shell/git/web);
   bare `ui/cli2.py` = assistant profile (search_conversation_history + read_turn
   only, by design). `ui/cli3.py` is the base for the streaming StepStream/
-  TurnStream lives.
+  TurnStream lives, and the runner for the **contextbench** profile.
 - **Benchmarks:** `tests/run_lmem.py` (LongMemEval) — **read `tests/AGENTS.md`
   first**; live LLM, costs real tokens.
+- **ContextBench / codebase-map eval** — see the dedicated section below.
 - **Tests:** `PYTHONPATH= .venv/bin/python -m pytest -q` (not bare `pytest`).
 - **Lint:** `PYTHONPATH= .venv/bin/ruff check <path> --output-format=concise`.
+
+## ContextBench / codebase-map eval (manual map-navigation arm)
+
+The benchmark that tests **paf's codebase-map as NAVIGATION over search**. Gold
+contexts are exact line-ranges required to produce a passing fix. Current phase:
+a **hand-driven live run** on one easy instance (`flask-5014`) via cli3, the map
+vs cold-start-shell A/B. Not yet the standalone `tests/run_lmem.py`-style harness
+— that comes later.
+
+**Profile / spec:** the `contextbench` profile (`src/paf/capabilities/profiles.py`)
+is the capability allowlist, and `specs/contextbench.yaml` roots it at a snapshot.
+Per the experiment, they hold BOTH arms — branch by *instruction*, not separate
+profiles/specs. **For the map arm, Shell/FileSystem/Git are COMMENTED OUT**, so
+the model MUST navigate purely by the codebase-map ladder.
+
+**How to run the map arm (with approval / user at the keyboard):**
+
+```bash
+cd /home/alice/projects/Personal/pydantic-agent-framework
+# 1. Bump CONV_EPOCH (ui/cli3.py) by 1 → fresh conversation lane (no resume)
+# 2. Run:
+set -a && . ./.env && set +a && PYTHONPATH= .venv/bin/python ui/cli3.py contextbench
+# 3. Send the flask-5014 task as the user message (NOT baked into the spec)
+# 4. Check the trace in Langfuse/ClickHouse (project cmsi71sj00003mp07im3de6ke)
+```
+
+The profile is `contextbench`; `resolve_profile_name()` reads the spec's
+`profile:` key so a one-arg `cli3.py contextbench` picks the RIGHT (Memory-less)
+profile — no hardcoded fallback needed. `CONV_EPOCH` gates conversation resets.
+
+**Why this tests NAVIGATION, and what the ladder expects:**
+
+- The locked read-model is a **sequential ladder**: `get_overview` (orient) →
+  `lookup_file` (head → detail) → `read_block(path:L1-L2)` (tight region only).
+  `search_codebase` is an **escape hatch AFTER orienting**, never a first move.
+  `_CODEMAP_GUIDANCE` (codebase_map/_capability.py) encodes this — keep it that
+  way; it's what stopped the model free-firing get_overview+search in parallel.
+- **`read_block` returns LINE NUMBERS** (tool-layer, e.g. `190: if "." in name:`)
+  for `path:L1-L2` reads, so the model can report the gold line range without the
+  raw FileSystem `read_file`. The storage seam stays raw (swappable backend).
+- **No Memory in this profile** — verified in traces (no `memory.inject` span).
+- Traces: Langfuse self-hosted (`localhost:3000`), or read ClickHouse directly
+  (skill: `hermes-local-observability` → `references/clickhouse-trace-query.md`);
+  the `paf-framework` project id is `cmsi71sj00003mp07im3de6ke`. Look for a clean
+  sequential tool ordering and NO `memory.inject` / memory tools.
+
+See the experiment journal in the vault
+(`Hermes/Projects/Personal/Portfolio-GitHub/Benchmark/ContextBench-Codebase-Map-Experiment-Journal.md`)
+for the run log, before/after token/cost numbers, and open questions.
