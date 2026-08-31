@@ -115,6 +115,23 @@ def test_lookup_file_unknown_symbol_is_none(scanned: tuple[Path, CodebaseMapTool
     assert t.lookup_file("src/a.py", symbol="Nope") is None
 
 
+def test_lookup_file_symbol_detail_emits_child_span_index(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """The single-symbol detail form must expose a drill-down span index for nested
+    symbols (class methods / inner functions), so the model can read_block(path:L1-L2)
+    without a blind window guess or a whole-class body dump."""
+    _, t = scanned
+    out = t.lookup_file("src/a.py", symbol="Widget", detail=True)
+    assert out is not None
+    # Class header carries its own coarse span.
+    assert "## Widget (Class" in out
+    # Child-span index names the method AND its line range.
+    assert "children:" in out
+    assert "make" in out
+    assert "[5-7]" in out  # make() spans def(5) + docstring(6) + return(7)
+    # The index appears before any raw body text.
+    assert out.index("children:") < (out.index("return") if "return" in out else len(out))
+
+
 def test_lookup_file_unknown_path_is_none(scanned: tuple[Path, CodebaseMapToolset]) -> None:
     _, t = scanned
     assert t.lookup_file("src/missing.py") is None

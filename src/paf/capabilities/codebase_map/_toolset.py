@@ -550,7 +550,15 @@ class CodebaseMapToolset(FunctionToolset):
         return "\n".join(block)
 
     def _symbol_block(self, s: dict) -> str:
-        """A symbol's full manifest entry including its body — the single-symbol form."""
+        """A symbol's full manifest entry including its body — the single-symbol form.
+
+        When the symbol has nested children (a class with methods, or a function with
+        an inner closure), a compact ``children:`` span index is prepended so the
+        caller gets precise drill-down pointers (``name  [L1-L2]``) to feed straight
+        into ``read_block(path:L1-L2)`` — no body dump needed to locate a method. The
+        spans come from the same manifest record, so this is a pure presentation fix:
+        no re-scan, no schema change. Children are recursively descended so the index
+        covers nested children (e.g. methods inside a method's inner class)."""
         name = s.get("name", "?")
         kind = s.get("kind", "?")
         span = self._span_str(s.get("span"))
@@ -560,9 +568,44 @@ class CodebaseMapToolset(FunctionToolset):
             block.append(f"  {s['signature']}")
         if s.get("doc"):
             block.append(f"  {s['doc']}")
+        # Drill-down span index for any nested symbols (class methods / inner funcs).
+        rings = self._child_span_rows(s.get("children"))
+        if rings:
+            block.append("  children:")
+            block.extend(f"    {row}" for row in rings)
         if body:
             block.append(body)
         return "\n".join(block)
+
+    @classmethod
+    def _child_span_rows(cls, children) -> list[str]:
+        """Flatten a symbol's ``children`` array into ``name  [L1-L2]`` span rows.
+
+        Recurses into grandchildren so a class's methods (and any nested functions
+        within them) all surface as drill-down pointers. Rows are pseudo-dotted
+        (``parent.method``) when a grandchild shares a name with a sibling (e.g.
+        ``decorator``/``register_template`` appearing inside multiple methods), so each
+        pointer stays unambiguous; otherwise the bare child name is used.
+        """
+        if not children:
+            return []
+        rows: list[str] = []
+
+        def walk(items, prefix: str) -> None:
+            for c in sorted(items, key=lambda x: (
+                (x.get("span") or {}).get("start_line") or 0,
+                x.get("name") or "",
+            )):
+                cspan = cls._span_str(c.get("span"))
+                cname = c.get("name") or "?"
+                # Disambiguate only when a name recurs at this level.
+                label = f"{prefix}{cname}"
+                if cspan:
+                    rows.append(f"{label:36}{cspan}")
+                walk(c.get("children"), f"{label}.")
+
+        walk(list(children), "")
+        return rows
 
     @staticmethod
     def _find_symbol(symbols: list[dict], name: str) -> dict | None:
