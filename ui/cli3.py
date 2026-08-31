@@ -45,7 +45,7 @@ DEFAULT_AGENT = "demo_assistant"
 # per agent) — bumping this number starts a BRAND-NEW empty lane, forgetting
 # every prior run's restored history for that agent. Keeps each benchmark run /
 # experiment arm on its own clean conversation (no resume of prior turns).
-CONV_EPOCH = 5
+CONV_EPOCH = 6
 
 # conversation_id derived per agent + epoch so each agent keeps its own history
 # lane (cli3-assistant-e1, cli3-demo_assistant-e1, cli3-contextbench-e1, ...).
