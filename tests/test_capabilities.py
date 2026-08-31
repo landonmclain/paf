@@ -31,7 +31,7 @@ from paf.capabilities.browser._toolset import (
 )
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory._window import MemoryConsolidationWindow
-from paf.capabilities.profiles import DEMO_PROFILE, PROFILES
+from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
 
@@ -347,17 +347,20 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
 
 
 def test_only_one_real_profile_for_m1() -> None:
-    """Two known profiles: assistant (clean prod) and demo (the everything sandbox).
+    """Known profiles: assistant (clean prod), demo (the everything sandbox), and
+    contextbench (the benchmark-runner arm).
 
     ``demo_assistant`` is the surface where we build out and tune the full stack
     (persistence, recall, memory, compaction) via the ``demo`` profile, which
     allowlists the same harness capabilities as the production assistant. Once the
     experiment proves out, demo's tuned values promote to the clean ``assistant``
-    spec and the sandbox resets. This is the complete, intentional set — no further
-    blank profile scaffolding.
+    spec and the sandbox resets. ``contextbench`` is the deliberate benchmark arm
+    (CodebaseMap + Shell + FileSystem + Git, NO Memory). This is the complete,
+    intentional set — no further blank profile scaffolding.
     """
-    assert set(PROFILES) == {"assistant", "demo"}
+    assert set(PROFILES) == {"assistant", "demo", "contextbench"}
     assert PROFILES["assistant"] is ASSISTANT_PROFILE
+    assert PROFILES["contextbench"] is CONTEXTBENCH_PROFILE
 
 
 def test_compaction_builds_real_strategy_objects() -> None:

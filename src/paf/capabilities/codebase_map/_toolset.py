@@ -315,7 +315,22 @@ class CodebaseMapToolset(FunctionToolset):
         except ValueError:
             return None
         ref = BlockRef(file=str(full), span=span)
-        return self._storage.read_block(ref)
+        text = self._storage.read_block(ref)
+        if text is None:
+            return None
+        # Present line numbers to the model so it can report "the line range".
+        # The storage seam returns RAW source (a swappable backend shouldn't
+        # format); numbering is a tool-layer presentation concern. Only annotate
+        # when the caller asked for a line span (`path:L1-L2`), so whole-file or
+        # byte-slice reads stay un-suffixed.
+        if span.start_line is not None and span.end_line is not None:
+            numbered = []
+            for offset, line in enumerate(text.splitlines()):
+                numbered.append(f"{span.start_line + offset}: {line}")
+            # Preserve a single trailing newline so the reply renders cleanly.
+            suffix = "\n" if text.endswith("\n") else ""
+            text = "\n".join(numbered) + suffix
+        return text
 
     def search_codebase(self, query: str, limit: int = 20) -> str:
         """Search the codebase for ``query`` and return the top hits.
