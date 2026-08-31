@@ -37,25 +37,39 @@ from rich.text import Text
 from paf.capabilities import PROFILES
 from paf.config import PROJECT_ROOT
 from paf.runtime import Session, StreamEvent
+from paf.specs import resolve_profile_name
 
 DEFAULT_AGENT = "demo_assistant"
 
-# conversation_id derived per agent so each agent keeps its own history lane
-# (cli-assistant, cli-demo_assistant, ...).
+# Conversation-lane epoch. The CLI is a single-lane resume (one conversation id
+# per agent) — bumping this number starts a BRAND-NEW empty lane, forgetting
+# every prior run's restored history for that agent. Keeps each benchmark run /
+# experiment arm on its own clean conversation (no resume of prior turns).
+CONV_EPOCH = 1
+
+# conversation_id derived per agent + epoch so each agent keeps its own history
+# lane (cli3-assistant-e1, cli3-demo_assistant-e1, cli3-contextbench-e1, ...).
 
 console = Console()
 
 
-def show_prompt_box(prompt: str) -> None:
+def show_prompt_box(prompt: str, n_lines: int = 1) -> None:
     """Render the user's typed line as a Rich `Panel` matching the assistant.
 
     Same engine and borders as the `assistant` panel, full-width, so the user
-    turn and reply read as one boxed conversation. The raw ``you > `` input
-    line is erased first so the text appears only inside the box — no dupe.
+    turn and reply read as one boxed conversation. The raw input row(s) are
+    erased first so the text appears only inside the box — no dupe. ``n_lines``
+    is the number of raw ``you >``/``...`` rows that were read for a multi-line
+    message; when it's > 1 we clear from the first input row down to the end of
+    the screen, then draw the box below the last-painted frame.
     """
-    # Erase the `you > <text>` input row, then redraw it boxed as the `you`
-    # panel. \r returns to column 0, \x1b[K clears to end of line.
-    _write("\r\x1b[K")
+    if n_lines > 1:
+        # Jump back to the first input row, then clear everything from there
+        # to the end of the screen (\x1b[0J), erasing every raw prompt row.
+        _write(f"\r\x1b[{n_lines - 1}A\x1b[0J")
+    else:
+        # Single line: \r returns to column 0, \x1b[K clears to end of line.
+        _write("\r\x1b[K")
     console.print(Panel(prompt, title="you", border_style="magenta"))
 
 
@@ -518,6 +532,8 @@ def _slash_help() -> None:
         ("/debug", "show session plumbing: ids, model, spec, store"),
         ("/quit", "exit (alias /q, exit)"),
     ]
+    console.print("[cyan]multi-line input:[/cyan] paste freely; an empty line sends the message "
+                  "(single-line messages: just hit Enter).")
     table = Table(title="slash commands (read-only)", box=None)
     table.add_column("cmd", style="cyan", no_wrap=True)
     table.add_column("description", style="default")
@@ -578,49 +594,70 @@ def main() -> int:
     agent_name = argv[0] if argv else DEFAULT_AGENT
     profile_name = argv[1] if len(argv) > 1 else None
     if profile_name is None:
-        profile_name = "demo" if agent_name == "demo_assistant" else "assistant"
+        # Default the profile from the spec's declared `profile:` key (so a
+        # one-arg `python ui/cli3.py contextbench` gets the contextbench
+        # profile, not a hardcoded fallback that silently changes capabilities).
+        # Only specs that don't declare `profile:` fall back to the legacy
+        # agent-name mapping.
+        profile_name = resolve_profile_name(agent_name) or (
+            "demo" if agent_name == "demo_assistant" else "assistant"
+        )
     profile = PROFILES.get(profile_name)
     if profile is None:
         console.print(f"unknown profile {profile_name!r}; known: {sorted(PROFILES)}")
         return 2
-    conversation_id = f"cli2-{agent_name}"
+    conversation_id = f"cli3-{agent_name}-e{CONV_EPOCH}"
 
     with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15, memory_consolidation=True) as session:
         _startup_banner(session)
-        console.print("type a message, or \"quit\" to exit")
+        console.print("type a message (blank line sends; paste multi-line freely), or \"quit\" to exit")
 
         while True:
             try:
-                # Plain line read (no fake box / prompt_toolkit fragments).
-                # The `you` Panel is printed with the typed text once submitted,
-                # so the input box appears exactly like the assistant box does.
-                prompt = input("you > ").strip()
+                # First line. A blank line here is just a newline (no message);
+                # it does NOT submit an empty prompt.
+                first = input("you > ").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print("\nbye")
                 return 0
 
-            if not prompt:
-                console.print()
-                continue
-            if not prompt.startswith("/"):
-                # Bare quit/exit words (legacy). Slash commands are handled
-                # below via `_handle_slash`.
-                if prompt.lower() in {"quit", "exit"}:
-                    console.print("bye")
+            # Slash commands are always single-line: never accumulate, never
+            # sent to the model. Returns False when the REPL should exit.
+            if first.startswith("/"):
+                if not _handle_slash(session, first):
                     return 0
-
-                # Render the user's turn as a `you` Panel, then stream the reply.
-                show_prompt_box(prompt)
+                continue
+            # Bare quit/exit words (legacy).
+            if first.lower() in {"quit", "exit"}:
+                console.print("bye")
+                return 0
+            if not first:
                 console.print()
-
-                asyncio.run(_run_streamed(session, prompt))
-                console.print()  # blank line before the next prompt
                 continue
 
-            # Slash command: handled locally, never sent to the model. Returns
-            # False when the REPL should exit (e.g. /quit).
-            if not _handle_slash(session, prompt):
-                return 0
+            # Blank-line-terminated multi-line: keep reading `... ` lines until
+            # the user pastes/drops an empty line, accumulating them into ONE
+            # prompt (joined with \n). A bare Enter right after the first line
+            # sends a single-line message, exactly as before.
+            lines = [first]
+            while True:
+                try:
+                    more = input("... ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\nbye")
+                    return 0
+                if not more:
+                    break
+                lines.append(more)
+
+            prompt = "\n".join(lines)
+            # Render the user's turn as a `you` Panel, then stream the reply.
+            show_prompt_box(prompt, n_lines=len(lines))
+            console.print()
+
+            asyncio.run(_run_streamed(session, prompt))
+            console.print()  # blank line before the next prompt
+            continue
 
     return 0
 

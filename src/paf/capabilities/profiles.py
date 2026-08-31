@@ -184,8 +184,42 @@ DEMO_PROFILE = AgentProfile(
 )
 
 
+# The ContextBench benchmark-runner profile — the codebase-map × benchmark A/B
+# harness agent.
+#
+# contextbench is the agent that runs the ContextBench-flavored manual/eventual
+# full eval of paf's navigation-first codebase-map. Per Landon (2026-08-30), the
+# "product arm" toolset is the default: BOTH codebase-map (the map ladder) AND a
+# bare shell (ls/find/rg/cat discovery) are allowlisted in one profile, and the
+# cold-start-vs-map arms are branched later by *instruction*, not by separate
+# profiles/specs (keeping the toolset the only variable in spirit, one agent kind).
+#
+# Deliberately NOT the everything-sandbox: no Web/Browser/Vault/Visual/Skills/
+# Subagents/Planning — the benchmark agent should not wander off to unrelated
+# capability surfaces. It gets the codebrowser + the shell/git/filesystem it
+# needs to inspect and patch a snapshot, rooted per-spec at the target snapshot.
+CONTEXTBENCH_PROFILE = AgentProfile(
+    name="contextbench",
+    capability_names=(
+        # Codebase-map: navigation-first browser over the indexed snapshot
+        # (get_overview/lookup_file/read_block/search_codebase/get_repo_map).
+        "CodebaseMap",
+        # Bare shell — the cold-start discovery toolset (ls/find/rg/cat/sed),
+        # rooted at the snapshot via the spec `shell:` block. Deny-list stays ON
+        # (no `allowed_commands` in the spec) so destructive commands are blocked.
+        "Shell",
+        # Scoped filesystem access for reading/editing files under the snapshot.
+        "FileSystem",
+        # Safe git inspection (status/changed/diff) — snapshots are real git
+        # worktrees at a base_commit, so git reads are useful for orientation.
+        "Git",
+    ),
+)
+
+
 # Name lookup so a spec/CLI can reference a profile by a string that resolves
 # to the allowlist. Only used by spec-driven loaders; keep small.
 PROFILES: dict[str, AgentProfile] = {
-    profile.name: profile for profile in (ASSISTANT_PROFILE, DEMO_PROFILE)
+    profile.name: profile
+    for profile in (ASSISTANT_PROFILE, DEMO_PROFILE, CONTEXTBENCH_PROFILE)
 }

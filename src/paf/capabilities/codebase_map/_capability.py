@@ -39,13 +39,21 @@ from ._toolset import CodebaseMapToolset
 _CODEMAP_GUIDANCE = (
     "Code-related questions. When the user is asking about source code -- where "
     "something is defined or referenced, what a symbol does, how pieces fit "
-    "together -- start with the codebase tools, not the raw file tools: use "
-    "`get_overview` to orient, `search_codebase` to search, and `lookup_file` / "
-    "`read_block` to read. These are scoped to the indexed repo and already skip "
-    "build artifacts and ignored directories like `data/` and `.agent-codeindex/`, "
-    "so they return far less noise and fewer tokens than a raw `search_files` over "
-    "the whole tree (which sweeps those ignored dirs). Keep the raw FileSystem "
-    "tools for editing files, non-code files, and anything outside the code index."
+    "together -- start with the codebase tools, not the raw file tools. Work in order:\n"
+    "1. Orient first -- `get_overview` to see the tree before deciding where to look.\n"
+    "2. Look before you read -- `lookup_file(path)` for a cheap head (symbol list), "
+    "then `lookup_file(path, symbol=X, detail=True)` for one symbol's body. Let one "
+    "call's result decide the next; don't issue dependent calls together.\n"
+    "3. Read the region -- `read_block(path:L1-L2)` only for the raw source of the "
+    "exact span you need; prefer the tightest region, not the whole class or file.\n"
+    "(Escape hatch) After orienting, you may `search_codebase` with a known symbol or "
+    "word to jump straight to a location, then `lookup_file`/`read_block` the result. "
+    "Don't search before you've seen the overview.\n"
+    "These tools are scoped to the indexed repo and already skip build artifacts and "
+    "ignored directories like `data/` and `.agent-codeindex/`, so they return far less "
+    "noise and fewer tokens than a raw `search_files` over the whole tree (which "
+    "sweeps those ignored dirs). Keep the raw FileSystem tools for editing files, "
+    "non-code files, and anything outside the code index."
 )
 
 

@@ -319,6 +319,35 @@ def resolve_memory_config(
     return {"consolidate_every": every}
 
 
+def resolve_profile_name(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> str | None:
+    """Resolve a spec's declared ``profile:`` key to its profile name.
+
+    The CLI entry points use this to choose the default profile for an agent
+    kind when the user doesn't pass one explicitly: a spec declares the profile
+    it belongs to (``profile: contextbench`` → ``PROFILES["contextbench"]``), so
+    capability selection stays spec-declared and never depends on a hardcoded
+    agent-name mapping in each `ui/*.py`.
+
+    This mirrors ``resolve_memory_config`` — a best-effort raw-YAML read of one
+    top-level key. pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so
+    the value is read off disk directly. Returns ``None`` when the spec is
+    absent, unreadable, or declares no ``profile:`` key — callers fall back to
+    their own default (specs without a declaration keep working today's way).
+    """
+    try:
+        with get_spec_path(agent_name, spec_directory).open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get("profile")
+    return value if isinstance(value, str) and value else None
+
+
 def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict | None:
     """Read one per-capability root block from a spec into a config dict.
 
