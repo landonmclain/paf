@@ -19,32 +19,33 @@ DEFAULT_SPEC_DIRECTORY = SPECS_DIR
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter determinism pin (mirrors tests/framework.py `_openrouter_model_settings`).
-# Prod shares the benchmark's reproducibility contract: temp 0, top_p 1.0, a fixed
-# sampler seed, and a pinned provider chain with hard quantization filter. Without
-# the pin, `:nitro`-style throughput routing silently bounces across upstream
-# providers that serve the same checkpoint at different quantizations (fp8 vs fp4)
-# -> real output nondeterminism at temp 0. Defaults are the DeepSeek subject chain;
-# all env-overridable (empty string disables the pin). See vault
-# OpenRouter-Provider-Quantization-Nondeterminism.md.
+# OpenRouter determinism pin — fallback defaults for specs that don't declare
+# their own `model_settings.extra_body.provider`. Specs are the source of truth;
+# this is used only when a spec's `model_settings` block omits routing. The
+# contract: temp 0, top_p 1.0, a fixed sampler seed, and a pinned provider chain
+# with hard quantization filter. Without the pin, `:nitro`-style throughput
+# routing silently bounces across upstream providers that serve the same
+# checkpoint at different quantizations (fp8 vs fp4) -> real nondeterminism at
+# temp 0. Defaults are the DeepSeek subject chain; all env-overridable (empty
+# string disables the pin). See vault OpenRouter-Provider-Quantization-Nondeterminism.md.
 # ---------------------------------------------------------------------------
 SUBJECT_PROVIDER_ORDER = [
     p for p in os.environ.get(
-        "LME_SUBJECT_PROVIDER_ORDER", "deepinfra,parasail,coreweave"
+        "SUBJECT_PROVIDER_ORDER", "deepinfra,parasail,coreweave"
     ).split(",") if p
 ]
 SUBJECT_PROVIDER_QUANTIZATIONS = [
     q for q in os.environ.get(
-        "LME_SUBJECT_PROVIDER_QUANTIZATIONS", "fp8"
+        "SUBJECT_PROVIDER_QUANTIZATIONS", "fp8"
     ).split(",") if q
 ]
-LME_SAMPLER_SEED = int(os.environ.get("LME_SAMPLER_SEED", "20260815"))
+SAMPLER_SEED = int(os.environ.get("SAMPLER_SEED", "20260815"))
 
 
 def _openrouter_model_settings(
     provider_order: list[str] | None = SUBJECT_PROVIDER_ORDER,
     quantizations: list[str] | None = SUBJECT_PROVIDER_QUANTIZATIONS,
-    seed: int | None = LME_SAMPLER_SEED,
+    seed: int | None = SAMPLER_SEED,
 ) -> ModelSettings:
     """Build `model_settings` that pin OpenRouter routing + sampler determinism.
 
@@ -52,8 +53,8 @@ def _openrouter_model_settings(
     fixed seed) with the OpenRouter `provider` object passed via `extra_body`.
     When `provider_order` is empty/None, no routing pin is applied (plain request).
     pydantic-ai's `openai_chat` passes `extra_body` verbatim to the HTTP body.
-    `Agent.from_spec` shallow-merges these over the spec YAML's `model_settings`,
-    so the YAML's `openrouter_cache_*` keys survive alongside `extra_body`.
+    This is a FALLBACK for specs that don't declare their own `model_settings.extra_body.provider`;
+    a spec that declares one is the source of truth and wins (see `build_agent`).
     """
     out: dict = {"temperature": 0}
     out["top_p"] = 1.0
@@ -504,11 +505,15 @@ def build_agent(
     shell_config = _spec_shell_config(spec_path)
     git_config = _spec_git_config(spec_path)
     codebase_map_config = _spec_codebase_map_config(spec_path)
-    # Default: apply the OpenRouter provider/quantization pin (temp 0,
-    # top_p 1.0, seed, pinned provider chain) unless the caller supplies their own
-    # `model_settings` override. Agent.from_spec shallow-merges this over the spec's
-    # YAML model_settings, so the YAML's openrouter_cache_* keys are preserved.
-    if "model_settings" not in overrides:
+    # The spec is the source of truth for `model_settings`: if the spec YAML
+    # declares its own `model_settings` (spec.model_settings), it is passed
+    # through untouched and the caller's/injected pin is never applied over it.
+    # We only inject the OpenRouter determinism pin (temp 0, top_p 1.0, seed,
+    # pinned provider chain) when neither the spec nor the caller supplies a
+    # `model_settings` override. Agent.from_spec still shallow-merges a caller
+    # override over the spec's YAML settings (caller wins), but the *default*
+    # pin no longer clobbers a spec-declared `model_settings`.
+    if spec.model_settings is None and "model_settings" not in overrides:
         overrides.setdefault("model_settings", _openrouter_model_settings())
     return Agent.from_spec(
         spec,

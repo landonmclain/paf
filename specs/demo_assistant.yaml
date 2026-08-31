@@ -61,6 +61,13 @@ model_settings:
   openrouter_cache_messages: true
   openrouter_cache_tool_definitions: true
 
+  # OpenRouter provider routing pin — same chain as the assistant spec. See
+  # specs/assistant.yaml for the full comments.
+  extra_body:
+    provider:
+      order: [deepinfra, parasail, coreweave]
+      quantizations: [fp8]
+
 # ---------------------------------------------------------------------------
 # Web trust boundary (option B — lives in the spec, not in Python). Read by
 # `build_agent` -> `_spec_web_config` -> the `fetch_web_page` extract allowlist.
