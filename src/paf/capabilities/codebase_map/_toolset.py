@@ -50,6 +50,39 @@ def _parent_dir(path: str) -> str:
     return posixpath.dirname(path)
 
 
+def _dir_importance(
+    tree: list[dict], imp: dict[str, float]
+) -> dict[str, tuple[float, float]]:
+    """Map each directory path to (mean, max) importance of its DESCENDANT files.
+
+    A directory's importance is the mean and max of `imp` taken over every file
+    rooted under it (through nested subdirs), e.g. `capabilities/` covers all 62
+    files, including `capabilities/codebase_map/*`. This is the module-level
+    complement to per-file `imp`: it says how importance-DENSE a folder is (mean,
+    corrected for file count -- so a small folder with a couple of hot files ranks
+    fairly) and which single file dominates it (max).
+
+    Only directories that appear as `type == "dir"` entries get a key; a dir with
+    no scored files is omitted so the renderer shows no annotation for it.
+    """
+    dirs = {e["path"] for e in tree if e.get("type") == "dir"}
+    acc: dict[str, list[float]] = {}
+    for path, val in imp.items():
+        if "/" not in path:
+            continue
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            d = "/".join(parts[:i])
+            if d in dirs:
+                acc.setdefault(d, []).append(val)
+    out: dict[str, tuple[float, float]] = {}
+    for d, vals in acc.items():
+        if vals:
+            hi = max(vals)
+            out[d] = (sum(vals) / len(vals), hi)
+    return out
+
+
 class CodebaseMapToolset(FunctionToolset):
     """Navigation-first five-tool codebase browser rooted at a scan root.
 
@@ -106,30 +139,79 @@ class CodebaseMapToolset(FunctionToolset):
         ``max_depth`` caps how deep the tree opens (default: open fully; pass e.g.
         ``max_depth=2`` on a big repo to see just the top directories + their files,
         then drill deeper with ``lookup_file``).
+
+        When a call graph has been persisted at scan time, each file is annotated
+        with a dependency-importance score (``imp=N``) computed from the RESOLVED
+        graph edges — NOT raw occurrence counts. ``imp`` = a file's cross-repo
+        coupling: every incoming dependence edge and every outgoing edge adds
+        weight (a proven ``kind: \"call\"`` edge = 3.0, a reference/type edge = 1.0).
+        This captures both kinds of importance: **hubs** (many things depend on the
+        file — high in-degree, e.g. ``config.py``) and **orchestrators** (the file
+        reaches into much of the codebase — high out-degree, e.g. ``runtime.py``).
+        The count is derived from graph edges carrying RESOLVED symbol names, so it
+        is immune to the word-collision inflation that a raw name-occurrence count
+        suffers (the latter is NOT used here).
         """
         overview = load_overview(self._storage, self._scan_root)
         if overview is None:
             # Not indexed yet — derive the tree on demand from the same walker.
             overview = build_overview(self._scan_root)
         tree = overview.get("tree", [])
+        imp = self._importance_by_path()
+        dir_imp = _dir_importance(tree, imp)
         head = (
             f"Overview of {overview.get('scan_root', self._scan_root)}\n"
             f"{sum(1 for e in tree if e.get('type') == 'dir')} dirs, "
             f"{sum(1 for e in tree if e.get('type') == 'file')} files\n"
         )
-        rendered = self._render_tree(tree, max_depth=max_depth)
+        head += "file `imp=N` = dependency importance (in+out, call=3, ref=1); "
+        head += "dir line: `imp: mean=N max=M` over its files\n"
+        rendered = self._render_tree(tree, max_depth=max_depth, imp=imp, dir_imp=dir_imp)
         return head + rendered if rendered else head + "(empty)"
 
+    def _importance_by_path(self) -> dict[str, float]:
+        """Map repo-relative path → dependency-importance score from the call graph.
+
+        ``imp(file) = sum over every graph edge touching it of (3.0 if the edge is a
+        proven call else 1.0)`` — over BOTH in-edges (things that depend on it) and
+        out-edges (things it reaches into). Resolved graph edges only, so this is
+        immune to the generic-word-collision inflation that a name-occurrence count
+        suffers. Returns ``{}`` when no call_graph.json has been persisted.
+        """
+        out: dict[str, float] = {}
+        payload = self._storage.read(ArtifactKind.GRAPH, self._scan_root)
+        edges = payload.get("edges", []) if isinstance(payload, dict) else []
+        for e in edges:
+            if not isinstance(e, dict):
+                continue
+            w = 3.0 if e.get("kind") == "call" else 1.0
+            for side in ("source", "target"):
+                p = e.get(side)
+                if isinstance(p, str) and p:
+                    out[p] = out.get(p, 0.0) + w
+        return out
+
     @staticmethod
-    def _render_tree(tree: list[dict], max_depth: int | None = None) -> str:
+    def _render_tree(
+        tree: list[dict],
+        max_depth: int | None = None,
+        imp: dict[str, float] | None = None,
+        dir_imp: dict[str, tuple[float, float]] | None = None,
+    ) -> str:
         """Render the flat ``(depth, path)``-sorted entry list as a real nested tree.
 
         Children are emitted indented under their parent directory (dirs before
         files, alphabetical within each), instead of the prior flat "all dirs then
         all files" dump with fully-requalified paths repeated on every line.
+
+        Optional ``imp`` ({path: dependency-importance}) annotates each file line
+        with ``(imp=N)``; optional ``dir_imp`` ({dir: (mean, max)}) annotates each
+        dir line with ``imp: mean=M max=N``. Degrades to the plain tree when empty.
         """
         if not tree:
             return ""
+        imp = imp or {}
+        dir_imp = dir_imp or {}
         dirs: dict[str, list[dict]] = {}  # dir path -> its child entries (files + subdirs)
         for e in tree:
             path = e.get("path", "")
@@ -151,10 +233,16 @@ class CodebaseMapToolset(FunctionToolset):
                     continue
                 name = path.rsplit("/", 1)[-1] if "/" in path else path
                 if e.get("type") == "dir":
-                    lines.append(f"{prefix}{name}/  ({e.get('file_count', 0)} files)")
+                    di = dir_imp.get(path)
+                    d_suffix = (
+                        f"  imp: mean={di[0]:.1f} max={di[1]:.0f}" if di else ""
+                    )
+                    lines.append(f"{prefix}{name}/  ({e.get('file_count', 0)} files){d_suffix}")
                     _open_dir(path, prefix + "  ")
                 else:
-                    lines.append(f"{prefix}{name}  ({e.get('line_count', 0)} lines)")
+                    r = imp.get(path)
+                    suffix = f"  imp={r:g}" if r is not None and r > 0 else ""
+                    lines.append(f"{prefix}{name}  ({e.get('line_count', 0)} lines){suffix}")
 
         # The root's children are the top-level entries (depth 1); start there.
         _open_dir("", "")

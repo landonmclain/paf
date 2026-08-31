@@ -88,3 +88,47 @@ def test_scan_and_write_writes_overview_artifact(tmp_path: Path) -> None:
     assert by["src"]["type"] == "dir"
     assert by["src"]["file_count"] == 2
     assert by["src/a.py"]["type"] == "file"
+
+
+def test_dir_importance_aggregates_descendant_files() -> None:
+    """_dir_importance maps each dir to the (mean, max) imp across files rooted
+    under it — through nested subdirs — mirroring the module-level stat."""
+    from paf.capabilities.codebase_map._toolset import _dir_importance
+
+    tree = [
+        {"path": "capabilities", "type": "dir"},
+        {"path": "capabilities/memory", "type": "dir"},
+        {"path": "capabilities/_turns.py", "type": "file"},
+        {"path": "capabilities/memory/_capability.py", "type": "file"},
+        {"path": "config.py", "type": "file"},
+    ]
+    imp = {
+        "capabilities/_turns.py": 10.0,
+        "capabilities/memory/_capability.py": 28.0,
+        "config.py": 21.0,  # top-level file: no dir shares its imp
+    }
+    di = _dir_importance(tree, imp)
+    # capabilities/ covers BOTH descendants (through nesting)
+    assert di["capabilities"] == (19.0, 28.0)  # mean((10,28)), max=28
+    assert di["capabilities/memory"] == (28.0, 28.0)  # single file
+    assert "config.py" not in di  # only dirs get keys
+
+
+def test_render_tree_annotates_dir_and_file_imp() -> None:
+    """_render_tree appends per-file imp=N and per-dir mean/max annotations."""
+    from paf.capabilities.codebase_map._toolset import CodebaseMapToolset
+
+    tree = [
+        {"path": "capabilities", "type": "dir", "depth": 1, "file_count": 1},
+        {"path": "capabilities/_turns.py", "type": "file", "depth": 2, "line_count": 32},
+        {"path": "config.py", "type": "file", "depth": 1, "line_count": 117},
+    ]
+    imp = {"capabilities/_turns.py": 13.0, "config.py": 21.0}
+    dir_imp = {"capabilities": (13.0, 13.0)}
+    out = CodebaseMapToolset._render_tree(tree, imp=imp, dir_imp=dir_imp)
+    assert "capabilities/  (1 files)  imp: mean=13.0 max=13" in out
+    assert "  _turns.py  (32 lines)  imp=13" in out
+    assert "config.py  (117 lines)  imp=21" in out
+    # degrades to plain tree when no annotations provided
+    plain = CodebaseMapToolset._render_tree(tree)
+    assert "imp" not in plain
