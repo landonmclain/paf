@@ -203,21 +203,22 @@ CONTEXTBENCH_PROFILE = AgentProfile(
     capability_names=(
         # Codebase-map: navigation-first browser over the indexed snapshot
         # (get_overview/lookup_file/read_block/search_codebase/get_repo_map).
-        "CodebaseMap",
-        # --- map-arm test: the other surfaces are COMMENTED OUT so the model
-        #     MUST navigate purely by the codebase-map ladder. No shell, no raw
-        #     filesystem, no git — if it can't find the fix via the map alone, we
-        #     see that failure instead of a quiet fallback to grep/cat.
-        #     (The cold-start shell arm re-enables "Shell" when we want it.)
-        #
+        # COMMENTED OUT for the current cold-start-no-map test arm — the model
+        # gets NO map ladder and must navigate by bare discovery only.
+        # "CodebaseMap",
+        # --- no-map arm: the raw discovery toolset is ENABLED so the model
+        #     navigates the snapshot with ls/find/rg/cat (Shell), raw file
+        #     reads/edits (FileSystem), and safe git orientation (Git). No
+        #     codebase-map tools anywhere — we compare this cold start against
+        #     the map arms (e2-e6) on the same Flask/Blueprint question.
         # Bare shell — the cold-start discovery toolset (ls/find/rg/cat/sed),
         # rooted at the snapshot via the spec `shell:` block. Deny-list stays ON.
-        # "Shell",
+        "Shell",
         # Scoped filesystem access for reading/editing files under the snapshot.
-        # "FileSystem",
+        "FileSystem",
         # Safe git inspection (status/changed/diff) — snapshots are real git
         # worktrees at a base_commit, so git reads are useful for orientation.
-        # "Git",
+        "Git",
     ),
 )
 
