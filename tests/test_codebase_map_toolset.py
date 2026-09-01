@@ -78,15 +78,116 @@ def test_get_overview_shows_nested_tree(scanned: tuple[Path, CodebaseMapToolset]
     assert "top.py" in out
 
 
-def test_get_overview_max_depth_folds_subdirs(scanned: tuple[Path, CodebaseMapToolset]) -> None:
-    """max_depth caps the open tree: subdirs below the cap show their header with
-    contents folded (not expanded), keeping the overview bounded on big repos."""
+def test_get_overview_depth_folds_subdirs(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """depth caps the open tree: subdirs below the cap show their header with
+    contents folded (not expanded), keeping the overview bounded on big repos.
+    (``depth`` is the renamed ``max_depth``, anchored at the repo root by default.)"""
     _, t = scanned
-    out = t.get_overview(max_depth=1)
+    out = t.get_overview(depth=1)
     # depth-1 dirs show but their children (depth 2) are folded away.
     assert "src/  (2 files)" in out
     assert "  a.py  (" not in out  # depth-2 file under src/ is folded
     assert "top.py" in out  # depth-1 file still visible
+
+
+def test_get_overview_path_scopes_subtree(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """path anchors the overview to one directory; siblings are not re-rendered."""
+    root, t = scanned
+    _seed(root, "src/a.py", "# a\n")  # ensure src has depth-2 files
+    # scope to src/: only src + its children, never top.py (a sibling at the root).
+    out = t.get_overview(path="src")
+    assert "anchored at: src/" in out
+    assert "src/  (2 files)" in out
+    assert "  a.py  (" in out
+    assert "  b.py  (" in out
+    assert "top.py" not in out  # sibling outside the subtree is absent
+
+
+def test_get_overview_path_depth_relative(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """depth under a path is relative to that path (not the repo root)."""
+    root, _ = scanned
+    _seed(root, "src/nested/deep.py", "def d():\n    return 1\n")
+    from paf.capabilities.codebase_map._scan import scan_and_write
+    store = FlatFileStorage()
+    scan_and_write(root, store)
+    t = CodebaseMapToolset(scan_root=root, storage=store)
+    # depth=1 anchored at src -> src + its direct children, nested/ folded.
+    out = t.get_overview(path="src", depth=1)
+    assert "nested/  (1 files)" in out
+    assert "deep.py" not in out  # depth-2 (relative) file folded
+    # depth=0 -> just the anchor dir header, no children.
+    out0 = t.get_overview(path="src", depth=0)
+    assert "src/  (3 files)" in out0
+    assert "  a.py  (" not in out0
+
+
+def test_get_overview_collapses_noise_dirs(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """Known-noise dirs (tests/docs/etc.) fold to one line; real code dirs expand."""
+    root, t = scanned
+    _seed(root, "tests/test_a.py", "# ta\n")
+    _seed(root, "tests/sub/test_b.py", "# tb\n")
+    _seed(root, "docs/index.md", "# docs\n")
+    # Re-scan so the fixture's overview.json picks up the new dirs.
+    from paf.capabilities.codebase_map._scan import scan_and_write
+    store = FlatFileStorage()
+    scan_and_write(root, store)
+    t = CodebaseMapToolset(scan_root=root, storage=store)
+    out = t.get_overview()
+    # tests/ and docs/ collapse to a single summary line (children hidden).
+    assert "tests/  (2 files)  [folded" in out
+    assert "test_a.py" not in out
+    assert "docs/  (1 files)  [folded" in out
+    assert "index.md" not in out
+    # src/ (a real code dir) stays expanded.
+    assert "src/  (2 files)" in out
+    assert "  a.py  (" in out
+
+
+def test_get_overview_anchor_matching_collapse_still_expands(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """The anchored dir expands even when it matches a collapse pattern."""
+    root, t = scanned
+    _seed(root, "tests/test_a.py", "# ta\n")
+    from paf.capabilities.codebase_map._scan import scan_and_write
+    store = FlatFileStorage()
+    scan_and_write(root, store)
+    t = CodebaseMapToolset(scan_root=root, storage=store)
+    out = t.get_overview(path="tests")
+    assert "[folded —" not in out  # anchor itself is never folded
+    assert "test_a.py" in out  # its children are revealed
+
+
+def test_get_overview_missing_path_reports(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """An unknown anchor path reports the miss instead of crashing."""
+    _, t = scanned
+    out = t.get_overview(path="does_not_exist")
+    assert "No directory named" in out
+
+
+def test_get_overview_deep_anchor_preserves_path(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """A deeply-nested anchor keeps its ancestor dirs so the tree can climb to it."""
+    root, _ = scanned
+    _seed(root, "pkg/deep/leaf.py", "def leaf():\n    return 1\n")
+    from paf.capabilities.codebase_map._scan import scan_and_write
+    store = FlatFileStorage()
+    scan_and_write(root, store)
+    t = CodebaseMapToolset(scan_root=root, storage=store)
+    # depth=1 at pkg/deep -> the anchor + its direct child (leaf.py).
+    out = t.get_overview(path="pkg/deep", depth=1)
+    assert "deep/  (1 files)" in out
+    assert "leaf.py" in out
+    # Ancestors pkg/ are present as a path (not folded away), so recursion reaches it.
+    assert "pkg/  " in out
+    # depth=0 -> anchor header only, leaf.py folded.
+    out0 = t.get_overview(path="pkg/deep", depth=0)
+    assert "deep/  (1 files)" in out0
+    assert "leaf.py" not in out0
+
+
+def test_get_overview_negative_depth_raises(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+    """Negative depth is rejected."""
+    _, t = scanned
+    with pytest.raises(ValueError):
+        t.get_overview(depth=-1)
 
 
 # ------------------------------------------------------------------ lookup_file

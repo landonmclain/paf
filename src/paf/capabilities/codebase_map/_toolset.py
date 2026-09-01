@@ -41,6 +41,34 @@ _MAX_SEARCH_HEAD = 200          # chars of module-doc head shown per search hit 
 _MAX_SNIPPET_BYTES = 65536      # read_block hard bound (matches _block limit_bytes)
 _MAX_LOOKUP_SYMBOLS = 120       # cap symbol name lists so a big head stays bounded
 
+# Render-time collapse: dirs whose *name* matches one of these are folded to a
+# single summary line in get_overview (they remain fully indexed -- searchable,
+# lookup_file-able, and drill-able via get_overview(path=<dir>)). This is a
+# DISPLAY decision only; it does NOT exclude anything from the index. Index-time
+# exclusion is ScanScope's separate concern (gitignore + _OWNED_SKIP_DIRS).
+# Patterns match the last path segment (basename), at any depth. Sourced from
+# surveying 12 corpus repos (tests/docs/changelog/CI/vendored/assets dominate
+# the tree; the actual code lives in a handful of other dirs like src|lib|pkg).
+_COLLAPSE_DIR_PATTERNS = frozenset({
+    # tests
+    "test", "tests", "testing", "js_tests", "unit_tests", "integration_tests",
+    "e2e", "spec", "specs", "__tests__", "fixtures", "bench", "benchmarks",
+    "asv_bench",
+    # docs / examples / meta
+    "docs", "doc", "documentation", "guide", "guides", "tutorial", "tutorials",
+    "examples", "model_cards", "notebooks", "plot_types", "artwork", "logos",
+    "changelog", "changelogs", "news", "releasenotes", "release", "changes",
+    "contrib", "hacking",
+    # CI / dotfiles / tooling
+    ".github", ".gitlab", ".circleci", ".travis", ".gitlab-ci",
+    ".azure-pipelines", ".binder", ".devcontainer", ".vscode", ".idea", ".tx",
+    ".pyinstaller", "kokoro", "ci", ".ci", "build_tools", "maint_tools",
+    "docker",
+    # vendored / generated / assets
+    "vendor", "third_party", "extern", "cextern", "licenses", "dist",
+    "distribution", "images",
+})
+
 
 def _parent_dir(path: str) -> str:
     """Parent dir (``""`` at the root) of a repo-relative POSIX path.
@@ -126,19 +154,24 @@ class CodebaseMapToolset(FunctionToolset):
 
     # -- tools ----------------------------------------------------------------
 
-    def get_overview(self, max_depth: int | None = None) -> str:
+    def get_overview(self, path: str = "", depth: int | None = None) -> str:
         """Orient to the top of the codebase: return the navigation tree.
 
         Use this FIRST, before any other tool, to see how the codebase is laid out
         (folders → files with counts). This is the starting point / orientation —
         a tree you climb down, not a search. Once you know where you are, drill with
-        ``lookup_file``.
+        ``lookup_file`` (or re-anchor with ``path`` to see one folder deeper).
 
         Returns a **nested tree** (children indented under their parent directory),
         repo-relative: dirs show ``file_count``, files show ``line_count``.
-        ``max_depth`` caps how deep the tree opens (default: open fully; pass e.g.
-        ``max_depth=2`` on a big repo to see just the top directories + their files,
-        then drill deeper with ``lookup_file``).
+        ``depth`` caps how many levels **below ``path``** stay open (default: open
+        fully). ``path`` anchors the tree at a repo-relative directory (default
+        ``""`` = the repo root). Prefer ``path`` on a big repo to scope to one
+        folder instead of re-rendering the whole tree.
+
+        Known-noise folders (tests, docs, changelogs, CI, vendored, assets — see
+        ``_COLLAPSE_DIR_PATTERNS``) are folded to a single summary line by default;
+        they stay indexed and can be opened with ``get_overview(path=<dir>)``.
 
         When a call graph has been persisted at scan time, each file is annotated
         with a dependency-importance score (``imp=N``) computed from the RESOLVED
@@ -159,14 +192,50 @@ class CodebaseMapToolset(FunctionToolset):
         tree = overview.get("tree", [])
         imp = self._importance_by_path()
         dir_imp = _dir_importance(tree, imp)
+
+        anchor = (path or "").strip().strip("/")
+        if depth is not None and depth < 0:
+            raise ValueError("depth must be >= 0 (or None to open fully)")
+        # Scope to the anchored subtree: drop entries not under `path`, and rebase
+        # the depth cap relative to the anchor so `depth` measures levels below it.
+        if anchor == "":
+            anchored = tree
+            base = 0
+        else:
+            # Keep the anchor dir, its ANCESTORS (so the render recursion can
+            # climb down to it), and every descendant under it.
+            prefix = anchor + "/"
+            anchor_depth = next(
+                (e["depth"] for e in tree if e.get("path") == anchor),
+                None,
+            )
+            if anchor_depth is None:
+                return f"No directory named {anchor!r} under {overview.get('scan_root', self._scan_root)}."
+            ancestors = {
+                "/".join(anchor.split("/")[:i]) for i in range(1, len(anchor.split("/")))
+            }
+            anchored = [
+                e for e in tree
+                if e.get("path") == anchor
+                or e.get("path") in ancestors
+                or e.get("path", "").startswith(prefix)
+                or e.get("path", "") == ""
+            ]
+            base = anchor_depth
+        # depth is relative to `path`: absolute cap = base + depth.
+        cap = None if depth is None else base + depth
+
         head = (
             f"Overview of {overview.get('scan_root', self._scan_root)}\n"
             f"{sum(1 for e in tree if e.get('type') == 'dir')} dirs, "
             f"{sum(1 for e in tree if e.get('type') == 'file')} files\n"
         )
+        if anchor:
+            head += f"anchored at: {anchor}/\n"
         head += "file `imp=N` = dependency importance (in+out, call=3, ref=1); "
-        head += "dir line: `imp: mean=N max=M` over its files\n"
-        rendered = self._render_tree(tree, max_depth=max_depth, imp=imp, dir_imp=dir_imp)
+        head += "dir line: `imp: mean=N max=M` over its files; "
+        head += "`[folded]` = noise dir collapsed (use get_overview(path=<dir>) to open)\n"
+        rendered = self._render_tree(anchored, depth=cap, imp=imp, dir_imp=dir_imp, anchor=anchor)
         return head + rendered if rendered else head + "(empty)"
 
     def _importance_by_path(self) -> dict[str, float]:
@@ -194,15 +263,22 @@ class CodebaseMapToolset(FunctionToolset):
     @staticmethod
     def _render_tree(
         tree: list[dict],
-        max_depth: int | None = None,
+        depth: int | None = None,
         imp: dict[str, float] | None = None,
         dir_imp: dict[str, tuple[float, float]] | None = None,
+        anchor: str = "",
     ) -> str:
         """Render the flat ``(depth, path)``-sorted entry list as a real nested tree.
 
         Children are emitted indented under their parent directory (dirs before
         files, alphabetical within each), instead of the prior flat "all dirs then
         all files" dump with fully-requalified paths repeated on every line.
+
+        ``depth`` caps the absolute render depth (None = open fully); entries whose
+        ``depth`` exceeds it are folded away (a later ``get_overview`` reveals them).
+        Directories whose basename matches ``_COLLAPSE_DIR_PATTERNS`` — and are not
+        the ``anchor`` itself — are collapsed to one summary line (they stay
+        indexed; open with ``get_overview(path=<dir>)``).
 
         Optional ``imp`` ({path: dependency-importance}) annotates each file line
         with ``(imp=N)``; optional ``dir_imp`` ({dir: (mean, max)}) annotates each
@@ -219,6 +295,11 @@ class CodebaseMapToolset(FunctionToolset):
             dirs.setdefault(parent, []).append(e)
         lines: list[str] = []
 
+        def _folded_dir_line(e: dict, prefix: str) -> str:
+            name = e.get("path", "").rsplit("/", 1)[-1]
+            total = e.get("file_count", 0)
+            return f"{prefix}{name}/  ({total} files)  [folded — get_overview(path={e.get('path', '')})]"
+
         def _open_dir(dir_path: str, prefix: str) -> None:
             children = sorted(
                 dirs.get(dir_path, []),
@@ -226,13 +307,18 @@ class CodebaseMapToolset(FunctionToolset):
             )
             for e in children:
                 path = e.get("path", "")
-                depth = e.get("depth", 0)
-                if max_depth is not None and depth > max_depth:
-                    # Drill only into dirs above the cap; files deeper than max_depth
-                    # are folded away (a later `get_overview`/`lookup_file` reveals them).
+                edepth = e.get("depth", 0)
+                if depth is not None and edepth > depth:
+                    # Drill only into entries above the cap; deeper entries are
+                    # folded away (a later `get_overview`/`lookup_file` reveals them).
                     continue
                 name = path.rsplit("/", 1)[-1] if "/" in path else path
                 if e.get("type") == "dir":
+                    # Collapse known-noise dirs to a single line unless this dir IS
+                    # the anchor (the anchor is always expanded so you can drill in).
+                    if path != anchor and name in _COLLAPSE_DIR_PATTERNS:
+                        lines.append(_folded_dir_line(e, prefix))
+                        continue
                     di = dir_imp.get(path)
                     d_suffix = (
                         f"  imp: mean={di[0]:.1f} max={di[1]:.0f}" if di else ""

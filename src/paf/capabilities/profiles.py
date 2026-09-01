@@ -201,23 +201,14 @@ DEMO_PROFILE = AgentProfile(
 CONTEXTBENCH_PROFILE = AgentProfile(
     name="contextbench",
     capability_names=(
-        # Codebase-map: navigation-first browser over the indexed snapshot
-        # (get_overview/lookup_file/read_block/search_codebase/get_repo_map).
-        # COMMENTED OUT for the current cold-start-no-map test arm — the model
-        # gets NO map ladder and must navigate by bare discovery only.
+        # No-map control on the SAME ansible `10a41eff` question (e14): replicate
+        # e10-vs-e12 on the big repo. The model navigates the ~150MB ansible tree
+        # with bare discovery only (Shell/FileSystem/Git). The map arm (e13) did it
+        # in 13 calls / 0 searches / 3.4M chars; the question is whether bare grep +
+        # whole-file reads stay tractable on a repo this size, or spiral.
         # "CodebaseMap",
-        # --- no-map arm: the raw discovery toolset is ENABLED so the model
-        #     navigates the snapshot with ls/find/rg/cat (Shell), raw file
-        #     reads/edits (FileSystem), and safe git orientation (Git). No
-        #     codebase-map tools anywhere — we compare this cold start against
-        #     the map arms (e2-e6) on the same Flask/Blueprint question.
-        # Bare shell — the cold-start discovery toolset (ls/find/rg/cat/sed),
-        # rooted at the snapshot via the spec `shell:` block. Deny-list stays ON.
         "Shell",
-        # Scoped filesystem access for reading/editing files under the snapshot.
         "FileSystem",
-        # Safe git inspection (status/changed/diff) — snapshots are real git
-        # worktrees at a base_commit, so git reads are useful for orientation.
         "Git",
     ),
 )

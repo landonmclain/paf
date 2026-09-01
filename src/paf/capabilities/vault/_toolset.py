@@ -176,13 +176,13 @@ class VaultToolset(FunctionToolset):
 
     # -- tools ---------------------------------------------------------------
 
-    def vault_overview(self, max_depth: int | None = None) -> str:
+    def vault_overview(self, depth: int | None = None) -> str:
         """Orient to the top of the vault: return the folder/note tree.
 
         Use this FIRST to see how the vault is laid out (folders → notes), like
         reading a table of contents. This is the starting point — a tree you climb
-        down, not a search. ``max_depth`` caps how deep the tree opens (default:
-        open fully; pass e.g. ``max_depth=2`` on a big vault to see the top
+        down, not a search. ``depth`` caps how deep the tree opens (default:
+        open fully; pass e.g. ``depth=2`` on a big vault to see the top
         folders, then drill with ``lookup_note``/``read_note``).
 
         The tree is relative to the vault root; the second line always states the
