@@ -16,6 +16,7 @@ Verified contract (Phase 2):
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -240,6 +241,44 @@ def test_session2_init_injects_spec_profile_for_keyword_agent_name(
     assert injected.get("profile") == _FAKE_SHELL_PROFILE
     assert injected.get("args") == ()
     assert injected.get("kwargs_agent_name") == "runtime2_test"
+
+
+class _FakeRun:
+    """Minimal AgentRun stand-in for steering tests."""
+
+    def __init__(self) -> None:
+        self.enqueued: list[tuple[str, str]] = []
+
+    def enqueue(self, content: str, priority: str = "asap") -> str:
+        self.enqueued.append((content, priority))
+        return "enq-1"
+
+
+def test_enqueue_forwards_to_live_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 3: enqueue() must forward to the active AgentRun's enqueue."""
+    monkeypatch.setattr(runtime2.Session, "__init__", lambda self, *a, **k: None)
+
+    s = runtime2.Session2(_FakeRun.__module__ + ".x", agent_name="x", trace=False)
+    fake = _FakeRun()
+    s._run = fake  # type: ignore[attr-defined]
+
+    enq_id = asyncio.run(s.enqueue("steer me", priority="asap"))
+    assert enq_id == "enq-1"
+    assert fake.enqueued == [("steer me", "asap")]
+
+
+def test_enqueue_returns_none_when_no_run_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Steering with nothing in flight must no-op (return None), not raise."""
+    monkeypatch.setattr(runtime2.Session, "__init__", lambda self, *a, **k: None)
+
+    s = runtime2.Session2("x", agent_name="x", trace=False)
+    s._run = None  # type: ignore[attr-defined]
+
+    assert asyncio.run(s.enqueue("steer me")) is None
 
 
 class _FakeProfile:

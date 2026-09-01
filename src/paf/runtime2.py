@@ -367,22 +367,34 @@ class Session2(Session):
                 conversation_id=cid,
                 cancellation_token=self._token,
             ) as run:
-                async for node in run:
-                    if isinstance(node, (ModelRequestNode, CallToolsNode)):
-                        # Both streamable node types expose @asynccontextmanager
-                        # stream(ctx) yielding an AgentStreamEvent iterator; the
-                        # union includes PartStart/PartDelta/FunctionToolCall/
-                        # FunctionToolResult — the same set as run_stream_events.
-                        async with node.stream(run.ctx) as stream:
-                            async for event in stream:
-                                # Reuse the SAME per-event dispatch the old flat
-                                # loop used (Phase 1) + the Phase 2 additive
-                                # kinds. Extracted to a pure module function so
-                                # it is unit-testable with synthetic events.
-                                for ev in _dispatch_stream_event(event):
-                                    yield ev
-                    elif isinstance(node, End):
-                        break
+                # Phase 3: keep a handle to the active AgentRun so callers can
+                # steer mid-turn (enqueue) and the next natural boundary picks
+                # up the injected message. Cleared when the turn ends.
+                self._run = run
+                try:
+                    async for node in run:
+                        if isinstance(node, (ModelRequestNode, CallToolsNode)):
+                            # Both streamable node types expose
+                            # @asynccontextmanager stream(ctx) yielding an
+                            # AgentStreamEvent iterator; the union includes
+                            # PartStart/PartDelta/FunctionToolCall/
+                            # FunctionToolResult — same set as run_stream_events.
+                            async with node.stream(run.ctx) as stream:
+                                async for event in stream:
+                                    # Reuse the SAME per-event dispatch the old
+                                    # flat loop used (Phase 1) + the Phase 2
+                                    # additive kinds. Extracted to a pure module
+                                    # function so it is unit-testable with
+                                    # synthetic events.
+                                    for ev in _dispatch_stream_event(event):
+                                        yield ev
+                        elif isinstance(node, End):
+                            break
+                finally:
+                    # The AgentRun is done (End reached, cancelled, or errored);
+                    # release the steering handle so enqueue()/cancel() after a
+                    # turn target nothing stale.
+                    self._run = None
             result = run.result
             assert result is not None, "iter() ended before AgentRun.result settled"
             # Set the trace output NOW, while the root span is still open.
@@ -410,11 +422,17 @@ class Session2(Session):
     async def enqueue(self, content: str, *, priority: str = "asap") -> str | None:
         """Steer the running agent at the next node boundary (AgentRun.enqueue).
 
-        Phase 3: requires keeping a handle to the active ``AgentRun`` during the
-        iter() walk. Not implemented yet — the Phase 1 loop proves the event
-        parity first.
+        Phase 3: enqueue injects ``content`` as a pending message that the
+        active ``AgentRun`` picks up at its next natural boundary (not
+        mid-generation). Requires a run to be live (``self._run`` set by the
+        Phase 1/3 iter() walk); returns the ``enqueue_id`` on success or
+        ``None`` if nothing is running. ``cancel()`` (not enqueue) is the way
+        to interrupt mid-generation.
         """
-        raise NotImplementedError("Session2.enqueue(): Phase 3")
+        run = self._run
+        if run is None:
+            return None
+        return run.enqueue(content, priority=priority)
 
     def subscribe_tasks(
         self, cb: Callable[[BackgroundEvent], Awaitable[Any] | Any]
