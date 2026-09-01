@@ -214,9 +214,32 @@ CONTEXTBENCH_PROFILE = AgentProfile(
 )
 
 
+# The runtime2 test/profile helper — a LEAN agent for exercising the
+# next-gen Session2 stream/event contract (runtime2.py), NOT a product surface.
+#
+# runtime2_test gets the smallest toolset that can deterministically produce
+# every turn-stream lifecycle edge: Shell's `run` is both the success path
+# (`run("echo ok")` -> tool_call -> ToolRunning -> tool_result) and the
+# deterministic FALLIBLE path (`run("exit 1")` -> a non-zero ToolReturnPart
+# outcome -> ToolError with the same step_id). No Memory/Compaction/Vault/
+# Search/Web/Browser/Subagents — those derail a trivial prompt into 8-search
+# loops and are out of scope for asserting ToolRunning/ToolError pairing.
+RUNTIME2_TEST_PROFILE = AgentProfile(
+    name="runtime2_test",
+    capability_names=(
+        "Shell",
+    ),
+)
+
+
 # Name lookup so a spec/CLI can reference a profile by a string that resolves
 # to the allowlist. Only used by spec-driven loaders; keep small.
 PROFILES: dict[str, AgentProfile] = {
     profile.name: profile
-    for profile in (ASSISTANT_PROFILE, DEMO_PROFILE, CONTEXTBENCH_PROFILE)
+    for profile in (
+        ASSISTANT_PROFILE,
+        DEMO_PROFILE,
+        CONTEXTBENCH_PROFILE,
+        RUNTIME2_TEST_PROFILE,
+    )
 }

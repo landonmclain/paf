@@ -1,0 +1,58 @@
+# runtime2_test — LEAN agent for exercising the Session2 stream/event contract.
+#
+# Purpose: a minimal, deterministic agent for testing the next-gen runtime
+# (src/paf/runtime2.py) — specifically the additive Phase 2 event kinds
+# (ToolRunning on tool-call start, ToolError on a failed/retried result, keyed
+# by the same step_id). It is NOT a product surface; it exists so a smoke test
+# can assert ToolRunning/ToolError pairing precisely without the model
+# derailing into search/vault/compaction loops (demo_assistant did exactly that).
+#
+# The `runtime2_test` profile (src/paf/capabilities/profiles.py) allowlists a
+# SINGLE harness capability — Shell. Shell's `run` is both the success path
+# (`run("echo ok")` cleanly returns) and the deterministic FALLIBLE path
+# (`run("exit 1")` -> non-zero ToolReturnPart outcome -> ToolError). No
+# Memory/Compaction/Vault/Search/Web/Browser/Subagents. To use with a Session2:
+#
+#     Session2(agent_name="runtime2_test", trace=False, resume=False)
+#
+#   (Session2 resolves this spec's `profile: runtime2_test` key when no profile
+#   is passed directly, matching how the CLIs pick the default profile.)
+
+name: runtime2_test
+
+# The profile (capability allowlist) this spec belongs to. Read by
+# `resolve_profile_name` -> PROFILES["runtime2_test"] -> Shell-only toolset.
+profile: runtime2_test
+
+# Provider-qualified model string. Same default as the other specs: DeepSeek V4
+# Flash via OpenRouter. Bare slug (NO `:nitro` suffix) — `build_agent` applies
+# the OpenRouter determinism pin via model_settings. Requires OPENROUTER_API_KEY.
+model: openrouter:deepseek/deepseek-v4-flash-0731
+
+instructions: |
+  You are a minimal test agent. Given a task, use the `run` tool to execute it
+  and report the result concisely — a single tool call per task, then reply
+  briefly. Do not chain extra tools, re-search, or wander. If a command fails
+  (non-zero exit), say plainly that it failed and report the error.
+
+model_settings:
+  # Maximum determinism: temp 0 + fixed seed so smoke tests for the event
+  # contract (ToolRunning/ToolError pairing) are reproducible.
+  temperature: 0
+  seed: 0
+
+  # OpenRouter prompt caching — same defaults as the other specs.
+  openrouter_cache_instructions: true
+  openrouter_cache_messages: true
+  openrouter_cache_tool_definitions: true
+
+  # OpenRouter provider routing pin — same chain as the other specs.
+  extra_body:
+    provider:
+      order: [deepinfra, parasail, coreweave]
+      quantizations: [fp8]
+
+# Root the single shell capability at a stable, harmless working directory.
+# (No filesystem/git/codebase_map/vault blocks — none are allowlisted.)
+shell:
+  cwd: ~/projects/Personal/pydantic-agent-framework
