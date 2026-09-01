@@ -293,9 +293,7 @@ class Session2(Session):
         # `Session2(agent_name="runtime2_test")` build the LEAN Shell-only
         # toolset instead of silently falling back to ASSISTANT_PROFILE.
         if kwargs.get("profile") is None:
-            agent_name = (
-                kwargs.get("agent_name", "assistant") if args else "assistant"
-            )
+            agent_name = kwargs.get("agent_name", "assistant")
             if args and isinstance(args[0], str):
                 agent_name = args[0]
             profile_name = resolve_profile_name(agent_name)

@@ -8,9 +8,13 @@
 # derailing into search/vault/compaction loops (demo_assistant did exactly that).
 #
 # The `runtime2_test` profile (src/paf/capabilities/profiles.py) allowlists a
-# SINGLE harness capability — Shell. Shell's `run` is both the success path
-# (`run("echo ok")` cleanly returns) and the deterministic FALLIBLE path
-# (`run("exit 1")` -> non-zero ToolReturnPart outcome -> ToolError). No
+# SINGLE harness capability — Shell. Shell's `run_command` is the success path
+# (`run_command "echo ok"` cleanly returns -> ToolRunning, no ToolError). The
+# deterministic FALLIBLE path is a DENIED command — e.g. `sudo` or another
+# interactive/deny-listed command, which raises ModelRetry/PermissionError ->
+# non-success ToolReturnPart -> ToolError. (Non-zero exit codes do NOT error:
+# `run_command` returns them as labeled output with outcome='success', so use a
+# denied command, not `exit 1`, to deterministically drive ToolError.) No
 # Memory/Compaction/Vault/Search/Web/Browser/Subagents. To use with a Session2:
 #
 #     Session2(agent_name="runtime2_test", trace=False, resume=False)
@@ -30,10 +34,10 @@ profile: runtime2_test
 model: openrouter:deepseek/deepseek-v4-flash-0731
 
 instructions: |
-  You are a minimal test agent. Given a task, use the `run` tool to execute it
-  and report the result concisely — a single tool call per task, then reply
-  briefly. Do not chain extra tools, re-search, or wander. If a command fails
-  (non-zero exit), say plainly that it failed and report the error.
+  You are a minimal test agent. Given a task, use the `run_command` tool to
+  execute it and report the result concisely — a single tool call per task, then
+  reply briefly. Do not chain extra tools, re-search, or wander. If a command
+  fails (non-zero exit), say plainly that it failed and report the error.
 
 model_settings:
   # Maximum determinism: temp 0 + fixed seed so smoke tests for the event

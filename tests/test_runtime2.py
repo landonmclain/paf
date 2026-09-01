@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from pydantic_ai import FunctionToolCallEvent, FunctionToolResultEvent
 from pydantic_ai.messages import (
     RetryPromptPart,
@@ -202,3 +203,54 @@ def test_runtime2_test_spec_resolves_to_profile() -> None:
     from paf.specs import resolve_profile_name
 
     assert resolve_profile_name("runtime2_test") == "runtime2_test"
+
+
+def test_session2_init_injects_spec_profile_for_keyword_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: Session2(agent_name=...) must resolve+inject the spec's
+    declared profile when none is passed.
+
+    This guards the bug where the constructor read ``agent_name`` from
+    positional args only, so a keyword ``agent_name="runtime2_test"`` silently
+    fell back to ASSISTANT_PROFILE (building an assistant-profile agent under a
+    test-agent name instead of the lean Shell-only toolset).
+    """
+    injected: dict[str, object] = {}
+
+    def fake_super_init(self: object, *args: object, **kwargs: object) -> None:
+        injected["profile"] = kwargs.get("profile")
+        injected["args"] = args
+        injected["kwargs_agent_name"] = kwargs.get("agent_name")
+
+    monkeypatch.setattr(
+        runtime2.Session, "__init__", fake_super_init
+    )
+    monkeypatch.setattr(
+        runtime2, "resolve_profile_name", lambda name: "runtime2_test"
+    )
+    monkeypatch.setattr(
+        runtime2, "PROFILES", {"runtime2_test": _FAKE_SHELL_PROFILE}
+    )
+
+    s = runtime2.Session2(agent_name="runtime2_test", trace=False)
+    del s  # profile injection is asserted via `injected`; no agent is built
+    # Session2.__init__ must have injected the Shell-only profile for the
+    # keyword agent_name (not ASSISTANT_PROFILE).
+    assert injected.get("profile") == _FAKE_SHELL_PROFILE
+    assert injected.get("args") == ()
+    assert injected.get("kwargs_agent_name") == "runtime2_test"
+
+
+class _FakeProfile:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _FakeProfile) and other.name == self.name
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+_FAKE_SHELL_PROFILE = _FakeProfile(name="runtime2_test")
