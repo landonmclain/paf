@@ -43,6 +43,7 @@ from ._markdown import rename_note_title, resolve_note, rewrite_wikilink_target
 from ._store import (
     FlatFileVaultStorage,
     ScanScope,
+    _write_atomic,
     build_index,
     load_index_notes,
 )
@@ -367,11 +368,13 @@ class VaultToolset(FunctionToolset):
         return full
 
     def _write_note_atomic(self, full: Path, content: str) -> None:
-        """Write a note's contents to disk atomically (staging + rename)."""
-        full.parent.mkdir(parents=True, exist_ok=True)
-        staging = full.with_name(f".{full.name}.staging")
-        staging.write_text(content, encoding="utf-8")
-        os.replace(staging, full)
+        """Write a note's contents to disk atomically (unique temp + rename).
+
+        Delegates to ``_store._write_atomic`` — a process-unique temp name per
+        write, so concurrent writes to the same note (web server can run turns
+        in parallel) never race on a shared staging file.
+        """
+        _write_atomic(full, content)
 
     def note_links(self, path: str) -> str | None:
         """List a note's outgoing wikilinks, resolved to vault-relative paths.

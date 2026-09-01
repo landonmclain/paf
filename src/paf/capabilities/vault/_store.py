@@ -42,12 +42,29 @@ _VERSION = 1
 
 
 def _write_atomic(path: str | Path, content: str) -> None:
+    """Write ``content`` to ``path`` atomically (unique temp + os.replace).
+
+    Thread-safe with respect to concurrent writers: each caller uses a
+    process-unique temp name (``tempfile.mkstemp``) so two threads writing the
+    SAME target can never steal each other's staging file mid-replace. A fixed
+    ``.name.staging`` name raced — one thread's ``os.replace`` could consume the
+    staging file another thread was about to move, raising ``FileNotFoundError``.
+    The temp is removed on any failure so no ``*.tmp`` debris is left behind.
+    """
     import os
+    import tempfile
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_name(f".{path.name}.staging")
-    staging.write_text(content, encoding="utf-8")
-    os.replace(staging, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def _write_json_atomic(path: str | Path, payload: object) -> None:

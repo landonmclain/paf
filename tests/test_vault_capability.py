@@ -595,3 +595,39 @@ def test_note_edit_unknown_or_outside_root(vault: tuple[Path, VaultToolset]) -> 
     # unknown path-like ref regrounds rather than guessing
     out3 = toolset.note_edit("Projects/Index.md", "a", "b")
     assert "do NOT prepend" in out3
+
+
+def test_write_atomic_is_thread_safe() -> None:
+    """Regression: concurrent writes to the SAME target must not race.
+
+    A fixed ``.name.staging`` filename was shared across writers — one thread's
+    ``os.replace`` could consume the staging file another thread was about to move,
+    raising ``FileNotFoundError:[Errno 2] ... .index.json.staging -> ... index.json``
+    (seen live in the web server where Gradio runs agent turns in parallel).
+    Each write must use a process-unique temp name and leave no ``*.tmp`` debris.
+    """
+    import tempfile
+    import threading
+
+    from paf.capabilities.vault._store import _write_atomic
+
+    d = Path(tempfile.mkdtemp())
+    target = d / "index.json"
+    errors: list[tuple[int, str]] = []
+    def _worker(n: int) -> None:
+        try:
+            for _ in range(3000):
+                _write_atomic(target, f"payload {n} x" * 40)
+        except Exception as exc:  # pragma: no cover -- assertion below reports
+            errors.append((n, repr(exc)))
+
+    threads = [threading.Thread(target=_worker, args=(i,)) for i in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == [], f"concurrent write raced: {errors[:3]}"
+    assert target.exists()
+    # no temp debris left behind
+    leftover = [p.name for p in d.glob("*.tmp") or d.glob(".*.tmp")]
+    assert leftover == [], f"leftover temp files: {leftover}"
