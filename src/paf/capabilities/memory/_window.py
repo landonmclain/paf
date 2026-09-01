@@ -141,6 +141,13 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
             # will be re-introduced later as a deterministic index derivation,
             # not an LLM pass.
             write_render(journal, str(Path(self.memory_directory) / "MEMORY.md"))
+            # Derived index of surviving facts (dedup winners) — incremental,
+            # pure derivation from the journal, same write path as MEMORY.md.
+            # (2026-09-01: reintroduced as deterministic code, not the LLM
+            # IndexStore that was unhooked 2026-08-25.)
+            from ._index import update_index
+
+            update_index(self.memory_directory)
             self._consolidated_cutoff = cutoff
         return await super().compact(messages, ctx)
 

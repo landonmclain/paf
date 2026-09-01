@@ -26,6 +26,7 @@ Follows the project convention of wrapping async bodies in `asyncio.run`
 from __future__ import annotations
 
 import asyncio
+import json
 import types
 from pathlib import Path
 
@@ -119,9 +120,14 @@ def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch
     assert (store_dir / "MEMORY.md").is_file()
     md = (store_dir / "MEMORY.md").read_text(encoding="utf-8")
     assert f"consolidated {expected_cutoff} evicted messages" in md
-    # The journal is the sole source and the index is no longer produced.
+    # The journal is the sole source; MEMORY.md and the derived index are both
+    # produced deterministically from it (2026-09-01: the derived index is back
+    # as a pure, non-LLM projection — NOT the removed LLM IndexStore).
     assert (store_dir / "memory-journal.jsonl").is_file()
-    assert not (store_dir / "memory-index.json").exists()
+    assert (store_dir / "memory-index.json").is_file()
+    idx = json.loads((store_dir / "memory-index.json").read_text(encoding="utf-8"))
+    assert idx.get("schema") == 1
+    assert idx.get("watermark") >= 1
 
     # 3. The window still performed the trim (the contract of the base window):
     #    the about-to-evict prefix is gone and only the tail remains.

@@ -279,6 +279,13 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         from ._render import write_render
 
         write_render(journal, str(Path(directory) / "MEMORY.md"))
+        # Derived index of surviving facts (dedup winners, incremental, pure
+        # derivation from the journal) — regenerated beside MEMORY.md so they can't
+        # disagree. First fold on a journal with pre-existing history builds the
+        # full index (incl. one-time fuzzy collapse).
+        from ._index import update_index
+
+        update_index(directory)
         log.info(
             "memory_consolidation_job session=%s folded=%s watermark=%s:%s",
             session_id,
