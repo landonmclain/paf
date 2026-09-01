@@ -33,6 +33,8 @@ the same bytes.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ._journal import JournalStore, MemoryRecord
 
 # Per-record separator between fact / date / source_ref in the md line.
@@ -93,17 +95,100 @@ def render_journal_memory(
     return "\n\n".join(sections) + ("\n" if sections else "")
 
 
+def _select_index_winners(
+    store: JournalStore, index
+) -> list[MemoryRecord]:
+    """Return the journal records that are surviving facts per the index.
+
+    ``index`` is a :class:`._index.MemoryIndex` (loaded, not its raw dict). For
+    each entry we keep the record at ``entry["current_line"]`` — the single
+    live copy of that fact — and drop every line in ``deduped_lines``. The
+    journal is the source of the fact text; the index is the verdict on which
+    line is the live one.
+    """
+    records = [r for _, r in store.read_all()]
+    winners: list[MemoryRecord] = []
+    for entry in index.entries:
+        line = int(entry["current_line"])
+        # current_line is a 1-based journal line number; records are 0-indexed.
+        if 1 <= line <= len(records):
+            winners.append(records[line - 1])
+    return winners
+
+
+def render_index_memory(store: JournalStore, index) -> str:
+    """Render MEMORY.md **from the derived index** (surviving facts only).
+
+    Groups the index winners by tier (t1/t2/t3 ladder), sorted by ``born_on``
+    descending within a tier — the same deterministic form as the raw render,
+    but emitting only the deduped survivors instead of every journal record.
+    Dedup is meaningless if it doesn't shrink what the answerer reads, and this
+    is the render the live write path uses when an index exists.
+    """
+    winners = _select_index_winners(store, index)
+    groups = _group_by_tier(winners)
+
+    sections: list[str] = []
+    for tier in _TIER_ORDER:
+        recs = groups.get(tier)
+        if not recs:
+            continue
+        lines = [
+            f"- {_encode(r.fact)}{_SEP}{r.born_on}{_SEP}{r.source_ref}"
+            if r.born_on
+            else f"- {_encode(r.fact)}{_SEP}{r.source_ref}"
+            for r in recs
+        ]
+        sections.append(f"## {tier}\n" + "\n".join(lines))
+
+    return "\n\n".join(sections) + ("\n" if sections else "")
+
+
 def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
-    """Render the journal and atomically write ``md_path`` (e.g. ``MEMORY.md``).
+    """Render and atomically write ``md_path`` (e.g. ``MEMORY.md``).
+
+    **Index-aware:** when ``store`` is a :class:`JournalStore` and a derived
+    index (``memory-index.json``) exists beside ``md_path``, the render comes
+    from the index — only the surviving (deduped-winner) facts are emitted, so
+    ``MEMORY.md`` agrees with ``memory-index.json`` and the assistant reads the
+    deduplicated notebook. If no index exists (pure unit-test path, the
+    benchmark's fresh directory, or the first render before any fold), it falls
+    back to the raw journal render — preserving the benchmark's measured
+    contract unchanged.
 
     Returns the rendered markdown. Uses the memory package's atomic writer so a
     crash mid-write never leaves a torn notebook.
     """
     from ._atomic import write_atomic  # local import keeps top of module import-light
 
-    content = render_journal_memory(store)
+    if isinstance(store, JournalStore):
+        index = _load_index_beside(md_path)
+        if index is not None:
+            content = render_index_memory(store, index)
+        else:
+            content = render_journal_memory(store)
+    else:
+        content = render_journal_memory(store)
     write_atomic(md_path, content)
     return content
+
+
+def _load_index_beside(md_path: str):
+    """Load ``memory-index.json`` beside ``md_path``, or ``None`` if absent.
+
+    A corrupt/unreadable index is treated as absent (the raw render wins; the
+    next fold regenerates the index). Reading it here means the live write path
+    gets index-driven rendering with no signature change at its call sites.
+    """
+    try:
+        from ._index import MemoryIndex
+
+        index_path = str(Path(md_path).with_name("memory-index.json"))
+        if Path(index_path).exists():
+            return MemoryIndex.load(str(Path(md_path).parent))
+    except Exception:
+        return None
+    return None
 
 
 def _encode(text: str) -> str:

@@ -214,3 +214,56 @@ def test_build_index_empty_journal(tmp_path):
     build_index(tmp_path)
     assert _load(tmp_path).watermark == 0
     assert _load(tmp_path).entries == []
+
+
+# --------------------------------------------------------------------------
+# index-aware rendering (write_render emits survivors, agrees with the index)
+# --------------------------------------------------------------------------
+
+def test_write_render_emits_index_winners_not_raw_journal(tmp_path):
+    """With an index present, MEMORY.md renders only surviving (winner) facts."""
+    from paf.capabilities.memory._render import write_render
+
+    store = _seed_store(tmp_path, [
+        _mk_record("User prefers mobile-first design", src="run:0"),
+        _mk_record("user prefers mobile-first design", src="run:1"),  # exact dup (case)
+        _mk_record("User prefers mobile-first design", src="run:2"),  # exact dup
+    ])
+    build_index(tmp_path)  # -> 1 winner
+    md_path = tmp_path / "MEMORY.md"
+    write_render(store, str(md_path))
+    text = md_path.read_text(encoding="utf-8")
+    # exactly ONE surviving fact line
+    lines = [ln for ln in text.splitlines() if ln.startswith("- ")]
+    assert len(lines) == 1
+    assert "mobile-first design" in lines[0]
+
+
+def test_write_render_falls_back_to_raw_without_index(tmp_path):
+    """No index file -> raw journal render (unchanged benchmark/unit contract)."""
+    from paf.capabilities.memory._render import write_render
+
+    store = _seed_store(tmp_path, [
+        _mk_record("fact one", src="run:0"),
+        _mk_record("fact two", src="run:1"),
+    ])
+    md_path = tmp_path / "MEMORY.md"
+    write_render(store, str(md_path))
+    text = md_path.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.startswith("- ")]
+    assert len(lines) == 2  # both raw records present
+
+
+def test_write_render_index_keeps_distinct_facts(tmp_path):
+    from paf.capabilities.memory._render import write_render
+
+    store = _seed_store(tmp_path, [
+        _mk_record("User prefers mobile-first design", src="run:0"),
+        _mk_record("User's site organized into four arcs", src="run:1"),
+    ])
+    build_index(tmp_path)
+    md_path = tmp_path / "MEMORY.md"
+    write_render(store, str(md_path))
+    text = md_path.read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.startswith("- ")]
+    assert len(lines) == 2  # two DISTINCT winners both survive
