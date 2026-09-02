@@ -24,6 +24,7 @@ from pydantic_ai.messages import (
     TextContent,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.tools import AgentDepsT
@@ -31,6 +32,12 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
 from .._markers import injected_artifact_markers
+
+# Char caps for the bounded (non-`full`) read. Mirrors `search/_render.py` so the
+# model-facing read and the search excerpt stay on the same budget contract.
+_TOOL_RETURN_TRUNCATE = 500
+_TOOL_CALL_TRUNCATE = 200
+_TEXT_TRUNCATE = 500
 
 READ_TURN_DESCRIPTION = """\
 Read one specific turn from persisted conversation history, by its index ref.
@@ -44,6 +51,12 @@ Pass ref='{run_id}' to fetch one run's entire durable history, or
 ref='{run_id}:{turn_id}' to fetch just the turn at that index (copy the exact
 ref shown in the index). `turn_id` is the ordinal of the turn's user prompt
 within the run (0, 1, ...), so refs are stable.
+
+Tool calls and results are returned truncated by default (tool results ~500 chars,
+tool call args ~200 chars, message text ~500 chars -- same budget as search
+excerpts) so a read stays bounded. To pull a byte-complete turn -- including the
+full untruncated tool results -- pass full=True. Prefer full=True only when the
+truncated read shows the content actually matters and you need the complete value.
 
 This is the targeted read step (rung 4): call it only once you HAVE a ref for the
 turn you want -- from the injected index or a `search_index` hit. If you don't yet
@@ -91,7 +104,11 @@ def _is_injected_text(text: TextContent) -> bool:
     )
 
 
-def _render_message(message: ModelMessage) -> str:
+def _truncate(text: str, cap: int) -> str:
+    return text if len(text) <= cap else text[:cap] + "..."
+
+
+def _render_message(message: ModelMessage, *, full: bool = False) -> str:
     if isinstance(message, ModelRequest):
         lines = []
         for part in message.parts:
@@ -114,7 +131,14 @@ def _render_message(message: ModelMessage) -> str:
                         # A UserPromptPart with only injected content carries no durable
                         # user text worth showing; skip it entirely.
                         continue
+                if not full:
+                    content = _truncate(content, _TEXT_TRUNCATE)
                 lines.append(f"User: {content}")
+            elif isinstance(part, ToolReturnPart):
+                content = str(part.content)
+                if not full:
+                    content = _truncate(content, _TOOL_RETURN_TRUNCATE)
+                lines.append(f"Tool [{part.tool_name}]: {content}")
             else:
                 lines.append(f"[{type(part).__name__}]")
         return " ".join(lines) if lines else f"<ModelRequest {len(message.parts)} parts>"
@@ -122,9 +146,15 @@ def _render_message(message: ModelMessage) -> str:
         lines = []
         for part in message.parts:
             if isinstance(part, TextPart):
-                lines.append(f"Assistant: {part.content}")
+                content = part.content
+                if not full:
+                    content = _truncate(content, _TEXT_TRUNCATE)
+                lines.append(f"Assistant: {content}")
             elif isinstance(part, ToolCallPart):
-                lines.append(f"Tool Call [{part.tool_name}]: {json.dumps(part.args_as_dict(), ensure_ascii=False)}")
+                args = json.dumps(part.args_as_dict(), ensure_ascii=False)
+                if not full:
+                    args = _truncate(args, _TOOL_CALL_TRUNCATE)
+                lines.append(f"Tool Call [{part.tool_name}]: {args}")
         return "\n".join(lines)
     return f"<{type(message).__name__}>"
 
@@ -148,6 +178,7 @@ class TurnFinder:
         *,
         run_id: str,
         conversation_id: str | None = None,
+        full: bool = False,
     ) -> str:
         history = await self._source.run_history(run_id=run_id)
         if not history:
@@ -157,10 +188,10 @@ class TurnFinder:
                 turn_id = int(ref.rsplit(":", 1)[1])
             except ValueError:
                 return f"Malformed ref '{ref}'; expected '{run_id}' or '{run_id}:<turn_id>'."
-            return self._render_turn(history, turn_id, run_id)
-        return self._render_run(history, run_id)
+            return self._render_turn(history, turn_id, run_id, full=full)
+        return self._render_run(history, run_id, full=full)
 
-    def _render_turn(self, history, turn_id: int, run_id: str) -> str:
+    def _render_turn(self, history, turn_id: int, run_id: str, *, full: bool = False) -> str:
         # Find the turn_id-th ModelRequest carrying a UserPromptPart (the anchor).
         anchors = [
             i for i, m in enumerate(history) if _is_user_turn(m)
@@ -179,12 +210,12 @@ class TurnFinder:
             if sid:
                 lines.append(f"-- session: {sid} --")
         for i in range(start, end):
-            lines.append(_render_message(history[i]))
+            lines.append(_render_message(history[i], full=full))
         return "\n".join(lines)
 
-    def _render_run(self, history, run_id: str) -> str:
+    def _render_run(self, history, run_id: str, *, full: bool = False) -> str:
         lines = [f"--- run {run_id} ({len(history)} messages) ---"]
-        lines.extend(_render_message(m) for m in history)
+        lines.extend(_render_message(m, full=full) for m in history)
         return "\n".join(lines)
 
     def anchor_count(self, history) -> int:
@@ -216,7 +247,13 @@ class ReadTurnToolset(FunctionToolset[AgentDepsT]):
         self,
         ctx: RunContext[AgentDepsT],
         ref: str,
+        full: bool = False,
     ) -> str:
-        """Resolve one ref into its full durable turn via pydantic-ai persistence."""
+        """Resolve one ref into its full durable turn via pydantic-ai persistence.
+
+        `full=False` renders tool calls/results and message text truncated at the
+        same budget as search excerpts (bounded read). `full=True` renders the
+        byte-complete turn, including untruncated tool returns.
+        """
         run_id, _, _ = ref.partition(":")
-        return await self._finder.resolve(ref, run_id=run_id, conversation_id=ctx.conversation_id)
+        return await self._finder.resolve(ref, run_id=run_id, conversation_id=ctx.conversation_id, full=full)

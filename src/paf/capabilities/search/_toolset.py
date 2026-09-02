@@ -178,14 +178,19 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         self,
         ctx: RunContext[AgentDepsT],
         ref: str,
+        full: bool = False,
     ) -> str:
-        """Resolve a `run_id:turn_id` ref into its full durable turn via pydantic-ai persistence."""
+        """Resolve a `run_id:turn_id` ref into its full durable turn via pydantic-ai persistence.
+
+        `full=False` (default) renders tool calls/results and message text truncated at
+        the same budget as search excerpts. `full=True` renders the byte-complete turn.
+        """
         # Expanding a search hit to its full turn is retrieval PROGRESS — it clears
         # the search streak so a healthy read-search-read rhythm is never a stall.
         self._reset_search_streak(ctx)
         run_id, _, _ = ref.partition(":")
         return await self._finder.resolve(
-            ref, run_id=run_id, conversation_id=ctx.conversation_id
+            ref, run_id=run_id, conversation_id=ctx.conversation_id, full=full
         )
 
     def _reset_search_streak(self, ctx: RunContext[AgentDepsT]) -> None:
