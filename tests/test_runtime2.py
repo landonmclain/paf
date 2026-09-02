@@ -186,6 +186,37 @@ def test_done_task_not_replayed() -> None:
     assert seen == []  # only queued/running are active; done is not replayed
 
 
+# --- profile namespace (conversation identity scoping) -------------------
+
+
+def test_scoped_cid_prefixes_with_profile_name() -> None:
+    s = object.__new__(runtime2.Session2)
+    s.profile = _FakeProfile(name="assistant")
+    assert s._scoped_cid("cli-1") == "assistant:cli-1"
+
+
+def test_scoped_cid_returns_cid_when_no_profile() -> None:
+    s = object.__new__(runtime2.Session2)
+    s.profile = None
+    assert s._scoped_cid("cli-1") == "cli-1"
+    assert s._scoped_cid(None) is None
+
+
+def test_scoped_cid_handles_bare_name_profile() -> None:
+    s = object.__new__(runtime2.Session2)
+    s.profile = "runtime2_test"  # raw string profile fallback
+    assert s._scoped_cid("web-1") == "runtime2_test:web-1"
+
+
+def test_two_profiles_same_cid_do_not_collide() -> None:
+    """The namespace invariant: identical plain cids scope apart by profile."""
+    a = _FakeProfile("assistant")
+    b = _FakeProfile("runtime2_test")
+    sa, sb = object.__new__(runtime2.Session2), object.__new__(runtime2.Session2)
+    sa.profile, sb.profile = a, b
+    assert sa._scoped_cid("conv-9") != sb._scoped_cid("conv-9")
+
+
 # --- profile wiring --------------------------------------------------------
 
 
@@ -217,30 +248,24 @@ def test_session2_init_injects_spec_profile_for_keyword_agent_name(
     fell back to ASSISTANT_PROFILE (building an assistant-profile agent under a
     test-agent name instead of the lean Shell-only toolset).
     """
-    injected: dict[str, object] = {}
-
-    def fake_super_init(self: object, *args: object, **kwargs: object) -> None:
-        injected["profile"] = kwargs.get("profile")
-        injected["args"] = args
-        injected["kwargs_agent_name"] = kwargs.get("agent_name")
-
-    monkeypatch.setattr(
-        runtime2.Session, "__init__", fake_super_init
-    )
     monkeypatch.setattr(
         runtime2, "resolve_profile_name", lambda name: "runtime2_test"
     )
     monkeypatch.setattr(
         runtime2, "PROFILES", {"runtime2_test": _FAKE_SHELL_PROFILE}
     )
+    # Stub the heavy build paths so constructing Session2 needs no API key.
+    monkeypatch.setattr(runtime2, "build_agent", lambda name, profile=None: object())
+    monkeypatch.setattr(
+        runtime2, "resolve_memory_config", lambda name: {"consolidate_every": 3}
+    )
+    monkeypatch.setattr(runtime2, "_build_store", lambda: object())
+    monkeypatch.setattr(runtime2, "setup_observability", lambda: None)
 
     s = runtime2.Session2(agent_name="runtime2_test", trace=False)
-    del s  # profile injection is asserted via `injected`; no agent is built
     # Session2.__init__ must have injected the Shell-only profile for the
     # keyword agent_name (not ASSISTANT_PROFILE).
-    assert injected.get("profile") == _FAKE_SHELL_PROFILE
-    assert injected.get("args") == ()
-    assert injected.get("kwargs_agent_name") == "runtime2_test"
+    assert s.profile == _FAKE_SHELL_PROFILE
 
 
 class _FakeRun:
@@ -258,7 +283,7 @@ def test_enqueue_forwards_to_live_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Phase 3: enqueue() must forward to the active AgentRun's enqueue."""
-    monkeypatch.setattr(runtime2.Session, "__init__", lambda self, *a, **k: None)
+    monkeypatch.setattr(runtime2.Session2, "__init__", lambda self, *a, **k: None)
 
     s = runtime2.Session2(_FakeRun.__module__ + ".x", agent_name="x", trace=False)
     fake = _FakeRun()
@@ -273,7 +298,7 @@ def test_enqueue_returns_none_when_no_run_running(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Steering with nothing in flight must no-op (return None), not raise."""
-    monkeypatch.setattr(runtime2.Session, "__init__", lambda self, *a, **k: None)
+    monkeypatch.setattr(runtime2.Session2, "__init__", lambda self, *a, **k: None)
 
     s = runtime2.Session2("x", agent_name="x", trace=False)
     s._run = None  # type: ignore[attr-defined]

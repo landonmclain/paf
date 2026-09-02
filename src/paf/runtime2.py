@@ -7,28 +7,44 @@ the verified pydantic-ai 2.33 API live in the vault spec:
 
     Hermes/Projects/Personal/Portfolio-GitHub/Designs/paf-runtime2-Session.md
 
+This module is **fully self-contained**: :class:`Session2` is a single concrete
+class (no subclass of anything), and there are NO imports from ``paf.runtime``.
+All behavior the old base ``Session`` owned is absorbed here (init, resume,
+memory queue, run/run_sync, close, properties), ported verbatim so the public
+contract (``stream()``/``run()``/``run_sync()``/``restore``/``refresh``/
+``close()``, ``history``, ``last_result``) keeps its shape and promotion from
+consumers is a one-line import swap.
+
 Locked decisions (do not revisit without reopening the workstream):
 - Sibling ``src/paf/runtime2.py``; promotes to THE single runtime, then
   ``runtime.py`` is deleted.
 - GO BIG: switching bar = ``coding_agent`` event parity
   (ActionStep running|done|error, MaintenanceStep, TurnUpdate).
 - Reuse shared core via imports (store/build_agent/resume/memory-queue).
+- Profile IS a namespace on conversation identity: store keys, resume, and
+  the agent run are scoped by ``{profile.name}:{cid}`` (see ``_scoped_cid``),
+  so two profiles using the SAME plain ``conversation_id`` never cross-talk.
+  The session holds the plain id; the profile scope is applied at the boundary.
+- Single-tenant, NO users. Users = a later prefix layer, not a rework.
 - Same public ``Session`` contract; new event kinds are **additive**.
-- ``Session2`` is a **subclass** of ``Session`` (drop-in for consumers that
-  type against ``Session``), overriding only the control loop + new surfaces.
 
 PHASE 0 (done): compile-clean stub. Additive event dataclasses forward-declared.
 PHASE 1 (done, commit c91e147): ``stream()`` switched from ``run_stream_events()``
 to ``agent.iter()`` node walk, reusing the existing per-event dispatch verbatim
 (byte-identical 4-kind contract for text/thinking/tool_call/tool_result).
 ``cancel()`` wired to the Session-held CancellationToken.
-PHASE 2 (this file): the forward-declared kinds are now WIRED. (1) The loop
-emits ``ToolRunning`` at tool-call start and ``ToolError`` on a failed/retried
-result, keyed by the part's ``tool_call_id`` (stable ``step_id``). (2) The
-background-task registry + ``subscribe_tasks()`` replay lands consumer #1:
-memory consolidation publishes queued/running/done via ``BackgroundEvent``.
-``enqueue()`` remains a Phase 3 stub. No ``runtime.py`` or ``ui/`` consumer is
-touched (events are additive).
+PHASE 2 (done, commit 61df477): the forward-declared kinds are now WIRED.
+(1) The loop emits ``ToolRunning`` at tool-call start and ``ToolError`` on a
+failed/retried result, keyed by the part's ``tool_call_id`` (stable ``step_id``).
+(2) The background-task registry + ``subscribe_tasks()`` replay lands consumer
+#1: memory consolidation publishes queued/running/done via ``BackgroundEvent``.
+``enqueue()`` (Phase 3, commit 228c568) is real: the active AgentRun handle is
+kept on ``self._run`` and ``enqueue`` forwards to it.
+PHASE 4 (this revision): the class becomes **fully self-contained** — no
+subclass, no ``paf.runtime`` imports — and conversation identity gets a
+**profile namespace** layer (``_scoped_cid``: ``{profile}:{cid}`` at the store
+boundary). ``runtime.py``'s entire ``Session`` body is absorbed here, ported
+as-is.
 """
 
 from __future__ import annotations
@@ -42,6 +58,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic_ai import (
+    Agent,
     AgentRunResult,
     CancellationToken,
     FunctionToolCallEvent,
@@ -51,23 +68,34 @@ from pydantic_ai import (
 )
 from pydantic_ai._agent_graph import CallToolsNode, End, ModelRequestNode
 from pydantic_ai.messages import (
+    ModelRequest,
     RetryPromptPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
     ToolReturnPart,
+    UserPromptPart,
 )
+from pydantic_ai_harness.conversation_search import SnapshotHistorySource
+from pydantic_ai_harness.step_persistence import continue_run
 
 from paf.capabilities import PROFILES
-from paf.observability.instrumentation import _json_dumps, root_span
-from paf.runtime import (
-    Session,
-    StreamEvent,
-    _part_leading_text,
-    _run_input,
-    _run_output,
+from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities.memory._background import (
+    ConsolidationJob,
+    MemoryConsolidationQueue,
+    resolve_unseen_span,
 )
-from paf.specs import resolve_profile_name
+from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
+from paf.capabilities.memory._window import DEFAULT_MEMORY_DIR
+from paf.capabilities.persistence import _build_store
+from paf.observability.instrumentation import (
+    _json_dumps,
+    root_span,
+    setup_observability,
+    shutdown_observability,
+)
+from paf.specs import build_agent, resolve_memory_config, resolve_profile_name
 
 log = logging.getLogger(__name__)
 
@@ -88,14 +116,37 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Forward-declared additive event kinds (Phase 0: declared, not yet wired).
-#
+# StreamEvent — the existing 4-kind event (previously defined in ``paf.runtime``)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class StreamEvent:
+    """One renderable event from an agent run.
+
+    UI-agnostic: a caller (REPL, web socket, TTS pipeline) maps these onto
+    whatever it shows. ``kind`` is one of:
+
+    - ``"text"``      a token chunk of the model's answer (``text``)
+    - ``"thinking"``  a reasoning token (suppress or render faintly)
+    - ``"tool_call"`` the model invoked a tool (``tool_name``, ``args``)
+    - ``"tool_result"`` a tool returned (``tool_name``, ``text``)
+
+    The settled ``AgentRunResult`` lands on ``self.last_result`` when the run
+    completes and ``self.history`` accumulates the turn's messages — callers
+    never need to reconstruct the transcript from these events.
+    """
+
+    kind: Literal["text", "thinking", "tool_call", "tool_result"]
+    text: str = ""
+    tool_name: str = ""
+    args: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Forward-declared additive event kinds (Phase 0: declared, Phases 1-3 wired).
 # Mapping to coding_agent parity (chat_runner.py):
 #   ActionStep        -> ToolRunning + ToolError (status running|done|error)
 #   MaintenanceStep   -> MaintenanceEvent (status done|queued|skipped|error)
 #   TurnUpdate/result -> BackgroundEvent (paf owns transport; richer event)
-# The existing ``text`` / ``thinking`` / ``tool_call`` / ``tool_result`` kinds
-# are inherited unchanged from :class:`StreamEvent` in ``paf.runtime``.
 # ---------------------------------------------------------------------------
 
 # Step lifecycle statuses (coding_agent ActionStep.status / MaintenanceStep.status).
@@ -190,6 +241,64 @@ class BackgroundTask:
 TurnStreamEvent = StreamEvent | ToolRunning | ToolError
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers (absorbed from ``paf.runtime``, plus this module's sinks)
+# ---------------------------------------------------------------------------
+
+
+def _part_leading_text(part: Any) -> str:
+    """Pull the initial text out of a stream part's ``.content`` field.
+
+    Mirrors cli_demo's ``_stream_part_content``: the first chunk of a part sits
+    in ``.content`` (a ``str`` or list of ``str``), later chunks arrive as
+    ``TextPartDelta.content_delta``. Non-text parts return ``""``.
+    """
+    content = getattr(part, "content", None)
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(chunk) for chunk in content)
+    return ""
+
+
+def _run_input(prompt: str, cid: str | None) -> dict:
+    """Serialize a turn's input for the Langfuse trace root span.
+
+    ``langfuse.observation.input`` is what Langfuse's OTLP mapper shows in the
+    trace-list Input column. That column is the *user's* input for that turn —
+    the current prompt — NOT the accumulated history. pydantic-ai's own
+    `gen_ai.input.messages` on the agent/generation spans already carries full
+    per-message context (and reads coherently when you click into the span), so
+    dumping the whole transcript here would just bloat the list view and
+    duplicate what's a click away. cid is included for at-a-glance grouping.
+    """
+    return {"prompt": prompt, "conversation_id": cid}
+
+
+def _run_output(result: Any) -> dict:
+    """Serialize a turn's settled output for the Langfuse trace root span."""
+    return {"output": result.output if result is not None else None}
+
+
+def _is_turn_start(msg: Any) -> bool:
+    """True if ``msg`` is a user request that opens a fresh turn.
+
+    A `ModelRequest` opens a new turn only when it carries a real string
+    `UserPromptPart` (the user's own prompt) — versus an injected/context
+    part whose content is a non-str list. This intentionally mirrors the web
+    renderer's turn-boundary test so `resume_window` rounding and the UI see
+    the same turns.
+    """
+    if not isinstance(msg, ModelRequest):
+        return False
+    return any(
+        isinstance(p, UserPromptPart) and isinstance(p.content, str)
+        for p in (getattr(msg, "parts", None) or [])
+    )
+
+
 def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
     """Map ONE pydantic-ai stream node event to the turn ``StreamEvent``(s).
 
@@ -277,31 +386,81 @@ def _tool_error_detail(part: ToolReturnPart | RetryPromptPart) -> str:
     return f"[{out}] {(detail or 'tool returned a failure state').strip()[:500]}"
 
 
-class Session2(Session):
+def _profile_name(profile: Any) -> str | None:
+    """The namespace segment for a profile (``AgentProfile.name``, a bare name
+    str, or ``None``) — used to scope conversation identity at the store.
+
+    ``Session2`` resolves spec-declared profiles to ``AgentProfile`` objects, so
+    ``.name`` is the usual path; the fallbacks keep it robust for raw args.
+    """
+    name = getattr(profile, "name", None)
+    if name:
+        return name
+    if isinstance(profile, str) and profile:
+        return profile
+    return None
+
+
+# ---------------------------------------------------------------------------
+# The single self-contained Session (no subclass — absorbed from paf.runtime)
+# ---------------------------------------------------------------------------
+class Session2:
     """Next-gen ``Session``: ``agent.iter()`` control loop + additive events.
 
-    Subclasses :class:`paf.runtime.Session`, reusing its entire init path
-    (store, agent build, memory queue, resume/restore/close) unchanged. Phase 1
-    swaps the control loop from ``run_stream_events()`` to an ``agent.iter()``
-    node walk; the additive event kinds land in Phase 2.
+    **Fully self-contained** — absorbs the entirety of :class:`paf.runtime.Session`
+    behavior (init, resume, memory queue, run/run_sync, close, properties),
+    porting it verbatim so the public contract keeps its shape. Profile IS a
+    namespace on conversation identity: the store/resume/run are scoped by
+    ``{profile}:{cid}`` (``_scoped_cid``) so two profiles using the same plain
+    ``conversation_id`` never cross-talk. The machine holds the plain id; the
+    scope is applied at the store boundary, so callers never think about it.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        agent_name: str = "assistant",
+        *,
+        profile=None,
+        conversation_id: str | None = None,
+        trace: bool = True,
+        resume: bool = True,
+        resume_window: int | None = None,
+        store=None,
+        memory_consolidation: bool = False,
+        memory_directory: str | None = None,
+        consolidate_span=None,
+    ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how the CLIs pick the default profile
         # (`resolve_profile_name` -> PROFILES[name]). This is what makes
         # `Session2(agent_name="runtime2_test")` build the LEAN Shell-only
         # toolset instead of silently falling back to ASSISTANT_PROFILE.
-        if kwargs.get("profile") is None:
-            agent_name = kwargs.get("agent_name", "assistant")
-            if args and isinstance(args[0], str):
-                agent_name = args[0]
+        if profile is None:
             profile_name = resolve_profile_name(agent_name)
             if profile_name and profile_name in PROFILES:
-                kwargs["profile"] = PROFILES[profile_name]
-        super().__init__(*args, **kwargs)
-        # Session-held CancellationToken -> stop (Phase 3 refines; the token is
-        # created here so cancel() works and iter() has a token from day one).
+                profile = PROFILES[profile_name]
+        self.agent_name = agent_name
+        self.profile = profile
+        self.conversation_id = conversation_id
+        self.trace = trace
+        self.resume = resume
+        self.resume_window = resume_window
+        self._resumed = False
+        self._restored = False
+        # Default to the canonical shared flat-file store (same directory
+        # build_persistence()/cli use). Injectable for tests / custom roots.
+        self._store = store if store is not None else _build_store()
+        if trace:
+            setup_observability()
+        self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
+        self.history: list = []
+        self.memory_consolidation = memory_consolidation
+        self.consolidate_every = resolve_memory_config(agent_name)["consolidate_every"]
+        self._memory_directory = memory_directory or DEFAULT_MEMORY_DIR
+        self._consolidate_span = consolidate_span
+        self._memory_queue: MemoryConsolidationQueue | None = None
+        # Session-held CancellationToken -> stop (created here so cancel()
+        # works and iter() has a token from day one).
         self._token = CancellationToken()
         # Phase 3 wiring: self._run (AgentRun handle) for steer/enqueue.
         self._run: Any = None
@@ -314,7 +473,235 @@ class Session2(Session):
         )
         self._consolidation_seq = 0
 
-    # -- control loop (Phase 1) ---------------------------------------------
+    # -- introspection ---------------------------------------------------------
+
+    @property
+    def agent(self) -> Agent[Any, Any]:
+        """The built agent."""
+        return self._agent
+
+    @property
+    def name(self) -> str:
+        return self._agent.name or self.agent_name
+
+    @property
+    def restored_count(self) -> int:
+        """Number of prior messages loaded by ``continue_run`` resume (0 if none)."""
+        return len(self.history) if self._restored else 0
+
+    @property
+    def memory_queue(self) -> MemoryConsolidationQueue | None:
+        """The lazily-built background consolidation queue (None until first use)."""
+        return self._memory_queue
+
+    # -- profile namespace (conversation identity scoping) --------------------
+
+    def _scoped_cid(self, cid: str | None) -> str | None:
+        """Scope a conversation id by the session's profile: ``{profile}:{cid}``.
+
+        The namespace seam: the machine holds the plain id (whatever the caller
+        passed), but the store/resume/agent-run access run under the
+        profile-scoped id, so two profiles using the SAME plain
+        ``conversation_id`` never cross-talk. This is what makes profile a real
+        isolation layer on conversation identity — users later = a further
+        prefix, not a rework. Applied ONCE at the boundary (``stream()`` selects
+        the plain cid, then passes the SCOPED one downstream to
+        iter/resume/consolidation), so the whole turn (and its persisted runs)
+        live under one namespace identity.
+        """
+        pname = _profile_name(self.profile)
+        if not pname or cid is None:
+            return cid
+        return f"{pname}:{cid}"
+
+    # -- resume ---------------------------------------------------------------
+
+    async def restore(self, *, conversation_id: str | None = None) -> int:
+        """Load prior history from the store now, returning ``restored_count``.
+
+        Explicit form of the auto-resume — call it before the first run (e.g. to
+        show "resumed N prior messages" in a banner). Same semantics as
+        ``_ensure_resumed``: ``continue_run`` full snapshot (compaction summary
+        included), idempotent, safe to call early or never.
+        """
+        cid = conversation_id if conversation_id is not None else self.conversation_id
+        await self._ensure_resumed(self._scoped_cid(cid))
+        return self.restored_count
+
+    async def refresh(self, *, conversation_id: str | None = None) -> int:
+        """Re-read prior history from the store, discarding the cached copy.
+
+        Unlike :meth:`restore` — which is one-shot per session (guarded by the
+        ``_resumed`` flag) — this forces a fresh ``continue_run`` so a *page
+        reload* shows turns that were persisted after the session first resumed.
+        Returns the new ``restored_count`` (0 if none).
+        """
+        cid = conversation_id if conversation_id is not None else self.conversation_id
+        self._resumed = False
+        self._restored = False
+        self.history = []
+        await self._ensure_resumed(self._scoped_cid(cid))
+        return self.restored_count
+
+    async def _ensure_resumed(self, conversation_id: str | None) -> None:
+        """Seed ``self.history`` from the store exactly once (before the first run).
+
+        ``continue_run`` loads the latest settled snapshot for the conversation's
+        most recent run and returns it as a message history — M1 semantics, full
+        snapshot (compaction summary included). When ``resume_window`` is set, the
+        history is trimmed to the last N messages so a fresh process does not load
+        the entire conversation into context (older turns stay recoverable via the
+        journal / ``search_conversation_history``). Idempotent: only acts when
+        resume is enabled, the conversation has a stable id, and this is the first
+        run. A conversation with no prior runs stays empty (``restored_count == 0``).
+
+        ``conversation_id`` here is ALREADY profile-scoped by the caller
+        (``_scoped_cid``).
+        """
+        if self._resumed or not self.resume or conversation_id is None:
+            self._resumed = True
+            return
+        self._resumed = True
+        try:
+            runs = await self._store.list_runs(conversation_id=conversation_id)
+            if not runs:
+                return
+            history = []
+            for run in reversed(runs):
+                try:
+                    history = await continue_run(self._store, run_id=run.run_id)
+                    break
+                except Exception:  # noqa: BLE001 - skip unsettled runs
+                    continue
+            if not history:
+                return
+            if self.resume_window is not None and self.resume_window >= 0:
+                if not self.resume_window:
+                    history = []
+                else:
+                    start = max(0, len(history) - self.resume_window)
+                    if start > 0 and not _is_turn_start(history[start]):
+                        for i in range(start - 1, -1, -1):
+                            if _is_turn_start(history[i]):
+                                start = i
+                                break
+                    history = history[start:]
+            self.history = history
+            self._restored = True
+        except Exception:  # noqa: BLE001 - resume is sugar; never break the run
+            self._restored = False
+
+    # -- background memory consolidation --------------------------------------
+
+    def _ensure_memory_queue(self) -> MemoryConsolidationQueue:
+        """Build the self-contained worker queue, bound to ``self._store``.
+
+        One queue == one worker per session (the engine's composition model).
+        The worker is given a ``span_source`` that resolves the persisted span
+        of complete turns from the same ``HistorySource`` the search capability
+        holds (``SnapshotHistorySource`` over ``self._store``) — it never reads
+        in-memory ``self.history``, so folding stays fully off the critical path
+        and resilient to what the Session may or may not have cached. The fold
+        seam is wrapped so the off-turn worker's completion updates the
+        consolidation ``BackgroundTask`` to ``done`` (or ``error`` on throw).
+        """
+        if self._memory_queue is None:
+            # Mark the currently-queued/running consolidation task done on success.
+            def _complete(kind: StepStatus, detail: str = "") -> None:
+                for task_id, task in list(self._background_tasks.items()):
+                    if task_id.startswith("consolidation.") and task.status in (
+                        QUEUED,
+                        PROCESSING,
+                    ):
+                        task.status = kind
+                        task.detail = detail
+                        task.progress = 1.0 if kind == DONE else None
+                        self._publish_task(task)
+
+            source = SnapshotHistorySource(self._store)
+
+            async def span_source(run_id: str, up_to_turn_id: int):
+                wm = MemoryWatermark.load(self._memory_directory, run_id=run_id)
+                return await resolve_unseen_span(
+                    source, wm, tip_run=run_id, tip_turn=up_to_turn_id
+                )
+
+            real_fold = self._consolidate_span
+
+            async def publish_fold(messages, directory, watermark):
+                try:
+                    n = (
+                        await real_fold(messages, directory, watermark)
+                        if real_fold is not None
+                        else 0
+                    )
+                    _complete(DONE, f"{n} records folded")
+                    return n
+                except Exception as exc:
+                    _complete(ERROR, str(exc))
+                    raise
+
+            self._memory_queue = MemoryConsolidationQueue(
+                memory_directory=self._memory_directory,
+                agent_name=self.agent_name,
+                span_source=span_source,
+                consolidate_span=publish_fold,
+            )
+        return self._memory_queue
+
+    async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
+        """Fire the background-consolidation hook, publishing task lifecycle.
+
+        Consumer #1 of the ``BackgroundEvent`` surface (mirrors coding_agent
+        ``MaintenanceStep``). First publish a ``queued`` task row, then fire the
+        trigger. The trigger builds the queue (and enqueues) ONLY when the
+        watermark says enough turns have accumulated; if the queue is still None,
+        no job is due this turn — mark skipped, don't leave a phantom "running"
+        row.
+
+        ``cid`` here is ALREADY profile-scoped by the caller (``_scoped_cid``).
+        """
+        if not self.memory_consolidation or cid is None:
+            return
+        self._consolidation_seq += 1
+        task_id = f"consolidation.{cid}.{self._consolidation_seq}"
+        task = BackgroundTask(id=task_id, label=f"Consolidating memory ({cid})")
+        self._publish_task(task)  # queued
+        try:
+            runs = await self._store.list_runs(conversation_id=cid)
+            if not runs:
+                task.status = SKIPPED
+                task.detail = "no persisted runs yet"
+                self._publish_task(task)
+                return
+            tip_run = runs[-1].run_id
+            tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+            anchors = user_anchor_indices(tip_history)
+            if not anchors:
+                task.status = SKIPPED
+                task.detail = "no persisted turns"
+                self._publish_task(task)
+                return
+            tip_turn = len(anchors) - 1
+            wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
+            if not should_fire(wm, current_turn_id=tip_turn, every=self.consolidate_every):
+                task.status = SKIPPED
+                task.detail = "no turns past the consolidation watermark"
+                self._publish_task(task)
+                return
+            self._ensure_memory_queue().enqueue(
+                self.agent_name,
+                ConsolidationJob(run_id=tip_run, turn_id=tip_turn),
+            )
+            if self._background_tasks.get(task_id) is not None:
+                task.status = PROCESSING  # job handed to the worker
+                self._publish_task(task)
+        except Exception as exc:  # trigger path itself failed (rare)
+            task.status = ERROR
+            task.detail = str(exc)
+            self._publish_task(task)
+
+    # -- async core -----------------------------------------------------------
 
     async def stream(
         self,
@@ -342,10 +729,13 @@ class Session2(Session):
         - Background memory-consolidation trigger fired post-turn.
 
         The chosen ``conversation_id`` (explicit > session default) is threaded
-        through so persistent storage restores prior history.
+        through (profile-scoped via ``_scoped_cid``) so persistent storage
+        restores prior history and the whole turn lives under one namespace
+        identity.
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
-        await self._ensure_resumed(cid)
+        scoped = self._scoped_cid(cid)
+        await self._ensure_resumed(scoped)
 
         # Stamp the current UTC timestamp onto the start of EVERY user message
         # (same ``[date: ...]`` convention the benchmark harness prepends), so
@@ -356,59 +746,65 @@ class Session2(Session):
         prompt = f"[date: {now.isoformat()}] {prompt}"
 
         result: AgentRunResult | None = None
-        # Trace hygiene: open ONE root span per turn (see runtime.py stream()).
         with root_span(
-            f"paf.run.{cid or 'default'}",
-            **( {"langfuse.observation.input": _run_input(prompt, cid)}),
+            f"paf.run.{scoped or 'default'}",
+            **({"langfuse.observation.input": _run_input(prompt, scoped)}),
         ) as _span:
             async with self._agent.iter(
                 prompt,
                 message_history=self.history,
-                conversation_id=cid,
+                conversation_id=scoped,
                 cancellation_token=self._token,
             ) as run:
-                # Phase 3: keep a handle to the active AgentRun so callers can
-                # steer mid-turn (enqueue) and the next natural boundary picks
-                # up the injected message. Cleared when the turn ends.
                 self._run = run
                 try:
                     async for node in run:
                         if isinstance(node, (ModelRequestNode, CallToolsNode)):
-                            # Both streamable node types expose
-                            # @asynccontextmanager stream(ctx) yielding an
-                            # AgentStreamEvent iterator; the union includes
-                            # PartStart/PartDelta/FunctionToolCall/
-                            # FunctionToolResult — same set as run_stream_events.
                             async with node.stream(run.ctx) as stream:
                                 async for event in stream:
-                                    # Reuse the SAME per-event dispatch the old
-                                    # flat loop used (Phase 1) + the Phase 2
-                                    # additive kinds. Extracted to a pure module
-                                    # function so it is unit-testable with
-                                    # synthetic events.
                                     for ev in _dispatch_stream_event(event):
                                         yield ev
                         elif isinstance(node, End):
                             break
                 finally:
-                    # The AgentRun is done (End reached, cancelled, or errored);
-                    # release the steering handle so enqueue()/cancel() after a
-                    # turn target nothing stale.
                     self._run = None
             result = run.result
             assert result is not None, "iter() ended before AgentRun.result settled"
-            # Set the trace output NOW, while the root span is still open.
             _span.set_attribute(
                 "langfuse.observation.output", _json_dumps(_run_output(result))
             )
         self.last_result = result
-        # ACKNOWLEDGE: new_messages() is ONLY this turn; older history lives in
-        # self.history. Accumulate, don't overwrite.
         self.history = [*self.history, *result.new_messages()]
-        # Fire the background memory-consolidation trigger (if enabled).
-        await self._maybe_trigger_consolidation(cid)
+        await self._maybe_trigger_consolidation(scoped)
 
-    # -- steering / control (Phase 3; cancel wired in Phase 1) --------------
+    async def run(
+        self,
+        prompt: str,
+        *,
+        conversation_id: str | None = None,
+    ) -> str:
+        """Run one turn and return the complete final text (async).
+
+        Thin convenience over :meth:`stream` that keeps only the answer text
+        (``kind == "text"``) and discards tool/thinking events.
+        """
+        parts: list[str] = []
+        async for event in self.stream(prompt, conversation_id=conversation_id):
+            if event.kind == "text":
+                parts.append(event.text)
+        return "".join(parts)
+
+    # -- thin sync convenience ------------------------------------------------
+
+    def run_sync(self, prompt: str, *, conversation_id: str | None = None) -> str:
+        """Run one turn synchronously; returns the final text.
+
+        Thin wrapper for scripts/tests that don't manage their own loop: creates
+        a short-lived loop, runs the async core inside it, returns the result.
+        """
+        return asyncio.run(self.run(prompt, conversation_id=conversation_id))
+
+    # -- steering / control ---------------------------------------------------
 
     async def cancel(self) -> None:
         """Stop the in-flight turn (CancellationToken cancel).
@@ -449,7 +845,6 @@ class Session2(Session):
         """
         if cb not in self._task_subscribers:
             self._task_subscribers.append(cb)
-        # Replay active tasks so the subscriber doesn't miss what's in flight.
         for task in self._background_tasks.values():
             if task.status in (QUEUED, PROCESSING):
                 cb(task.as_event())
@@ -468,109 +863,15 @@ class Session2(Session):
             except Exception:  # a subscriber must never break the session
                 log.exception("background-task subscriber failed task=%s", task.id)
 
-    async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
-        """Fire the background-consolidation hook, publishing task lifecycle.
+    # -- observability lifecycle ---------------------------------------------
 
-        Consumer #1 of the ``BackgroundEvent`` surface (mirrors coding_agent
-        ``MaintenanceStep``). Overrides :meth:`paf.runtime.Session._maybe_trigger_consolidation`
-        to first publish a ``queued`` task row, then ``await`` the base trigger.
-        The base uses the shared ``MemoryConsolidationQueue`` unchanged; the
-        wrap in :meth:`_ensure_memory_queue` flips the row to ``done``/``error``
-        once the off-turn worker actually folds (or fails) — the completion is
-        published on the background timeline, never inside ``stream()``.
-        """
-        if not self.memory_consolidation or cid is None:
-            return
-        self._consolidation_seq += 1
-        task_id = f"consolidation.{cid}.{self._consolidation_seq}"
-        task = BackgroundTask(id=task_id, label=f"Consolidating memory ({cid})")
-        self._publish_task(task)  # queued
-        try:
-            await super()._maybe_trigger_consolidation(cid)
-            # Base builds the queue (and enqueues) ONLY when the watermark
-            # says enough turns have accumulated. If the queue is still None,
-            # no job is due this turn — mark skipped, don't leave a phantom
-            # "running" row in the registry.
-            if self._memory_queue is None:
-                task.status = SKIPPED
-                task.detail = "no turns past the consolidation watermark"
-            elif self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-            self._publish_task(task)
-        except Exception as exc:  # trigger path itself failed (rare)
-            task.status = ERROR
-            task.detail = str(exc)
-            self._publish_task(task)
+    def close(self) -> None:
+        """Flush buffered spans and disable tracing before process exit."""
+        if self.trace:
+            shutdown_observability()
 
-    def _ensure_memory_queue(self):
-        """Build the shared queue with a completion-publishing fold wrap.
+    def __enter__(self) -> Session2:
+        return self
 
-        Reuses the base queue build (/also/ the wrapper) but wraps
-        ``self._consolidate_span`` so the off-turn worker's fold updates the
-        consolidation ``BackgroundTask`` to ``done`` (or ``error`` on throw)
-        and publishes it — the honest completion edge for consumer #1.
-        """
-        # Mark the currently-queued/running consolidation task done on success.
-        def _complete(kind: StepStatus, detail: str = "") -> None:
-            for task_id, task in list(self._background_tasks.items()):
-                if task_id.startswith("consolidation.") and task.status in (
-                    QUEUED,
-                    PROCESSING,
-                ):
-                    task.status = kind
-                    task.detail = detail
-                    task.progress = 1.0 if kind == DONE else None
-                    self._publish_task(task)
-
-        return self._make_queue_with_wrapped_fold(
-            _complete,
-            self._consolidate_span,
-        )
-
-    def _make_queue_with_wrapped_fold(
-        self, complete: Callable[[StepStatus, str], None], inner_span
-    ):
-        """Construct the memory queue, wrapping the fold seam with a publisher.
-
-        Kept separate so the wrap logic is unit-testable without a model call.
-        """
-        from pydantic_ai_harness.conversation_search import SnapshotHistorySource
-
-        from paf.capabilities.memory._background import (
-            MemoryConsolidationQueue,
-            resolve_unseen_span,
-        )
-        from paf.capabilities.memory._watermark import (
-            MemoryWatermark,
-        )
-
-        source = SnapshotHistorySource(self._store)
-
-        async def span_source(run_id: str, up_to_turn_id: int):
-            wm = MemoryWatermark.load(self._memory_directory, run_id=run_id)
-            return await resolve_unseen_span(
-                source, wm, tip_run=run_id, tip_turn=up_to_turn_id
-            )
-
-        real_fold = inner_span
-
-        async def publish_fold(messages, directory, watermark):
-            try:
-                n = (
-                    await real_fold(messages, directory, watermark)
-                    if real_fold is not None
-                    else 0
-                )
-                complete(DONE, f"{n} records folded")
-                return n
-            except Exception as exc:
-                complete(ERROR, str(exc))
-                raise
-
-        self._memory_queue = MemoryConsolidationQueue(
-            memory_directory=self._memory_directory,
-            agent_name=self.agent_name,
-            span_source=span_source,
-            consolidate_span=publish_fold,
-        )
-        return self._memory_queue
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
