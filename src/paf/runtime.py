@@ -344,16 +344,21 @@ class Session:
         if not self.memory_consolidation or cid is None:
             return
 
-        anchors = user_anchor_indices(self.history)
-        if not anchors:
-            return
-        tip_turn = len(anchors) - 1  # 0-based last (in-flight) turn
-
         # Current run = the most recently persisted one for this conversation.
         runs = await self._store.list_runs(conversation_id=cid)
         if not runs:
             return
         tip_run = runs[-1].run_id
+
+        # Derive tip_turn from the PERSISTED run history, not the truncated
+        # in-memory window (resume_window) — the watermark is a persisted-store
+        # ordinal, so the trigger must count turns in the same space or the
+        # delta never grows enough to fire. (2026-09-01: provenance fix.)
+        tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+        anchors = user_anchor_indices(tip_history)
+        if not anchors:
+            return
+        tip_turn = len(anchors) - 1  # 0-based last (persisted) turn
 
         wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
         if not should_fire(wm, current_turn_id=tip_turn, every=self.consolidate_every):
