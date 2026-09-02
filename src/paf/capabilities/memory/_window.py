@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai_harness.compaction import SlidingWindowCompaction
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
@@ -34,7 +35,24 @@ from paf.config import PROJECT_ROOT, settings
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
-    from pydantic_ai.messages import ModelMessage
+
+# Mid-turn eviction gate (Landon 2026-09-02, Option A): the eviction tier must
+# never consume the ACTIVE user turn. `compact()` is driven by
+# TieredCompaction._escalate before every model request, so it fires mid-turn —
+# exactly when the active prompt is vulnerable to find_safe_cutoff's back-walk
+# (run 01a05ff8: the live "implement it" prompt was evicted while its response
+# survived). The gate bounds every eviction decision to the completed prefix
+# strictly BEFORE the most recent real user prompt, so the current turn is
+# structurally unreachable by the window tier.
+#
+# The "<memory>" injected context parts carry a non-str `content` (a list), so
+# they are deliberately NOT turn starts — this mirrors runtime2._is_turn_start
+# so the gate and the resume_window renderer see the same turns.
+def _is_real_user_prompt(message: ModelMessage) -> bool:
+    return isinstance(message, ModelRequest) and any(
+        isinstance(part, UserPromptPart) and isinstance(part.content, str)
+        for part in (getattr(message, "parts", None) or [])
+    )
 
 # Same fixed store the assistant's Memory uses (build.py `_build_memory`). The
 # owner writes these plain `.md` bodies + CAS sidecar so the assistant reads the
@@ -93,7 +111,7 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
         messages: list[ModelMessage],
         ctx: RunContext,
     ) -> list[ModelMessage]:
-        """Consolidate, render, then trim.
+        """Consolidate, render, then trim — never consuming the active turn.
 
         Flow (chosen with Landon 2026-08-21, render source updated 2026-08-25):
         the **owner** wraps the about-to-evict slice into journal records
@@ -115,8 +133,37 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
            tier-sorting will return as a deterministic index *derivation*
            (pure code), not an LLM pass. The removed code is preserved in
            ``archive/organizer/`` (kept importable for revival).
+
+        **Mid-turn gate (2026-09-02, Option A):** ``compact`` is driven by
+        ``TieredCompaction._escalate`` *before every model request*, so it fires
+        mid-turn. To forbid eviction of the ACTIVE user turn, every decision is
+        bounded to the completed prefix before the most recent real user prompt:
+        consolidation folds only that prefix, and the base window is invoked on
+        that prefix alone, with the active turn re-appended verbatim. A history
+        that is entirely a live turn (or has nothing evictable in completed
+        turns) is returned untouched — the window tier never touches it.
+        ClearToolResults / ClampOversizedMessages are separate tiers and
+        continue to run mid-turn.
         """
-        cutoff = find_safe_cutoff(messages, self.keep_messages)
+        # === Mid-turn gate: locate the active turn's start ===
+        anchor: int | None = None
+        for i in range(len(messages) - 1, -1, -1):
+            if _is_real_user_prompt(messages[i]):
+                anchor = i
+                break
+        # Evictable = strictly before the last real user prompt. If the whole
+        # history is the active turn (no completed prefix), nothing may drop.
+        if anchor is None or anchor == 0:
+            return messages
+        settled = list(messages[:anchor])  # completed turns only
+        active = messages[anchor:]         # current turn — never evicted
+        # Recompute the cutoff against the SETTLED prefix only. If nothing is
+        # evictable there (short completed history), skip entirely — even the
+        # active tail must not be pushed through the base, which would re-derive
+        # an un-clamped cutoff over the full list.
+        cutoff = find_safe_cutoff(settled, self.keep_messages)
+        if cutoff <= 0:
+            return messages
         if cutoff > 0 and (
             self._consolidated_cutoff is None or cutoff > self._consolidated_cutoff
         ):
@@ -126,7 +173,7 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
 
             journal = JournalStore(self.memory_directory)
             await consolidate(
-                messages,
+                settled,
                 store=self._build_memory_store(),
                 agent_name=self.memory_agent,
                 namespace=self.memory_namespace,
@@ -149,7 +196,11 @@ class MemoryConsolidationWindow(SlidingWindowCompaction):
 
             update_index(self.memory_directory)
             self._consolidated_cutoff = cutoff
-        return await super().compact(messages, ctx)
+        # Run the base window over the settled prefix ONLY, then reattach the
+        # active turn verbatim. The base's find_safe_cutoff / find_token_cutoff
+        # can therefore never reach the active prompt.
+        trimmed_settled = await super().compact(settled, ctx)
+        return [*trimmed_settled, *active]
 
     def _build_memory_store(self):
         """Construct the store handle for the owner's `Memory` (journal-view).

@@ -54,7 +54,9 @@ def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
       never the tail or the full list;
     * the stub writes durable content to the real flat-file store (proving the store the
       window targets is reachable and writable);
-    * the window still trims to ``keep_messages`` (consolidation does not swallow the trim).
+    * the window still trims to ``keep_messages`` (consolidation does not swallow the trim);
+    * the ACTIVE user turn (the last real user prompt) is never evicted — it is re-appended
+      verbatim after trimming (Option A mid-turn gate).
     """
     import asyncio
 
@@ -71,7 +73,6 @@ def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
         for i in range(6)
     ]
     captured: dict[str, object] = {}
-
     async def fake_consolidate(
         messages, *, store, agent_name, namespace, keep_tail, journal=None
     ):
@@ -100,13 +101,19 @@ def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
 
     cutoff = find_safe_cutoff(msgs, 2)
     assert cutoff == 4  # 6 messages, keep 2 -> evict first 4
-    # The window hands consolidate the FULL list + keep_tail on the eviction boundary;
-    # consolidate() (not the window) is responsible for slicing to the evicted prefix.
-    assert len(captured["slice"]) == 6  # type: ignore[arg-type]
+    # Mid-turn gate (2026-09-02, Option A): the window never consumes the ACTIVE
+    # user turn. The last real user prompt (index 5) is that turn's start, so the
+    # evictable/settled prefix is EXACTLY msgs[:5]; the 6th user message is
+    # re-appended verbatim and must survive eviction. This is the regression
+    # guard for run 01a05ff8, where the live "implement it" prompt was dropped.
+    assert len(captured["slice"]) == 5  # type: ignore[arg-type]
+    assert captured["slice"][:5] == msgs[:5]  # type: ignore[arg-type]
     assert captured["keep_tail"] == 2
-    # Window trims to keep_messages=2 PLUS one preserved opening user message (the
-    # harness's preserve_first_user_message default), so 3 remain.
-    assert len(out) == 3
+    # Window trims the SETTLED prefix (5) to keep_messages=2 PLUS one preserved
+    # opening user message = 3, then re-appends the protected active turn -> 4.
+    assert len(out) == 4
+    # The active (last) user message is never dropped.
+    assert out[-1] == msgs[-1]
 
     # End-to-end proof of the split-brain fix: after consolidate appends to the
     # journal, compact renders root MEMORY.md, and the assistant's JournalViewStore
