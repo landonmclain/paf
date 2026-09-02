@@ -36,7 +36,8 @@ from rich.text import Text
 
 from paf.capabilities import PROFILES
 from paf.config import PROJECT_ROOT
-from paf.runtime import Session, StreamEvent
+from paf.runtime2 import Session2 as Session
+from paf.runtime2 import StreamEvent
 from paf.specs import resolve_profile_name
 
 DEFAULT_AGENT = "demo_assistant"
@@ -293,6 +294,11 @@ def _answer_panel(out: TurnStream, *, max_body_lines: int | None = None) -> Pane
 
 def render(event: StreamEvent, out: TurnStream) -> None:
     """Fold one StreamEvent into ``out`` (the Live loop drives redraws)."""
+    # runtime2 emits additive kinds (ToolRunning/ToolError/...) that this CLI
+    # doesn't render yet; only StreamEvents carry `.kind`. Skip them so a
+    # session with tool lifecycle events still renders the base 4 kinds.
+    if not isinstance(event, StreamEvent):
+        return
     if event.kind == "thinking" and event.text:
         out.add_thinking(event.text)
     elif event.kind == "text" and event.text:
