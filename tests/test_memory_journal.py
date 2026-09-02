@@ -322,7 +322,10 @@ def test_render_each_line_carries_fact_date_source(tmp_path) -> None:
     line = next(ln for ln in md.splitlines() if ln.startswith("- "))
     # fact, date (born_on), source all present on the one line.
     assert "user prefers flat-file, diffable storage" in line
-    assert "2026-08-17T10:30:00+00:00" in line
+    # MEMORY.md presents dates only — time-of-day is stripped at render
+    # (presentation-only; born_on in the journal/index keeps the full ISO).
+    assert "2026-08-17" in line
+    assert "T10:30:00+00:00" not in line
     assert "seed-lmem-a1b2c3d4:12" in line
 
 

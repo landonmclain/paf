@@ -18,7 +18,7 @@ each tier (most-recent-first), each line carrying **at least fact, date
 (born_on), and source (source_ref)**:
 
     ## t1
-    - user prefers flat-file storage — 2026-08-17T10:30:00+00:00 — seed-a1b2:12
+    - user prefers flat-file storage — 2026-08-17 — seed-a1b2:12
 
 Type grouping is gone — type remains a journal search tag only, not a render
 axis. The render is deliberately **unbound** (emits every record) so a
@@ -85,7 +85,7 @@ def render_journal_memory(
         if not recs:
             continue
         lines = [
-            f"- {_encode(r.fact)}{_SEP}{r.born_on}{_SEP}{r.source_ref}"
+            f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{r.source_ref}"
             if r.born_on
             else f"- {_encode(r.fact)}{_SEP}{r.source_ref}"
             for r in recs
@@ -134,7 +134,7 @@ def render_index_memory(store: JournalStore, index) -> str:
         if not recs:
             continue
         lines = [
-            f"- {_encode(r.fact)}{_SEP}{r.born_on}{_SEP}{r.source_ref}"
+            f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{r.source_ref}"
             if r.born_on
             else f"- {_encode(r.fact)}{_SEP}{r.source_ref}"
             for r in recs
@@ -195,3 +195,17 @@ def _encode(text: str) -> str:
     """Sanitize a fact for a single md line: replace internal newlines/sep."""
     # Collapse newlines so a multi-line fact never breaks the one-per-line shape.
     return " ".join(text.split())
+
+
+def _date_only(born_on: str) -> str:
+    """Reduce a ``born_on`` ISO timestamp to calendar date for display.
+
+    Presentation-only: the journal/index keep the full ``born_on`` timestamp
+    (that is the sort key); MEMORY.md shows just ``YYYY-MM-DD`` because the
+    time-of-day is noise in the notebook view (every production record pins
+    ``T00:00:00`` anyway — the source turns carry only dates). Ordering is
+    unaffected: nothing downstream parses this rendered string.
+    """
+    if not born_on:
+        return born_on
+    return born_on.split("T", 1)[0]
