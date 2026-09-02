@@ -207,19 +207,20 @@ vault:
 #   get cleared mid-turn — the destructive blanking only kicks in on genuinely
 #   long/huge turns. (Was 4 — too aggressive, nuked read_file results the model
 #   still needed, leaving it blind mid-answer.)
-# consolidate: TRUE — memory is used in demo (the everything sandbox), and the
-#   journal-folding consolidation is proven in benchmark tests, so wire it in.
-#   When the sliding window evicts old turns, it first folds the about-to-evict
-#   slice into the durable journal via the writable owner sub-agent (now via the
-#   M2 JournalStore + write_render, matching the benchmark path), so durable
-#   facts survive eviction instead of being lost.
+# consolidate: FALSE — moved OFF (2026-09-02). The background watermark worker
+#   is now the sole memory writer: it reads from the persisted store (durable,
+#   lossless) on `memory.consolidate_every`, so trimming the live window loses
+#   nothing. The inline eviction fold is redundant AND harmful — it ran an LLM
+#   mid-turn on the live message list, blocked the turn, and once dropped a
+#   user message from context. Keep `compact.consolidate` off so eviction
+#   stays a plain trim-only SlidingWindowCompaction.
 compact:
   target_tokens: 50000
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 20
-  consolidate: true
+  consolidate: false
 
 # Per-assistant memory tuning (option B — lives in the spec, not in Python).
 # Read by `build_agent` -> `_spec_memory_config` -> `_build_memory` -> the

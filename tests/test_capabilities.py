@@ -393,6 +393,39 @@ def test_compaction_builds_real_strategy_objects() -> None:
     assert all(type(tier) in strategy_types for tier in compaction.tiers)
 
 
+def test_build_compaction_consolidate_flag_selects_window_type() -> None:
+    """The `compact.consolidate` flag is the ONLY switch between the plain
+    trim-only sliding window and the sync (inline, eviction-time) fold.
+
+    Regression for the 2026-09-02 decision: eviction must stay trim-only —
+    the background watermark worker (reads from the persisted store) is the
+    sole memory writer. `consolidate=False` must therefore produce a plain
+    `SlidingWindowCompaction` with NO memory write on eviction, and
+    `consolidate=True` the `MemoryConsolidationWindow`. This pins that the two
+    paths are disjoint: the background trigger is gated separately (session
+    `memory_consolidation` flag + `memory.consolidate_every`), never by this
+    flag.
+    """
+    from paf.capabilities.compaction import CompactionConfig
+
+    # consolidate=False -> plain, trim-only window (no inline memory fold).
+    off = build_compaction(CompactionConfig(consolidate=False))
+    window_off = off.tiers[-1]
+    assert type(window_off) is SlidingWindowCompaction
+    assert not isinstance(window_off, MemoryConsolidationWindow)
+
+    # consolidate=True -> the sync consolidation window (the eviction fold).
+    on = build_compaction(CompactionConfig(consolidate=True))
+    assert isinstance(on.tiers[-1], MemoryConsolidationWindow)
+
+    # Spec path mapping: `compact: {consolidate: false}` must round-trip
+    # through CompactionConfig.from_mapping into the same plain window.
+    from_spec = build_compaction(
+        CompactionConfig.from_mapping({"consolidate": False})
+    )
+    assert type(from_spec.tiers[-1]) is SlidingWindowCompaction
+
+
 # --- EgressPolicy: secure default, explicit override, metadata firebreak ----
 
 def _policy(*, block_private: bool, allowed: list[str] | None) -> EgressPolicy:
