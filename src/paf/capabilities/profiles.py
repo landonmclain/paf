@@ -227,6 +227,12 @@ CONTEXTBENCH_PROFILE = AgentProfile(
 RUNTIME2_TEST_PROFILE = AgentProfile(
     name="runtime2_test",
     capability_names=(
+        # StepPersistence so turns actually land in the store (data/paf/) — the
+        # web UI's history render reads list_runs(cid); without this writer the
+        # lane stays empty and nothing renders on reload. Purely additive (writes
+        # steps to disk, no extra tools), so the deterministic ToolRunning/
+        # ToolError test surface is undisturbed.
+        "StepPersistence",
         "Shell",
     ),
 )

@@ -49,7 +49,8 @@ import gradio as gr
 from gradio.components.chatbot import MetadataDict as GradioMetadataDict
 
 from paf.capabilities import PROFILES
-from paf.runtime import Session, StreamEvent
+from paf.runtime2 import Session2 as Session
+from paf.runtime2 import StreamEvent
 
 DEFAULT_AGENT = "demo_assistant"
 DEFAULT_PORT = 8080
@@ -553,10 +554,17 @@ def _boot_banner(session: Session) -> list[gr.ChatMessage]:
 # ---------------------------------------------------------------------------
 
 
+# Per-session boot flags (id-keyed; sessions are singletons per agent_name in
+# `_sessions`). Tracked here instead of a dynamic attribute on the Session so
+# neither Pyright (unknown attr on Session2) nor ruff (B010 setattr-constant)
+# is tripped.
+_session_booted: set[int] = set()
+
+
 async def _seed_once(session: Session) -> None:
     """Seed durable history on first run (single-lane resume), like cli3."""
-    if not getattr(session, "_web_booted", False):
-        session._web_booted = True
+    if id(session) not in _session_booted:
+        _session_booted.add(id(session))
         try:
             await session.restore()
         except Exception:  # noqa: BLE001 - persistence is optional sugar
@@ -782,7 +790,11 @@ async def event_messages(
 
     t0 = time.perf_counter()
     async for event in session.stream(prompt, conversation_id=session.conversation_id):
-        render(event, out)
+        # runtime2 streams an additive union (StreamEvent | ToolRunning | ToolError).
+        # The new kinds carry no `.kind` — render only the base 4 for now; the
+        # additive events pass through unrendered (mirrors the cli3 guard).
+        if isinstance(event, StreamEvent):
+            render(event, out)
         # Rebuild the current turn's assistant transcript fresh each frame
         # (never accumulate via slicing), so Gradio replaces the open accordion
         # in place instead of growing new bubbles. Pass a fresh `now` so the

@@ -1,11 +1,14 @@
 # runtime2_test — LEAN agent for exercising the Session2 stream/event contract.
 #
-# Purpose: a minimal, deterministic agent for testing the next-gen runtime
-# (src/paf/runtime2.py) — specifically the additive Phase 2 event kinds
-# (ToolRunning on tool-call start, ToolError on a failed/retried result, keyed
-# by the same step_id). It is NOT a product surface; it exists so a smoke test
-# can assert ToolRunning/ToolError pairing precisely without the model
-# derailing into search/vault/compaction loops (demo_assistant did exactly that).
+# Purpose: a minimal, deterministic agent for exercising the next-gen runtime
+# (src/paf/runtime2.py) — the additive Phase 2 event kinds (ToolRunning on
+# tool-call start, ToolError on a failed/retried result, keyed by the same
+# step_id). It is intentionally NOT a full product surface — Shell is the only
+# allowlisted capability — but it should still hold a light conversation, so
+# you can chat with it over the web UI and drive the tool lifecycle when a task
+# actually needs a command. It exists so a smoke test can assert
+# ToolRunning/ToolError pairing precisely without the model derailing into
+# search/vault/compaction loops (demo_assistant did exactly that).
 #
 # The `runtime2_test` profile (src/paf/capabilities/profiles.py) allowlists a
 # SINGLE harness capability — Shell. Shell's `run_command` is the success path
@@ -34,10 +37,13 @@ profile: runtime2_test
 model: openrouter:deepseek/deepseek-v4-flash-0731
 
 instructions: |
-  You are a minimal test agent. Given a task, use the `run_command` tool to
-  execute it and report the result concisely — a single tool call per task, then
-  reply briefly. Do not chain extra tools, re-search, or wander. If a command
-  fails (non-zero exit), say plainly that it failed and report the error.
+  You are a lean test agent. Hold a normal conversational back-and-forth: answer
+  questions directly, acknowledge the user, and only reach for the `run_command`
+  tool when the task actually requires running a command or checking something on
+  the system. When you do use it, run the command, report the result concisely,
+  and continue the conversation naturally — no need to re-run, re-search, or pad
+  with extra tool calls. If a command fails (non-zero exit or a denied command),
+  say plainly that it failed and report the error. Keep replies brief and helpful.
 
 model_settings:
   # Maximum determinism: temp 0 + fixed seed so smoke tests for the event
