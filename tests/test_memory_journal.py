@@ -310,7 +310,33 @@ def test_render_groups_by_tier_and_sorts_newest_first(tmp_path) -> None:
     )
 
 
-def test_render_each_line_carries_fact_date_source(tmp_path) -> None:
+def test_render_pins_identity_type_to_top_of_tier(tmp_path) -> None:
+    """Within a tier, identity-type records sort ABOVE other types living recency.
+
+    An OLDER identity fact beats a NEWER non-identity fact within the same tier
+    ("who the user is" stays uppermost), and recency still rules within each group.
+"""
+    store = JournalStore(tmp_path)
+    store.append_many([
+        _rec("preference", "newer non-identity pref", "2026-08-20T00:00:00Z"),
+        _rec("identity", "older identity fact", "2026-08-10T00:00:00Z"),
+        _rec("identity", "newest identity fact", "2026-08-18T00:00:00Z"),
+        _rec("fact", "a plain fact", "2026-08-15T00:00:00Z"),
+    ])
+    md = render_journal_memory(store)
+    t1_block = md.split("## t1", 1)[1].split("## ", 1)[0]
+    lines = [ln for ln in t1_block.splitlines() if ln.startswith("- ")]
+    joined = "\n".join(lines)
+
+    assert len(lines) == 4
+    # identity-type block comes before ANY non-identity line
+    assert joined.index("newest identity fact") < joined.index("newer non-identity pref")
+    assert joined.index("older identity fact") < joined.index("newer non-identity pref")
+    # recency within identity kept (newest identity before older identity)
+    assert joined.index("newest identity fact") < joined.index("older identity fact")
+
+
+def test_render_each_line_carries_fact_date_journal_id(tmp_path) -> None:
     store = JournalStore(tmp_path)
     store.append(
         type="preference",
@@ -320,13 +346,17 @@ def test_render_each_line_carries_fact_date_source(tmp_path) -> None:
     )
     md = render_journal_memory(store)
     line = next(ln for ln in md.splitlines() if ln.startswith("- "))
-    # fact, date (born_on), source all present on the one line.
+    # fact, date (born_on), journal-line provenance all present on the one line.
     assert "user prefers flat-file, diffable storage" in line
     # MEMORY.md presents dates only — time-of-day is stripped at render
     # (presentation-only; born_on in the journal/index keeps the full ISO).
     assert "2026-08-17" in line
     assert "T10:30:00+00:00" not in line
-    assert "seed-lmem-a1b2c3d4:12" in line
+    # provenance is the stable journal LINE ID (this is record 1), not the
+    # {run_id}:{turn_id} — the source_ref stays in the journal record, traceable
+    # via find_memory / search_conversation_history, but no longer rides the line.
+    assert "#1" in line
+    assert "seed-lmem-a1b2c3d4:12" not in line
 
 
 def test_render_omits_absent_tiers(tmp_path) -> None:

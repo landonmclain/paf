@@ -53,17 +53,24 @@ _TIER_CAPS: dict[str, int | None] = {"t1": None, "t2": 25, "t3": 15}
 
 
 def _group_by_tier(records: list[MemoryRecord]) -> dict[str, list[MemoryRecord]]:
-    """Group records by `tier`, each group sorted by `born_on` descending.
+    """Group records by `tier`, each group sorted (recency + identity-pin).
 
-    Most-recent-first within a tier (newest at top). Ties keep append order
-    (stable sort). Iterates in deterministic append order here; final sorted
-    emission is in :func:`render_journal_memory`.
+    Within a tier, sort by ``born_on`` descending (most-recent-first), but
+    ``identity``-type records are pinned ABOVE all other types in the same tier
+    (so "who the user is" stays at the top of ``## t1`` regardless of age).
+    Ties keep append order (stable sort).
     """
     groups: dict[str, list[MemoryRecord]] = {}
     for rec in records:
         groups.setdefault(rec.tier, []).append(rec)
     for recs in groups.values():
-        recs.sort(key=lambda r: r.born_on, reverse=True)
+        # identity-pin: identity-type records first (top of the tier section),
+        # then everything else; recency (born_on desc) within each sub-group.
+        identity = [r for r in recs if r.type == "identity"]
+        others = [r for r in recs if r.type != "identity"]
+        identity.sort(key=lambda r: r.born_on, reverse=True)
+        others.sort(key=lambda r: r.born_on, reverse=True)
+        recs[:] = identity + others
     return groups
 
 
@@ -80,8 +87,11 @@ def render_journal_memory(
     Unbound: every record is emitted.
     """
     records: list[MemoryRecord]
+    provenance: dict[int, str] = {}
     if isinstance(store, JournalStore):
-        records = [r for _, r in store.read_all()]
+        pairs = store.read_all()
+        records = [r for _, r in pairs]
+        provenance = {id(r): f"#{ln}" for ln, r in pairs}
     else:
         records = list(store)
 
@@ -92,12 +102,14 @@ def render_journal_memory(
         recs = groups.get(tier)
         if not recs:
             continue
-        lines = [
-            f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{r.source_ref}"
-            if r.born_on
-            else f"- {_encode(r.fact)}{_SEP}{r.source_ref}"
-            for r in recs
-        ]
+        lines = []
+        for r in recs:
+            prov = provenance.get(id(r)) or r.source_ref
+            lines.append(
+                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}"
+                if r.born_on
+                else f"- {_encode(r.fact)}{_SEP}{prov}"
+            )
         sections.append(f"## {tier}\n" + "\n".join(lines))
 
     return "\n\n".join(sections) + ("\n" if sections else "")
@@ -105,22 +117,23 @@ def render_journal_memory(
 
 def _select_index_winners(
     store: JournalStore, index
-) -> list[MemoryRecord]:
-    """Return the journal records that are surviving facts per the index.
+) -> list[tuple[int, MemoryRecord]]:
+    """Return the (journal-line-id, record) pairs that are surviving facts.
 
     ``index`` is a :class:`._index.MemoryIndex` (loaded, not its raw dict). For
     each entry we keep the record at ``entry["current_line"]`` — the single
     live copy of that fact — and drop every line in ``deduped_lines``. The
     journal is the source of the fact text; the index is the verdict on which
-    line is the live one.
+    line is the live one. The returned ``line`` is the stable journal id used
+    as the rendered provenance (and the address overrides/`find_memory` key on).
     """
     records = [r for _, r in store.read_all()]
-    winners: list[MemoryRecord] = []
+    winners: list[tuple[int, MemoryRecord]] = []
     for entry in index.entries:
         line = int(entry["current_line"])
         # current_line is a 1-based journal line number; records are 0-indexed.
         if 1 <= line <= len(records):
-            winners.append(records[line - 1])
+            winners.append((line, records[line - 1]))
     return winners
 
 
@@ -140,24 +153,30 @@ def render_index_memory(store: JournalStore, index) -> str:
     remain reachable in the journal / index, never lost).
     """
     winners = _select_index_winners(store, index)
-    groups = _group_by_tier(winners)
+    groups = _group_by_tier([r for _, r in winners])
     # Bound each already-recency-sorted group to its tier cap (t1 unbounded).
     groups = {
         tier: recs[:_TIER_CAPS[tier]] if _TIER_CAPS.get(tier) else recs
         for tier, recs in groups.items()
     }
 
+    # Map a record back to its journal line id (the rendered provenance).
+    line_of = {id(r): ln for ln, r in winners}
+
     sections: list[str] = []
     for tier in _TIER_ORDER:
         recs = groups.get(tier)
         if not recs:
             continue
-        lines = [
-            f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{r.source_ref}"
-            if r.born_on
-            else f"- {_encode(r.fact)}{_SEP}{r.source_ref}"
-            for r in recs
-        ]
+        lines = []
+        for r in recs:
+            ln = line_of.get(id(r))
+            prov = f"#{ln}" if ln is not None else r.source_ref
+            lines.append(
+                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}"
+                if r.born_on
+                else f"- {_encode(r.fact)}{_SEP}{prov}"
+            )
         sections.append(f"## {tier}\n" + "\n".join(lines))
 
     return "\n\n".join(sections) + ("\n" if sections else "")
