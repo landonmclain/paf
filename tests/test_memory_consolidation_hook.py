@@ -1,23 +1,13 @@
-"""End-to-end test that the memory compaction HOOK actually fires and writes.
+"""Tests for the turn-bounded, trim-only eviction window (``TurnBoundSlidingWindow``).
 
-The benchmark harness (run_lmem.py) deliberately bypasses live
-`MemoryConsolidationWindow.compact()`: on direct-seeded data the sliding window
-never overflows, so it calls `consolidate_conversation` (the full-conversation
-variant) directly instead. That means the REAL eviction boundary — the path a
-production long conversation actually takes when the window trims — was never
-exercised by a test. The existing `test_build_agent.py` tests only assert WHICH
-window tier is present (`MemoryConsolidationWindow` in the ladder), not that it
-fires consolidation on the about-to-evict slice and writes durable memory.
+The assistant's eviction tier is a plain sliding window that (1) never consumes
+the ACTIVE user turn (the 2026-09-02 Option A gate — regression for run
+01a05ff8 where the live "implement it" prompt was evicted while its response
+survived) and (2) performs **no memory work** — durable-fact capture is the
+background watermark worker's job, never eviction.
 
-This test closes that gap deterministically and WITHOUT a model/API key: it
-monkeypatches `_consolidate.consolidate` (the function `_window.compact` calls
-via a lazy `from ._consolidate import`) with a recording fake that writes a
-known `MEMORY.md` into the store, then drives `MemoryConsolidationWindow.compact`
-through a real overflow. It asserts:
-  1. consolidation FIRES exactly when the window would evict (cutoff > 0), and
-  2. derives its input from the about-to-evict tail, and
-  3. writes durable memory into the shared store, and
-  4. still returns the trimmed tail the plain window would.
+The former inline eviction-fold window (``MemoryConsolidationWindow``) is
+DELETED, so there is no consolidation at the eviction boundary to test here.
 
 Follows the project convention of wrapping async bodies in `asyncio.run`
 (no pytest-asyncio plugin in the suite).
@@ -26,195 +16,72 @@ Follows the project convention of wrapping async bodies in `asyncio.run`
 from __future__ import annotations
 
 import asyncio
-import json
 import types
-from pathlib import Path
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
-from paf.capabilities.memory._window import MemoryConsolidationWindow
+from paf.capabilities.memory._window import TurnBoundSlidingWindow
 
 
 def _make_messages(n: int) -> list[ModelRequest]:
-    """Build a message list of `n` plain user turns (the common overflow shape)."""
+    """Build a list of `n` plain user turns (the common overflow shape)."""
     return [
         ModelRequest(parts=[UserPromptPart(content=f"user message {i}")])
         for i in range(n)
     ]
 
 
-class _Gotcha:
-    """Recording probe for the `consolidate` call site."""
+def test_window_trims_settled_prefix_never_active_turn() -> None:
+    """Trim drops only the SETTLED prefix; the active (last) user turn survives.
 
-    def __init__(self, store_dir: Path):
-        self.store_dir = store_dir
-        self.cutoff: int | None = None
-        self.passed_messages: int = 0
-        self.keep_tail: int = 0
-        self.call_count: int = 0
-
-    async def __call__(self, messages, *, store, agent_name, namespace, keep_tail, journal=None):
-        # Record exactly what _window.compact handed over.
-        self.call_count += 1
-        self.passed_messages = len(messages)
-        self.keep_tail = keep_tail
-        self.cutoff = find_safe_cutoff(messages, keep_tail)
-        # Durable memory is written through the M2 journal (append_memory), which
-        # the window then renders to root MEMORY.md — NOT the legacy store.
-        assert journal is not None, "window must pass the journal through to consolidate"
-        journal.append(
-            type="fact",
-            fact=f"consolidated {self.cutoff} evicted messages",
-            tier="t1", born_on="2023-08-20",
-            source_ref="test:0",
-        )
-        return None
-
-
-def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch):
-    # The shared Markdown store the window targets for memory.
-    store_dir = tmp_path / "memory"
-    store_dir.mkdir()
-
-    # A window that overflows at 5 messages and keeps 2 at the tail.
-    window = MemoryConsolidationWindow(
-        max_messages=5,
-        keep_messages=2,
-        memory_directory=str(store_dir),
-        memory_agent="assistant",
-    )
-
+    The window bounds every eviction decision to the completed history strictly
+    before the most recent real user prompt, so the in-flight turn is
+    structurally unreachable by the window tier.
+    """
+    window = TurnBoundSlidingWindow(max_messages=5, keep_messages=2)
     # Real overflow: 8 messages > max_messages=5 -> the plain window WOULD trim.
     messages = _make_messages(8)
-
-    # Substitute the real owner consolidation (model call) with a deterministic
-    # recording write. `_window.compact` lazy-imports `consolidate` per call, so
-    # patching the module attribute is picked up. (The organizer/consolidation
-    # passes are unhooked in the window, so no organizer stub is needed.)
-    got = _Gotcha(store_dir)
-    monkeypatch.setattr(
-        "paf.capabilities.memory._consolidate.consolidate", got, raising=True
-    )
-
-    # `MemoryConsolidationWindow.compact` never dereferences `ctx` fields (it only
-    # passes them through to the base window, which likewise only consults the
-    # messages list + cutoff helpers), so a lightweight stand-in is sufficient.
     fake_ctx = types.SimpleNamespace(messages=messages, model=None)
 
     result = asyncio.run(window.compact(messages, fake_ctx))  # type: ignore[arg-type]
 
-    # 1. Consolidation fired exactly once, on the about-to-evict prefix.
-    assert got.cutoff is not None and got.cutoff > 0, (
-        "consolidation must fire only when the window actually evicts"
-    )
-    # The slice handed to consolidate is the SETTLED prefix strictly before the
-    # active (last) user turn — the window never folds the live turn's messages.
-    # With 8 plain user turns the gate anchors at index 7, so settled = 7.
-    assert got.passed_messages == 7  # len(settled) — the active turn is excluded
-    expected_cutoff = 7 - 2  # find_safe_cutoff(settled=7, keep_messages=2)
-    assert got.cutoff == expected_cutoff
-    assert got.keep_tail == 2
+    # Settled = strictly before the last real user prompt (index 7) = 7 messages.
+    settled = messages[:7]
+    cutoff = find_safe_cutoff(settled, window.keep_messages)
+    assert cutoff == 7 - 2  # keep=2 -> drop the first 5 of the settled prefix
 
-    # 2. Durable memory was written into the shared store, through the new
-    #    owner → journal-render path: MEMORY.md comes from the append-only
-    #    journal, not a curated LLM index.
-    assert (store_dir / "MEMORY.md").is_file()
-    md = (store_dir / "MEMORY.md").read_text(encoding="utf-8")
-    assert f"consolidated {expected_cutoff} evicted messages" in md
-    # The journal is the sole source; MEMORY.md and the derived index are both
-    # produced deterministically from it (2026-09-01: the derived index is back
-    # as a pure, non-LLM projection — NOT the removed LLM IndexStore).
-    assert (store_dir / "memory-journal.jsonl").is_file()
-    assert (store_dir / "memory-index.json").is_file()
-    idx = json.loads((store_dir / "memory-index.json").read_text(encoding="utf-8"))
-    assert idx.get("schema") == 1
-    assert idx.get("watermark") >= 1
-
-    # 3. The window still performed the trim (the contract of the base window),
-    #    never consuming the active turn: settled(7) trimmed to keep=2 (+1
-    #    preserved first user msg) = 3, re-appended with the active turn(1) = 4.
+    # Settled(7) trimmed to keep=2 + 1 preserved opening user msg = 3, then the
+    # active turn re-appended = 4.
     assert len(result) == 4
     assert result[-1] == messages[-1], "the active (last) user turn must survive"
 
 
-def test_compaction_hook_noop_when_nothing_to_evict(tmp_path, monkeypatch):
-    """When `compact` is invoked but nothing is about to be evicted (history is at or
-    under `keep_messages`), consolidation must NOT fire — the window short-circuits
-    on `find_safe_cutoff(...) <= 0`. (The outer trigger — `before_model_request` /
-    `TieredCompaction._escalate` — decides *whether* `compact` runs at all; this pins
-    the inner guard that prevents a redundant consolidation on a non-trimming call.)"""
-    store_dir = tmp_path / "memory"
-    store_dir.mkdir()
-
-    window = MemoryConsolidationWindow(
-        max_messages=5,
-        keep_messages=2,
-        memory_directory=str(store_dir),
-        memory_agent="assistant",
-    )
+def test_window_noop_when_nothing_evictable() -> None:
+    """History at or under keep_messages -> no trim at all (whole list returned)."""
+    window = TurnBoundSlidingWindow(max_messages=5, keep_messages=2)
     messages = _make_messages(2)  # len == keep_messages -> nothing to evict
-
-    got = _Gotcha(store_dir)
-    monkeypatch.setattr(
-        "paf.capabilities.memory._consolidate.consolidate", got, raising=True
-    )
-
     fake_ctx = types.SimpleNamespace(messages=messages, model=None)
-    asyncio.run(window.compact(messages, fake_ctx))  # type: ignore[arg-type]
 
-    # No consolidation, no memory write.
-    assert got.cutoff is None, "consolidation must NOT fire when nothing is evicted"
-    assert not (store_dir / "MEMORY.md").exists()
+    result = asyncio.run(window.compact(messages, fake_ctx))  # type: ignore[arg-type]
+    assert result == messages, "no eviction must leave the history untouched"
 
 
-def test_compaction_hook_rate_limits_within_one_turn(tmp_path, monkeypatch):
-    """Consolidation is rate-limited to once per eviction generation.
+def test_window_does_no_memory_work(tmp_path) -> None:
+    """The trim-only window never writes memory-journal.jsonl / MEMORY.md.
 
-    The harness drives `compact` once per model request, so a long tool-heavy turn
-    can cross the token trigger repeatedly and call `compact` several times over
-    roughly the same history (witnessed: 5 consolidations in one turn). The window
-    must fold the about-to-evict slice into memory only when it extends BEYOND what
-    was last folded — a repeat call over the same/smaller cutoff is a no-op (the
-    plain window still trims, but memory is not re-written).
+    Durable fact capture is the background watermark worker's job; eviction is
+    pure context management. An overflowed trim must leave the target memory
+    directory pristine.
     """
     store_dir = tmp_path / "memory"
     store_dir.mkdir()
+    window = TurnBoundSlidingWindow(max_messages=5, keep_messages=2)
+    messages = _make_messages(8)
+    fake_ctx = types.SimpleNamespace(messages=messages, model=None)
 
-    window = MemoryConsolidationWindow(
-        max_messages=5,
-        keep_messages=2,
-        memory_directory=str(store_dir),
-        memory_agent="assistant",
-    )
+    asyncio.run(window.compact(messages, fake_ctx))  # type: ignore[arg-type]
 
-    got = _Gotcha(store_dir)
-    monkeypatch.setattr(
-        "paf.capabilities.memory._consolidate.consolidate", got, raising=True
-    )
-
-    fake_ctx = types.SimpleNamespace(messages=[], model=None)
-
-    # 1st fire: 8 messages -> settled=7, cutoff=5, consolidates (fresh material).
-    m8 = _make_messages(8)
-    fake_ctx.messages = m8
-    asyncio.run(window.compact(m8, fake_ctx))  # type: ignore[arg-type]
-    assert got.cutoff == 5
-    assert got.call_count == 1
-
-    # 2nd fire, same turn: history re-inflated to the same size (a tool result
-    # pushed the estimate back over the token trigger). cutoff 5 is NOT beyond
-    # the last folded cutoff -> memory must NOT be re-consolidated.
-    m8b = _make_messages(8)
-    fake_ctx.messages = m8b
-    asyncio.run(window.compact(m8b, fake_ctx))  # type: ignore[arg-type]
-    assert got.call_count == 1, "repeat consolidation over same cutoff must be skipped"
-
-    # 3rd fire: genuinely new material accumulated (12 messages). settled=11,
-    # cutoff 9 exceeds the last folded 5 -> consolidates the newly-evictable
-    # prefix.
-    m12 = _make_messages(12)
-    fake_ctx.messages = m12
-    asyncio.run(window.compact(m12, fake_ctx))  # type: ignore[arg-type]
-    assert got.cutoff == 9
-    assert got.call_count == 2
+    assert not (store_dir / "memory-journal.jsonl").exists()
+    assert not (store_dir / "MEMORY.md").exists()
+    assert not (store_dir / "memory-index.json").exists()

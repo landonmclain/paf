@@ -1,19 +1,12 @@
 """Turn-bounded sliding-window compaction — never evicts the active turn.
 
-Two windows ship here:
+:class:`TurnBoundSlidingWindow` — the assistant's eviction tier. Trim-only
+and turn-bounded: it drops the oldest *settled* messages (strictly before the
+most recent real user prompt) and does **no memory work**. This is the only
+window ``build_compaction`` assembles; there is no ``consolidate`` toggle.
 
-* :class:`TurnBoundSlidingWindow` — the **assistant's** eviction tier. Trim-only
-  and turn-bounded: it drops the oldest *settled* messages (strictly before the
-  most recent real user prompt) and does **no memory work**. This is the only
-  window ``build_compaction`` assembles; there is no ``consolidate`` toggle.
-* :class:`MemoryConsolidationWindow` — **benchmark-only** (LongMemEval
-  ``tests/framework.py`` / ``run_lmem``). Same turn-bounded base, but it ALSO
-  folds the about-to-evict settled slice into the durable memory journal before
-  trimming — the harness's build pass turns evicted evidence into a durable
-  notebook. It is deliberately NOT wired into the assistant path.
-
-Turn-bounding is inherited by both: ``compact`` slices at the most recent real
-user prompt, so neither window can ever consume or degrade the active turn.
+``compact`` slices at the most recent real user prompt, so the window can never
+consume or degrade the active turn.
 
 Why ``compact`` and not ``before_model_request``
 ------------------------------------------------
@@ -31,7 +24,6 @@ a no-op, so a window costs nothing on turns where it would not trim.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -69,7 +61,6 @@ def _is_real_user_prompt(message: ModelMessage) -> bool:
 # through the shared Settings object (MEMORY_DIR / .env), so both always target
 # one canonical directory no matter where the process is launched from.
 DEFAULT_MEMORY_DIR = str(PROJECT_ROOT / Path(settings.memory_dir))
-DEFAULT_MEMORY_AGENT = "assistant"
 
 
 class TurnBoundSlidingWindow(SlidingWindowCompaction):
@@ -136,98 +127,3 @@ class TurnBoundSlidingWindow(SlidingWindowCompaction):
         return [*trimmed_settled, *active]
 
 
-@dataclass
-class MemoryConsolidationWindow(TurnBoundSlidingWindow):
-    """Turn-bounded window that ALSO folds the evicted slice into memory.
-
-    **Benchmark-only** (LongMemEval ``tests/framework.py`` / ``run_lmem``): it
-    adds the inline consolidation fold on top of :class:`TurnBoundSlidingWindow`
-    — folding the about-to-evict SETTLED slice into the durable journal before
-    trimming. This is the harness's build pass: evicted evidence becomes a
-    durable notebook. It is intentionally NOT wired into the assistant path,
-    which uses trim-only ``TurnBoundSlidingWindow``.
-
-    The owner is ``writable=True`` (the sole memory writer); the subject's
-    ``Memory`` stays ``writable=False`` (read-only). The owner writes through the
-    M2 **journal** (``memory-journal.jsonl``), then renders ``MEMORY.md`` from it.
-
-    Store config defaults to the same ``data/memory`` scope the subject's
-    ``Memory`` uses, so both share one durable store. Override
-    ``memory_directory`` / ``memory_agent`` to target a different scope.
-    """
-
-    memory_directory: str = field(default=DEFAULT_MEMORY_DIR, kw_only=True)
-    """Directory for the shared memory store (owns ``memory-journal.jsonl`` + rendered ``MEMORY.md``)."""
-
-    memory_agent: str = field(default=DEFAULT_MEMORY_AGENT, kw_only=True)
-    """Agent segment scoping the shared memory store (must match the subject's)."""
-
-    memory_namespace: str = field(default="", kw_only=True)
-    """Optional namespace prefix for the shared memory scope."""
-
-    # Monotonic rate-limit gate: the highest ``find_safe_cutoff`` (about-to-
-    # evict prefix) that has already been folded into durable memory by this
-    # window instance. Without a gate, repeated compact() calls would re-run the
-    # full owner->render chain on the same/overlapping evictable slice.
-    # Consolidation is made monotonic: only fold when the about-to-evict prefix
-    # extends BEYOND what we already folded.
-    _consolidated_cutoff: int | None = field(default=None, init=False, repr=False)
-
-    async def compact(
-        self,
-        messages: list[ModelMessage],
-        ctx: RunContext,
-    ) -> list[ModelMessage]:
-        """Consolidate the settled slice, render, then trim — never consuming the active turn.
-
-        Splits at the most recent real user prompt (exactly as the base), folds
-        the about-to-evict SETTLED prefix into the journal, re-renders
-        ``MEMORY.md`` from the journal, then trims only the settled prefix and
-        re-appends the active turn verbatim.
-        """
-        # Reuse the base gate to find the settled/active split.
-        anchor: int | None = None
-        for i in range(len(messages) - 1, -1, -1):
-            if _is_real_user_prompt(messages[i]):
-                anchor = i
-                break
-        if anchor is None or anchor == 0:
-            return messages
-        settled = list(messages[:anchor])  # completed turns only
-        cutoff = find_safe_cutoff(settled, self.keep_messages)
-        if cutoff <= 0:
-            return messages
-        if cutoff > 0 and (
-            self._consolidated_cutoff is None or cutoff > self._consolidated_cutoff
-        ):
-            from ._consolidate import consolidate
-            from ._index import update_index
-            from ._journal import JournalStore
-            from ._render import write_render
-
-            journal = JournalStore(self.memory_directory)
-            await consolidate(
-                settled,
-                store=self._build_memory_store(),
-                agent_name=self.memory_agent,
-                namespace=self.memory_namespace,
-                keep_tail=self.keep_messages,
-                journal=journal,
-            )
-            write_render(journal, str(Path(self.memory_directory) / "MEMORY.md"))
-            update_index(self.memory_directory)
-            self._consolidated_cutoff = cutoff
-        # Delegate the trim to the turn-bounded base (settled only, active
-        # re-appended verbatim).
-        return await super().compact(messages, ctx)
-
-    def _build_memory_store(self):
-        """Build the store handle for the owner's `Memory` (journal-view).
-
-        Semantically inert for writes once ``journal`` is passed (the owner
-        appends through the journal, not the store), but still required by
-        ``consolidate``'s signature and read by the chunked/inject variant.
-        """
-        from ._view import JournalViewStore
-
-        return JournalViewStore(self.memory_directory)

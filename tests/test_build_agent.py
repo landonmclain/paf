@@ -142,15 +142,15 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     assert TieredCompaction not in {type(c) for c in no_compaction}
 
 
-def _build_recall_agent(use_memory_owner):
-    """Drive tests.framework._build_agent (the recall-agent builder) both ways.
+def _build_recall_agent():
+    """Drive tests.framework._build_agent (the recall-agent builder).
 
     Returns the composed root capability.
     """
     import tests.framework as _rl
 
     old_mem = _rl.MEMORY
-    _rl.MEMORY = True  # owner path only exists under MEMORY=1
+    _rl.MEMORY = True  # the memory arm only exists under MEMORY=1
     try:
         from pathlib import Path
         from tempfile import TemporaryDirectory
@@ -162,7 +162,6 @@ def _build_recall_agent(use_memory_owner):
             agent = _rl._build_agent(
                 store,
                 memory_dir=Path(td) / "memory",
-                use_memory_owner=use_memory_owner,
             )
             return getattr(agent, "_root_capability", None) or getattr(
                 agent, "root_capability", None
@@ -171,25 +170,17 @@ def _build_recall_agent(use_memory_owner):
         _rl.MEMORY = old_mem
 
 
-def test_recall_agent_gates_memory_owner_off_when_durable() -> None:
-    """Durable memory snapshot => the recall agent uses the plain sliding window.
+def test_recall_agent_uses_turn_bounded_trim_only_window() -> None:
+    """The recall agent's compaction ladder uses the turn-bounded, trim-only window.
 
-    `MemoryConsolidationWindow` fires the owner sub-agent on eviction. When a
-    question already has a durable memory snapshot (use_memory_owner=False) the
-    recall agent must use the plain `SlidingWindowCompaction` so the owner never
-    fires on the (read-only) recall turn.
+    Durable memory capture is the background watermark worker's job (and the
+    harness runs the owner at seed time) — the eviction window never folds to
+    memory. The ladder's sliding-window tier must be `TurnBoundSlidingWindow`
+    (turn-bounded: never evicts the active user prompt; trim-only: no memory).
     """
-    from pydantic_ai_harness.compaction import SlidingWindowCompaction
+    from paf.capabilities.memory._window import TurnBoundSlidingWindow
 
-    from paf.capabilities.memory._window import MemoryConsolidationWindow
-
-    root_owner = _build_recall_agent(use_memory_owner=True)
-    comp_owner = _find_compaction(root_owner)
-    assert comp_owner is not None
-    assert any(type(t) is MemoryConsolidationWindow for t in comp_owner.tiers)
-
-    root_plain = _build_recall_agent(use_memory_owner=False)
-    comp_plain = _find_compaction(root_plain)
-    assert comp_plain is not None
-    assert not any(type(t) is MemoryConsolidationWindow for t in comp_plain.tiers)
-    assert any(type(t) is SlidingWindowCompaction for t in comp_plain.tiers)
+    root = _build_recall_agent()
+    comp = _find_compaction(root)
+    assert comp is not None
+    assert any(type(t) is TurnBoundSlidingWindow for t in comp.tiers)

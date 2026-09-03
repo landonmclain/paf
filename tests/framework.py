@@ -155,9 +155,8 @@ def _openrouter_model_settings(
 
 # Memory presence knob: MEMORY=1 wires the durable Memory capability into the
 # harness (inject_memory=True, subject READ-ONLY / writable=False per the M2
-# owner model) and swaps the plain SlidingWindowCompaction tier for
-# MemoryConsolidationWindow, so the owner sub-agent (writable=True) folds each
-# about-to-evict slice into a run-scoped memory store.
+# owner model) and uses the turn-bounded, trim-only TurnBoundSlidingWindow tier
+# (no inline consolidation — the owner runs at seed time via run_lmem).
 # DEFAULT (unset) = ON: SEARCH + MEMORY (no turn index) is the intended standard
 # arm. Set MEMORY=0 for a no-memory ablation run (`MEMORY=0 ...`).
 MEMORY = os.environ.get("MEMORY", "1") == "1"
@@ -282,7 +281,6 @@ def _build_agent(
     store: FileStepStore,
     *,
     memory_dir: Path | None = None,
-    use_memory_owner: bool = True,
 ) -> Agent:
     """Wire the full PAF pipeline (retrieval ladder + durable memory).
 
@@ -292,16 +290,9 @@ def _build_agent(
     (capability instruction blocks are off).
 
     The durable `Memory` capability is included by default (`MEMORY=1`), with
-    the consolidation window that fires the owner on each eviction, targeting
-    ``memory_dir`` (default ``memory_dir``; callers pass a run-scoped dir) so a
-    run never touches repo `data/memory`. Set `MEMORY=0` for a no-memory
-    ablation.
-
-    Per-question gating (used by run_lmem): when a question already has a
-    durable memory snapshot (`use_memory_owner=False`) the plain
-    `SlidingWindowCompaction` replaces `MemoryConsolidationWindow` so the owner
-    sub-agent never fires. Building the agent per-question is cheap (both are
-    config-only dataclasses — no model init at build time).
+    the turn-bounded, trim-only sliding-window tier, targeting ``memory_dir``
+    (default ``memory_dir``; callers pass a run-scoped dir) so a run never
+    touches repo `data/memory`. Set `MEMORY=0` for a no-memory ablation.
 
     Default: a single `system_prompt=` (SUBJECT_SYSTEM_PROMPT) owns ALL static
     guidance — identity, the CONFLICT/INFERENCE answer rules, and the retrieval
@@ -313,10 +304,10 @@ def _build_agent(
 
     With MEMORY=1: the durable `Memory` capability is loaded (a plain capability,
     subject READ-ONLY / writable=False per the M2 owner model, so the subject
-    can't contaminate durable memory) and the plain SlidingWindowCompaction tier
-    is replaced by MemoryConsolidationWindow — the owner sub-agent (writable=True,
-    the sole writer) folds each about-to-evict slice into ``memory_dir`` before
-    the window drops it.
+    can't contaminate durable memory) and the sliding-window tier is the
+    turn-bounded `TurnBoundSlidingWindow` (trim-only — does no memory work). The
+    consolidation owner is run separately by the runner (``run_lmem``) at seed
+    time over the full haystack, never on eviction.
     """
     source = SnapshotHistorySource(store)
     caps = [
@@ -338,7 +329,7 @@ def _build_agent(
         # consolidation owner (writable=True) is the sole writer, folding each
         # about-to-evict slice into the store at the eviction boundary.
         from paf.capabilities.memory import Memory
-        from paf.capabilities.memory._window import MemoryConsolidationWindow
+        from paf.capabilities.memory._window import TurnBoundSlidingWindow
 
         mem_dir = memory_dir or Path("memory")
         # Per-question isolation (run_lmem): the subject's memory store must
@@ -380,25 +371,13 @@ def _build_agent(
                 guidance="",
             )
         )
-        # Consolidation window: same knobs as the plain sliding window, but
-        # folds the about-to-evict slice into the shared run-scoped memory dir
-        # before dropping it.
-        # Consolidation window: same knobs as the plain sliding window, but
-        # folds the about-to-evict slice into the shared run-scoped memory dir
-        # before dropping it. `use_memory_owner=False` (durable memory exists
-        # for the question) keeps the plain window so the owner never fires.
-        if use_memory_owner:
-            sw_tier = MemoryConsolidationWindow(
-                max_messages=LOCOMO_SW_MAX_MESSAGES,
-                keep_messages=LOCOMO_SW_KEEP,
-                memory_directory=str(mem_dir),
-                memory_agent="assistant",
-            )
-        else:
-            sw_tier = SlidingWindowCompaction(
-                max_messages=LOCOMO_SW_MAX_MESSAGES,
-                keep_messages=LOCOMO_SW_KEEP,
-            )
+        # Sliding-window tier: the turn-bounded, trim-only window — never
+        # evicts the active user turn, does no memory work. The consolidation
+        # owner is run at seed time by the runner (run_lmem), not on eviction.
+        sw_tier = TurnBoundSlidingWindow(
+            max_messages=LOCOMO_SW_MAX_MESSAGES,
+            keep_messages=LOCOMO_SW_KEEP,
+        )
     else:
         sw_tier = SlidingWindowCompaction(
             max_messages=LOCOMO_SW_MAX_MESSAGES,

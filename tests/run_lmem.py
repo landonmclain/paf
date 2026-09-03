@@ -809,12 +809,12 @@ def main(argv: list[str] | None = None) -> dict:
         )
 
         # ---- Memory consolidation (MEMORY=1): owner folds the haystack ----
-        # The live MemoryConsolidationWindow.compact() is DEAD on seeded data:
-        # direct-persist never flows through the live agent window, so the
-        # sliding window never overflows and the owner never fires. Instead,
-        # run the owner over the FULL seeded haystack (`seed_msgs`) HERE, before
-        # recall, so the recall turn's <memory> injection (which re-reads the
-        # store every request) renders a POPULATED notebook.
+        # The eviction window is trim-only (TurnBoundSlidingWindow) and never
+        # runs the owner — direct-persist never flows through a live eviction
+        # anyway. Instead, run the owner over the FULL seeded haystack
+        # (`seed_msgs`) HERE, before recall, so the recall turn's <memory>
+        # injection (which re-reads the store every request) renders a
+        # POPULATED notebook.
         #   - HONEST-MEMORY GUARD: seed_msgs is built from q["haystack_sessions"]
         #     ONLY (see _raw_turns). The recall question/answer turn is asked
         #     AFTER seeding (_run_turn) and is NOT in this list — assert that so
@@ -923,18 +923,16 @@ def main(argv: list[str] | None = None) -> dict:
         # consolidated (memory/<question_id>). Set on the framework module
         # global (a `from ... import` local alias would NOT update the module
         # global the store_resolver closure reads).
-        # The recall agent is built per-question, gating its memory-owner on
-        # this question's durable state so no model fires when the durable
-        # store already has the answer (recall is read-only).
+        # The recall agent is built per-question; durable-memory state still
+        # gates the seed-time owner skip (below), and the agent uses the
+        # trim-only turn-bounded window — no eviction-time consolidation.
         if MEMORY:
             import tests.framework as _rl
 
             _rl._CURRENT_MEMORY_DIR = artifact_dir / "memory" / q["question_id"]
-        use_memory_owner = not (MEMORY and restored and not fresh_memory)
         agent = _build_agent(
             store,
             memory_dir=artifact_dir / "memory",
-            use_memory_owner=use_memory_owner,
         )
         qctx = (
             f"The date now is {q['question_date']}. " if q.get("question_date") else ""

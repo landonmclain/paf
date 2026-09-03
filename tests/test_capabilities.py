@@ -29,10 +29,7 @@ from paf.capabilities.browser._toolset import (
     is_blocked_address,
 )
 from paf.capabilities.compaction import build_compaction
-from paf.capabilities.memory._window import (
-    MemoryConsolidationWindow,
-    TurnBoundSlidingWindow,
-)
+from paf.capabilities.memory._window import TurnBoundSlidingWindow
 from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
@@ -410,7 +407,6 @@ def test_build_compaction_window_is_always_turn_bound_trim_only() -> None:
     for cfg in (None, CompactionConfig(), CompactionConfig.from_mapping({})):
         comp = build_compaction(cfg)
         assert type(comp.tiers[-1]) is TurnBoundSlidingWindow
-        assert not isinstance(comp.tiers[-1], MemoryConsolidationWindow)
 
     # A stale `compact: {consolidate: false}` in a spec is a no-op (unknown key
     # dropped by from_mapping) and does not change the window type.

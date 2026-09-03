@@ -1,169 +1,29 @@
-"""Tests for memory consolidation.
+"""Tests for the consolidation OWNER engine (``paf.capabilities.memory._consolidate``).
 
-Covers the consolidation feature's seams:
+Covers the consolidation owner's seams:
 
-1.  ``MemoryConsolidationWindow.compact`` (benchmark-only) — fires the owner on
-    the about-to-be-evicted settled slice and no-ops when nothing would be
-    evicted.
-2.  ``build_compaction`` — the assistant's eviction tier is ALWAYS the
-    turn-bounded trim-only ``TurnBoundSlidingWindow`` (no ``consolidate``
-    toggle, retired 2026-09-02); the inline-consolidation
-    ``MemoryConsolidationWindow`` is never the assistant's window.
-3.  journal round-trip — the consolidation window hands the owner the M2 journal and the
-    rendered root ``MEMORY.md`` is readable back via ``JournalViewStore``.
+1.  owner guidance enforces append-only journal semantics;
+2.  the consolidation model + provider-routing config (CONSOL_MODEL /
+    provider order / quantizations / seed) resolves from settings;
+3.  owner construction invariants (sole writer, inject control) for both the
+    tool-only live owner and the chunked seed-time variant;
+4.  ``resident_consolidate_text`` derives a real ``born_on`` from the inline
+    ``[date: ...]`` prefix without leaking it into the stored fact;
+5.  seed-time chunked consolidation (``consolidate_conversation_chunked`` /
+    ``_split_chunks``) never splits a message and merges cumulatively.
+
+The inline eviction-fold window (``MemoryConsolidationWindow``) is DELETED:
+durable-fact capture is the background watermark worker's job, and the
+assistant's eviction tier is trim-only ``TurnBoundSlidingWindow``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from pydantic_ai.messages import ModelRequest, UserPromptPart
-from pydantic_ai_harness.compaction._shared import find_safe_cutoff
-
-from paf.capabilities.compaction import build_compaction
 from paf.capabilities.memory._consolidate import (
     CONSOLIDATION_GUIDANCE,
     consolidate_model,
 )
 from paf.capabilities.memory._format import MEMORY_FORMAT, extract_sections
-from paf.capabilities.memory._window import MemoryConsolidationWindow
-
-# ---------------------------------------------------------------------------
-# MemoryConsolidationWindow.compact — fires on the eviction slice, no-op otherwise
-# ---------------------------------------------------------------------------
-
-
-def _messages(n: int) -> list[ModelRequest]:
-    return [ModelRequest(parts=[UserPromptPart(content=f"msg {i}")]) for i in range(n)]
-
-
-def test_compact_noop_when_nothing_evicted() -> None:
-    """With fewer messages than keep_messages, find_safe_cutoff=0 → no consolidation."""
-    msgs = _messages(2)
-    window = MemoryConsolidationWindow(max_messages=4, keep_messages=2)
-    assert find_safe_cutoff(msgs, window.keep_messages) == 0
-
-
-def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
-    tmp_path: Path,
-) -> None:
-    """Driving compact() with an evictable history folds the dropped slice into memory, then trims.
-
-    This is the end-to-end seam the prior tests only assert structurally (window swaps
-    into the ladder, defaults scope) WITHOUT ever calling ``compact`` on a slice that
-    would actually be evicted. It verifies the whole dance offline:
-
-    * ``consolidate`` is invoked on EXACTLY the about-to-evict slice (``messages[:cutoff]``),
-      never the tail or the full list;
-    * the stub writes durable content to the real flat-file store (proving the store the
-      window targets is reachable and writable);
-    * the window still trims to ``keep_messages`` (consolidation does not swallow the trim);
-    * the ACTIVE user turn (the last real user prompt) is never evicted — it is re-appended
-      verbatim after trimming (Option A mid-turn gate).
-    """
-    import asyncio
-
-    from pydantic_ai.messages import ModelMessage
-
-    from paf.capabilities.memory import _consolidate as cons
-
-    window = MemoryConsolidationWindow(
-        max_messages=6, keep_messages=2, memory_directory=str(tmp_path / "memory")
-    )
-
-    msgs: list[ModelMessage] = [
-        ModelRequest(parts=[UserPromptPart(content=f"durable fact alpha {i}")])
-        for i in range(6)
-    ]
-    captured: dict[str, object] = {}
-    async def fake_consolidate(
-        messages, *, store, agent_name, namespace, keep_tail, journal=None
-    ):
-        captured["slice"] = messages
-        captured["keep_tail"] = keep_tail
-        captured["journal"] = journal
-        # Prove the window passes the M2 journal through: the owner path appends
-        # to the journal (append_memory) rather than the legacy store. Simulate
-        # one append here.
-        assert journal is not None, "window must pass the journal to consolidate"
-        journal.append(
-            type="fact",
-            fact="durable fact alpha",
-            tier="t1", born_on="2023-08-20",
-            source_ref="test:0",
-        )
-
-    # The window imports consolidate *inside* compact() — patch the module attr so the
-    # freshed local `from ._consolidate import consolidate` picks up the stub.
-    original = cons.consolidate
-    cons.consolidate = fake_consolidate  # type: ignore[assignment]
-    try:
-        out = asyncio.run(window.compact(msgs, ctx=None))  # type: ignore[arg-type]
-    finally:
-        cons.consolidate = original  # type: ignore[assignment]
-
-    cutoff = find_safe_cutoff(msgs, 2)
-    assert cutoff == 4  # 6 messages, keep 2 -> evict first 4
-    # Mid-turn gate (2026-09-02, Option A): the window never consumes the ACTIVE
-    # user turn. The last real user prompt (index 5) is that turn's start, so the
-    # evictable/settled prefix is EXACTLY msgs[:5]; the 6th user message is
-    # re-appended verbatim and must survive eviction. This is the regression
-    # guard for run 01a05ff8, where the live "implement it" prompt was dropped.
-    assert len(captured["slice"]) == 5  # type: ignore[arg-type]
-    assert captured["slice"][:5] == msgs[:5]  # type: ignore[arg-type]
-    assert captured["keep_tail"] == 2
-    # Window trims the SETTLED prefix (5) to keep_messages=2 PLUS one preserved
-    # opening user message = 3, then re-appends the protected active turn -> 4.
-    assert len(out) == 4
-    # The active (last) user message is never dropped.
-    assert out[-1] == msgs[-1]
-
-    # End-to-end proof of the split-brain fix: after consolidate appends to the
-    # journal, compact renders root MEMORY.md, and the assistant's JournalViewStore
-    # can read the fact back. (Prior to the fix this path wrote only to the legacy
-    # assistant/MEMORY.md and the reader came up empty.)
-    from paf.capabilities.memory._view import JournalViewStore
-
-    reader = JournalViewStore(tmp_path / "memory")
-    mf = asyncio.run(reader.read("assistant/MEMORY.md", max_chars=100_000))
-    assert mf is not None, "root MEMORY.md must be rendered and readable"
-    assert "durable fact alpha" in mf.content
-    assert "fact" in mf.content  # rendered journal groups by type
-
-
-def test_window_swaps_into_compaction_under_config() -> None:
-    """`build_compaction` ALWAYS uses the turn-bounded trim-only window.
-
-    Regression for the 2026-09-02 decision: there is NO `consolidate` toggle —
-    the inline ``MemoryConsolidationWindow`` is benchmark-only and is never the
-    assistant's eviction tier. ``build_compaction`` pins ``TurnBoundSlidingWindow``.
-    """
-    from pydantic_ai_harness.compaction import SlidingWindowCompaction
-
-    from paf.capabilities.memory._window import MemoryConsolidationWindow
-
-    gated = build_compaction()
-
-    # The assistant's window is the turn-bounded trim-only subclass of the plain
-    # sliding window — NEVER the inline-consolidation window.
-    assert isinstance(gated.tiers[-1], SlidingWindowCompaction)
-    assert not isinstance(gated.tiers[-1], MemoryConsolidationWindow)
-
-
-def test_window_default_store_scope(monkeypatch) -> None:
-    """Defaults point at the anchored shared data/memory + assistant scope (build.py)."""
-    from pydantic_ai_harness.compaction import SlidingWindowCompaction
-
-    w = MemoryConsolidationWindow(max_messages=4)
-    # Anchored to PROJECT_ROOT through Settings.memory_dir, matching build.py.
-    from paf.config import PROJECT_ROOT
-
-    assert w.memory_directory == str(PROJECT_ROOT / Path("data/memory"))
-    assert w.memory_agent == "assistant"
-    # Parent's defaults are inherited unchanged.
-    assert isinstance(w, SlidingWindowCompaction)
-    assert w.keep_messages == 40  # harness default, unchanged
-
 
 # ---------------------------------------------------------------------------
 # owner consolidation guidance + model env

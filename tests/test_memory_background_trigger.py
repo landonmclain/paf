@@ -12,9 +12,9 @@ Covers the NEW trigger path added 2026-08-28:
 These tests deliberately inject a **synthetic ``span_source``** (standing in for
 persistence) and a **journal-fenced ``consolidate_span``** (standing in for the
 owner LLM) so the service + trigger mechanics are proven without a model call.
-The compaction eviction hook (``_window.py::MemoryConsolidationWindow.compact``)
-is intentionally NOT touched — it stays the safety net; this is the parallel,
-secondary driver.
+The compaction eviction tier (``_window.py::TurnBoundSlidingWindow``) is
+trim-only and does no memory work — it is intentionally NOT touched; this
+queued watermark worker is the sole memory writer.
 
 Follows the established suite convention (no pytest-asyncio): sync ``def
 test_*`` driving async scenarios via ``asyncio.run``.

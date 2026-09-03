@@ -35,10 +35,7 @@ from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
 from paf.capabilities.memory import Memory
-from paf.capabilities.memory._window import (
-    MemoryConsolidationWindow,
-    TurnBoundSlidingWindow,
-)
+from paf.capabilities.memory._window import TurnBoundSlidingWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
@@ -63,10 +60,6 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # evicts the active user turn, does NO memory work (consolidation is the
     # background watermark worker's job). Always on; no consolidate toggle.
     "TurnBoundSlidingWindow": TurnBoundSlidingWindow,
-    # Benchmark-only inline-consolidation variant (LongMemEval tests/framework.py):
-    # same turn-bound base plus a fold of the evicted settled slice into the
-    # journal. NOT wired into the assistant path.
-    "MemoryConsolidationWindow": MemoryConsolidationWindow,
     # Lossless recall over the persistence store. Built in Python (build.py) because
     # its `source` needs a real SnapshotHistorySource object; cataloged so the
     # profile allowlist + schema stay complete.
