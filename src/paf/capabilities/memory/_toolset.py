@@ -28,6 +28,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from typing_extensions import TypedDict
 
 from ._journal import MEMORY_TIERS, MEMORY_TYPES, JournalStore
+from ._overrides import OverrideStore
 from ._store import MemoryStore
 
 MAIN_FILENAME = "MEMORY.md"
@@ -298,4 +299,79 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
                 "replayed": False,
                 "status": "appended",
                 "diff": None,
+            }
+
+
+class OverrideResult(TypedDict):
+    """Result of a memory override — echoes the pending archive back so the
+    assistant can confirm its suggestion landed (and that it is under review).
+    """
+
+    journal_id: int
+    op: str
+    by: str
+    status: Literal["pending_review"]
+    reason: str | None
+
+
+class OverrideToolset(FunctionToolset[AgentDepsT]):
+    """The assistant's ONE curation tool: ``memory_archive_suggestion``.
+
+    This is the narrow, modify-only curation channel. It does NOT append to the
+    journal or touch the index — it writes a **pending** intent to the override
+    sidecar (``memory-overrides.jsonl``), which the render pass reflects with a
+    ``*(pending review)*`` marker until a reviewer resolves it (archive /
+    tier_change / reject). The assistant remains read-only with respect to the
+    journal and index.
+    """
+
+    def __init__(self, overrides: OverrideStore) -> None:
+        super().__init__(id="memory")
+        self._overrides = overrides
+        self.add_function(self.memory_archive_suggestion, name="memory_archive_suggestion")
+
+    async def memory_archive_suggestion(
+        self,
+        ctx: RunContext[AgentDepsT],
+        journal_id: int,
+        reason: str,
+    ) -> OverrideResult:
+        """Suggest archiving a memory fact you believe is stale or wrong.
+
+        The fact is addressed by its journal line id -- the ``#N`` shown on the
+        line in the injected memory block. You NEVER edit memory directly; this
+        records a *pending* archive suggestion that a reviewer must approve
+        before it drops out of the injected view. Until then the fact stays
+        visible with a ``*(pending review)*`` marker.
+
+        Args:
+            journal_id: The journal line id of the fact to archive (the ``#N``
+                shown at the end of the fact's line in the injected memory block).
+            reason: Why this fact is stale/wrong and should be removed. Be
+                specific so the reviewer can judge it.
+        """
+        with ctx.tracer.start_as_current_span(
+            "memory.override.suggest_archive",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                self._overrides.append(
+                    op="archive",
+                    target_line=journal_id,
+                    by="assistant",
+                    reason=reason,
+                )
+            except ValueError as exc:
+                raise ModelRetry(str(exc)) from exc
+            if span.is_recording():
+                span.set_attributes(
+                    {"memory.override.op": "archive", "memory.override.target": journal_id}
+                )
+            return {
+                "journal_id": journal_id,
+                "op": "archive",
+                "by": "assistant",
+                "status": "pending_review",
+                "reason": reason,
             }

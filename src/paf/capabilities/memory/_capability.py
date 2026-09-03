@@ -21,10 +21,12 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AgentToolset
 
 from ._journal import JournalStore
+from ._overrides import OverrideStore
 from ._store import MemoryStore, validate_store_path
 from ._toolset import (
     MAIN_FILENAME,
     JournalAppendToolset,
+    OverrideToolset,
     injection_listing_limit,
     list_subfiles,
     render_memory_prompt,
@@ -174,6 +176,16 @@ class Memory(AbstractCapability[AgentDepsT]):
     at recall time.
     """
 
+    overrides: OverrideStore | None = field(default=None, kw_only=True)
+    """Optional append-only override sidecar the assistant proposes archives to.
+
+    When set, :meth:`get_toolset` returns an override toolset exposing ONLY
+    ``memory_archive_suggestion`` (write a *pending* archive intent). This is
+    the assistant's narrow, modify-only curation channel — it never touches the
+    journal or index. The render pass reflects pending suggestions with a
+    ``*(pending review)*`` marker until a reviewer resolves them.
+    """
+
     _resolved_scope: tuple[MemoryStore, str] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -214,11 +226,18 @@ class Memory(AbstractCapability[AgentDepsT]):
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:
         """Provide the stable `memory` toolset.
 
-        Two M2 surfaces exist: injection-only (``expose_tools=False``, the
-        assistant — no memory tools at all) and the journal-append owner
-        (``journal`` set — ``append_memory`` only). The legacy ``writable``-gated
-        ``MemoryToolset`` (read/search/write/delete) was removed.
+        Three M2 surfaces exist:
+          - ``overrides`` set (the ASSISTANT's curation channel) -> an override
+            toolset exposing ONLY ``memory_archive_suggestion`` (pending archive).
+          - ``journal`` set (the OWNER) -> ``append_memory`` only.
+          - otherwise ``expose_tools=False`` (inject-only, no memory tools).
+        The legacy ``writable``-gated ``MemoryToolset`` (read/search/write/delete)
+        was removed.
         """
+        if self.overrides is not None:
+            # Assistant curation: ONE narrow modify-only tool. It never touches
+            # the journal/index — it writes pending intents to the sidecar.
+            return OverrideToolset(self.overrides)
         if not self.expose_tools:
             # Injection-only memory: the assistant carries NO memory tools. The
             # journal-rendered notebook is injected in-context and the recall

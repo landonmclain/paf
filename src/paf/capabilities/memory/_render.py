@@ -36,6 +36,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._journal import JournalStore, MemoryRecord
+from ._overrides import OverrideState
 
 # Per-record separator between fact / date / source_ref in the md line.
 _SEP = " — "
@@ -74,8 +75,47 @@ def _group_by_tier(records: list[MemoryRecord]) -> dict[str, list[MemoryRecord]]
     return groups
 
 
+def _apply_overrides(
+    pairs: list[tuple[int, MemoryRecord]],
+    overrides: dict[int, OverrideState] | None,
+) -> tuple[list[tuple[int, MemoryRecord]], set[int]]:
+    """Filter / re-tier / mark ``(journal_line, record)`` pairs per the sidecar.
+
+    ``overrides`` is the folded per-target map (``None``/empty -> no-op). Returns
+    ``(kept_pairs, pending_lines)`` where ``pending_lines`` arethe journal
+    line ids with an assistant archive awaiting review (those lines render with a
+    ``*(pending review)*`` marker). Applied archives are dropped; applied tier
+    changes rebuild the record at the new tier.
+    """
+    if not overrides:
+        return pairs, set()
+    kept: list[tuple[int, MemoryRecord]] = []
+    pending: set[int] = set()
+    for line, rec in pairs:
+        st = overrides.get(line)
+        if st is None:
+            kept.append((line, rec))
+            continue
+        if st.is_applied_archive:
+            continue  # reviewer archived — drop from injection
+        if st.is_applied_tier and st.tier and st.tier != rec.tier:
+            # reviewer demoted — rebuildthe record at the new tier
+            rec = MemoryRecord(
+                type=rec.type,
+                fact=rec.fact,
+                tier=st.tier,
+                born_on=rec.born_on,
+                source_ref=rec.source_ref,
+            )
+        if st.is_pending:
+            pending.add(line)
+        kept.append((line, rec))
+    return kept, pending
+
+
 def render_journal_memory(
     store: JournalStore | list[MemoryRecord],
+    overrides: dict[int, OverrideState] | None = None,
 ) -> str:
     """Render the journal into a MEMORY.md string (pure, deterministic).
 
@@ -84,18 +124,23 @@ def render_journal_memory(
     (``## t1`` / ``## t2`` / ``## t3``) appear only for tiers that have records,
     in fixed ladder order; within a tier records sort by ``born_on`` descending
     (most-recent-first). Each line: ``- <fact> — <born_on> — <source_ref>``.
+
+    ``overrides`` (optional, folded sidecar map) is honored deterministically:
+    applied archives drop the fact, applied tier-changes move it under a new
+    tier, and pending assistant archives render with a ``*(pending review)*``
+    marker so the subject can see its proposal is awaiting review.
+
     Unbound: every record is emitted.
     """
-    records: list[MemoryRecord]
     provenance: dict[int, str] = {}
     if isinstance(store, JournalStore):
         pairs = store.read_all()
-        records = [r for _, r in pairs]
         provenance = {id(r): f"#{ln}" for ln, r in pairs}
     else:
-        records = list(store)
+        pairs = [(id(r), r) for r in store]
 
-    groups = _group_by_tier(records)
+    kept, pending = _apply_overrides(pairs, overrides)
+    groups = _group_by_tier([r for _, r in kept])
 
     sections: list[str] = []
     for tier in _TIER_ORDER:
@@ -105,10 +150,11 @@ def render_journal_memory(
         lines = []
         for r in recs:
             prov = provenance.get(id(r)) or r.source_ref
+            marker = " *(pending review)*" if id(r) in pending else ""
             lines.append(
-                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}"
+                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}{marker}"
                 if r.born_on
-                else f"- {_encode(r.fact)}{_SEP}{prov}"
+                else f"- {_encode(r.fact)}{_SEP}{prov}{marker}"
             )
         sections.append(f"## {tier}\n" + "\n".join(lines))
 
@@ -137,7 +183,9 @@ def _select_index_winners(
     return winners
 
 
-def render_index_memory(store: JournalStore, index) -> str:
+def render_index_memory(
+    store: JournalStore, index, overrides: dict[int, OverrideState] | None = None
+) -> str:
     """Render MEMORY.md **from the derived index** (surviving facts only).
 
     Groups the index winners by tier (t1/t2/t3 ladder), sorted by ``born_on``
@@ -151,9 +199,15 @@ def render_index_memory(store: JournalStore, index) -> str:
     already deduped and sorted by recency, so the cap keeps the newest facts
     and lets old ephemeral/goal entries fall out of the injected view (they
     remain reachable in the journal / index, never lost).
+
+    ``overrides`` (optional, folded sidecar map) is honored deterministically
+    before grouping: applied archives drop the fact, applied tier-changes move
+    it under a new tier, and pending assistant archives render with a
+    ``*(pending review)*`` marker.
     """
     winners = _select_index_winners(store, index)
-    groups = _group_by_tier([r for _, r in winners])
+    kept, pending = _apply_overrides(winners, overrides)
+    groups = _group_by_tier([r for _, r in kept])
     # Bound each already-recency-sorted group to its tier cap (t1 unbounded).
     groups = {
         tier: recs[:_TIER_CAPS[tier]] if _TIER_CAPS.get(tier) else recs
@@ -161,7 +215,7 @@ def render_index_memory(store: JournalStore, index) -> str:
     }
 
     # Map a record back to its journal line id (the rendered provenance).
-    line_of = {id(r): ln for ln, r in winners}
+    line_of = {id(r): ln for ln, r in kept}
 
     sections: list[str] = []
     for tier in _TIER_ORDER:
@@ -172,10 +226,11 @@ def render_index_memory(store: JournalStore, index) -> str:
         for r in recs:
             ln = line_of.get(id(r))
             prov = f"#{ln}" if ln is not None else r.source_ref
+            marker = " *(pending review)*" if ln in pending else ""
             lines.append(
-                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}"
+                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}{marker}"
                 if r.born_on
-                else f"- {_encode(r.fact)}{_SEP}{prov}"
+                else f"- {_encode(r.fact)}{_SEP}{prov}{marker}"
             )
         sections.append(f"## {tier}\n" + "\n".join(lines))
 
@@ -198,15 +253,20 @@ def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
     crash mid-write never leaves a torn notebook.
     """
     from ._atomic import write_atomic  # local import keeps top of module import-light
+    from ._overrides import (
+        load_overrides,  # local import keeps top of module import-light
+    )
+
+    overrides = load_overrides(str(Path(md_path).parent))
 
     if isinstance(store, JournalStore):
         index = _load_index_beside(md_path)
         if index is not None:
-            content = render_index_memory(store, index)
+            content = render_index_memory(store, index, overrides=overrides)
         else:
-            content = render_journal_memory(store)
+            content = render_journal_memory(store, overrides=overrides)
     else:
-        content = render_journal_memory(store)
+        content = render_journal_memory(store, overrides=overrides)
     write_atomic(md_path, content)
     return content
 

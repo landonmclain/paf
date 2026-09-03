@@ -111,6 +111,7 @@ def _build_memory(
     Memory hands it the values it needs as injected constructor args
     (``consolidate_every``, ``memory_directory``, ``span_source``).
     """
+    from paf.capabilities.memory._overrides import OverrideStore
     from paf.capabilities.memory._view import JournalViewStore
     from paf.capabilities.memory._window import memory_dir_for
 
@@ -125,10 +126,10 @@ def _build_memory(
     max_tokens = _read_positive_int(cfg, "max_tokens", DEFAULT_MEMORY_MAX_TOKENS)
     max_lines = _read_positive_int(cfg, "max_lines", DEFAULT_MEMORY_MAX_LINES)
 
+    memory_dir = str(memory_dir_for(agent_name)) if agent_name else Path(_MEMORY_DIR)
+
     return Memory(
-        store=JournalViewStore(
-            str(memory_dir_for(agent_name)) if agent_name else Path(_MEMORY_DIR)
-        ),
+        store=JournalViewStore(memory_dir),
         inject_memory=True,
         writable=False,
         expose_tools=False,
@@ -140,6 +141,9 @@ def _build_memory(
         # an explicit `guidance: ""`.
         guidance=None,
         consolidate_every=consolidate_every,
+        # The assistant's narrow curation tool: propose archiving a stale fact.
+        # It writes only to the override sidecar (never the journal/index).
+        overrides=OverrideStore(memory_dir),
     )
 
 
