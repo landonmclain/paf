@@ -83,6 +83,8 @@ from paf.capabilities._turns import user_anchor_indices
 from paf.capabilities.memory._background import (
     ConsolidationJob,
     MemoryConsolidationQueue,
+    MemoryReviewQueue,
+    ReviewJob,
     resolve_unseen_span,
 )
 from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
@@ -452,7 +454,11 @@ class Session:
             setup_observability()
         self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
         self.history: list = []
-        self.consolidate_every = resolve_memory_config(agent_name)["consolidate_every"]
+        _mem_cfg = resolve_memory_config(agent_name)
+        self.consolidate_every = _mem_cfg["consolidate_every"]
+        # Review cadence defaults to the owner's cadence when a config/stub only
+        # provides `consolidate_every` (defensive against partial mock configs).
+        self.review_every = _mem_cfg.get("review_every", self.consolidate_every)
         # Background memory consolidation is the sole memory writer and just RUNS
         # when memory is built for the agent — there is no opt-in flag. The store
         # directory defaults to the per-agent scope (<MEMORY_DIR>/<agent_name>/,
@@ -460,6 +466,10 @@ class Session:
         self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
         self._consolidate_span = consolidate_span
         self._memory_queue: MemoryConsolidationQueue | None = None
+        self._review_queue: MemoryReviewQueue | None = None
+        self._review_watermark_path = (
+            self._memory_directory.rstrip("/\\") + "/memory-review-watermark.json"
+        )
         # Session-held CancellationToken -> stop (created here so cancel()
         # works and iter() has a token from day one).
         self._token = CancellationToken()
@@ -494,6 +504,11 @@ class Session:
     def memory_queue(self) -> MemoryConsolidationQueue | None:
         """The lazily-built background consolidation queue (None until first use)."""
         return self._memory_queue
+
+    @property
+    def review_queue(self) -> MemoryReviewQueue | None:
+        """The lazily-built background reviewer queue (None until first use)."""
+        return self._review_queue
 
     # -- profile namespace (conversation identity scoping) --------------------
 
@@ -650,6 +665,70 @@ class Session:
             )
         return self._memory_queue
 
+    def _ensure_review_queue(self) -> MemoryReviewQueue:
+        """Build the self-contained background reviewer queue.
+
+        Peer to the consolidation queue: same engine, different cadence and job.
+        The reviewer curates the whole rendered memory on ``review_every`` turns.
+        ``review_span`` defaults to the real reviewer (``_review.review``); a
+        test injects a journal-fenced stand-in so the queue + trigger mechanics
+        are proven without an LLM call.
+        """
+        if self._review_queue is None:
+            from paf.capabilities.memory._review import review as _default_review
+
+            async def review_span(directory: str) -> int:
+                from paf.capabilities.memory._overrides import OverrideStore
+
+                return await _default_review(
+                    directory,
+                    overrides=OverrideStore(directory),
+                )
+
+            self._review_queue = MemoryReviewQueue(
+                memory_directory=self._memory_directory,
+                agent_name=self.agent_name,
+                review_span=review_span,
+            )
+        return self._review_queue
+
+    async def _maybe_trigger_review(self, cid: str | None) -> None:
+        """Fire the background reviewer hook on its own ``review_every`` cadence.
+
+        Like ``_maybe_trigger_consolidation`` but for the reviewer: after each
+        completed turn, check the review watermark; when ``review_every`` turns
+        have accumulated since the last review pass, enqueue a ``ReviewJob``.
+        The reviewer curates the whole rendered memory (not just pending
+        suggestions), so it fires on cadence regardless of pending count.
+        """
+        if cid is None:
+            return
+        try:
+            runs = await self._store.list_runs(conversation_id=cid)
+            if not runs:
+                return
+            tip_run = runs[-1].run_id
+            tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+            anchors = user_anchor_indices(tip_history)
+            if not anchors:
+                return
+            tip_turn = len(anchors) - 1
+            wm = MemoryWatermark.load(
+                self._memory_directory,
+                run_id=tip_run,
+                filename="memory-review-watermark.json",
+            )
+            if not should_fire(wm, current_turn_id=tip_turn, every=self.review_every):
+                return
+            self._ensure_review_queue().enqueue(self.agent_name, ReviewJob())
+            # Advance the review watermark to the current tip so we don't
+            # re-fire until review_every more turns accumulate.
+            wm.run_id = tip_run
+            wm.turn_id = tip_turn
+            wm.save(self._memory_directory, filename="memory-review-watermark.json")
+        except Exception:  # noqa: BLE001 - the review hook must not break the turn
+            pass
+
     async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
         """Fire the background-consolidation hook, publishing task lifecycle.
 
@@ -777,6 +856,7 @@ class Session:
         self.last_result = result
         self.history = [*self.history, *result.new_messages()]
         await self._maybe_trigger_consolidation(scoped)
+        await self._maybe_trigger_review(scoped)
 
     async def run(
         self,

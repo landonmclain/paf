@@ -27,6 +27,7 @@ from ._toolset import (
     MAIN_FILENAME,
     JournalAppendToolset,
     OverrideToolset,
+    ReviewerToolset,
     injection_listing_limit,
     list_subfiles,
     render_memory_prompt,
@@ -186,6 +187,16 @@ class Memory(AbstractCapability[AgentDepsT]):
     ``*(archive pending review)*`` marker until a reviewer resolves them.
     """
 
+    reviewer: bool = field(default=False, kw_only=True)
+    """True for the **memory reviewer** agent: curates on a cadence.
+
+    When ``overrides`` is set AND ``reviewer=True``, :meth:`get_toolset`
+    returns ``ReviewerToolset`` exposing ONLY ``memory_review`` (apply verdicts
+    directly) instead of the assistant's ``memory_archive_suggestion``. The
+    reviewer curates the whole rendered memory — pending suggestions plus its
+    own proactive archive/tier_change — via the same sidecar write path.
+    """
+
     _resolved_scope: tuple[MemoryStore, str] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -237,6 +248,10 @@ class Memory(AbstractCapability[AgentDepsT]):
         if self.overrides is not None:
             # Assistant curation: ONE narrow modify-only tool. It never touches
             # the journal/index — it writes pending intents to the sidecar.
+            # For the REVIEWER agent (reviewer=True), the same sidecar is the
+            # curation channel but exposes `memory_review` (apply directly).
+            if self.reviewer:
+                return ReviewerToolset(self.overrides)
             return OverrideToolset(self.overrides)
         if not self.expose_tools:
             # Injection-only memory: the assistant carries NO memory tools. The

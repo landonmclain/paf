@@ -319,3 +319,81 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
 def put_watermark_path(directory: str | os.PathLike) -> str:
     """Path of the watermark file within a memory directory (for tests/docs)."""
     return str(Path(directory) / _WATERMARK_FILENAME)
+
+
+# ---------------------------------------------------------------------------
+# Memory reviewer queue (peer to the owner, cadence-fired curation)
+# ---------------------------------------------------------------------------
+
+
+class ReviewJob:
+    """A request to run one curation pass over the whole rendered memory."""
+
+
+#: Type of the review seam: run the reviewer over the rendered view and return
+#: the number of verdicts applied. Defaults to the real reviewer; a test injects
+#: a journal-fenced stand-in so the queue + trigger mechanics are proven without
+#: an LLM call.
+ReviewSpan = Callable[[str], Awaitable[int]]
+
+
+class MemoryReviewQueue(BackgroundQueueService[ReviewJob]):
+    """Background reviewer queue, fired on its own cadence (like the owner).
+
+    One instance == one queue == one worker per session. ``process_job`` runs
+    the reviewer curation pass over the **whole rendered memory** (``read_render``)
+    and re-renders — no watermark advance needed (the reviewer is stateless w.r.t.
+    the turn ladder; it curates whatever is currently displayed).
+
+    ``review_span`` defaults to the real reviewer; a test injects a stand-in so
+    the service + trigger mechanics are proven without an LLM call. Deliberately
+    NOT a ``@dataclass`` (same reason as ``MemoryConsolidationQueue``).
+    """
+
+    name: str = "memory-review"
+
+    def __init__(
+        self,
+        *,
+        memory_directory: str = "",
+        agent_name: str = "assistant",
+        name: str = "memory-review",
+        review_span: ReviewSpan | None = None,
+    ) -> None:
+        super().__init__()
+        self.name = name
+        self.memory_directory = memory_directory
+        self.agent_name = agent_name
+        self.review_span = review_span
+
+    async def process_job(
+        self,
+        session_id: str,
+        job: ReviewJob,
+        state: QueueState[ReviewJob],
+    ) -> None:
+        del job, state  # reviewer is stateless w.r.t. the turn ladder
+        directory = self.memory_directory
+        if not directory:
+            log.error("memory_review_queue missing memory_directory; dropping job")
+            return
+
+        if self.review_span is not None:
+            applied = await self.review_span(directory)
+        else:
+            applied = await self._default_review(directory)
+
+        log.info(
+            "memory_review_job session=%s applied=%s verdicts", session_id, applied
+        )
+
+    async def _default_review(self, directory: str) -> int:
+        """Real review: run the reviewer over the rendered view, then re-render."""
+        from ._overrides import OverrideStore
+        from ._review import review
+
+        verdicts = await review(
+            directory,
+            overrides=OverrideStore(directory),
+        )
+        return verdicts

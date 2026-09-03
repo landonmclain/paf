@@ -342,7 +342,13 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     if not isinstance(block, dict):
         return None
     cfg: dict[str, object] = {}
-    for key in ("consolidate_every", "max_memory_size", "max_tokens", "max_lines"):
+    for key in (
+        "consolidate_every",
+        "review_every",
+        "max_memory_size",
+        "max_tokens",
+        "max_lines",
+    ):
         value = block.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             cfg[key] = value
@@ -364,11 +370,14 @@ def resolve_memory_config(
     never drift from the ``Memory`` capability's ``consolidate_every`` — Memory
     stays the owner, this is just a non-invasive read of the resolved value.
 
-    Returns ``{"consolidate_every": int}`` (always present, default applied).
+    Returns ``{"consolidate_every": int, "review_every": int}`` (always present,
+    defaults applied). ``review_every`` defaults to ``consolidate_every`` (the
+    reviewer runs on the same cadence unless a spec overrides it).
     """
     from paf.capabilities.build import DEFAULT_CONSOLIDATE_EVERY
 
     every = DEFAULT_CONSOLIDATE_EVERY
+    review_every = every  # reviewer defaults to the owner's cadence
     try:
         cfg = _spec_memory_config(get_spec_path(agent_name, spec_directory))
     except Exception:  # noqa: BLE001 - spec read is best-effort sugar
@@ -377,7 +386,14 @@ def resolve_memory_config(
         candidate = cfg.get("consolidate_every")
         if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
             every = candidate
-    return {"consolidate_every": every}
+        review_candidate = cfg.get("review_every")
+        if (
+            isinstance(review_candidate, int)
+            and not isinstance(review_candidate, bool)
+            and review_candidate > 0
+        ):
+            review_every = review_candidate
+    return {"consolidate_every": every, "review_every": review_every}
 
 
 def resolve_profile_name(

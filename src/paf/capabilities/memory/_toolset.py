@@ -314,7 +314,34 @@ class OverrideResult(TypedDict):
     reason: str | None
 
 
-class OverrideToolset(FunctionToolset[AgentDepsT]):
+class _CurationToolset(FunctionToolset[AgentDepsT]):
+    """Shared base for the override sidecar toolsets (assistant + reviewer).
+
+    Holds the ``OverrideStore`` handle, the eager re-render helper, and nothing
+    else — the concrete subclass registers its single curation tool.
+    """
+
+    def __init__(self, overrides: OverrideStore) -> None:
+        super().__init__(id="memory")
+        self._overrides = overrides
+
+    def _refresh_render(self) -> None:
+        """Re-materialize ``MEMORY.md`` from the journal, honoring the sidecar.
+
+        This makes an override visible on the very next injection instead of
+        waiting for the background consolidation pass (every ``consolidate_every``
+        turns). Same deterministic ``write_render`` the owner performs; safe to
+        call on any override write.
+        """
+        from ._journal import JournalStore
+        from ._render import write_render
+
+        directory = self._overrides.directory
+        md_path = directory.rstrip("/\\") + "/" + MAIN_FILENAME
+        write_render(JournalStore(directory), md_path)
+
+
+class OverrideToolset(_CurationToolset[AgentDepsT]):
     """The assistant's ONE curation tool: ``memory_archive_suggestion``.
 
     This is the narrow, modify-only curation channel. It does NOT append to the
@@ -326,8 +353,7 @@ class OverrideToolset(FunctionToolset[AgentDepsT]):
     """
 
     def __init__(self, overrides: OverrideStore) -> None:
-        super().__init__(id="memory")
-        self._overrides = overrides
+        super().__init__(overrides)
         self.add_function(self.memory_archive_suggestion, name="memory_archive_suggestion")
 
     async def memory_archive_suggestion(
@@ -387,17 +413,89 @@ class OverrideToolset(FunctionToolset[AgentDepsT]):
                 "reason": reason,
             }
 
-    def _refresh_render(self) -> None:
-        """Re-materialize ``MEMORY.md`` from the journal, honoring the sidecar.
 
-        This makes an override visible on the very next injection instead of
-        waiting for the background consolidation pass (every ``consolidate_every``
-        turns). Same deterministic ``write_render`` the owner performs; safe to
-        call on any override write.
+class ReviewerResult(TypedDict):
+    """Result of a reviewer curation verdict — echoes the applied op back."""
+
+    journal_id: int
+    op: Literal["archive", "tier_change", "reject"]
+    by: Literal["reviewer"]
+    status: Literal["applied"]
+    reason: str | None
+    tier: str | None
+
+
+class ReviewerToolset(_CurationToolset[AgentDepsT]):
+    """The memory reviewer's curation tool: ``memory_review``.
+
+    The reviewer is a periodic, off-band curator (like the watermark owner,
+    cadence-fired) with authority the assistant lacks. It curates the **whole
+    rendered memory**: approving/rejecting the assistant's pending archive
+    suggestions AND proactively archiving stale facts / changing tiers on its
+    own. It writes ``memory_review`` verdicts directly (they apply at once,
+    unlike the assistant's pending intents) to the same append-only sidecar the
+    assistant writes to, then re-renders.
+
+    Read input is the **rendered view only** (``read_render``) — it never reads
+    the journal or index directly, addressing facts by their stable ``#N`` line id.
+    """
+
+    def __init__(self, overrides: OverrideStore) -> None:
+        super().__init__(overrides)
+        self.add_function(self.memory_review, name="memory_review")
+
+    async def memory_review(
+        self,
+        ctx: RunContext[AgentDepsT],
+        journal_id: int,
+        op: Literal["archive", "tier_change", "reject"],
+        tier: Literal["t1", "t2", "t3"] | None = None,
+        reason: str = "",
+    ) -> ReviewerResult:
+        """Issue a curation verdict on a memory fact (applies immediately).
+
+        The reviewer is the approver: its verdicts act at once (the assistant's
+        suggestions stay pending until a reviewer resolves them, or the reviewer
+        curates on its own). Addressed by the fact's journal line id -- the
+        ``#N`` shown on the line in the rendered memory view.
+
+        Args:
+            journal_id: The journal line id of the fact to curate (the ``#N``
+                shown at the end of the fact's line in the rendered memory view).
+            op: ``archive`` (drop the fact), ``tier_change`` (move it to ``tier``),
+                or ``reject`` (keep as-is, clear a pending marker).
+            tier: Required for ``tier_change``: the new tier (``t1``/``t2``/``t3``).
+            reason: Why this verdict. Be specific; it is recorded in the sidecar.
         """
-        from ._journal import JournalStore
-        from ._render import write_render
-
-        directory = self._overrides.directory
-        md_path = directory.rstrip("/\\") + "/" + MAIN_FILENAME
-        write_render(JournalStore(directory), md_path)
+        with ctx.tracer.start_as_current_span(
+            "memory.override.review",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                self._overrides.append(
+                    op=op,
+                    target_line=journal_id,
+                    by="reviewer",
+                    reason=reason,
+                    tier=tier,
+                )
+            except ValueError as exc:
+                raise ModelRetry(str(exc)) from exc
+            # Reflect the verdict immediately (drop / re-tier / clear marker).
+            self._refresh_render()
+            if span.is_recording():
+                span.set_attributes(
+                    {
+                        "memory.override.op": op,
+                        "memory.override.target": journal_id,
+                    }
+                )
+            return {
+                "journal_id": journal_id,
+                "op": op,
+                "by": "reviewer",
+                "status": "applied",
+                "reason": reason,
+                "tier": tier,
+            }

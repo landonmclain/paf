@@ -62,9 +62,20 @@ class MemoryWatermark:
     turn_id: int | None = None
 
     @classmethod
-    def load(cls, directory: str | os.PathLike, *, run_id: str = "") -> MemoryWatermark:
-        """Read the watermark for ``directory`` (or a fresh empty one)."""
-        path = Path(directory) / _WATERMARK_FILENAME
+    def load(
+        cls,
+        directory: str | os.PathLike,
+        *,
+        run_id: str = "",
+        filename: str = _WATERMARK_FILENAME,
+    ) -> MemoryWatermark:
+        """Read the watermark for ``directory`` (or a fresh empty one).
+
+        ``filename`` defaults to the consolidation watermark file; a caller may
+        pass a different name (e.g. a separate review watermark) so the owner
+        and reviewer cadences track independently.
+        """
+        path = Path(directory) / filename
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -76,9 +87,11 @@ class MemoryWatermark:
                 pass
         return cls(run_id=run_id)
 
-    def save(self, directory: str | os.PathLike) -> None:
+    def save(
+        self, directory: str | os.PathLike, filename: str = _WATERMARK_FILENAME
+    ) -> None:
         """Persist the watermark atomically (staging + ``os.replace``)."""
-        path = Path(directory) / _WATERMARK_FILENAME
+        path = Path(directory) / filename
         payload = json.dumps(
             {"run_id": self.run_id, "turn_id": self.turn_id}, ensure_ascii=False
         )
