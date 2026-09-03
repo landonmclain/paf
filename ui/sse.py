@@ -30,6 +30,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from paf.capabilities import PROFILES
@@ -127,6 +128,22 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="paf SSE transport", lifespan=_lifespan)
+
+# Narrow CORS for the paf-ui dev server (localhost:3000) + the Tailscale host
+# used for phone/other-device access. The browser POSTs cross-origin to this
+# :8090 service; without this the frontend fetch is blocked. Keep it minimal —
+# no wildcard, only the origins paf-ui actually runs on.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://100.107.176.116:3000",  # Tailscale host (paf-ui via phone/devices)
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
