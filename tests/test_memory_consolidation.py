@@ -1,12 +1,15 @@
-"""Tests for pre-eviction memory consolidation.
+"""Tests for memory consolidation.
 
-Covers the three seams locked in for the consolidation feature:
+Covers the consolidation feature's seams:
 
-1.  ``MemoryConsolidationWindow.compact`` — fires the owner on the
-    about-to-be-evicted slice and no-ops when nothing would be evicted.
-2.  ``build_compaction`` config toggle — ``consolidate`` on swaps the sliding-window
-    tier for the consolidation window; off keeps the plain window.
-3.  journal round-trip — the window hands the owner the M2 journal and the
+1.  ``MemoryConsolidationWindow.compact`` (benchmark-only) — fires the owner on
+    the about-to-be-evicted settled slice and no-ops when nothing would be
+    evicted.
+2.  ``build_compaction`` — the assistant's eviction tier is ALWAYS the
+    turn-bounded trim-only ``TurnBoundSlidingWindow`` (no ``consolidate``
+    toggle, retired 2026-09-02); the inline-consolidation
+    ``MemoryConsolidationWindow`` is never the assistant's window.
+3.  journal round-trip — the consolidation window hands the owner the M2 journal and the
     rendered root ``MEMORY.md`` is readable back via ``JournalViewStore``.
 """
 
@@ -128,19 +131,23 @@ def test_window_compact_consolidates_evicted_slice_then_trims_happy_path(
     assert "fact" in mf.content  # rendered journal groups by type
 
 
-def test_window_swaps_into_compaction_under_config(monkeypatch) -> None:
-    """consolidate config on swaps the plain sliding window for the consolidation window."""
+def test_window_swaps_into_compaction_under_config() -> None:
+    """`build_compaction` ALWAYS uses the turn-bounded trim-only window.
+
+    Regression for the 2026-09-02 decision: there is NO `consolidate` toggle —
+    the inline ``MemoryConsolidationWindow`` is benchmark-only and is never the
+    assistant's eviction tier. ``build_compaction`` pins ``TurnBoundSlidingWindow``.
+    """
     from pydantic_ai_harness.compaction import SlidingWindowCompaction
 
-    from paf.config import settings
+    from paf.capabilities.memory._window import MemoryConsolidationWindow
 
-    monkeypatch.setattr(settings, "consolidate", False)
-    plain = build_compaction()
-    monkeypatch.setattr(settings, "consolidate", True)
     gated = build_compaction()
 
-    assert isinstance(plain.tiers[-1], SlidingWindowCompaction)
-    assert isinstance(gated.tiers[-1], MemoryConsolidationWindow)
+    # The assistant's window is the turn-bounded trim-only subclass of the plain
+    # sliding window — NEVER the inline-consolidation window.
+    assert isinstance(gated.tiers[-1], SlidingWindowCompaction)
+    assert not isinstance(gated.tiers[-1], MemoryConsolidationWindow)
 
 
 def test_window_default_store_scope(monkeypatch) -> None:

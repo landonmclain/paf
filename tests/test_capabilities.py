@@ -14,7 +14,6 @@ from pydantic_ai.models import ModelRequestContext
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
-    SlidingWindowCompaction,
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
@@ -30,7 +29,10 @@ from paf.capabilities.browser._toolset import (
     is_blocked_address,
 )
 from paf.capabilities.compaction import build_compaction
-from paf.capabilities.memory._window import MemoryConsolidationWindow
+from paf.capabilities.memory._window import (
+    MemoryConsolidationWindow,
+    TurnBoundSlidingWindow,
+)
 from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
@@ -358,7 +360,7 @@ def test_only_one_real_profile_for_m1() -> None:
     spec and the sandbox resets. ``contextbench`` is the deliberate benchmark arm
     (CodebaseMap + Shell + FileSystem + Git, NO Memory). ``runtime2_test`` is the
     deliberate dev/test arm (Shell only) for deterministically exercising the
-    Session2 stream/event contract — a test profile, not a product surface. This
+    Session stream/event contract — a test profile, not a product surface. This
     is the complete, intentional set — no further blank profile scaffolding.
     """
     assert set(PROFILES) == {
@@ -380,50 +382,41 @@ def test_compaction_builds_real_strategy_objects() -> None:
     # `CompactionStrategy` is a bare Protocol (not runtime_checkable), so we can't
     # isinstance against it. Assert each tier is a real concrete strategy (a class,
     # not a raw dict) drawn from the no-summary ladder's known types. The sliding
-    # window may be the plain `SlidingWindowCompaction` or, when consolidation is
-    # enabled (Settings.consolidate / CONSOLIDATE=1), its subclass
-    # `MemoryConsolidationWindow` — both are real strategy objects.
+    # window is always the turn-bounded trim-only `TurnBoundSlidingWindow` (no
+    # consolidate toggle, retired 2026-09-02).
     strategy_types = (
         ClampOversizedMessages,
         ClearToolResults,
-        SlidingWindowCompaction,
-        MemoryConsolidationWindow,
+        TurnBoundSlidingWindow,
     )
     assert len(compaction.tiers) == 3
     assert all(type(tier) in strategy_types for tier in compaction.tiers)
 
 
-def test_build_compaction_consolidate_flag_selects_window_type() -> None:
-    """The `compact.consolidate` flag is the ONLY switch between the plain
-    trim-only sliding window and the sync (inline, eviction-time) fold.
+def test_build_compaction_window_is_always_turn_bound_trim_only() -> None:
+    """`build_compaction` always uses the turn-bounded trim-only window.
 
-    Regression for the 2026-09-02 decision: eviction must stay trim-only —
-    the background watermark worker (reads from the persisted store) is the
-    sole memory writer. `consolidate=False` must therefore produce a plain
-    `SlidingWindowCompaction` with NO memory write on eviction, and
-    `consolidate=True` the `MemoryConsolidationWindow`. This pins that the two
-    paths are disjoint: the background trigger is gated separately (session
-    `memory_consolidation` flag + `memory.consolidate_every`), never by this
-    flag.
+    Regression for the 2026-09-02 decision: there is NO `consolidate` toggle.
+    Eviction is always trim-only `TurnBoundSlidingWindow` (never evicts the
+    active user turn, never calls memory) — the background watermark worker is
+    the sole memory writer. This pins that the two concerns are structurally
+    disjoint: the background trigger is gated separately (session
+    `memory_consolidation` flag + `memory.consolidate_every`), never by a
+    `compact.consolidate` flag.
     """
     from paf.capabilities.compaction import CompactionConfig
 
-    # consolidate=False -> plain, trim-only window (no inline memory fold).
-    off = build_compaction(CompactionConfig(consolidate=False))
-    window_off = off.tiers[-1]
-    assert type(window_off) is SlidingWindowCompaction
-    assert not isinstance(window_off, MemoryConsolidationWindow)
+    # Both an empty config and a config without any consolidate key yield the
+    # same turn-bounded window.
+    for cfg in (None, CompactionConfig(), CompactionConfig.from_mapping({})):
+        comp = build_compaction(cfg)
+        assert type(comp.tiers[-1]) is TurnBoundSlidingWindow
+        assert not isinstance(comp.tiers[-1], MemoryConsolidationWindow)
 
-    # consolidate=True -> the sync consolidation window (the eviction fold).
-    on = build_compaction(CompactionConfig(consolidate=True))
-    assert isinstance(on.tiers[-1], MemoryConsolidationWindow)
-
-    # Spec path mapping: `compact: {consolidate: false}` must round-trip
-    # through CompactionConfig.from_mapping into the same plain window.
-    from_spec = build_compaction(
-        CompactionConfig.from_mapping({"consolidate": False})
-    )
-    assert type(from_spec.tiers[-1]) is SlidingWindowCompaction
+    # A stale `compact: {consolidate: false}` in a spec is a no-op (unknown key
+    # dropped by from_mapping) and does not change the window type.
+    from_spec = build_compaction(CompactionConfig.from_mapping({"consolidate": False}))
+    assert type(from_spec.tiers[-1]) is TurnBoundSlidingWindow
 
 
 # --- EgressPolicy: secure default, explicit override, metadata firebreak ----

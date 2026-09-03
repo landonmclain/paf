@@ -35,11 +35,6 @@ class Settings(BaseSettings):
     # .env (MEMORY_DIR).
     memory_dir: str = "data/memory"
 
-    # Pre-eviction memory consolidation: when true (CONSOLIDATE / .env), the
-    # sliding-window compaction tier folds the about-to-be-evicted slice into
-    # durable memory via the writable owner sub-agent before dropping it.
-    consolidate: bool = False
-
     # Model for the consolidation owner sub-agent. Blank (default) → resolved to
     # a cheap default constant (see paf.capabilities.memory._consolidate);
     # set via CONSOL_MODEL / .env to override per run. Not the spec'd subject

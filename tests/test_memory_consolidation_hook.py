@@ -108,9 +108,11 @@ def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch
     assert got.cutoff is not None and got.cutoff > 0, (
         "consolidation must fire only when the window actually evicts"
     )
-    # The slice handed to consolidate is exactly the prefix the window will drop.
-    assert got.passed_messages == len(messages)
-    expected_cutoff = 8 - 2  # find_safe_cutoff(messages, keep_messages=2) on plain turns
+    # The slice handed to consolidate is the SETTLED prefix strictly before the
+    # active (last) user turn — the window never folds the live turn's messages.
+    # With 8 plain user turns the gate anchors at index 7, so settled = 7.
+    assert got.passed_messages == 7  # len(settled) — the active turn is excluded
+    expected_cutoff = 7 - 2  # find_safe_cutoff(settled=7, keep_messages=2)
     assert got.cutoff == expected_cutoff
     assert got.keep_tail == 2
 
@@ -129,12 +131,11 @@ def test_compaction_hook_fires_and_writes_on_real_eviction(tmp_path, monkeypatch
     assert idx.get("schema") == 1
     assert idx.get("watermark") >= 1
 
-    # 3. The window still performed the trim (the contract of the base window):
-    #    the about-to-evict prefix is gone and only the tail remains.
-    assert len(result) < len(messages), "compaction must still trim"
-    assert len(result) <= 3, (  # keep_messages=2 (+ preserved first user msg)
-        f"expected a trimmed tail; got {len(result)}"
-    )
+    # 3. The window still performed the trim (the contract of the base window),
+    #    never consuming the active turn: settled(7) trimmed to keep=2 (+1
+    #    preserved first user msg) = 3, re-appended with the active turn(1) = 4.
+    assert len(result) == 4
+    assert result[-1] == messages[-1], "the active (last) user turn must survive"
 
 
 def test_compaction_hook_noop_when_nothing_to_evict(tmp_path, monkeypatch):
@@ -194,25 +195,26 @@ def test_compaction_hook_rate_limits_within_one_turn(tmp_path, monkeypatch):
 
     fake_ctx = types.SimpleNamespace(messages=[], model=None)
 
-    # 1st fire: 8 messages -> cutoff 6, consolidates (fresh material).
+    # 1st fire: 8 messages -> settled=7, cutoff=5, consolidates (fresh material).
     m8 = _make_messages(8)
     fake_ctx.messages = m8
     asyncio.run(window.compact(m8, fake_ctx))  # type: ignore[arg-type]
-    assert got.cutoff == 6
+    assert got.cutoff == 5
     assert got.call_count == 1
 
     # 2nd fire, same turn: history re-inflated to the same size (a tool result
-    # pushed the estimate back over the token trigger). cutoff 6 is NOT beyond
+    # pushed the estimate back over the token trigger). cutoff 5 is NOT beyond
     # the last folded cutoff -> memory must NOT be re-consolidated.
     m8b = _make_messages(8)
     fake_ctx.messages = m8b
     asyncio.run(window.compact(m8b, fake_ctx))  # type: ignore[arg-type]
     assert got.call_count == 1, "repeat consolidation over same cutoff must be skipped"
 
-    # 3rd fire: genuinely new material accumulated (12 messages). cutoff 10
-    # exceeds the last folded 6 -> consolidates the newly-evictable prefix.
+    # 3rd fire: genuinely new material accumulated (12 messages). settled=11,
+    # cutoff 9 exceeds the last folded 5 -> consolidates the newly-evictable
+    # prefix.
     m12 = _make_messages(12)
     fake_ctx.messages = m12
     asyncio.run(window.compact(m12, fake_ctx))  # type: ignore[arg-type]
-    assert got.cutoff == 10
+    assert got.cutoff == 9
     assert got.call_count == 2

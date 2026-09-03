@@ -1,10 +1,10 @@
 """Persisted-consumption watermark for background memory consolidation.
 
 The trigger that decides *when* a background memory-consolidation job should
-fire, decoupled from eviction. Where ``MemoryConsolidationWindow.compact``
-runs the owner *because the window is about to drop messages*, here the owner
-runs *because enough durable conversation has accumulated since the last time
-it consumed*, tracked by a flat-file watermark.
+fire, decoupled from eviction. Eviction (``TurnBoundSlidingWindow``) is
+**trim-only** and never calls memory; here the owner runs *because enough
+durable conversation has accumulated since the last time it consumed*, tracked
+by a flat-file watermark.
 
 This module holds the pure, testable pieces — the watermark record and the
 ``should_fire`` trigger predicate — with **no model and no persistence calls**.

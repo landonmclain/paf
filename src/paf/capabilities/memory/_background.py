@@ -4,14 +4,11 @@ Wires the framework-level work-queue engine (:class:`paf.background.BackgroundQu
 committed ``29faa67``) to the M2 memory store, fired by the *watermark* trigger
 (:mod:`._watermark`) instead of eviction.
 
-Where ``MemoryConsolidationWindow.compact`` runs the owner inline because the
-window is about to drop messages, this queue runs the owner **out-of-band** —
-the turn returns immediately and a background worker drains the job. The turn
-never blocks on the owner's LLM work. The eviction hook is intentionally left
-in place (see design): the watermark is the *driver*, eviction stays the
-*safety net*, and the two paths share the one append-only journal — the
-queue's FIFO + ``write_lock`` serialize journal writes so the paths never
-stomp each other.
+This queue runs the owner **out-of-band** — the turn returns immediately and a
+background worker drains the job. The turn never blocks on the owner's LLM work.
+The eviction tier (``TurnBoundSlidingWindow``) is **trim-only** and never runs
+the owner at all; the watermark is the sole driver, and the queue's FIFO +
+``write_lock`` serialize journal writes so paths never stomp each other.
 
 The heavy seams are injectable so the service + trigger mechanics can be
 unit-tested without a model call or a fake persistence substrate:

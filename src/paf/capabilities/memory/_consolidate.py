@@ -1,8 +1,9 @@
-"""Pre-eviction memory consolidation — the writable owner sub-agent.
+"""Memory consolidation — the writable owner sub-agent.
 
-Backs :class:`MemoryConsolidationWindow` (``paf/capabilities/memory/_window.py``),
-which folds the about-to-be-evicted slice of conversation into the memory store
-*before* the sliding window drops it.
+Backs the **background** watermark consolidation queue
+(``paf/capabilities/memory/_background.py``), which folds spans of conversation
+into the memory store off the eviction hot path. Eviction
+(``TurnBoundSlidingWindow``) no longer calls this — it is trim-only.
 
 Ownership model
 ---------------

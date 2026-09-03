@@ -30,11 +30,8 @@ from dataclasses import dataclass
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
-    SlidingWindowCompaction,
     TieredCompaction,
 )
-
-from paf.config import settings
 
 # ---------------------------------------------------------------------------
 # Compaction tuning — spec-file driven (per-agent), with benchmark-default fallback.
@@ -75,9 +72,6 @@ class CompactionConfig:
         clamp_max_part_tokens: ClampOversizedMessages — any single message part
             larger than this is trimmed to head+tail.
         clamp_head_chars / clamp_tail_chars: head/tail chars kept when clamping.
-        consolidate: when True, replace the plain sliding window with
-            MemoryConsolidationWindow (fold the about-to-evict slice into the
-            durable journal before dropping). Default False.
     """
 
     target_tokens: int | None = None
@@ -88,7 +82,6 @@ class CompactionConfig:
     clamp_max_part_tokens: int | None = None
     clamp_head_chars: int | None = None
     clamp_tail_chars: int | None = None
-    consolidate: bool | None = None
 
     @classmethod
     def from_mapping(cls, data: dict | None) -> CompactionConfig:
@@ -109,8 +102,9 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
 
     1. ``ClampOversizedMessages`` — trim any single oversized part to head+tail.
     2. ``ClearToolResults`` — replace tool-call/result pairs with placeholders.
-    3. ``SlidingWindowCompaction`` — drop oldest messages, keep the recent window
-       (plus the first user message) — the harness's cheap default.
+    3. ``TurnBoundSlidingWindow`` — drop the oldest *settled* messages below the
+       most recent real user prompt, keeping the recent window (plus the first
+       user message) — trim-only, never evicts the active turn.
 
     ``config`` (optional, from the agent spec's ``compact:`` block) overrides the
     historical defaults. When ``None``, the historical defaults are used verbatim
@@ -118,12 +112,11 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     clamp 50_000/2000) so existing call sites and tests keep byte-identical
     behavior. When ``config`` supplies values, they replace only the fields set.
 
-    When ``config.consolidate`` (or ``Settings.consolidate``) is True, the
-    sliding-window tier is replaced by
-    :class:`~paf.capabilities.memory._window.MemoryConsolidationWindow`, which
-    folds the about-to-be-evicted slice into the durable memory store (via the
-    writable owner sub-agent) *before* dropping it. Default (unset) keeps the
-    byte-identical plain window.
+    The single sliding-window tier is always
+    :class:`~paf.capabilities.memory._window.TurnBoundSlidingWindow` — turn-bounded
+    (never evicts the active user prompt) and **trim-only** (does no memory work).
+    There is no ``consolidate`` flag: durable-fact capture is owned solely by the
+    background watermark worker, never by eviction (retired 2026-09-02).
 
     The LLM rewrite (4. ``SummarizingCompaction``) is intentionally absent — paf's
     long-term recall is the store-backed memory system (owner → organizer → curated
@@ -147,20 +140,13 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     clamp_tail = cfg.clamp_tail_chars if cfg.clamp_tail_chars is not None else 2_000
     win_max = cfg.window_max_messages if cfg.window_max_messages is not None else 10
     win_keep = cfg.window_keep_messages if cfg.window_keep_messages is not None else 20
-    consolidate = cfg.consolidate if cfg.consolidate is not None else bool(settings.consolidate)
 
-    if consolidate:
-        from paf.capabilities.memory._window import MemoryConsolidationWindow
+    from paf.capabilities.memory._window import TurnBoundSlidingWindow
 
-        window = MemoryConsolidationWindow(
-            max_messages=win_max,
-            keep_messages=win_keep,
-        )
-    else:
-        window = SlidingWindowCompaction(
-            max_messages=win_max,
-            keep_messages=win_keep,
-        )
+    window = TurnBoundSlidingWindow(
+        max_messages=win_max,
+        keep_messages=win_keep,
+    )
     return TieredCompaction(
         target_tokens=target,
         tiers=[
@@ -177,7 +163,8 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
                 max_tokens=clear_max,
                 keep_pairs=clear_keep,
             ),
-            # 3. Drop the oldest messages (or consolidate-then-drop, when enabled).
+            # 3. Drop the oldest SETTLED messages (turn-bounded; the active
+            #    user turn is never evicted). Trim-only — no memory work here.
             window,
         ],
     )
