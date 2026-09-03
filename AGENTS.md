@@ -68,7 +68,7 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 
 - **CLIs:** `ui/cli2.py demo_assistant` = demo profile (fs/shell/git/web);
   bare `ui/cli2.py` = assistant profile (search_conversation_history + read_turn
-  only, by design). `ui/cli3.py` is the base for the streaming StepStream/
+  only, by design). `ui/cli.py` is the base for the streaming StepStream/
   TurnStream lives, and the runner for the **contextbench** profile.
 - **Benchmarks:** `tests/run_lmem.py` (LongMemEval) — **read `tests/AGENTS.md`
   first**; live LLM, costs real tokens.
@@ -80,7 +80,7 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 
 The benchmark that tests **paf's codebase-map as NAVIGATION over search**. Gold
 contexts are exact line-ranges required to produce a passing fix. Current phase:
-a **hand-driven live run** on one easy instance (`flask-5014`) via cli3, the map
+a **hand-driven live run** on one easy instance (`flask-5014`) via cli.py, the map
 vs cold-start-shell A/B. Not yet the standalone `tests/run_lmem.py`-style harness
 — that comes later.
 
@@ -94,15 +94,15 @@ the model MUST navigate purely by the codebase-map ladder.
 
 ```bash
 cd /home/alice/projects/Personal/pydantic-agent-framework
-# 1. Bump CONV_EPOCH (ui/cli3.py) by 1 → fresh conversation lane (no resume)
+# 1. Bump CONV_EPOCH (ui/cli.py) by 1 → fresh conversation lane (no resume)
 # 2. Run:
-set -a && . ./.env && set +a && PYTHONPATH= .venv/bin/python ui/cli3.py contextbench
+set -a && . ./.env && set +a && PYTHONPATH= .venv/bin/python ui/cli.py contextbench
 # 3. Send the flask-5014 task as the user message (NOT baked into the spec)
 # 4. Check the trace in Langfuse/ClickHouse (project cmsi71sj00003mp07im3de6ke)
 ```
 
 The profile is `contextbench`; `resolve_profile_name()` reads the spec's
-`profile:` key so a one-arg `cli3.py contextbench` picks the RIGHT (Memory-less)
+`profile:` key so a one-arg `cli.py contextbench` picks the RIGHT (Memory-less)
 profile — no hardcoded fallback needed. `CONV_EPOCH` gates conversation resets.
 
 **Why this tests NAVIGATION, and what the ladder expects:**

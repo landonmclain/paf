@@ -108,7 +108,7 @@ memory-write tool (recording is the owner's job).
 All UIs drive the same `Session`/`Runtime` underneath.
 
 - `ui/cli.py` — plain REPL.
-- `ui/cli2.py` / `ui/cli3.py` — Rich live render with streaming thinking/tool
+- `ui/cli2.py` / `ui/cli.py` — Rich live render with streaming thinking/tool
   status.
 - `ui/cli_textual.py` — Textual full-screen.
 - `ui/cli_demo.py` — keyless/deterministic debug path (`MODEL='test'`).
@@ -156,7 +156,7 @@ src/paf/
   specs.py        spec loader (agent name → YAML → Agent)
   config.py       pydantic-settings config + spec/root anchoring
 specs/            declarative agent specs (*.yaml)
-ui/               cli.py (plain), cli2.py / cli3.py (Rich), cli_textual.py (Textual),
+ui/               cli.py (plain), cli.py (Rich), cli_textual.py (Textual),
                   cli_demo.py (keyless), web.py (Gradio)
 tests/            unit tests + benchmark harness (run_lmem, ...)
 ```

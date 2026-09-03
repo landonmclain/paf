@@ -24,7 +24,7 @@ name: demo_assistant
 
 # The profile (capability allowlist) this spec belongs to. Read by the CLI
 # (`resolve_profile_name`) to choose the default profile for a one-arg
-# invocation like `python ui/cli3.py demo_assistant`.
+# invocation like `python ui/cli.py demo_assistant`.
 profile: demo
 
 # Provider-qualified model string. Same default as the assistant: DeepSeek V4

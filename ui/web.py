@@ -1,7 +1,7 @@
 """paf Web UI — Gradio, one file, mobile-first.
 
 A self-contained web chat UI for the pydantic-agent-framework (paf) that renders
-the same live step model as `ui/cli3.py`, but as Gradio ``ChatMessage`` metadata
+the same live step model as `ui/cli.py`, but as Gradio ``ChatMessage`` metadata
 accordions instead of Rich panels:
 
     thinking  -> accordion "🧠 Thinking" (collapsible, faint)
@@ -23,13 +23,13 @@ Usage:
     python ui/web.py [agent_name] [port]
     # default agent_name "demo_assistant"; "assistant" (specs/assistant.yaml)
     # for the full profile. conversation_id defaults to web-{agent_name}
-    # (single-lane persistence, same as cli3).
+    # (single-lane persistence, same as cli).
 
 The server binds 0.0.0.0:<port> (default 8080) so it's reachable on the LAN and
 hence via Tailscale from a phone. Keep it plain HTTP behind Tailscale (TS
 provides authn); do not expose it to the public internet.
 
-Needs OPENAI_API_KEY (live model), matching cli3.
+Needs OPENAI_API_KEY (live model), matching cli.
 """
 
 from __future__ import annotations
@@ -49,8 +49,7 @@ import gradio as gr
 from gradio.components.chatbot import MetadataDict as GradioMetadataDict
 
 from paf.capabilities import PROFILES
-from paf.runtime2 import Session2 as Session
-from paf.runtime2 import StreamEvent
+from paf.runtime import Session, StreamEvent
 
 DEFAULT_AGENT = "demo_assistant"
 DEFAULT_PORT = 8080
@@ -229,7 +228,7 @@ footer {
 """
 
 # ---------------------------------------------------------------------------
-# Turn model (same as cli3) — fold StreamEvents into ordered blocks.
+# Turn model (same as cli) — fold StreamEvents into ordered blocks.
 # ---------------------------------------------------------------------------
 
 
@@ -300,7 +299,7 @@ class TurnStream:
 def _safe(s: str) -> str:
     """Make a model-produced string safe under utf-8 (callers may not set it).
     FunctionToolCallEvent.args can carry lone UTF-16 surrogates while streaming;
-    drop unencodable chars rather than raise, mirroring cli3."""
+    drop unencodable chars rather than raise, mirroring cli."""
     return s.encode("utf-8", errors="replace").decode("utf-8")
 
 
@@ -412,7 +411,7 @@ _sessions: dict[str, Session] = {}
 def get_session(agent_name: str, profile_name: str | None = None) -> Session:
     """Build (or reuse) the single-lane Session for ``agent_name``.
 
-    cli3 holds a ``with Session(...)`` open for the process; here we cache the
+    cli holds a ``with Session(...)`` open for the process; here we cache the
     session per agent and seed history on first use (mirroring the startup
     banner). Sessions flush on process exit via the atexit hook."""
     session = _sessions.get(agent_name)
@@ -556,13 +555,13 @@ def _boot_banner(session: Session) -> list[gr.ChatMessage]:
 
 # Per-session boot flags (id-keyed; sessions are singletons per agent_name in
 # `_sessions`). Tracked here instead of a dynamic attribute on the Session so
-# neither Pyright (unknown attr on Session2) nor ruff (B010 setattr-constant)
+# neither Pyright (unknown attr on Session) nor ruff (B010 setattr-constant)
 # is tripped.
 _session_booted: set[int] = set()
 
 
 async def _seed_once(session: Session) -> None:
-    """Seed durable history on first run (single-lane resume), like cli3."""
+    """Seed durable history on first run (single-lane resume), like cli."""
     if id(session) not in _session_booted:
         _session_booted.add(id(session))
         try:
@@ -790,9 +789,9 @@ async def event_messages(
 
     t0 = time.perf_counter()
     async for event in session.stream(prompt, conversation_id=session.conversation_id):
-        # runtime2 streams an additive union (StreamEvent | ToolRunning | ToolError).
+        # runtime streams an additive union (StreamEvent | ToolRunning | ToolError).
         # The new kinds carry no `.kind` — render only the base 4 for now; the
-        # additive events pass through unrendered (mirrors the cli3 guard).
+        # additive events pass through unrendered (mirrors the cli guard).
         if isinstance(event, StreamEvent):
             render(event, out)
         # Rebuild the current turn's assistant transcript fresh each frame
