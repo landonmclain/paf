@@ -86,7 +86,7 @@ from paf.capabilities.memory._background import (
     resolve_unseen_span,
 )
 from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
-from paf.capabilities.memory._window import DEFAULT_MEMORY_DIR
+from paf.capabilities.memory._window import memory_dir_for
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
     _json_dumps,
@@ -455,9 +455,9 @@ class Session:
         self.consolidate_every = resolve_memory_config(agent_name)["consolidate_every"]
         # Background memory consolidation is the sole memory writer and just RUNS
         # when memory is built for the agent — there is no opt-in flag. The store
-        # directory defaults to the canonical shared journal/MEMORY.md directory;
-        # pass one explicitly to target a different scope (tests / hermetic runs).
-        self._memory_directory = memory_directory or DEFAULT_MEMORY_DIR
+        # directory defaults to the per-agent scope (<MEMORY_DIR>/<agent_name>/,
+        # created on first use); pass one explicitly to override (tests / custom).
+        self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
         self._consolidate_span = consolidate_span
         self._memory_queue: MemoryConsolidationQueue | None = None
         # Session-held CancellationToken -> stop (created here so cancel()

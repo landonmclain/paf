@@ -614,6 +614,7 @@ def build_agent(
             shell_config=shell_config,
             git_config=git_config,
             codebase_map_config=codebase_map_config,
+            agent_name=agent_name,
         ),
         **overrides,
     )

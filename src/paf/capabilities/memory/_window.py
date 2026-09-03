@@ -63,6 +63,21 @@ def _is_real_user_prompt(message: ModelMessage) -> bool:
 DEFAULT_MEMORY_DIR = str(PROJECT_ROOT / Path(settings.memory_dir))
 
 
+def memory_dir_for(agent_name: str) -> str:
+    """The per-agent memory directory: ``<MEMORY_DIR>/<agent_name>/``.
+
+    Agent-isolated durable memory (one journal/MEMORY.md set per agent, keyed by
+    the spec base name — ``demo_assistant`` → ``data/memory/demo_assistant/``).
+    The directory is created on first use; no corpus is copied in. The shared
+    Session watermark/queue default and the injected ``JournalViewStore`` (in
+    ``build.py._build_memory``) both derive from this so they can never point at
+    different scopes.
+    """
+    path = PROJECT_ROOT / Path(settings.memory_dir) / agent_name
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 class TurnBoundSlidingWindow(SlidingWindowCompaction):
     """Turn-bounded, trim-only sliding window — never evicts the active turn.
 

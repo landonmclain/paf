@@ -82,7 +82,9 @@ def _read_positive_int(memory_config: dict, key: str, default: int) -> int:
     return default
 
 
-def _build_memory(store, memory_config: dict | None = None) -> Memory:
+def _build_memory(
+    store, memory_config: dict | None = None, agent_name: str | None = None
+) -> Memory:
     """M2 journal-view durable memory, INJECT-ONLY for the assistant.
 
     Mirrors the benchmark assembly in `tests/framework.py`: the model carries
@@ -110,6 +112,7 @@ def _build_memory(store, memory_config: dict | None = None) -> Memory:
     (``consolidate_every``, ``memory_directory``, ``span_source``).
     """
     from paf.capabilities.memory._view import JournalViewStore
+    from paf.capabilities.memory._window import memory_dir_for
 
     cfg = memory_config if isinstance(memory_config, dict) else {}
 
@@ -123,7 +126,9 @@ def _build_memory(store, memory_config: dict | None = None) -> Memory:
     max_lines = _read_positive_int(cfg, "max_lines", DEFAULT_MEMORY_MAX_LINES)
 
     return Memory(
-        store=JournalViewStore(_MEMORY_DIR),
+        store=JournalViewStore(
+            str(memory_dir_for(agent_name)) if agent_name else Path(_MEMORY_DIR)
+        ),
         inject_memory=True,
         writable=False,
         expose_tools=False,
@@ -570,6 +575,7 @@ def build_runtime_capabilities(
     shell_config: dict | None = None,
     git_config: dict | None = None,
     codebase_map_config: dict | None = None,
+    agent_name: str | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -659,7 +665,7 @@ def build_runtime_capabilities(
             # — the background-consolidation cadence) read from the spec's
             # top-level `memory:` block. The background queue is a separate
             # framework-level service the Memory capability hands values down to.
-            capabilities.append(_build_memory(store, memory_config))
+            capabilities.append(_build_memory(store, memory_config, agent_name))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
