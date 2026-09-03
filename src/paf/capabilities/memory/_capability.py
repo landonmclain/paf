@@ -183,7 +183,7 @@ class Memory(AbstractCapability[AgentDepsT]):
     ``memory_archive_suggestion`` (write a *pending* archive intent). This is
     the assistant's narrow, modify-only curation channel — it never touches the
     journal or index. The render pass reflects pending suggestions with a
-    ``*(pending review)*`` marker until a reviewer resolves them.
+    ``*(archive pending review)*`` marker until a reviewer resolves them.
     """
 
     _resolved_scope: tuple[MemoryStore, str] | None = field(

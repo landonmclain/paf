@@ -142,6 +142,11 @@ class OverrideStore:
         return self._path
 
     @property
+    def directory(self) -> str:
+        """The memory scope dir this sidecar sits in (journal/index/MEMORY.md home)."""
+        return self._dir
+
+    @property
     def filename(self) -> str:
         return _OVERRIDES_FILENAME
 

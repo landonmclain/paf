@@ -41,6 +41,12 @@ from ._overrides import OverrideState
 # Per-record separator between fact / date / source_ref in the md line.
 _SEP = " — "
 
+# Marker appended to a fact that has a PENDING archive suggestion from the
+# assistant (awaiting a reviewer verdict). Distinct phrasing — "archive pending
+# review" — so the answerer reads it as a *proposed removal*, not a general
+# note.
+_PENDING_MARKER = " *(archive pending review)*"
+
 # Fixed render order for the 3-tier ladder; tiers not present are omitted.
 _TIER_ORDER = ("t1", "t2", "t3")
 
@@ -84,7 +90,7 @@ def _apply_overrides(
     ``overrides`` is the folded per-target map (``None``/empty -> no-op). Returns
     ``(kept_pairs, pending_lines)`` where ``pending_lines`` arethe journal
     line ids with an assistant archive awaiting review (those lines render with a
-    ``*(pending review)*`` marker). Applied archives are dropped; applied tier
+    ``*(archive pending review)*`` marker). Applied archives are dropped; applied tier
     changes rebuild the record at the new tier.
     """
     if not overrides:
@@ -127,7 +133,7 @@ def render_journal_memory(
 
     ``overrides`` (optional, folded sidecar map) is honored deterministically:
     applied archives drop the fact, applied tier-changes move it under a new
-    tier, and pending assistant archives render with a ``*(pending review)*``
+    tier, and pending assistant archives render with a ``*(archive pending review)*``
     marker so the subject can see its proposal is awaiting review.
 
     Unbound: every record is emitted.
@@ -150,7 +156,7 @@ def render_journal_memory(
         lines = []
         for r in recs:
             prov = provenance.get(id(r)) or r.source_ref
-            marker = " *(pending review)*" if id(r) in pending else ""
+            marker = _PENDING_MARKER if id(r) in pending else ""
             lines.append(
                 f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}{marker}"
                 if r.born_on
@@ -203,7 +209,7 @@ def render_index_memory(
     ``overrides`` (optional, folded sidecar map) is honored deterministically
     before grouping: applied archives drop the fact, applied tier-changes move
     it under a new tier, and pending assistant archives render with a
-    ``*(pending review)*`` marker.
+    ``*(archive pending review)*`` marker.
     """
     winners = _select_index_winners(store, index)
     kept, pending = _apply_overrides(winners, overrides)
@@ -226,7 +232,7 @@ def render_index_memory(
         for r in recs:
             ln = line_of.get(id(r))
             prov = f"#{ln}" if ln is not None else r.source_ref
-            marker = " *(pending review)*" if ln in pending else ""
+            marker = _PENDING_MARKER if ln in pending else ""
             lines.append(
                 f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}{marker}"
                 if r.born_on

@@ -3,7 +3,7 @@
 Covers the append-only sidecar, the deterministic fold to per-target override
 state, validation, and the one narrow render-hook pass: applied archives drop
 the fact, applied tier-changes move it under a new tier, and pending assistant
-archives render with a ``*(pending review)*`` marker. All deterministic, no
+archives render with a ``*(archive pending review)*`` marker. All deterministic, no
 model.
 """
 
@@ -196,7 +196,7 @@ def test_render_pending_archive_marks_line(tmp_path):
     md = render_index_memory(store, idx, overrides=ov)
     lines = [ln for ln in md.splitlines() if ln.startswith("- ")]
     assert len(lines) == 1
-    assert "*(pending review)*" in lines[0]
+    assert "*(archive pending review)*" in lines[0]
     # the fact is NOT dropped — just flagged
     assert "flat-file storage" in lines[0]
 
@@ -221,7 +221,7 @@ def test_render_reject_clears_pending_marker(tmp_path):
     md = render_index_memory(store, idx, overrides=ov)
     lines = [ln for ln in md.splitlines() if ln.startswith("- ")]
     assert len(lines) == 1
-    assert "*(pending review)*" not in "".join(lines)  # marker cleared
+    assert "*(archive pending review)*" not in "".join(lines)  # marker cleared
     assert "flat-file storage" in lines[0]  # fact stays
 
 
@@ -283,7 +283,7 @@ def test_write_render_end_to_end_pending_marker(tmp_path):
     md_path = tmp_path / "MEMORY.md"
     write_render(store, str(md_path))
     text = md_path.read_text(encoding="utf-8")
-    assert "*(pending review)*" in text
+    assert "*(archive pending review)*" in text
     assert "flat-file storage" in text
 
 
@@ -333,4 +333,29 @@ def test_memory_capability_wires_override_toolset(tmp_path):
     assert ts is not None
     assert "memory_archive_suggestion" in set(ts.tools.keys())
     assert "append_memory" not in set(ts.tools.keys())  # never the owner's tool
+
+
+def test_tool_refreshes_render_immediately(tmp_path):
+    """After the tool suggests an archive, MEMORY.md shows the marker NOW —
+    no need to wait for the background consolidation pass."""
+    import asyncio
+
+    from paf.capabilities.memory._index import build_index
+    from paf.capabilities.memory._toolset import OverrideToolset
+
+    _seed_store(tmp_path, [
+        _mk_record("User prefers flat-file storage", src="run:0"),
+    ])
+    build_index(tmp_path)
+    ts = OverrideToolset(OverrideStore(tmp_path))
+
+    asyncio.run(
+        ts.memory_archive_suggestion(_FakeCtx(), journal_id=1, reason="rm disproven")
+    )
+
+    # MEMORY.md is rewritten by the tool itself (not a later consolidation pass)
+    md = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
+    assert "*(archive pending review)*" in md
+    assert "flat-file storage" in md
+
 

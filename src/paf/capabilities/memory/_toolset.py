@@ -320,7 +320,7 @@ class OverrideToolset(FunctionToolset[AgentDepsT]):
     This is the narrow, modify-only curation channel. It does NOT append to the
     journal or touch the index — it writes a **pending** intent to the override
     sidecar (``memory-overrides.jsonl``), which the render pass reflects with a
-    ``*(pending review)*`` marker until a reviewer resolves it (archive /
+    ``*(archive pending review)*`` marker until a reviewer resolves it (archive /
     tier_change / reject). The assistant remains read-only with respect to the
     journal and index.
     """
@@ -342,7 +342,7 @@ class OverrideToolset(FunctionToolset[AgentDepsT]):
         line in the injected memory block. You NEVER edit memory directly; this
         records a *pending* archive suggestion that a reviewer must approve
         before it drops out of the injected view. Until then the fact stays
-        visible with a ``*(pending review)*`` marker.
+        visible with a ``*(archive pending review)*`` marker.
 
         Args:
             journal_id: The journal line id of the fact to archive (the ``#N``
@@ -364,6 +364,17 @@ class OverrideToolset(FunctionToolset[AgentDepsT]):
                 )
             except ValueError as exc:
                 raise ModelRetry(str(exc)) from exc
+            # Re-render MEMORY.md NOW so the pending-review marker appears on the
+            # next injection instead of waiting for the background consolidation
+            # pass (which only fires every `consolidate_every` turns). The render
+            # is the same deterministic write the owner performs — this just
+            # makes the suggestion immediately visible.
+            try:
+                self._refresh_render()
+            except Exception:  # pragma: no cover - render must not fail the turn
+                # A render hiccup (e.g. corrupt journal line) must not drop the
+                # suggestion — the background pass will retry it later.
+                pass
             if span.is_recording():
                 span.set_attributes(
                     {"memory.override.op": "archive", "memory.override.target": journal_id}
@@ -375,3 +386,18 @@ class OverrideToolset(FunctionToolset[AgentDepsT]):
                 "status": "pending_review",
                 "reason": reason,
             }
+
+    def _refresh_render(self) -> None:
+        """Re-materialize ``MEMORY.md`` from the journal, honoring the sidecar.
+
+        This makes an override visible on the very next injection instead of
+        waiting for the background consolidation pass (every ``consolidate_every``
+        turns). Same deterministic ``write_render`` the owner performs; safe to
+        call on any override write.
+        """
+        from ._journal import JournalStore
+        from ._render import write_render
+
+        directory = self._overrides.directory
+        md_path = directory.rstrip("/\\") + "/" + MAIN_FILENAME
+        write_render(JournalStore(directory), md_path)
