@@ -135,7 +135,10 @@ def _build_memory(
         max_lines=max_lines,
         max_tokens=max_tokens,
         max_memory_size=max_memory_size,
-        guidance="",
+        # None → `_DEFAULT_MEMORY_GUIDANCE` (the tiered, read-only notebook
+        # guidance the assistant should always carry). A spec may opt out with
+        # an explicit `guidance: ""`.
+        guidance=None,
         consolidate_every=consolidate_every,
     )
 

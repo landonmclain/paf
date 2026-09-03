@@ -23,7 +23,6 @@ from paf.capabilities.memory._consolidate import (
     CONSOLIDATION_GUIDANCE,
     consolidate_model,
 )
-from paf.capabilities.memory._format import MEMORY_FORMAT, extract_sections
 
 # ---------------------------------------------------------------------------
 # owner consolidation guidance + model env
@@ -42,40 +41,35 @@ def test_consolidation_guidance_is_owned_by_owner() -> None:
     assert "NEWER ALWAYS WINS" not in CONSOLIDATION_GUIDANCE
 
 
-def test_memory_format_pinned_sections_and_order() -> None:
-    """The canonical MEMORY.md format declares exactly four sections, in order.
+def test_memory_guidance_describes_tiered_not_legacy_sections() -> None:
+    """The assistant's default guidance describes the 3-tier rendered shape.
 
-    The subject's default guidance must embed the exact same MEMORY_FORMAT so
-    the writer and reader agree on the rendered notebook shape by construction.
-    The consolidation OWNER is append-only and does NOT carry the notebook
-    format — the render pass produces it.
+    The legacy four-section ``MEMORY_FORMAT`` (Facts/Preferences/Pending/Notes)
+    and the writable ``_DEFAULT_GUIDANCE`` were retired with the M2 rework — the
+    assistant is inject-only (no memory tools), and its guidance reflects the
+    tiered, append-only notebook the render produces (t1/t2/t3). The
+    consolidation OWNER keeps append-only journal semantics only and carries no
+    notebook section list.
     """
-    from paf.capabilities.memory._capability import _DEFAULT_GUIDANCE
+    from paf.capabilities.memory._capability import _DEFAULT_MEMORY_GUIDANCE
 
-    # The raw format pins the four sections, in the canonical order.
-    assert extract_sections(MEMORY_FORMAT) == [
-        "Facts",
-        "Preferences",
-        "Pending",
-        "Notes",
-    ]
-    # No stray sections beyond the four.
-    assert len(extract_sections(MEMORY_FORMAT)) == 4
-    # Write bias is explicit ("write too much") in the format.
-    assert "WHEN IN DOUBT, RECORD IT" in MEMORY_FORMAT
-    assert "## Pending" in MEMORY_FORMAT and "- [ ]" in MEMORY_FORMAT
-    # The assistant's default guidance carries the exact section block
-    # (single source of truth for the rendered notebook).
-    assert extract_sections(
-        _DEFAULT_GUIDANCE.format(format_spec=MEMORY_FORMAT)
-    ) == extract_sections(MEMORY_FORMAT)
-    # The consolidation owner is append-only — it does NOT carry the
-    # 4-section notebook format (the render produces it, not the owner).
+    # The assistant's default guidance describes the tier ladder, not four
+    # fixed sections, and contains no write/CAPTURE directives (inject-only).
+    assert "## t1" in _DEFAULT_MEMORY_GUIDANCE
+    assert "## t2" in _DEFAULT_MEMORY_GUIDANCE
+    assert "## t3" in _DEFAULT_MEMORY_GUIDANCE
+    assert "search_conversation_history" in _DEFAULT_MEMORY_GUIDANCE
+    assert "write_memory" not in _DEFAULT_MEMORY_GUIDANCE
+    assert "CAPTURE as you go" not in _DEFAULT_MEMORY_GUIDANCE
+    # The consolidation owner is append-only — it does NOT carry a notebook
+    # section/format block (the render produces it, not the owner).
     from paf.capabilities.memory._consolidate import _build_owner_memory
 
     built_owner = _build_owner_memory(None, agent_name="assistant", namespace="")
     assert built_owner.guidance is not None
-    assert extract_sections(built_owner.guidance) == []
+    assert "## Facts" not in built_owner.guidance
+    assert "## Pending" not in built_owner.guidance
+    assert "write_memory" not in built_owner.guidance
 
 
 def test_consolidation_model_reads_config(monkeypatch) -> None:
