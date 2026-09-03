@@ -400,9 +400,8 @@ def test_build_compaction_window_is_always_turn_bound_trim_only() -> None:
     Eviction is always trim-only `TurnBoundSlidingWindow` (never evicts the
     active user turn, never calls memory) — the background watermark worker is
     the sole memory writer. This pins that the two concerns are structurally
-    disjoint: the background trigger is gated separately (session
-    `memory_consolidation` flag + `memory.consolidate_every`), never by a
-    `compact.consolidate` flag.
+    disjoint: the background trigger is gated by `memory.consolidate_every`
+    (per-agent spec), never by a `compact.consolidate` flag or a session flag.
     """
     from paf.capabilities.compaction import CompactionConfig
 

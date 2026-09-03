@@ -86,6 +86,7 @@ from paf.capabilities.memory._background import (
     resolve_unseen_span,
 )
 from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
+from paf.capabilities.memory._window import DEFAULT_MEMORY_DIR
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
     _json_dumps,
@@ -424,7 +425,6 @@ class Session:
         resume: bool = True,
         resume_window: int | None = None,
         store=None,
-        memory_consolidation: bool = False,
         memory_directory: str | None = None,
         consolidate_span=None,
     ) -> None:
@@ -452,17 +452,12 @@ class Session:
             setup_observability()
         self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
         self.history: list = []
-        self.memory_consolidation = memory_consolidation
         self.consolidate_every = resolve_memory_config(agent_name)["consolidate_every"]
-        # Memory is opt-in; when it's on, the store directory is REQUIRED — there
-        # is no default. Fail fast in the constructor rather than discovering a
-        # missing directory mid-turn when the consolidation worker fires.
-        if memory_consolidation and not memory_directory:
-            raise ValueError(
-                "memory_directory is required when memory_consolidation=True "
-                "(no default memory directory; pass one explicitly)"
-            )
-        self._memory_directory = memory_directory
+        # Background memory consolidation is the sole memory writer and just RUNS
+        # when memory is built for the agent — there is no opt-in flag. The store
+        # directory defaults to the canonical shared journal/MEMORY.md directory;
+        # pass one explicitly to target a different scope (tests / hermetic runs).
+        self._memory_directory = memory_directory or DEFAULT_MEMORY_DIR
         self._consolidate_span = consolidate_span
         self._memory_queue: MemoryConsolidationQueue | None = None
         # Session-held CancellationToken -> stop (created here so cancel()
@@ -667,7 +662,7 @@ class Session:
 
         ``cid`` here is ALREADY profile-scoped by the caller (``_scoped_cid``).
         """
-        if not self.memory_consolidation or cid is None:
+        if cid is None:
             return
         self._consolidation_seq += 1
         task_id = f"consolidation.{cid}.{self._consolidation_seq}"

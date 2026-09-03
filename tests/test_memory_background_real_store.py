@@ -211,7 +211,6 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
         trace=False,
         resume=False,
         store=store,
-        memory_consolidation=True,
         memory_directory=str(memdir),
         consolidate_span=fence,
     ) as session:
@@ -260,7 +259,6 @@ def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
         trace=False,
         resume=False,
         store=store,
-        memory_consolidation=True,
         memory_directory=str(memdir),
     ) as session:
         for i in range(5):
