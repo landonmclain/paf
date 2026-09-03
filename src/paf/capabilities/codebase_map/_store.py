@@ -13,8 +13,12 @@ are answered is ``_retrieval.py``'s job. Swapping storage does not make search s
   per-file records in structure/manifest/tokens carry no ``content_hash``. Decided.
 - **Freshness: on-query lazy** — ``sync_changed`` does a cheap ``stat`` walk, sha256's
   only the files whose mtime/size differ (stat = gate, hash = confirm).
-- **Graph/reference counts are derived on read** (§5.x) — ``FlatFileStorage`` never
-  persists a global ``call_graph.json`` that can go stale.
+- **Graph persisted at scan time** — ``_scan.py`` writes the symbol-bearing edge
+  set as the GRAPH artifact (``call_graph.json``) when it scans, and stamps
+  ``references_count`` into the manifest/index HEAD rows. (This supersedes §5.x's
+  original "derive on read": recomputing the graph on every read would require a
+  re-parse, so the edges are materialized once at scan and read as a first-class
+  artifact by ``get_repo_map`` / ``distilled_map``.)
 - **``read_block`` is "query-the-pointer"** — heavy source is touched only for the exact
   byte span a ``BlockRef`` names.
 """

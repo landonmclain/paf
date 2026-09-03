@@ -6,9 +6,12 @@ symbol graph + relationships, which is the key deliverable and comes next); this
 is the "broad search is important for a quick start" layer.
 
 Design:
-  - Reuses the repo's existing, dependency-free BM25 core
-    (``paf.capabilities.search._ranking`` — tokenize / compute_idf / bm25_score).
-    No retrieval framework (no Rank-BM25 / whoosh / LlamaIndex).
+  - Shares the repo's dependency-free BM25 tokenizer and tuning constants
+    (``paf.capabilities.search._ranking`` — reuses ``tokenize`` and ``Bm25Params``),
+    but reimplements the idf + scoring loop here (``_idf``, the inline rank loop).
+    The codebase-map field-weighting (per-record field tokens, reference tiebreak)
+    differs enough from the search module's that shared scoring isn't worth the
+    coupling. No retrieval framework (no Rank-BM25 / whoosh / LlamaIndex).
   - Field-weighted per spec §3.7.2: name > qualified > file_path > signature >
     doc > imports > body. Each ``FileInfo`` record is scored as a bag of weighted
     field tokens so a hit in a high-weight field (name/file_path) beats one in a

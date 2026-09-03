@@ -1,17 +1,22 @@
-"""Call graph + references — Phase 2 (count first; edges come next).
+"""Call graph + references — symbol-bearing file→file edges and their counts.
 
-Implemented now (per Landon, 2026-08-23):
-  - ``reference_counts``  — inbound-reference counts per FILE, computed at scan time
-    and persisted into each ``FileInfo.references_count`` in the index (head). At
-    full-scan scale (~114 files, sha256 full rewalk) this is free and never stale;
-    recomputed-at-scan beats §5.x's "derive on read" (which was written for a
-    file-watcher/incremental future we don't have).
+Two layers, both implemented (the ``build_edges`` deliverable landed, replacing
+the original "count first, edges come next" plan):
 
-Deferred (key deliverable, comes next):
-  - ``build_edges``  — caller→callee edges (the real graph). The count here is a
-    *projection of the graph*: an incoming count is not independently maintainable
-    without the edge set (which files reference X). When edges land, the count
-    falls out of them trivially.
+- ``build_edges``  — the real graph. Resolve every identifier a file references
+  (imports + its own symbol bodies/signatures/docs) to the file that *defines*
+  it; emit one ``{source, target, kind, symbols, call_symbols}`` edge per
+  distinct (file A → defining-file) pair. ``kind`` is ``"call"`` for edges whose
+  reachability is *provable* (Phase 1.2 refinement via ``_calls.call_edge_set``,
+  re-parsing source), else ``"reference"``. Persisted by ``_scan.py`` as the
+  GRAPH artifact (``call_graph.json``) at scan time.
+- ``reference_counts``  — inbound-reference counts per FILE, derived from
+  ``build_edges``'s resolution: how many DISTINCT other files reference at least
+  one symbol the file defines. Computed at scan time and stamped into each
+  ``FileInfo.references_count`` / manifest record / index HEAD row. At full-scan
+  scale this is free and never stale; recomputed-at-scan beats §5.x's original
+  "derive on read" (which was written for a file-watcher/incremental future we
+  don't have).
 
 Reference definition (file granularity, honest + cheap): a FILE ``A`` references
 FILE ``B`` when ``A`` mentions — in its imports or any of its own symbol
