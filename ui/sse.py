@@ -24,7 +24,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
@@ -38,8 +40,6 @@ log = logging.getLogger(__name__)
 # Default agent when the caller doesn't specify one — mirrors ui/web.py's
 # "demo" profile convention so a bare /api/chat gives a working demo lane.
 DEFAULT_AGENT = "demo_assistant"
-
-app = FastAPI(title="paf SSE transport")
 
 
 def _profile_for(agent_name: str) -> Any | None:
@@ -60,10 +60,20 @@ def _profile_for(agent_name: str) -> Any | None:
 # Session registry: "{agent}:{conversation_id}" -> Session. One Session per lane.
 # ---------------------------------------------------------------------------
 _sessions: dict[str, Session] = {}
+_sessions_last_used: dict[str, float] = {}
+
+# Idle TTL: a lane with no activity for IDLE_TTL_SECONDS is closed and evicted
+# (Session.close() flushes spans; a re-touch lazily recreates + resumes from the
+# store via the same {agent}:{conversation_id}, so an idle lane is cheap, not lost).
+IDLE_TTL_SECONDS = 30 * 60  # 30 min
 
 
 def _session_key(agent: str, conversation_id: str) -> str:
     return f"{agent}:{conversation_id}"
+
+
+def _now() -> float:
+    return time.monotonic()
 
 
 async def _get_session(conversation_id: str, agent: str) -> Session:
@@ -77,7 +87,46 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
             resume_window=15,
         )
         _sessions[key] = session
+    _sessions_last_used[key] = _now()
     return session
+
+
+def _close_session(key: str) -> None:
+    """Close + evict one lane (flush spans, drop the worker). Tolerant of races."""
+    session = _sessions.pop(key, None)
+    _sessions_last_used.pop(key, None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:  # noqa: BLE001 - closing must never break the request
+            log.exception("close failed for session %s", key)
+            session = None
+
+
+async def _close_idle_loop() -> None:
+    """Periodically close lanes idle past ``IDLE_TTL_SECONDS`` (started on startup)."""
+    while True:
+        await asyncio.sleep(60)  # sweep every minute
+        cutoff = _now() - IDLE_TTL_SECONDS
+        stale = [k for k, t in _sessions_last_used.items() if t < cutoff]
+        for key in stale:
+            log.info("closing idle session %s (no activity in %ds)", key, IDLE_TTL_SECONDS)
+            _close_session(key)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Start the idle sweeper on boot; close every session on shutdown."""
+    sweeper = asyncio.create_task(_close_idle_loop())
+    try:
+        yield
+    finally:
+        sweeper.cancel()
+        for key in list(_sessions.keys()):
+            _close_session(key)
+
+
+app = FastAPI(title="paf SSE transport", lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
