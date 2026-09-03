@@ -215,7 +215,7 @@ CONTEXTBENCH_PROFILE = AgentProfile(
 
 
 # The runtime2 test/profile helper — a LEAN agent for exercising the
-# next-gen Session2 stream/event contract (runtime2.py), NOT a product surface.
+# Session stream/event contract (src/paf/runtime.py), NOT a product surface.
 #
 # runtime2_test gets the smallest toolset that can deterministically produce
 # every turn-stream lifecycle edge: Shell's `run` is both the success path
