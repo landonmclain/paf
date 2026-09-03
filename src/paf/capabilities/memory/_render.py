@@ -43,6 +43,14 @@ _SEP = " — "
 # Fixed render order for the 3-tier ladder; tiers not present are omitted.
 _TIER_ORDER = ("t1", "t2", "t3")
 
+# Bounded-presentation caps (per tier) for the LIVE index render — Gap A of
+# Global-Durable-Memory-Maintenance. t1 (stable "who they are") is stable
+# identity/preference and stays UNBOUNDED; t2 (goals/current) and t3
+# (ephemeral) are capped to the most-recent N winners so the injected
+# MEMORY.md stays small and current instead of a growing wall that a small
+# model misreads as corruption (trace cfe9030e, web-demo_assistant).
+_TIER_CAPS: dict[str, int | None] = {"t1": None, "t2": 25, "t3": 15}
+
 
 def _group_by_tier(records: list[MemoryRecord]) -> dict[str, list[MemoryRecord]]:
     """Group records by `tier`, each group sorted by `born_on` descending.
@@ -124,9 +132,20 @@ def render_index_memory(store: JournalStore, index) -> str:
     but emitting only the deduped survivors instead of every journal record.
     Dedup is meaningless if it doesn't shrink what the answerer reads, and this
     is the render the live write path uses when an index exists.
+
+    **Bounded (Gap A):** each tier is capped to the most-recent N winners
+    (:data:`_TIER_CAPS`) — t1 unbounded, t2 capped, t3 capped. Winners are
+    already deduped and sorted by recency, so the cap keeps the newest facts
+    and lets old ephemeral/goal entries fall out of the injected view (they
+    remain reachable in the journal / index, never lost).
     """
     winners = _select_index_winners(store, index)
     groups = _group_by_tier(winners)
+    # Bound each already-recency-sorted group to its tier cap (t1 unbounded).
+    groups = {
+        tier: recs[:_TIER_CAPS[tier]] if _TIER_CAPS.get(tier) else recs
+        for tier, recs in groups.items()
+    }
 
     sections: list[str] = []
     for tier in _TIER_ORDER:

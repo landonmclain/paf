@@ -9,6 +9,7 @@ no model needed.
 from __future__ import annotations
 
 import json
+import uuid
 
 from paf.capabilities.memory._index import (
     MemoryIndex,
@@ -267,3 +268,44 @@ def test_write_render_index_keeps_distinct_facts(tmp_path):
     text = md_path.read_text(encoding="utf-8")
     lines = [ln for ln in text.splitlines() if ln.startswith("- ")]
     assert len(lines) == 2  # two DISTINCT winners both survive
+
+
+def test_index_render_bounds_t2_and_t3_keeps_all_t1(tmp_path):
+    """Gap A: the LIVE index render caps t2/t3 by recency; t1 stays unbounded.
+
+    t1 (stable) must never fall off; t2 (goals) caps to 25 newest; t3
+    (ephemeral) caps to 15 newest — oldest records drop out of the injected
+    view but remain in the journal/index (never lost).
+    """
+    from paf.capabilities.memory._render import render_index_memory
+
+    T1, T2, T3 = 30, 40, 30  # t1 above any cap, t2/t3 above their caps
+    recs = []
+    born = "2026-01-01T00:00:00Z"
+    # fully-disjoint token sets per record (real facts are distinct) — the
+    # full-build fuzzy collapse (Jaccard/containment > 0.60) would otherwise
+    # merge near-duplicate synthetic facts into one winner per tier.
+    def _words():
+        return " ".join(uuid.uuid4().hex[:8] for _ in range(4))
+    for i in range(T1):
+        recs.append(_mk_record(_words(), tier="t1", born=born, src=f"t1:{i}"))
+    for i in range(T2):
+        recs.append(_mk_record(_words(), tier="t2", born=born, src=f"t2:{i}"))
+    for i in range(T3):
+        recs.append(_mk_record(_words(), tier="t3", born=born, src=f"t3:{i}"))
+    store = _seed_store(tmp_path, recs)
+    build_index(tmp_path)
+    idx = _load(tmp_path)
+
+    md = render_index_memory(store, idx)
+    # count emitted lines per tier section
+    tiers: dict[str, int] = {}
+    cur = None
+    for ln in md.splitlines():
+        if ln.startswith("## "):
+            cur = ln[3:]
+        elif ln.startswith("- ") and cur is not None:
+            tiers[cur] = tiers.get(cur, 0) + 1
+    assert tiers.get("t1", 0) == T1        # unbounded: all survive
+    assert tiers.get("t2", 0) == 25        # capped to newest 25
+    assert tiers.get("t3", 0) == 15        # capped to newest 15
