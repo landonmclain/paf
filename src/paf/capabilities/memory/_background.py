@@ -112,18 +112,11 @@ async def resolve_unseen_span(
         (i for i, r in enumerate(runs) if r.run_id == tip_run),
         len(runs) - 1,
     )
-    wm_idx = next(
-        (i for i, r in enumerate(runs) if r.run_id == watermark.run_id), None
-    )
 
     collected: list[ModelMessage] = []
     last_complete: MemoryWatermark | None = None
 
     for i, r in enumerate(runs):
-        # Runs strictly before the watermark run are fully consumed.
-        if wm_idx is not None and i < wm_idx:
-            continue
-
         hist = await source.run_history(run_id=r.run_id)
         if not hist:
             continue
@@ -133,22 +126,34 @@ async def resolve_unseen_span(
             continue
 
         n = len(hist)
-        for t in range(len(anchors)):
-            # Skip turns already consumed by the watermark.
-            if (
-                wm_idx is not None
-                and i == wm_idx
-                and watermark.turn_id is not None
-                and t <= watermark.turn_id
-            ):
-                continue
+
+        # Intra-run continuation: when this run is the watermark's run, the
+        # {run_id, turn_id} ref tells us exactly which turns are already
+        # consumed. A strictly older run (started before the time anchor, and
+        # not the run holding the ref) is fully consumed and skipped.
+        first_turn = 0
+        if watermark.run_id == r.run_id and watermark.turn_id is not None:
+            first_turn = watermark.turn_id + 1
+        elif (
+            watermark.consumed_ts is not None
+            and watermark.run_id != r.run_id
+            and r.started_at <= watermark.consumed_ts
+        ):
+            continue
+
+        for t in range(first_turn, len(anchors)):
             # Fold full turns only: stop strictly before the in-flight tip. A
             # turn at or after (tip_idx, tip_turn) has not finished settling.
             if (i, t) >= (tip_idx, tip_turn):
                 break
             start, end = _turn_bounds(anchors, t, n)
             collected.extend(hist[start:end])
-            last_complete = MemoryWatermark(run_id=r.run_id, turn_id=t)
+            # Advance the ref AND the time anchor. consumed_ts is this run's
+            # started_at — monotonic across runs, so the next cadence can gauge
+            # progress even after a run boundary resets local turn_id.
+            last_complete = MemoryWatermark(
+                run_id=r.run_id, turn_id=t, consumed_ts=r.started_at
+            )
 
     # Fresh watermark with nothing folded keeps its ref (never points past the
     # consumed position; an empty span leaves it untouched).
