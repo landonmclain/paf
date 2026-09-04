@@ -14,6 +14,14 @@ from typing import Any
 
 from paf.config import settings
 
+# Ref-count for observability lifecycle. A long-lived process creates a Session
+# per lane, each constructor calling setup_observability() and each close()
+# calling shutdown_observability(). We must configure the global OTel provider
+# once and only truly shut it down once (last ref), otherwise per-lane sessions
+# tear the provider down out from under everyone else (traces silently stop).
+_setup_active: bool = False
+_setup_refs: int = 0
+
 
 @contextmanager
 def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterator[Any]:
@@ -71,13 +79,25 @@ def setup_observability() -> bool:
     exit). Safe to call unconditionally: no-ops when any of the keys or the
     endpoint are absent (all come from .env), so the package also works with
     tracing off (e.g. in tests or offline).
+
+    **Idempotent / ref-counted:** a long-lived process (web server) constructs
+    a ``Session`` per lane and each constructor calls this. We must configure
+    the OTel provider EXACTLY ONCE — ``trace.set_tracer_provider`` rejects an
+    override and the exporter would otherwise be torn down by other sessions'
+    ``shutdown``. Subsequent calls bump a refcount and return their earlier
+    result without touching the provider.
     """
+    global _setup_active, _setup_refs
     if (
         not settings.langfuse_public_key
         or not settings.langfuse_secret_key
         or not settings.otlp_endpoint
     ):
         return False
+
+    if _setup_active:
+        _setup_refs += 1
+        return True
 
     os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", settings.otlp_endpoint)
     # NOTE: do NOT set OTEL_EXPORTER_OTLP_HEADERS here. An empty-string value
@@ -124,17 +144,43 @@ def setup_observability() -> bool:
     from pydantic_ai import Agent
 
     Agent.instrument_all()
+    _setup_active = True
+    _setup_refs += 1
     return True
 
 
 def shutdown_observability() -> None:
     """Flush + shut down the tracer so short-lived processes don't lose spans.
 
-    Call before process exit (e.g. at the end of a CLI run).
+    **Ref-counted:** every ``setup_observability()`` (Session constructor) must
+    be balanced by one ``shutdown_observability()`` (Session.close). We only
+    call ``provider.shutdown()`` on the LAST release — a per-lane Session.close
+    must flush but must never tear down the global provider that other
+    concurrent sessions are still tracing into. On a long-lived server the
+    last ref (process shutdown) is what flushes+shuts down.
     """
+    global _setup_active, _setup_refs
+    if not _setup_active or _setup_refs <= 0:
+        return
+    _setup_refs -= 1
+    if _setup_refs > 0:
+        # Other sessions still active — DO NOT shut the provider down. Just
+        # force pending spans to flush so THIS session's spans aren't lost on
+        # idle eviction.
+        try:
+            from opentelemetry import trace
+
+            provider = trace.get_tracer_provider()
+            force_flush = getattr(provider, "force_flush", None)
+            if force_flush is not None:
+                force_flush()
+        except Exception:  # noqa: BLE001 - flush must never break close
+            pass
+        return
     from opentelemetry import trace
 
     provider = trace.get_tracer_provider()
     shutdown = getattr(provider, "shutdown", None)
     if shutdown is not None:
         shutdown()
+    _setup_active = False
