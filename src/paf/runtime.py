@@ -831,6 +831,12 @@ class Session:
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
         scoped = self._scoped_cid(cid)
+        # A fresh turn must NOT inherit a previously-cancelled token: cancel()
+        # is one-way on CancellationToken, so a token cancelled by an earlier
+        # stop would instantly cancel every later run ("The agent run was
+        # cancelled."). Recreate it per turn so stop only ever affects the
+        # current turn.
+        self._token = CancellationToken()
         await self._ensure_resumed(scoped)
 
         # Stamp the current UTC timestamp onto the start of EVERY user message
