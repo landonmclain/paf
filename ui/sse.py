@@ -36,6 +36,18 @@ from fastapi.responses import StreamingResponse
 from paf.capabilities import PROFILES
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
 
+# Message/part types for serializing restored conversation history
+# (session.history is a list of pydantic-ai ModelMessage).
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+
 log = logging.getLogger(__name__)
 
 # Default agent when the caller doesn't specify one — mirrors ui/web.py's
@@ -142,6 +154,7 @@ app.add_middleware(
         "http://127.0.0.1:3001",
         "http://100.107.176.116:3000",
         "http://100.107.176.116:3001",  # Tailscale host (paf-ui via phone/devices)
+        "http://paf.example.com:3001",  # Tailscale machine name (preferred)
     ],
     allow_credentials=False,
     allow_methods=["*"],
@@ -180,6 +193,94 @@ def _serialize_turn(ev: TurnStreamEvent) -> tuple[str, dict[str, Any]]:
 async def health() -> dict[str, bool]:
     """Liveness probe for the systemd unit / load balancer / UI boot check."""
     return {"ok": True}
+
+
+def _serialize_history(msgs: list[Any]) -> list[dict[str, Any]]:
+    """Flatten restored pydantic-ai messages into UI-shaped history entries.
+
+    A ``ModelRequest`` with a real string ``UserPromptPart`` is a user turn.
+    A ``ModelResponse`` becomes a structured assistant turn: a ``log`` array of
+    ``thinking`` / ``tool`` / ``text`` entries (mirroring the live turn's
+    ``TurnLogEntry``) so restored turns render the full timeline — thinking
+    blocks, per-tool rows, and the final answer — not just the final text.
+    """
+    out: list[dict[str, Any]] = []
+    for msg in msgs:
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if (
+                    isinstance(part, UserPromptPart)
+                    and isinstance(part.content, str)
+                    and part.content
+                ):
+                    out.append({"role": "user", "text": part.content})
+        elif isinstance(msg, ModelResponse):
+            log: list[dict[str, Any]] = []
+            # Coalesce consecutive ThinkingParts into one block (they stream in
+            # many small pieces, matching how the live UI groups by "chunk").
+            pending_thinking: list[str] = []
+            for part in msg.parts:
+                if isinstance(part, ThinkingPart) and isinstance(part.content, str):
+                    if part.content:
+                        pending_thinking.append(part.content)
+                    continue
+                if pending_thinking:
+                    log.append(
+                        {"kind": "thinking", "text": "\n\n".join(pending_thinking)}
+                    )
+                    pending_thinking = []
+                if isinstance(part, TextPart) and isinstance(part.content, str):
+                    if part.content:
+                        log.append({"kind": "text", "text": part.content})
+                elif isinstance(part, ToolCallPart):
+                    log.append(
+                        {
+                            "kind": "tool",
+                            "stepId": f"h-{part.tool_call_id}",
+                            "toolName": part.tool_name,
+                            "args": part.args,
+                            "status": "done",
+                            "result": None,
+                        }
+                    )
+                elif isinstance(part, ToolReturnPart):
+                    # Fill in the result/error on the last matching tool entry.
+                    for e in reversed(log):
+                        if (
+                            e.get("kind") == "tool"
+                            and e.get("toolName") == part.tool_name
+                            and e.get("stepId") == f"h-{part.tool_call_id}"
+                        ):
+                            if part.outcome.is_error():
+                                e["status"] = "error"
+                                e["error"] = str(part.content)
+                            else:
+                                e["result"] = (
+                                    part.content
+                                    if isinstance(part.content, (str, int, float, bool))
+                                    or part.content is None
+                                    else str(part.content)
+                                )
+                            break
+            if pending_thinking:
+                log.append({"kind": "thinking", "text": "\n\n".join(pending_thinking)})
+            if log:
+                out.append({"role": "assistant", "log": log})
+    return out
+
+
+@app.get("/api/conversations/{conversation_id}/history")
+async def conversation_history(conversation_id: str, agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+    """Return the prior turns for a conversation (server-authoritative history).
+
+    Restores the lane's prior messages from the store via the shared session
+    registry (same {profile}:{cid} scoping + resume as /api/chat), then flattens
+    them to ``[{role, text}]`` for the UI to render on load. Cheap when there is
+    no prior history (``messages: []``).
+    """
+    session = await _get_session(conversation_id, agent)
+    restored = await session.restore()
+    return {"conversation_id": conversation_id, "messages": _serialize_history(session.history), "restored": restored}
 
 
 def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIterator[str]:
