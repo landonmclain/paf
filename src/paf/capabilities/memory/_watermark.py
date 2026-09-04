@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from ._atomic import write_atomic
@@ -48,11 +49,19 @@ _EMPTY = ""
 
 @dataclass
 class MemoryWatermark:
-    """The last user-turn the owner has consumed, as a persistent flat file.
+    """The position the owner has consumed, as a persistent flat file.
 
-    ``run_id`` / ``turn_id`` mirror the ``{run_id}:{turn_id}`` ref model of
-    ``_journal.py``. An empty ``turn_id`` (or a missing file) means "nothing
-    consumed yet" — the first trigger sees the whole backlog as new.
+    ``consumed_ts`` is the **time anchor** (monotonic across runs — the fix from
+    ``Designs/Background-Memory-Watermark-Spec.md``): the watermark's ordering
+    key is the persisted ``started_at`` of the last foldable material, not a
+    per-run ``turn_id`` ordinal (which is only monotonic within one run and rots
+    as sessions fork/continue). ``run_id`` / ``turn_id`` mirror the
+    ``{run_id}:{turn_id}`` ref model of ``_journal.py`` and are kept as the
+    precise ``source_ref`` address, no longer as the ordering key.
+
+    A ``None`` ``consumed_ts`` (or a missing file) means "nothing consumed yet" —
+    the first trigger sees the whole backlog as new and the ``should_fire``
+    predicate falls back to a fresh-session fire.
 
     Stored next to the journal at ``<memory_dir>/memory-watermark.json`` so the
     durable "what's seen" marker survives restart and stays diffable.
@@ -60,6 +69,7 @@ class MemoryWatermark:
 
     run_id: str = ""
     turn_id: int | None = None
+    consumed_ts: datetime | None = None
 
     @classmethod
     def load(
@@ -74,13 +84,27 @@ class MemoryWatermark:
         ``filename`` defaults to the consolidation watermark file; a caller may
         pass a different name (e.g. a separate review watermark) so the owner
         and reviewer cadences track independently.
+
+        A legacy file (only ``{run_id, turn_id}``, no ``consumed_ts``) loads
+        fine with ``consumed_ts`` left ``None``; a corrupt/unparseable
+        ``consumed_ts`` is likewise treated as fresh — the append-only journal
+        is the lossless source of truth, so a missing watermark only defers a
+        beat, never loses a fact.
         """
         path = Path(directory) / filename
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                return cls(run_id=data.get("run_id", run_id), turn_id=data.get("turn_id"))
-            except (json.JSONDecodeError, OSError, TypeError):
+                ts_raw = data.get("consumed_ts")
+                consumed_ts = None
+                if isinstance(ts_raw, str):
+                    consumed_ts = datetime.fromisoformat(ts_raw)
+                return cls(
+                    run_id=data.get("run_id", run_id),
+                    turn_id=data.get("turn_id"),
+                    consumed_ts=consumed_ts,
+                )
+            except (json.JSONDecodeError, OSError, TypeError, ValueError):
                 # Corrupt/absent -> treat as fresh; append-only journal is the
                 # lossless source of truth, a missing watermark only defers a
                 # beat, never loses a fact.
@@ -93,13 +117,18 @@ class MemoryWatermark:
         """Persist the watermark atomically (staging + ``os.replace``)."""
         path = Path(directory) / filename
         payload = json.dumps(
-            {"run_id": self.run_id, "turn_id": self.turn_id}, ensure_ascii=False
+            {
+                "run_id": self.run_id,
+                "turn_id": self.turn_id,
+                "consumed_ts": self.consumed_ts.isoformat() if self.consumed_ts else None,
+            },
+            ensure_ascii=False,
         )
         write_atomic(os.fspath(path), payload + "\n")
 
     def is_empty(self) -> bool:
         """True when nothing has been consumed yet."""
-        return self.turn_id is None
+        return self.consumed_ts is None
 
     def __repr__(self) -> str:
         return f"MemoryWatermark(run_id={self.run_id!r}, turn_id={self.turn_id!r})"
