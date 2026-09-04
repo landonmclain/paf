@@ -249,8 +249,9 @@ def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
     memdir = tmp_path / "mem"
     memdir.mkdir(exist_ok=True)
     JournalStore(str(memdir))
-    # Watermark at 2; only 5 turns -> 5-2=3 < 10 cadence.
-    MemoryWatermark(run_id="run-a", turn_id=2).save(str(memdir))
+    # Watermark consumed "just now"; only ~5 turns/seconds later the tip is well
+    # UNDER the 30-minute cadence, so the hook must not fire.
+    MemoryWatermark(run_id="run-a", consumed_ts=datetime.now(UTC)).save(str(memdir))
 
     from paf.runtime import Session
 

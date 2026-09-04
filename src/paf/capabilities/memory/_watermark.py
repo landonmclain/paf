@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from ._atomic import write_atomic
@@ -137,20 +137,28 @@ class MemoryWatermark:
 def should_fire(
     watermark: MemoryWatermark,
     *,
-    current_turn_id: int,
-    every: int,
+    tip_ts: datetime,
+    every: datetime.timedelta,
 ) -> bool:
-    """The metric trigger: has enough new material accumulated to run a job?
+    """The metric trigger: have we accumulated enough new material to run a job?
 
-    ``True`` when at least ``every`` user-turns have accumulated past the
-    watermark since the last consolidation — *or* when nothing has been
-    consumed yet (fresh session, whole backlog is new).
+    ``True`` when at least ``every`` (a :class:`datetime.timedelta`) has elapsed
+    since the watermark's ``consumed_ts`` — a **time** metric that is monotonic
+    across runs (``started_at`` is native + index-sorted on the store, unlike a
+    per-run ``turn_id`` ordinal which is only monotonic within one run and resets
+    when a session forks/continues). Or ``True`` when nothing has been consumed
+    yet (fresh / legacy watermark with no ``consumed_ts``) — the whole backlog is
+    new.
 
-    ``every`` is the trigger cadence; the spec mandates ``every < keep`` (window
-    ``keep_messages``) so the owner always consumes ahead of eviction.
+    ``every`` is the cadence; the spec mandates it run ahead of eviction
+    (``every < keep``) so the owner always consumes before the window trims.
     """
-    if every <= 0:
-        raise ValueError(f"every must be > 0, got {every!r}")
-    if watermark.turn_id is None:
+    if every is None or every <= timedelta(0):
+        raise ValueError(f"every must be a positive timedelta, got {every!r}")
+    if watermark.consumed_ts is None:
+        # Fresh watermark (or a legacy one with only {run_id, turn_id}): the
+        # time anchor is unknown, so treat the whole backlog as new. The
+        # append-only journal is lossless, so an extra first run costs at most
+        # one owner pass.
         return True
-    return (current_turn_id - watermark.turn_id) >= every
+    return (tip_ts - watermark.consumed_ts) >= every

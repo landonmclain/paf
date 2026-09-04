@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -39,27 +40,30 @@ from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
 # Trigger predicate
 # --------------------------------------------------------------------------- #
 
+_TS0 = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
+_EVERY = timedelta(minutes=30)
+
 
 def test_should_fire_fires_when_nothing_consumed_yet() -> None:
-    """A fresh watermark (never consumed) means the whole backlog is new."""
-    wm = MemoryWatermark(run_id="r1", turn_id=None)
-    assert should_fire(wm, current_turn_id=3, every=10) is True
+    """A fresh watermark (time anchor unknown) means the whole backlog is new."""
+    wm = MemoryWatermark(run_id="r1")
+    assert should_fire(wm, tip_ts=_TS0 + timedelta(hours=1), every=_EVERY) is True
 
 
 def test_should_fire_threshold_logic() -> None:
-    """Fires when >= `every` turns accumulate; not below."""
-    wm = MemoryWatermark(run_id="r1", turn_id=0)
-    assert should_fire(wm, current_turn_id=2, every=10) is False
-    assert should_fire(wm, current_turn_id=10, every=10) is True
-    assert should_fire(wm, current_turn_id=15, every=10) is True
+    """Fires when `every` has elapsed since the consumed point; not below."""
+    wm = MemoryWatermark(run_id="r1", consumed_ts=_TS0)
+    assert should_fire(wm, tip_ts=_TS0 + timedelta(minutes=10), every=_EVERY) is False
+    assert should_fire(wm, tip_ts=_TS0 + timedelta(minutes=30), every=_EVERY) is True
+    assert should_fire(wm, tip_ts=_TS0 + timedelta(hours=2), every=_EVERY) is True
 
 
-def test_should_fire_rejects_nonpositive_every() -> None:
-    wm = MemoryWatermark(run_id="r1", turn_id=0)
+def test_should_fire_rejects_bad_every() -> None:
+    wm = MemoryWatermark(run_id="r1", consumed_ts=_TS0)
     with pytest.raises(ValueError):
-        should_fire(wm, current_turn_id=1, every=0)
+        should_fire(wm, tip_ts=_TS0, every=timedelta(0))
     with pytest.raises(ValueError):
-        should_fire(wm, current_turn_id=1, every=-5)
+        should_fire(wm, tip_ts=_TS0, every=timedelta(minutes=-5))
 
 
 # --------------------------------------------------------------------------- #
@@ -92,7 +96,7 @@ def test_watermark_file_lives_at_memory_dir(tmp_path) -> None:
     MemoryWatermark(run_id="r1", turn_id=5).save(tmp_path)
     assert (tmp_path / "memory-watermark.json").is_file()
     data = json.loads((tmp_path / "memory-watermark.json").read_text(encoding="utf-8"))
-    assert data == {"run_id": "r1", "turn_id": 5}
+    assert data == {"run_id": "r1", "turn_id": 5, "consumed_ts": None}
 
 
 # --------------------------------------------------------------------------- #
@@ -161,9 +165,11 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
             span_source=_synthetic_span_source(),
             consolidate_span=_journal_fence_consolidate(records),
         )
-        # The trigger decides a job is due (10 turns accumulated):
-        wm = MemoryWatermark.load(str(tmp_path), run_id="r1")
-        assert should_fire(wm, current_turn_id=12, every=10) is True
+        # The trigger decides a job is due (>= every accrued since consumed):
+        wm = MemoryWatermark(run_id="r1", consumed_ts=_TS0)
+        assert (
+            should_fire(wm, tip_ts=_TS0 + timedelta(hours=1), every=_EVERY) is True
+        )
         q.enqueue("s1", ConsolidationJob(run_id="r1", turn_id=12))
         await q.drain("s1")
 
@@ -187,11 +193,11 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
 
 def test_drain_without_trigger_does_not_fire_when_below_threshold(tmp_path) -> None:
     """Below threshold, the trigger says no — no job, no fold, watermark unchanged."""
-    # Seed a non-empty watermark so "3 - 0 = 3 < 10" is genuinely below threshold
+    # Seed a consumed watermark so we're genuinely below the time threshold
     # (a FRESH watermark always fires — that's covered separately).
-    MemoryWatermark(run_id="r1", turn_id=0).save(tmp_path)
+    MemoryWatermark(run_id="r1", consumed_ts=_TS0).save(tmp_path)
     wm = MemoryWatermark.load(str(tmp_path), run_id="r1")
-    fired = should_fire(wm, current_turn_id=3, every=10)
+    fired = should_fire(wm, tip_ts=_TS0 + timedelta(minutes=10), every=_EVERY)
     assert fired is False
     # Nothing should have been written: no journal, no MEMORY.md, no watermark file.
     assert not (tmp_path / "memory-journal.jsonl").exists()

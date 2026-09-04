@@ -313,9 +313,9 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
           max_tokens: 65536          # optional; token ceiling for injected section
           max_lines: 1000000         # optional; line cap for injected section
 
-    ``consolidate_every`` is the number of user-turns that must accumulate past
-    the memory watermark before a background consolidation job fires (the
-    owner runs ahead of eviction). ``max_memory_size`` / ``max_tokens`` /
+    ``consolidate_every`` is the background-consolidation cadence in **minutes**
+    — a time metric (time-anchored watermark; monotonic across runs) that the
+    owner uses to fire ahead of eviction. ``max_memory_size`` / ``max_tokens`` /
     ``max_lines`` bound how much of the rendered journal is injected into each
     request (see ``JournalViewStore.read`` / ``render_memory_prompt``). They
     live on **Memory** — the capability owns every memory config variable —
@@ -371,13 +371,14 @@ def resolve_memory_config(
     stays the owner, this is just a non-invasive read of the resolved value.
 
     Returns ``{"consolidate_every": int, "review_every": int}`` (always present,
-    defaults applied). ``review_every`` defaults to ``consolidate_every`` (the
-    reviewer runs on the same cadence unless a spec overrides it).
+    defaults applied, both in MINUTES). ``review_every`` defaults to
+    ``DEFAULT_REVIEW_EVERY`` (the reviewer runs on its own, less-frequent
+    cadence than the owner unless a spec overrides it).
     """
-    from paf.capabilities.build import DEFAULT_CONSOLIDATE_EVERY
+    from paf.capabilities.build import DEFAULT_CONSOLIDATE_EVERY, DEFAULT_REVIEW_EVERY
 
     every = DEFAULT_CONSOLIDATE_EVERY
-    review_every = every  # reviewer defaults to the owner's cadence
+    review_every = DEFAULT_REVIEW_EVERY  # reviewer runs less often than the owner
     try:
         cfg = _spec_memory_config(get_spec_path(agent_name, spec_directory))
     except Exception:  # noqa: BLE001 - spec read is best-effort sugar

@@ -57,11 +57,14 @@ _COMPACTION_CAPABILITY = "Compaction"
 # consolidation owner and the assistant always target the same store.
 _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
-# Default cadence for background memory consolidation (owner runs ahead of
-# eviction: with the window keeping `window_keep_messages` (20) recent messages,
-# firing every ~10 turns keeps the owner ahead of the drop). Memory owns this
-# value; the spec's `memory: {consolidate_every: N}` overrides it per agent.
-DEFAULT_CONSOLIDATE_EVERY = 10
+# Default cadence for background memory consolidation, in MINUTES. The owner
+# runs on a **time** cadence (the watermark is time-anchored on the persisted
+# `started_at` — monotonic across runs, unlike a per-run turn ordinal). Owner
+# runs MORE often than the reviewer (owner 30m, reviewer 60m) so durable turns
+# never stall waiting on the slower reviewer. Memory owns this value; the
+# spec's `memory: {consolidate_every: N}` (minutes) overrides it per agent.
+DEFAULT_CONSOLIDATE_EVERY = 30  # minutes; owner fires at least this often with new material
+DEFAULT_REVIEW_EVERY = 60  # minutes; reviewer fires at most this often
 
 # Default injection bounds for the assistant's Memory capability. Mirrors the
 # benchmark assembly: high, non-evicting caps so the full rendered journal

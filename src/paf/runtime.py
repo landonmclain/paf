@@ -53,7 +53,7 @@ import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic_ai import (
@@ -718,13 +718,16 @@ class Session:
                 run_id=tip_run,
                 filename="memory-review-watermark.json",
             )
-            if not should_fire(wm, current_turn_id=tip_turn, every=self.review_every):
+            if not should_fire(
+                wm, tip_ts=runs[-1].started_at, every=timedelta(minutes=self.review_every)
+            ):
                 return
             self._ensure_review_queue().enqueue(self.agent_name, ReviewJob())
             # Advance the review watermark to the current tip so we don't
-            # re-fire until review_every more turns accumulate.
+            # re-fire until review_every more accrues.
             wm.run_id = tip_run
             wm.turn_id = tip_turn
+            wm.consumed_ts = runs[-1].started_at
             wm.save(self._memory_directory, filename="memory-review-watermark.json")
         except Exception:  # noqa: BLE001 - the review hook must not break the turn
             pass
@@ -764,9 +767,13 @@ class Session:
                 return
             tip_turn = len(anchors) - 1
             wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
-            if not should_fire(wm, current_turn_id=tip_turn, every=self.consolidate_every):
+            if not should_fire(
+                wm,
+                tip_ts=runs[-1].started_at,
+                every=timedelta(minutes=self.consolidate_every),
+            ):
                 task.status = SKIPPED
-                task.detail = "no turns past the consolidation watermark"
+                task.detail = "not past the consolidation cadence"
                 self._publish_task(task)
                 return
             self._ensure_memory_queue().enqueue(
