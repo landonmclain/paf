@@ -21,7 +21,6 @@ from pydantic_ai.messages import (
 
 from paf.capabilities.memory._background import resolve_unseen_span
 from paf.capabilities.memory._watermark import MemoryWatermark
-
 from tests.test_memory_background_real_store import _store
 
 

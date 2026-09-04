@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-import pytest
-
 from paf.capabilities.memory._watermark import MemoryWatermark
 
 TS0 = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
