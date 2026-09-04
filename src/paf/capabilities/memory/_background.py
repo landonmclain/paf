@@ -269,12 +269,24 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 messages, directory, watermark
             )
 
-        # Advance the watermark past what we just consumed — to the last
-        # COMPLETE turn folded (the resolver already stopped before the
-        # in-flight tip, so its watermark ref is exactly that position).
-        watermark.run_id = messages_span.watermark.run_id
-        watermark.turn_id = messages_span.watermark.turn_id
-        watermark.save(directory)
+        if new_records and new_records > 0:
+            # Advance the watermark ONLY when something was actually folded —
+            # to the last COMPLETE turn the resolver included (it already
+            # stopped before the in-flight tip). This is the fix for the silent
+            # stall: the old code advanced unconditionally even when the owner
+            # no-op'd, so the cadence kept firing on stale/false progress and
+            # the owner stopped writing.
+            watermark.run_id = messages_span.watermark.run_id
+            watermark.turn_id = messages_span.watermark.turn_id
+            watermark.consumed_ts = messages_span.watermark.consumed_ts
+            watermark.save(directory)
+        else:
+            log.info(
+                "memory_consolidation_queue folded nothing (session=%s run=%s "
+                "turn=%s); watermark unchanged",
+                session_id, job.run_id, job.turn_id,
+            )
+            return
 
         # Materialize MEMORY.md deterministically from the append-only journal —
         # the exact render the eviction path and benchmark produce.
@@ -304,12 +316,15 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
     ) -> int:
         """Real fold: run the owner over ``messages`` into the journal.
 
-        Returns the number of journal records appended (for the log/assert).
+        Returns the number of journal records ADDED by this fold (a delta, not
+        the running total) so the worker can tell whether anything was actually
+        folded — the signal it uses to decide whether the watermark may advance.
         """
         from ._consolidate import consolidate
         from ._view import JournalViewStore
 
         journal = JournalStore(directory)
+        before = journal.count()
         await consolidate(
             messages,
             store=JournalViewStore(directory),
@@ -318,7 +333,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             keep_tail=0,
             journal=journal,
         )
-        return journal.count()
+        return journal.count() - before
 
 
 def put_watermark_path(directory: str | os.PathLike) -> str:

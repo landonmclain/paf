@@ -643,26 +643,35 @@ class Session:
                 )
 
             real_fold = self._consolidate_span
+            queue_ref: MemoryConsolidationQueue | None = None
 
             async def publish_fold(messages, directory, watermark):
                 try:
-                    n = (
-                        await real_fold(messages, directory, watermark)
-                        if real_fold is not None
-                        else 0
-                    )
+                    if real_fold is not None:
+                        n = await real_fold(messages, directory, watermark)
+                    else:
+                        # Production Sessions pass no `consolidate_span`; fall
+                        # back to the queue's real fold so the owner actually
+                        # writes (previously this returned 0 and the worker
+                        # advanced the watermark with nothing folded).
+                        assert queue_ref is not None
+                        n = await queue_ref._default_consolidate_span(
+                            messages, directory, watermark
+                        )
                     _complete(DONE, f"{n} records folded")
                     return n
                 except Exception as exc:
                     _complete(ERROR, str(exc))
                     raise
 
-            self._memory_queue = MemoryConsolidationQueue(
+            queue = MemoryConsolidationQueue(
                 memory_directory=self._memory_directory,
                 agent_name=self.agent_name,
                 span_source=span_source,
                 consolidate_span=publish_fold,
             )
+            queue_ref = queue
+            self._memory_queue = queue
         return self._memory_queue
 
     def _ensure_review_queue(self) -> MemoryReviewQueue:

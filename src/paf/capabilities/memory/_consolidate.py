@@ -396,6 +396,15 @@ async def consolidate(
     )
     evicted_text = await resident_consolidate_text(evicted)
     if not evicted_text:
+        # No durable user/assistant text in the span (pure tool/empty traffic).
+        # Deliberately do NOT burn an LLM call on empty input — but this is a
+        # VISIBLE no-op: it folds 0 records, so the queue keeps the watermark
+        # unchanged (a 0-fold retries next cadence instead of false-advancing).
+        logger.info(
+            "consolidate no-op: span of %d msgs has no durable text; "
+            "folding 0 records (watermark unchanged)",
+            len(evicted),
+        )
         return
     result = await owner.run(
         CONSOLIDATION_PROMPT.format(evicted_text=evicted_text),
