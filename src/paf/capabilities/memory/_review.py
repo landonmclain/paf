@@ -44,28 +44,48 @@ of facts, each on a line ending with its journal line id (#N). Some lines carry
 a `*(archive pending review)*` marker — those are the assistant's suggestions
 awaiting your verdict.
 
-Use the `memory_review` tool to apply verdicts by line id:
+THE FIRST RULE IS CONSERVATION. Memory is cheap to keep and expensive to lose.
+A fact you archive is gone from the injected view forever unless someone
+deliberately re-appends it. When in doubt, DO NOTHING to that fact. Aggressive
+archiving is a bug, not a feature — missing a live constraint is far worse than
+carrying a little harmless redundancy. Most facts should be left exactly as-is.
 
-- `archive` (journal_id) — the fact is stale, wrong, superseded, or no longer
-  true: drop it. Use this for pending-marked lines you agree with, and for any
-  other fact you judge should no longer be shown.
-- `tier_change` (journal_id, tier) — the fact is still valid but belongs at a
-  different permanence level. Move it (t1 => t2/t3 to deprioritize, t2 => t1 if
-  it's now central). This is the reviewer's judgment call; the assistant can't
-  do it.
-- `reject` (journal_id) — keep the fact exactly as-is AND clear a pending
-  marker you disagree with (the suggestion was wrong; the fact stays).
+Only ARCHIVE a fact when it falls into one of these HIGH-CONFIDENCE classes:
+  1. DIRECTLY CONTRADICTED — a newer fact in the same view states the opposite
+     of this one (e.g. "rm is denied" vs "rm works"). Archive the wrong one.
+  2. FACTUALLY SUPERSEDED — a newer fact fully replaces this one (e.g. "needs a
+     way to persist the server" superseded by "server runs in tmux now").
+  3. VERBATIM / NEAR-IDENTICAL DUPLICATE — two lines state the SAME fact almost
+     word-for-word (the same claim, same subject). Archive the weaker copy only.
+Do NOT archive merely because a fact is "aged", "redundant", "historical",
+"process-related", "moot", "planned-then-executed", or "less central". Those are
+TIER_CHANGE (or nothing), never archive. Redundancy across facts that each carry
+some distinct nuance is expected and fine.
 
-Curate the WHOLE list, not just the pending-marked lines:
-- Facts that are wrong, contradicted, or no longer relevant -> archive.
-- Stale/less-central facts that are still true -> tier_change down.
-- Core identity/person facts should stay t1. Don't archive things you aren't
-  fairly confident are wrong or stale — memory is better with a little
-  redundancy than missing a live constraint.
+Use TIER_CHANGE sparingly and only down one step at a time (t1->t2 or t2->t3):
+  - A fact that was a live decision/goal but is now settled-and-recorded may
+    move ONE tier down (t1->t2, t2->t3). It is still a real fact; it just is no
+    longer the current focus.
+  - Do NOT move every old design fact to t3 — that turns t3 into a graveyard and
+    destroys the tier ladder's meaning. A few well-placed demotions per pass is
+    plenty. Most things you think about demoting, you should instead leave.
+  - Never move a fact UP tier (t2->t1) reflexively; only do so for a clearly
+    central, durable constraint.
 
-Be decisive but conservative. Only archive when you're reasonably confident the
-fact is stale or wrong. Prefer tier_change (keep, deprioritize) over archive
-when the fact is merely aged but plausibly still true.
+DO NOT LET THE SAME FACT LIVE AT MULTIPLE TIERS. If you notice one fact is
+expressed in more than one line (e.g. a t1/t2 line and a t3 line saying the same
+thing), that is the one situation where you may resolve it — keep the single
+most complete/central copy and archive the merely-repeated weaker copies. Left
+alone, split copies make the tiers inconsistent.
+
+For pending-marked lines (`*(archive pending review)*`):
+  - AGREE (it truly is contradicted/superseded/duplicate) -> archive.
+  - DISAGREE (it's still true, just aged) -> `reject` (keep as-is, clear marker).
+  Err toward `reject`: a pending marker is the assistant guessing; you are the
+  approver. If you would not archive the fact on your own, reject the suggestion.
+
+Be decisive on clear cases and passive on everything else. A pass that archives
+NOTHING and changes ONE tier is a perfectly good pass. Restraint is the metric.
 """
 
 
@@ -135,13 +155,28 @@ your verdict.
 
 {rendered}
 
-Curate it now with `memory_review`. Review the WHOLE list, not just the pending
-lines. For each fact you judge stale/wrong/superseded, `memory_review(journal_id,
-op="archive", reason=...)`. For facts still valid but mis-tiered,
-`memory_review(journal_id, op="tier_change", tier=..., reason=...)`. For pending
-suggestions you disagree with, `memory_review(journal_id, op="reject", reason=...)`.
-Be conservative: only archive when you are reasonably confident the fact is wrong
-or stale; prefer `tier_change` (keep, deprioritize) when it's merely aged.
+You are under NO obligation to do anything. Producing zero verdicts is a
+perfectly normal, good pass — the memory may simply be healthy as-is. Memory is
+cheap to keep and expensive to lose; only act on the HIGH-CONFIDENCE cases below.
+
+Act ONLY on facts that clearly fall into one of these classes, otherwise leave
+the fact untouched:
+
+- archive: the fact is directly contradicted by a newer fact in this view, or
+  factually superseded by one, or is a verbatim/near-identical duplicate of
+  another line (keep the more complete copy). Do NOT archive for age,
+  redundancy, being historical/process/moot, or being less central.
+- tier_change (ONE step down, t1->t2 or t2->t3 only): a settled live decision
+  is being demoted; demote sparingly, a few per pass at most. Never up-tier
+  except for a clearly central durable constraint. Do not let the same fact
+  live at multiple tiers — if you see split copies, keep the best one and
+  archive the weak repeats.
+- reject: a pending suggestion you disagree with (the fact is still true, just
+  aged). Err toward reject over archive.
+
+For every fact that is not a clear HIGH-CONFIDENCE case: do nothing. A pass that
+archives nothing and changes nothing is a good, expected pass. Restraint is the
+metric.
 """
 
 
