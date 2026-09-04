@@ -138,7 +138,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://100.107.176.116:3000",  # Tailscale host (paf-ui via phone/devices)
+        "http://localhost:3001",  # paf-ui dev falls to :3001 while Langfuse holds :3000
+        "http://127.0.0.1:3001",
+        "http://100.107.176.116:3000",
+        "http://100.107.176.116:3001",  # Tailscale host (paf-ui via phone/devices)
     ],
     allow_credentials=False,
     allow_methods=["*"],
