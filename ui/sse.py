@@ -186,6 +186,25 @@ def _serialize_turn(ev: TurnStreamEvent) -> tuple[str, dict[str, Any]]:
     return "unknown", {"raw": repr(ev)}
 
 
+def _task_frame(got: Any) -> tuple[str, dict[str, Any]] | None:
+    """Map a BackgroundEvent -> `task:` SSE frame. Returns None when the event is
+    the stream-termination sentinel (None)."""
+    if got is None:
+        return None
+    meta = getattr(got, "metadata", {}) or {}
+    return (
+        "task",
+        {
+            "id": meta.get("id") or got.kind,
+            "label": got.kind,
+            "status": got.status,
+            "progress": meta.get("progress"),
+            "detail": got.detail,
+            "updated_at": "",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -287,57 +306,53 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
     """Run one turn, forwarding turn events + background-task frames as SSE."""
 
     async def _inner() -> AsyncIterator[str]:
-        out: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        turn_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        task_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
 
         async def _pump_turn() -> None:
             try:
                 async for ev in session.stream(prompt, conversation_id=conversation_id):
-                    await out.put(_serialize_turn(ev))
+                    await turn_q.put(_serialize_turn(ev))
             except Exception as exc:  # noqa: BLE001 - surface as an error frame
                 log.warning("turn stream ended: %r", exc)
-                await out.put(("error", {"detail": str(exc)}))
+                await turn_q.put(("error", {"detail": str(exc)}))
+            finally:
+                await turn_q.put(None)  # sentinel: turn stream finished
 
-        async def _pump_tasks() -> None:
-            queue: asyncio.Queue[Any] = asyncio.Queue()
-            # callback is handed to subscribe_tasks, which calls it both synchronously
-            # (replay of already-active tasks) and via ensure_future (live events).
-            # put_nowait is sync-safe on an asyncio.Queue from the same loop thread, so
-            # both paths land the event in the queue without an unawaited-coroutine warning.
+        # subscribe_tasks fires the callback both synchronously (replay of
+        # already-active tasks) and via ensure_future (live events). put_nowait
+        # is sync-safe on an asyncio.Queue from the same loop thread. The
+        # `dead` flag guards against a stale fire after this generator closes.
+        dead = {"v": False}
 
-            session.subscribe_tasks(queue.put_nowait)
-            try:
-                while True:
-                    got = await queue.get()
-                    if got is None:
-                        break
-                    # subscribe_tasks delivers BackgroundEvent (kind/status/detail/metadata).
-                    meta = getattr(got, "metadata", {}) or {}
-                    await out.put(
-                        (
-                            "task",
-                            {
-                                "id": meta.get("id") or got.kind,
-                                "label": got.kind,
-                                "status": got.status,
-                                "progress": meta.get("progress"),
-                                "detail": got.detail,
-                                "updated_at": "",
-                            },
-                        )
-                    )
-            except Exception as exc:  # noqa: BLE001
-                log.debug("task pump ended: %r", exc)
+        def _on_task(ev: Any) -> None:
+            if not dead["v"]:
+                task_q.put_nowait(_task_frame(ev))
+
+        session.subscribe_tasks(_on_task)
 
         turn = asyncio.create_task(_pump_turn())
-        tasks = asyncio.create_task(_pump_tasks())
         try:
-            while not turn.done():
-                event, data = await out.get()
-                yield _frame(event, data)
+            # Drive the TURN to completion. The stream ends exactly when the turn
+            # ends (clean EOF -> client onDone -> UI shows "done"). Background
+            # task frames are forwarded only while the turn is still producing, so
+            # a trailing consolidation frame can never keep the connection open or
+            # become the terminal event.
+            while True:
+                item = await turn_q.get()
+                if item is None:
+                    break  # turn finished -- close the SSE stream now
+                yield _frame(*item)
+                # Opportunistically flush any pending task frame (non-blocking).
+                while not task_q.empty():
+                    t = task_q.get_nowait()
+                    if t is None:
+                        break
+                    yield _frame(*t)
         finally:
+            dead["v"] = True
             turn.cancel()
-            tasks.cancel()
-            await asyncio.gather(turn, tasks, return_exceptions=True)
+            await asyncio.gather(turn, return_exceptions=True)
 
     return _inner()
 
