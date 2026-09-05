@@ -116,7 +116,21 @@ async def resolve_unseen_span(
     collected: list[ModelMessage] = []
     last_complete: MemoryWatermark | None = None
 
+    # Position of the watermark's run. Runs strictly older than it are fully
+    # consumed and MUST be skipped even when a legacy watermark carries no
+    # time anchor (consumed_ts=None): without this, the default first_turn=0
+    # below would scoop the ENTIRE pre-watermark history into the fold span,
+    # blowing the owner's context and silently 0-folding — the live stall.
+    wm_run_idx = 0
+    for _i, _r in enumerate(runs):
+        if _r.run_id == watermark.run_id:
+            wm_run_idx = _i
+            break
+
     for i, r in enumerate(runs):
+        if i < wm_run_idx:
+            # Strictly older than the watermark's own run: fully consumed.
+            continue
         hist = await source.run_history(run_id=r.run_id)
         if not hist:
             continue
@@ -166,14 +180,17 @@ async def resolve_unseen_span(
 class ConsolidationJob:
     """A request to fold the unseen persisted span into durable memory.
 
-    ``run_id`` / ``turn_id`` mark the current (in-flight) tip position; the
-    worker folds complete turns strictly newer than the stored watermark and
-    strictly older than the tip, then advances the watermark to the last
-    complete turn folded.
+    ``run_id`` / ``turn_id`` mark the current (in-flight) tip position the
+    trigger resolved against. ``messages`` optionally carries the **pre-resolved
+    span** the trigger already computed when it advanced the watermark at
+    fire-time; when present the worker folds it directly instead of re-resolving
+    against the (now-advanced) watermark — otherwise re-resolution would find
+    nothing new.
     """
 
     run_id: str
     turn_id: int
+    messages: list[ModelMessage] | None = None
 
 
 #: Type of the span-source seam: resolve "(run_id, up_to_turn_id)" into the
@@ -251,14 +268,24 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         watermark = MemoryWatermark.load(directory, run_id=job.run_id)
 
         # Resolve the unseen span from persistence (or a synthetic source).
-        if self.span_source is None:
-            log.error(
-                "memory_consolidation_queue has no span_source; cannot fold job "
-                "session=%s run=%s turn=%s — the builder must supply one",
-                session_id, job.run_id, job.turn_id,
+        # When the trigger already resolved AND advanced the watermark at
+        # fire-time, it passes the precomputed span here so we fold exactly
+        # what it advanced over — re-resolving against the now-advanced
+        # watermark would find nothing new.
+        if job.messages is not None:
+            messages_span = ResolvedSpan(
+                messages=job.messages,
+                watermark=watermark,
             )
-            return
-        messages_span = await self.span_source(job.run_id, job.turn_id)
+        else:
+            if self.span_source is None:
+                log.error(
+                    "memory_consolidation_queue has no span_source; cannot fold job "
+                    "session=%s run=%s turn=%s — the builder must supply one",
+                    session_id, job.run_id, job.turn_id,
+                )
+                return
+            messages_span = await self.span_source(job.run_id, job.turn_id)
         messages = messages_span.messages
 
         # Fold into the journal (append-only; dedup/supersede at render).

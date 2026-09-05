@@ -785,10 +785,28 @@ class Session:
                 task.detail = "not past the consolidation cadence"
                 self._publish_task(task)
                 return
+            # Mirror the reviewer (which advances its watermark at fire-time):
+            # resolve the unseen span NOW, pass it to the worker as precomputed
+            # material so it folds exactly what we advanced over (re-resolving
+            # against the now-advanced cursor would find nothing new), then save
+            # the owner watermark to the resolved position so it always carries
+            # a fresh {run_id, turn_id, consumed_ts} anchor — never left in the
+            # legacy no-consumed_ts format that made should_fire return True
+            # every turn.
+            span = await resolve_unseen_span(
+                SnapshotHistorySource(self._store), wm,
+                tip_run=tip_run, tip_turn=tip_turn,
+            )
             self._ensure_memory_queue().enqueue(
                 self.agent_name,
-                ConsolidationJob(run_id=tip_run, turn_id=tip_turn),
+                ConsolidationJob(
+                    run_id=tip_run, turn_id=tip_turn, messages=span.messages,
+                ),
             )
+            wm.run_id = span.watermark.run_id
+            wm.turn_id = span.watermark.turn_id
+            wm.consumed_ts = span.watermark.consumed_ts
+            wm.save(self._memory_directory)
             if self._background_tasks.get(task_id) is not None:
                 task.status = PROCESSING  # job handed to the worker
                 self._publish_task(task)
@@ -796,7 +814,6 @@ class Session:
             task.status = ERROR
             task.detail = str(exc)
             self._publish_task(task)
-
     # -- async core -----------------------------------------------------------
 
     async def stream(
