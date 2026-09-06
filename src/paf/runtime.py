@@ -68,10 +68,12 @@ from pydantic_ai import (
 from pydantic_ai._agent_graph import CallToolsNode, End, ModelRequestNode
 from pydantic_ai.messages import (
     ModelRequest,
+    ModelResponse,
     RetryPromptPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -559,6 +561,51 @@ class Session:
         await self._ensure_resumed(self._scoped_cid(cid))
         return self.restored_count
 
+    async def _recover_interrupted(
+        self, run_id: str, history: list[Any]
+    ) -> list[Any]:
+        """Trim a recovered interrupted snapshot to the last RESOLVED boundary.
+
+        ``continue_run(..., include_interrupted=True)`` returns the full
+        interrupted run's history, which may end on a partially-executed tool
+        sequence. We must NOT feed unresolved (pending / side-effecting) tool
+        calls back into context — pydantic-ai would re-execute or synthesize
+        their returns. So we drop the trailing tail of messages that reference
+        tool calls the store still lists as unresolved, keeping every completed
+        tool return and the user prompt. A run with no unresolved tool effects
+        is returned intact.
+        """
+        try:
+            unresolved = {
+                rec.tool_call_id
+                for rec in await self._store.list_unresolved_tool_effects(
+                    run_id=run_id
+                )
+            }
+        except Exception:  # noqa: BLE001 - store read is best-effort
+            return history
+        if not unresolved:
+            return history
+        # Walk back from the end, dropping the tail that references unresolved
+        # tool calls (a ModelResponse carrying an unresolved ToolCallPart, or
+        # the ModelRequest that echoes it / the partial empty response after).
+        keep_end = len(history)
+        for i in range(len(history) - 1, -1, -1):
+            msg = history[i]
+            tainted = False
+            if isinstance(msg, ModelResponse):
+                for part in msg.parts:
+                    if isinstance(part, ToolCallPart) and (
+                        part.tool_call_id in unresolved
+                    ):
+                        tainted = True
+                        break
+            if tainted:
+                keep_end = i
+                continue
+            break
+        return history[:keep_end]
+
     async def _ensure_resumed(self, conversation_id: str | None) -> None:
         """Seed ``self.history`` from the store exactly once (before the first run).
 
@@ -584,11 +631,24 @@ class Session:
                 return
             history = []
             for run in reversed(runs):
+                # 1) Normal path: settled (complete) snapshot.
                 try:
                     history = await continue_run(self._store, run_id=run.run_id)
                     break
-                except Exception:  # noqa: BLE001 - skip unsettled runs
-                    continue
+                except Exception:  # noqa: BLE001
+                    # 2) Broken turn: recover the interrupted snapshot, trimmed
+                    #    to the last RESOLVED tool boundary so we never feed
+                    #    pending/replayable side effects back into context.
+                    try:
+                        raw = await continue_run(
+                            self._store,
+                            run_id=run.run_id,
+                            include_interrupted=True,
+                        )
+                    except Exception:  # noqa: BLE001 - genuinely unrecoverable
+                        continue
+                    history = await self._recover_interrupted(run.run_id, raw)
+                    break
             if not history:
                 return
             if self.resume_window is not None and self.resume_window >= 0:

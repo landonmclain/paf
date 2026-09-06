@@ -22,12 +22,15 @@ from datetime import UTC, datetime
 import pytest
 from pydantic_ai import FunctionToolCallEvent, FunctionToolResultEvent
 from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
     RetryPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPartDelta,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from paf import runtime
@@ -317,6 +320,61 @@ class _FakeProfile:
 
     def __hash__(self) -> int:
         return hash(self.name)
+
+
+class _FakeToolStore:
+    """Duck-typed store exposing list_unresolved_tool_effects for offline tests."""
+
+    def __init__(self, unresolved: set[str]) -> None:
+        self._unresolved = unresolved
+
+    async def list_unresolved_tool_effects(self, *, run_id: str) -> list[object]:
+        del run_id
+        return [
+            type("Rec", (), {"tool_call_id": tid})() for tid in self._unresolved
+        ]
+
+
+def _trim_interrupted(unresolved: set[str], history: list[object]) -> list[object]:
+    """Run Session._recover_interrupted against a fake store, synchronously."""
+    async def _run() -> list[object]:
+        s = object.__new__(runtime.Session)
+        s._store = _FakeToolStore(unresolved)  # type: ignore[attr-defined]
+        return await s._recover_interrupted("run-1", history)  # type: ignore[attr-defined]
+
+    return asyncio.run(_run())
+
+
+def test_recover_interrupted_trims_unresolved_tool_tail() -> None:
+    """A recovered interrupted snapshot must drop the unresolved tool tail."""
+    user_ok = ModelRequest(
+        parts=[UserPromptPart(content="hello", part_kind="user-prompt")]
+    )
+    resp_ok = ModelResponse(parts=[TextPart(content="partial done")])
+    resp_bad = ModelResponse(
+        parts=[
+            ToolCallPart(tool_name="shell", tool_call_id="call_unresolved")
+        ]
+    )
+    # History ends on the unresolved tool call -> that tail must be trimmed.
+    trimmed = _trim_interrupted(
+        {"call_unresolved"}, [user_ok, resp_ok, resp_bad]
+    )
+    assert len(trimmed) == 2
+    assert trimmed[0] is user_ok
+    assert trimmed[1] is resp_ok
+
+
+def test_recover_interrupted_keeps_history_when_no_unresolved() -> None:
+    """No unresolved tool effects -> recovered history returned intact."""
+    user_ok = ModelRequest(parts=[UserPromptPart(content="hi", part_kind="user-prompt")])
+    resp = ModelResponse(
+        parts=[ToolCallPart(tool_name="shell", tool_call_id="call_resolved")]
+    )
+    trimmed = _trim_interrupted({"call_other"}, [user_ok, resp])
+    assert len(trimmed) == 2
+    assert trimmed[0] is user_ok
+    assert trimmed[1] is resp
 
 
 _FAKE_SHELL_PROFILE = _FakeProfile(name="runtime2_test")
