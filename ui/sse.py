@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -300,6 +301,56 @@ async def conversation_history(conversation_id: str, agent: str = DEFAULT_AGENT)
     session = await _get_session(conversation_id, agent)
     restored = await session.restore()
     return {"conversation_id": conversation_id, "messages": _serialize_history(session.history), "restored": restored}
+
+
+def _last_prompt(session: Session) -> str | None:
+    """Best-effort last user prompt from a session's history (None if none)."""
+    try:
+        for msg in reversed(session.history):
+            if isinstance(msg, ModelRequest):
+                for part in msg.parts:
+                    if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                        return part.content[:120]
+    except Exception:  # noqa: BLE001 - title is sugar; never fail a list
+        return None
+    return None
+
+
+@app.get("/api/conversations")
+async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+    """List known conversation lanes (live registry) for the left sidebar.
+
+    Returns id + last user prompt + last-activity time, newest first. Only live
+    (in-memory) lanes are returned in v1; idle lanes are cheap to re-create on
+    first use, so a store-scan fallback is a later enhancement.
+    """
+    prefix = f"{agent}:"
+    out = []
+    for key, last in _sessions_last_used.items():
+        if not key.startswith(prefix):
+            continue
+        conversation_id = key[len(prefix):]
+        session = _sessions.get(key)
+        out.append({
+            "conversation_id": conversation_id,
+            "agent": agent,
+            "title": _last_prompt(session) if session is not None else None,
+            "updated_at": last,
+        })
+    out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
+    return {"conversations": out}
+
+
+@app.post("/api/conversations")
+async def create_conversation(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+    """Allocate a fresh conversation lane id for the \"New conversation\" flow.
+
+    The session itself is lazily created on first /api/chat; here we just mint a
+    stable id and register its last-used timestamp so it appears in the list.
+    """
+    conversation_id = f"paf-{uuid.uuid4().hex[:12]}"
+    _sessions_last_used[_session_key(agent, conversation_id)] = _now()
+    return {"conversation_id": conversation_id, "agent": agent}
 
 
 def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIterator[str]:
