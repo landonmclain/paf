@@ -17,10 +17,16 @@ Verified contract (Phase 2):
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
-from pydantic_ai import FunctionToolCallEvent, FunctionToolResultEvent
+from pydantic_ai import (
+    CancellationToken,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+)
+from pydantic_ai.exceptions import RunCancelled
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -375,6 +381,129 @@ def test_recover_interrupted_keeps_history_when_no_unresolved() -> None:
     assert len(trimmed) == 2
     assert trimmed[0] is user_ok
     assert trimmed[1] is resp
+
+
+async def _collect(agen):
+    """Drain an async generator, propagating exceptions, into a list."""
+    out: list[object] = []
+    async for x in agen:
+        out.append(x)
+    return out
+
+
+def test_stream_preserves_partial_history_on_stop(monkeypatch) -> None:
+    """Hitting Stop must keep the cancelled run's partial history, end cleanly.
+
+    ``stream()`` catches ``RunCancelled`` (raised when a CancellationToken
+    cancel ends the agent run), appends the run's partial ``new_messages()`` to
+    ``self.history`` so the NEXT message in this session continues from it, and
+    ends the stream WITHOUT surfacing an error frame ("The agent run was
+    cancelled."). External cancellation (``asyncio.CancelledError``) is NOT
+    swallowed — only first-party ``RunCancelled``.
+    """
+    s = object.__new__(runtime.Session)  # type: ignore[attr-defined]
+    s.agent_name = "x"
+    s.profile = None
+    s.conversation_id = "conv-1"
+    s._token = CancellationToken()
+    s.history = []
+
+    @contextmanager
+    def _root_span(*a, **k):
+        del a, k
+        yield type("Span", (), {"set_attribute": lambda *x, **y: None})()
+
+    monkeypatch.setattr(runtime, "root_span", _root_span)
+
+    async def _noop(*a, **k):
+        del a, k
+
+    s._ensure_resumed = _noop  # type: ignore[attr-defined]
+    s._maybe_trigger_consolidation = _noop  # type: ignore[attr-defined]
+    s._maybe_trigger_review = _noop  # type: ignore[attr-defined]
+
+    partial = ModelResponse(parts=[TextPart(content="partial answer")])
+
+    class _CancellingRun:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise RunCancelled("cancelled", messages=[partial])
+
+    class _CM:
+        async def __aenter__(self):
+            return _CancellingRun()
+
+        async def __aexit__(self, *exc):
+            del exc
+            return False
+
+    class _FakeAgent:
+        def iter(self, *a, **k):
+            del a, k
+            return _CM()
+
+    s._agent = _FakeAgent()  # type: ignore[attr-defined]
+
+    events = asyncio.run(
+        _collect(s.stream("hi", conversation_id="conv-1"))  # type: ignore[attr-defined]
+    )
+    # Stream ends cleanly (no error/exception event) and partial history kept.
+    assert events == []
+    assert s.history == [partial]
+
+
+def test_stream_propagates_real_cancellation(monkeypatch) -> None:
+    """External ``asyncio.CancelledError`` must NOT be swallowed."""
+
+    s = object.__new__(runtime.Session)  # type: ignore[attr-defined]
+    s.agent_name = "x"
+    s.profile = None
+    s.conversation_id = "conv-1"
+    s._token = CancellationToken()
+    s.history = []
+
+    @contextmanager
+    def _root_span(*a, **k):
+        del a, k
+        yield type("Span", (), {"set_attribute": lambda *x, **y: None})()
+
+    monkeypatch.setattr(runtime, "root_span", _root_span)
+
+    async def _noop(*a, **k):
+        del a, k
+
+    s._ensure_resumed = _noop  # type: ignore[attr-defined]
+    s._maybe_trigger_consolidation = _noop  # type: ignore[attr-defined]
+    s._maybe_trigger_review = _noop  # type: ignore[attr-defined]
+
+    class _CancellingRun:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise asyncio.CancelledError()
+
+    class _CM:
+        async def __aenter__(self):
+            return _CancellingRun()
+
+        async def __aexit__(self, *exc):
+            del exc
+            return False
+
+    class _FakeAgent:
+        def iter(self, *a, **k):
+            del a, k
+            return _CM()
+
+    s._agent = _FakeAgent()  # type: ignore[attr-defined]
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            _collect(s.stream("hi", conversation_id="conv-1"))  # type: ignore[attr-defined]
+        )
 
 
 _FAKE_SHELL_PROFILE = _FakeProfile(name="runtime2_test")

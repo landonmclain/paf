@@ -66,6 +66,7 @@ from pydantic_ai import (
     PartStartEvent,
 )
 from pydantic_ai._agent_graph import CallToolsNode, End, ModelRequestNode
+from pydantic_ai.exceptions import RunCancelled
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -929,25 +930,39 @@ class Session:
             f"paf.run.{scoped or 'default'}",
             **({"langfuse.observation.input": _run_input(prompt, scoped)}),
         ) as _span:
-            async with self._agent.iter(
-                prompt,
-                message_history=self.history,
-                conversation_id=scoped,
-                cancellation_token=self._token,
-            ) as run:
-                self._run = run
-                try:
-                    async for node in run:
-                        if isinstance(node, (ModelRequestNode, CallToolsNode)):
-                            async with node.stream(run.ctx) as stream:
-                                async for event in stream:
-                                    for ev in _dispatch_stream_event(event):
-                                        yield ev
-                        elif isinstance(node, End):
-                            break
-                finally:
-                    self._run = None
-            result = run.result
+            try:
+                async with self._agent.iter(
+                    prompt,
+                    message_history=self.history,
+                    conversation_id=scoped,
+                    cancellation_token=self._token,
+                ) as run:
+                    self._run = run
+                    try:
+                        async for node in run:
+                            if isinstance(node, (ModelRequestNode, CallToolsNode)):
+                                async with node.stream(run.ctx) as stream:
+                                    async for event in stream:
+                                        for ev in _dispatch_stream_event(event):
+                                            yield ev
+                            elif isinstance(node, End):
+                                break
+                    finally:
+                        self._run = None
+                result = run.result
+            except RunCancelled as exc:
+                # Stop (application-requested cancellation via cancel()): a
+                # normal turn-ending, NOT an error. Preserve the partial turn's
+                # completed history so the next message in this session can
+                # continue from it. ``new_messages()`` excludes message_history
+                # and older turns; unresolved tool calls are already closed out
+                # with synthesized ``outcome='interrupted'`` returns by
+                # pydantic-ai, so feeding this back never re-runs pending side
+                # effects. We return (clean end of stream) rather than re-raising
+                # RunCancelled so _turn_frames does not emit an error frame
+                # ("The agent run was cancelled.") -- the UI ends the turn itself.
+                self.history = [*self.history, *exc.new_messages()]
+                return
             assert result is not None, "iter() ended before AgentRun.result settled"
             _span.set_attribute(
                 "langfuse.observation.output", _json_dumps(_run_output(result))
