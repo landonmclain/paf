@@ -33,9 +33,6 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from paf.capabilities import PROFILES
-from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
-
 # Message/part types for serializing restored conversation history
 # (session.history is a list of pydantic-ai ModelMessage).
 from pydantic_ai.messages import (
@@ -47,6 +44,9 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+
+from paf.capabilities import PROFILES
+from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
 
 log = logging.getLogger(__name__)
 
@@ -350,8 +350,24 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
                         break
                     yield _frame(*t)
         finally:
+            # Cooperative teardown: cancel the session's CancellationToken, NOT
+            # the turn task directly. turn.cancel() injects asyncio.CancelledError
+            # into session.stream()'s generator from a DIFFERENT task/context than
+            # the one that opened its OTel root_span, which makes OTel's
+            # context.detach() raise `ValueError: <Token> was created in a
+            # different Context`, the span is never ended/exported (the "tracing
+            # sometimes just stops" bug) and we get `aclose(): already running`.
+            # session.cancel() lets stream() end via its own RunCancelled path in
+            # the SAME task/context that owns the span -> span ends, trace lands,
+            # partial history preserved (commit 24cd3aa). We then drain the turn
+            # task so it settles before the generator is torn down.
             dead["v"] = True
-            turn.cancel()
+            try:
+                await session.cancel()
+            except Exception:  # noqa: BLE001 - best-effort; never mask teardown
+                log.warning("session.cancel() during stream teardown failed", exc_info=True)
+            if not turn.done():
+                turn.cancel()
             await asyncio.gather(turn, return_exceptions=True)
 
     return _inner()
