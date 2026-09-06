@@ -11,6 +11,9 @@ covered by the live web loop + an optional manual run).
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
+
+import pytest
 
 from paf.capabilities.memory._index import build_index
 from paf.capabilities.memory._journal import JournalStore, MemoryRecord
@@ -183,6 +186,7 @@ def test_read_render_returns_full_unbounded_view(tmp_path):
 
 def test_review_queue_runs_review_span(tmp_path):
     from paf.capabilities.memory._background import MemoryReviewQueue, ReviewJob
+    from paf.capabilities.memory._watermark import MemoryWatermark
 
     calls = []
 
@@ -195,15 +199,24 @@ def test_review_queue_runs_review_span(tmp_path):
         agent_name="assistant",
         review_span=fake_review,
     )
+    from datetime import datetime
+
+    advance = MemoryWatermark(
+        run_id="r1", turn_id=3, consumed_ts=datetime(2026, 9, 6, tzinfo=UTC)
+    )
 
     class FakeState:
         pass
 
     async def run():
-        await q.process_job("sess", ReviewJob(), FakeState())
+        await q.process_job("sess", ReviewJob(run_id="r1", turn_id=3, watermark=advance), FakeState())
 
     asyncio.run(run())
     assert calls == [str(tmp_path)]
+    # Successful pass => the review watermark advanced to the job's target.
+    wm = MemoryWatermark.load(str(tmp_path), run_id="r1", filename="memory-review-watermark.json")
+    assert wm.consumed_ts is not None
+    assert wm.turn_id == 3
 
 
 def test_review_queue_requires_directory():
@@ -222,7 +235,93 @@ def test_review_queue_requires_directory():
         pass
 
     async def run():
-        await q.process_job("sess", ReviewJob(), FakeState())
+        # Directory missing -> process_job drops before using the job's fields,
+        # so an empty job is fine here.
+        await q.process_job("sess", ReviewJob(run_id="r1", turn_id=1), FakeState())
 
     asyncio.run(run())
     assert called == []  # dropped without a directory
+
+
+# ---------------------------------------------------------------------------
+# Reviewer watermark contract (mirrors the owner's worker-owns-watermark rule)
+# ---------------------------------------------------------------------------
+
+
+def _mk_review_wm(tmp_path, run_id="r1", turn_id=1):
+    from paf.capabilities.memory._watermark import MemoryWatermark
+
+    MemoryWatermark(run_id=run_id, turn_id=turn_id).save(
+        tmp_path, filename="memory-review-watermark.json"
+    )
+    return tmp_path
+
+
+def test_review_throw_does_not_advance_watermark(tmp_path):
+    """A review pass that THROWS must NOT advance the review watermark — it is
+    left behind so the pass retries next cadence instead of being silently
+    skipped (the same owner-watermark contract)."""
+    from paf.capabilities.memory._background import MemoryReviewQueue, ReviewJob
+    from paf.capabilities.memory._watermark import MemoryWatermark
+
+    _mk_review_wm(tmp_path)
+
+    async def failing_review(directory):
+        raise RuntimeError("review LLM failed")
+
+    q = MemoryReviewQueue(
+        memory_directory=str(tmp_path), agent_name="assistant", review_span=failing_review
+    )
+
+    class FakeState:
+        pass
+
+    async def run():
+        await q.process_job("sess", ReviewJob(run_id="r1", turn_id=7), FakeState())
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(run())
+
+    wm = MemoryWatermark.load(
+        str(tmp_path), run_id="r1", filename="memory-review-watermark.json"
+    )
+    assert wm.turn_id == 1, "failed pass must leave the review watermark untouched"
+
+
+def test_review_zero_verdicts_advances_watermark(tmp_path):
+    """'Nothing to curate' (0 verdicts) is a SUCCESSFUL, complete review pass —
+    the review watermark must advance anyway (completion, not content)."""
+    from datetime import datetime
+
+    from paf.capabilities.memory._background import MemoryReviewQueue, ReviewJob
+    from paf.capabilities.memory._watermark import MemoryWatermark
+
+    _mk_review_wm(tmp_path)
+
+    async def empty_review(directory):
+        return 0
+
+    q = MemoryReviewQueue(
+        memory_directory=str(tmp_path), agent_name="assistant", review_span=empty_review
+    )
+    advance = MemoryWatermark(
+        run_id="r1",
+        turn_id=7,
+        consumed_ts=datetime(2026, 9, 6, tzinfo=UTC),
+    )
+
+    class FakeState:
+        pass
+
+    async def run():
+        await q.process_job(
+            "sess", ReviewJob(run_id="r1", turn_id=7, watermark=advance), FakeState()
+        )
+
+    asyncio.run(run())
+
+    wm = MemoryWatermark.load(
+        str(tmp_path), run_id="r1", filename="memory-review-watermark.json"
+    )
+    assert wm.turn_id == 7, "a 0-verdict pass is a completed pass and must advance"
+    assert wm.consumed_ts is not None

@@ -792,13 +792,18 @@ class Session:
                 wm, tip_ts=runs[-1].started_at, every=timedelta(minutes=self.review_every)
             ):
                 return
-            self._ensure_review_queue().enqueue(self.agent_name, ReviewJob())
-            # Advance the review watermark to the current tip so we don't
-            # re-fire until review_every more accrues.
-            wm.run_id = tip_run
-            wm.turn_id = tip_turn
-            wm.consumed_ts = runs[-1].started_at
-            wm.save(self._memory_directory, filename="memory-review-watermark.json")
+            # Mirror the owner's worker-owns-watermark contract: the trigger
+            # SCHEDULES only. It enqueues a ReviewJob carrying the resolved tip
+            # position; the review worker is the SOLE review-watermark writer
+            # and advances it only on a COMPLETED (non-error) curation pass. A
+            # failed/never-run review leaves the watermark behind so it retries
+            # next cadence instead of being silently skipped.
+            advance = MemoryWatermark(
+                run_id=tip_run, turn_id=tip_turn, consumed_ts=runs[-1].started_at
+            )
+            self._ensure_review_queue().enqueue(
+                self.agent_name, ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance)
+            )
         except Exception:  # noqa: BLE001 - the review hook must not break the turn
             pass
 

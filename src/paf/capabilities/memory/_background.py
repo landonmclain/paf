@@ -375,7 +375,21 @@ def put_watermark_path(directory: str | os.PathLike) -> str:
 
 
 class ReviewJob:
-    """A request to run one curation pass over the whole rendered memory."""
+    """A request to run one curation pass over the whole rendered memory.
+
+    ``run_id`` / ``turn_id`` / ``watermark`` carry the review position the
+    trigger resolved (the current tip). The worker, on a COMPLETED review pass
+    (any verdict count, incl. 0), advances the review watermark to this
+    position — mirroring the owner's worker-owns-watermark contract. Only a
+    failed/never-run review leaves the watermark behind so the pass retries.
+    """
+
+    __slots__ = ("run_id", "turn_id", "watermark")
+
+    def __init__(self, run_id: str, turn_id: int, watermark: MemoryWatermark | None = None):
+        self.run_id = run_id
+        self.turn_id = turn_id
+        self.watermark = watermark
 
 
 #: Type of the review seam: run the reviewer over the rendered view and return
@@ -420,7 +434,7 @@ class MemoryReviewQueue(BackgroundQueueService[ReviewJob]):
         job: ReviewJob,
         state: QueueState[ReviewJob],
     ) -> None:
-        del job, state  # reviewer is stateless w.r.t. the turn ladder
+        del state  # unused; single queue, FIFO serialization is enough
         directory = self.memory_directory
         if not directory:
             log.error("memory_review_queue missing memory_directory; dropping job")
@@ -431,8 +445,30 @@ class MemoryReviewQueue(BackgroundQueueService[ReviewJob]):
         else:
             applied = await self._default_review(directory)
 
+        # THE WATERMARK CONTRACT (mirrored from the owner): advance the review
+        # watermark if and only if the review pass COMPLETED WITHOUT ERROR,
+        # regardless of how many verdicts it applied. "Nothing to curate"
+        # (applied == 0) is a successful, complete pass and MUST advance; only
+        # a throw / timeout / no-response leaves the review watermark behind so
+        # the pass retries next cadence instead of being silently skipped.
+        # The worker is the SOLE review-watermark writer — the trigger only
+        # schedules (it no longer advances at fire-time).
+        wm = MemoryWatermark.load(
+            directory, run_id=job.run_id, filename="memory-review-watermark.json"
+        )
+        if job.watermark is not None:
+            wm.run_id = job.watermark.run_id
+            wm.turn_id = job.watermark.turn_id
+            wm.consumed_ts = job.watermark.consumed_ts
+        else:
+            wm.run_id = job.run_id
+            wm.turn_id = job.turn_id
+        wm.save(directory, filename="memory-review-watermark.json")
         log.info(
-            "memory_review_job session=%s applied=%s verdicts", session_id, applied
+            "memory_review_job session=%s success applied=%r "
+            "watermark=%s:%s ts=%s",
+            session_id, applied,
+            wm.run_id, wm.turn_id, wm.consumed_ts,
         )
 
     async def _default_review(self, directory: str) -> int:
