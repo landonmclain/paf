@@ -84,6 +84,20 @@ def test_create_conversation_agent_scoped() -> None:
     ]
 
 
+def test_list_conversations_new_conversation_fallback_title() -> None:
+    _reset_registry()
+    # A freshly-minted lane is registered in _sessions_last_used but has no
+    # session yet (lazily created on first /api/chat) — title must not be the
+    # raw id; it falls back to "New conversation".
+    prefix = sse._session_key(sse.DEFAULT_AGENT, "")
+    sse._sessions_last_used[prefix + "fresh"] = 100.0
+
+    client = TestClient(sse.app)
+    body = client.get("/api/conversations").json()
+    (conv,) = [c for c in body["conversations"] if c["conversation_id"] == "fresh"]
+    assert conv["title"] == "New conversation"
+
+
 def _mk_user(content: str) -> Any:
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 

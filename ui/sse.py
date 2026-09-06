@@ -331,10 +331,11 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
             continue
         conversation_id = key[len(prefix):]
         session = _sessions.get(key)
+        title = _last_prompt(session) if session is not None else None
         out.append({
             "conversation_id": conversation_id,
             "agent": agent,
-            "title": _last_prompt(session) if session is not None else None,
+            "title": title or "New conversation",
             "updated_at": last,
         })
     out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
