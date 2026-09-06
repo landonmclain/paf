@@ -801,9 +801,15 @@ class Session:
             advance = MemoryWatermark(
                 run_id=tip_run, turn_id=tip_turn, consumed_ts=runs[-1].started_at
             )
-            self._ensure_review_queue().enqueue(
-                self.agent_name, ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance)
-            )
+            rq = self._ensure_review_queue()
+            # Single-flight: skip if a review is already queued or running so a
+            # slow worker behind the cadence gate can't pile up duplicate passes.
+            rst = rq.status(self.agent_name)
+            if not (rst.queued > 0 or rst.running):
+                rq.enqueue(
+                    self.agent_name,
+                    ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
+                )
         except Exception:  # noqa: BLE001 - the review hook must not break the turn
             pass
 
@@ -851,6 +857,15 @@ class Session:
                 task.detail = "not past the consolidation cadence"
                 self._publish_task(task)
                 return
+            # Single-flight: skip if a consolidation is already queued or running
+            # so a slow worker behind the cadence gate can't pile up duplicate folds.
+            mq = self._ensure_memory_queue()
+            mst = mq.status(self.agent_name)
+            if mst.queued > 0 or mst.running:
+                task.status = SKIPPED
+                task.detail = "consolidation already in flight"
+                self._publish_task(task)
+                return
             # Resolve the unseen span NOW and hand it to the worker as
             # precomputed material so it folds exactly what was scheduled
             # (re-resolving inside the worker against the not-yet-advanced
@@ -863,7 +878,7 @@ class Session:
                 SnapshotHistorySource(self._store), wm,
                 tip_run=tip_run, tip_turn=tip_turn,
             )
-            self._ensure_memory_queue().enqueue(
+            mq.enqueue(
                 self.agent_name,
                 ConsolidationJob(
                     run_id=tip_run, turn_id=tip_turn, messages=span.messages,

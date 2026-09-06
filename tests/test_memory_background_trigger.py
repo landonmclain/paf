@@ -220,3 +220,66 @@ def test_missing_span_source_logs_and_skips(tmp_path, caplog) -> None:
     assert "no span_source" in caplog.text
     assert not (tmp_path / "memory-journal.jsonl").exists()
     assert not (tmp_path / "memory-watermark.json").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Single-flight: the trigger guard's premise (status reports in-flight work)
+# --------------------------------------------------------------------------- #
+
+
+def test_queue_status_reports_queued_and_running_single_flight(tmp_path) -> None:
+    """The single-flight guard skips a re-trigger while a job is queued/running.
+
+    This pins the GUARD'S PREMISE at the queue level: ``status()`` must expose
+    an in-flight worker (``running``) and any backlog (``queued > 0``) so the
+    trigger's ``not (queued > 0 or running)`` check reliably prevents duplicate
+    passes when a slow worker trails the cadence gate. No LLM — a blocking fold
+    holds the worker so we can observe the transient state.
+    """
+    import asyncio as _aio
+
+    release = _aio.Event()
+    entered = _aio.Event()
+    fold_calls = 0
+
+    async def blocking_consolidate(messages, directory, watermark) -> int:
+        nonlocal fold_calls
+        fold_calls += 1
+        entered.set()
+        await release.wait()  # hold the worker until the test releases
+        return 0
+
+    class Q(MemoryConsolidationQueue):
+        pass
+
+    async def scenario() -> None:
+        q = Q(
+            memory_directory=str(tmp_path),
+            span_source=_synthetic_span_source(),
+            consolidate_span=blocking_consolidate,
+        )
+        # Fire the first job; the worker picks it up and blocks.
+        q.enqueue("s1", ConsolidationJob(run_id="r1", turn_id=12))
+        await entered.wait()
+
+        # Worker is mid-fold: status must say a job is in flight.
+        st = q.status("s1")
+        assert st.running is True
+        assert st.queued == 0
+
+        # Simulate a redundant re-trigger while in flight → a second job queues.
+        q.enqueue("s1", ConsolidationJob(run_id="r1", turn_id=12))
+        st2 = q.status("s1")
+        # The guard's skip-predicate: with work in flight (queued>0 OR running)
+        # it must refuse to fire → the guard returns True (skip).
+        assert st2.running is True
+        assert st2.queued >= 1
+        assert (st2.queued > 0 or st2.running) is True
+
+        release.set()
+        await q.drain("s1")
+
+    asyncio.run(scenario())
+    # Both jobs were consumed by the queue (single-flight governs the TRIGGER's
+    # enqueue decision, not the queue itself), so the blocking fold ran twice.
+    assert fold_calls == 2
