@@ -182,15 +182,18 @@ class ConsolidationJob:
 
     ``run_id`` / ``turn_id`` mark the current (in-flight) tip position the
     trigger resolved against. ``messages`` optionally carries the **pre-resolved
-    span** the trigger already computed when it advanced the watermark at
-    fire-time; when present the worker folds it directly instead of re-resolving
-    against the (now-advanced) watermark — otherwise re-resolution would find
-    nothing new.
+    span** the trigger already computed; when present the worker folds it
+    directly instead of re-resolving against the (not-yet-advanced) watermark.
+    ``watermark`` optionally carries the **resolved target position** (the
+    ``ResolvedSpan.watermark`` the trigger advanced to) so the worker, on a
+    successful fold, advances THE OWNER WATERMARK to that exact position —
+    not to the stale on-disk watermark it loaded for cadence reference.
     """
 
     run_id: str
     turn_id: int
     messages: list[ModelMessage] | None = None
+    watermark: MemoryWatermark | None = None
 
 
 #: Type of the span-source seam: resolve "(run_id, up_to_turn_id)" into the
@@ -267,16 +270,18 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         journal = JournalStore(directory)
         watermark = MemoryWatermark.load(directory, run_id=job.run_id)
 
-        # Resolve the unseen span from persistence (or a synthetic source).
-        # When the trigger already resolved AND advanced the watermark at
-        # fire-time, it passes the precomputed span here so we fold exactly
-        # what it advanced over — re-resolving against the now-advanced
-        # watermark would find nothing new.
+        # Resolve the unseen span from persistence (or from the trigger's
+        # precomputed material). The ADVANCE TARGET — where the owner watermark
+        # moves to on a successful fold — is the trigger's resolved watermark
+        # when supplied (job.watermark), else the resolver's own
+        # messages_span.watermark; NEVER the stale on-disk watermark loaded
+        # above (that is only the cadence reference).
         if job.messages is not None:
             messages_span = ResolvedSpan(
                 messages=job.messages,
                 watermark=watermark,
             )
+            advance_target = job.watermark if job.watermark is not None else messages_span.watermark
         else:
             if self.span_source is None:
                 log.error(
@@ -286,6 +291,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 )
                 return
             messages_span = await self.span_source(job.run_id, job.turn_id)
+            advance_target = messages_span.watermark
         messages = messages_span.messages
 
         # Fold into the journal (append-only; dedup/supersede at render).
@@ -296,44 +302,39 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 messages, directory, watermark
             )
 
-        if new_records and new_records > 0:
-            # Advance the watermark ONLY when something was actually folded —
-            # to the last COMPLETE turn the resolver included (it already
-            # stopped before the in-flight tip). This is the fix for the silent
-            # stall: the old code advanced unconditionally even when the owner
-            # no-op'd, so the cadence kept firing on stale/false progress and
-            # the owner stopped writing.
-            watermark.run_id = messages_span.watermark.run_id
-            watermark.turn_id = messages_span.watermark.turn_id
-            watermark.consumed_ts = messages_span.watermark.consumed_ts
-            watermark.save(directory)
-        else:
-            log.info(
-                "memory_consolidation_queue folded nothing (session=%s run=%s "
-                "turn=%s); watermark unchanged",
-                session_id, job.run_id, job.turn_id,
-            )
-            return
-
-        # Materialize MEMORY.md deterministically from the append-only journal —
-        # the exact render the eviction path and benchmark produce.
-        from ._render import write_render
-
-        write_render(journal, str(Path(directory) / "MEMORY.md"))
-        # Derived index of surviving facts (dedup winners, incremental, pure
-        # derivation from the journal) — regenerated beside MEMORY.md so they can't
-        # disagree. First fold on a journal with pre-existing history builds the
-        # full index (incl. one-time fuzzy collapse).
-        from ._index import update_index
-
-        update_index(directory)
+        # THE WATERMARK CONTRACT: advance when the fold COMPLETED WITHOUT
+        # ERROR, regardless of how many records it wrote. "Found nothing
+        # durable" (new_records == 0) is a successful, complete pass and MUST
+        # advance — only a throw / timeout / no-response holds the watermark
+        # back so that span is retried next cadence, never silently skipped.
+        # The worker is now the SOLE owner-watermark writer (the trigger only
+        # schedules; it no longer advances at fire-time).
+        watermark.run_id = advance_target.run_id
+        watermark.turn_id = advance_target.turn_id
+        watermark.consumed_ts = advance_target.consumed_ts
+        watermark.save(directory)
         log.info(
-            "memory_consolidation_job session=%s folded=%s watermark=%s:%s",
-            session_id,
-            new_records,
-            watermark.run_id,
-            watermark.turn_id,
+            "memory_consolidation_job session=%s success folded=%r "
+            "watermark=%s:%s ts=%s",
+            session_id, new_records,
+            watermark.run_id, watermark.turn_id, watermark.consumed_ts,
         )
+
+        # Re-render MEMORY.md (and the derived index) only when the fold actually
+        # wrote new facts — a successful 0-record fold changed nothing to render.
+        if new_records and new_records > 0:
+            # Materialize MEMORY.md deterministically from the append-only journal —
+            # the exact render the eviction path and benchmark produce.
+            from ._render import write_render
+
+            write_render(journal, str(Path(directory) / "MEMORY.md"))
+            # Derived index of surviving facts (dedup winners, incremental, pure
+            # derivation from the journal) — regenerated beside MEMORY.md so they
+            # can't disagree. First fold on a journal with pre-existing history
+            # builds the full index (incl. one-time fuzzy collapse).
+            from ._index import update_index
+
+            update_index(directory)
 
     async def _default_consolidate_span(
         self,

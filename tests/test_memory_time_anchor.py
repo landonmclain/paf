@@ -221,11 +221,13 @@ def test_process_job_advances_watermark_on_real_fold(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_owner_trigger_advances_watermark_at_fire_time(tmp_path) -> None:
-    """Fix A: the trigger advances the owner watermark at fire-time like the
-    reviewer, so a legacy no-``consumed_ts`` watermark is upgraded to a
-    time-anchored one the moment it next fires — it can no longer stay stuck
-    in the old format that makes ``should_fire`` return True every turn."""
+def test_owner_trigger_does_not_advance_watermark_before_fold(tmp_path) -> None:
+    """THE WATERMARK CONTRACT: a fold that FAILS must NOT advance the owner
+    watermark. The worker is the sole owner-watermark writer, advancing only on
+    a completed (non-error) fold; a throwing fold leaves the legacy watermark
+    in place so the span retries next cadence instead of being silently
+    skipped. (This is the opposite of the old fire-time advance, which moved
+    the watermark regardless of outcome.)"""
     from tests.test_memory_background_real_store import _msg
 
     msgs: list[ModelMessage] = []
@@ -242,8 +244,9 @@ def test_owner_trigger_advances_watermark_at_fire_time(tmp_path) -> None:
 
     from paf.runtime import Session
 
-    async def noop_fold(messages, directory, wm) -> int:
-        return 0
+    # A fold that raises — simulates a model 400 / timeout / no-response.
+    async def failing_fold(messages, directory, wm) -> int:
+        raise RuntimeError("simulated owner failure (context overflow)")
 
     with Session(
         "assistant",
@@ -251,18 +254,22 @@ def test_owner_trigger_advances_watermark_at_fire_time(tmp_path) -> None:
         resume=False,
         store=store,
         memory_directory=str(memdir),
-        consolidate_span=noop_fold,
+        consolidate_span=failing_fold,
     ) as session:
         for i in range(12):
             session.history.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
         asyncio.run(session._maybe_trigger_consolidation("c1"))
+        q = session.memory_queue
+        assert q is not None
+        await_drain = getattr(q, "drain", None)
+        if await_drain is not None:
+            asyncio.run(await_drain("assistant"))
 
-    # After the trigger (even with a no-op fold), the owner watermark must be
-    # upgraded out of the legacy format: fresh run, a turn, and a consumed_ts.
+    # The failing fold must leave the watermark untouched — legacy position,
+    # no time anchor. The worker did NOT own/advance it.
     wm = MemoryWatermark.load(str(memdir))
-    assert wm.consumed_ts is not None, "trigger must write a time-anchored watermark"
-    assert wm.run_id == "run-a"
-    assert wm.turn_id is not None
+    assert wm.turn_id == 1, "failed fold must not advance the watermark"
+    assert wm.consumed_ts is None, "failed fold must not write a time anchor"
 
 
 def test_consolidate_always_runs_owner_without_durable_text(monkeypatch) -> None:
@@ -312,11 +319,11 @@ def test_consolidate_always_runs_owner_without_durable_text(monkeypatch) -> None
     assert calls, "owner must be invoked even with no durable text (gate removed)"
 
 
-def test_owner_escapes_legacy_watermark_and_folds_real_store(tmp_path) -> None:
-    """End to end (Fix A + B): a legacy no-``consumed_ts`` owner watermark,
-    driven through the real trigger + worker against a real store, is upgraded
-    to a time-anchored watermark AND the fold advances past the old position
-    with journal records — the exact live scenario that was stalled."""
+def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
+    """THE WATERMARK CONTRACT (worker owns it): triggered + drained with a
+    fold that finishes successfully (returns N records, incl. a no-op 0), the
+    worker advances the owner watermark to the folded position with a real
+    ``consumed_ts`` — the trigger alone must NOT have moved it first."""
     from tests.test_memory_background_real_store import _msg
 
     msgs: list[ModelMessage] = []
@@ -332,27 +339,30 @@ def test_owner_escapes_legacy_watermark_and_folds_real_store(tmp_path) -> None:
     memdir.mkdir(exist_ok=True)
     from paf.capabilities.memory._journal import JournalStore
 
-    JournalStore(str(memdir))
+    journal = JournalStore(str(memdir))
     # Legacy owner watermark (the stuck old-format file), consumed up to turn 1.
     MemoryWatermark(run_id="run-a", turn_id=1).save(str(memdir))
 
     from paf.runtime import Session
 
-    async def real_owner_fold(messages, directory, wm) -> int:
-        from paf.capabilities.memory._consolidate import consolidate
-        from paf.capabilities.memory._view import JournalViewStore
-
-        j = JournalStore(directory)
-        before = j.count()
-        await consolidate(
-            messages,
-            store=JournalViewStore(directory),
-            agent_name="assistant",
-            namespace="",
-            keep_tail=0,
-            journal=j,
+    # Deterministic fold: writes exactly 2 records and reports 2. No LLM.
+    async def success_fold(messages, directory, wm) -> int:
+        j2 = JournalStore(directory)
+        j2.append(
+            type="preference",
+            fact="the user prefers coffee",
+            tier="t1",
+            born_on="2026-09-06",
+            source_ref="run-a:1",
         )
-        return j.count() - before
+        j2.append(
+            type="fact",
+            fact="the user works remotely",
+            tier="t1",
+            born_on="2026-09-06",
+            source_ref="run-a:1",
+        )
+        return 2  # the two records just written
 
     with Session(
         "assistant",
@@ -360,14 +370,11 @@ def test_owner_escapes_legacy_watermark_and_folds_real_store(tmp_path) -> None:
         resume=False,
         store=store,
         memory_directory=str(memdir),
-        consolidate_span=real_owner_fold,
+        consolidate_span=success_fold,
     ) as session:
-        topics = ["coffee", "remote work", "dark mode", "python", "gardening",
-                  "hiking", "cooking", "photography", "reading", "cycling",
-                  "chess", "bread"]
-        for t in topics:
+        for t in ["coffee", "remote work", "dark mode"]:
             session.history.extend(_msg(
-                user=f"The user enjoys {t} as a hobby and prefers doing it on weekends",
+                user=f"The user enjoys {t} as a hobby",
                 assistant=f"Recorded the {t} preference.",
             ))
         async def scenario():
@@ -379,8 +386,65 @@ def test_owner_escapes_legacy_watermark_and_folds_real_store(tmp_path) -> None:
         asyncio.run(scenario())
 
     wm = MemoryWatermark.load(str(memdir))
-    assert wm.consumed_ts is not None, "owner watermark must be time-anchored now"
+    # The successful fold (worker) advanced the watermark past legacy turn 1,
+    # carrying a real time anchor — NOT left in the legacy no-consumed_ts form.
+    assert wm.consumed_ts is not None, "worker must set a time anchor on success"
     assert wm.turn_id is not None and wm.turn_id > 1, "must advance past legacy turn 1"
+    assert wm.run_id == "run-a"
+    assert len(journal.read_all()) == 2, "the fold's records must have landed"
+
+
+def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
+    """THE WATERMARK CONTRACT, the key distinction: a fold that COMPLETES but
+    writes no records ("found nothing durable") STILL advances the watermark —
+    completion, not output volume, is what makes the position safe to advance.
+    Only failure/error/no-response holds it back."""
+    from tests.test_memory_background_real_store import _msg
+
+    msgs: list[ModelMessage] = []
+    for _t in ["coffee", "remote work", "dark mode", "python", "gardening",
+               "hiking", "cooking", "photography", "reading", "cycling",
+               "chess", "bread"]:
+        msgs.extend(_msg(
+            user=f"The user enjoys {_t} as a hobby and prefers it on weekends",
+            assistant=f"Recorded the {_t} preference.",
+        ))
+    store = _store(tmp_path, {"run-a": msgs})
+    memdir = tmp_path / "mem"
+    memdir.mkdir(exist_ok=True)
+    from paf.capabilities.memory._journal import JournalStore
+
     journal = JournalStore(str(memdir))
-    rows = journal.read_all()
-    assert len(rows) > 0, "owner must have folded real facts into the journal"
+    MemoryWatermark(run_id="run-a", turn_id=1).save(str(memdir))
+
+    from paf.runtime import Session
+
+    async def nothing_fold(messages, directory, wm) -> int:
+        return 0  # successful no-op: nothing durable found
+
+    with Session(
+        "assistant",
+        trace=False,
+        resume=False,
+        store=store,
+        memory_directory=str(memdir),
+        consolidate_span=nothing_fold,
+    ) as session:
+        for t in ["coffee", "remote work", "dark mode"]:
+            session.history.extend(_msg(
+                user=f"The user enjoys {t} as a hobby",
+                assistant=f"Recorded the {t} preference.",
+            ))
+        async def scenario():
+            await session._maybe_trigger_consolidation("c1")
+            q = session.memory_queue
+            assert q is not None
+            await q.drain("assistant")
+
+        asyncio.run(scenario())
+
+    wm = MemoryWatermark.load(str(memdir))
+    # 0 records + a normal return = success: watermark still advances.
+    assert wm.consumed_ts is not None, "a successful 0-record fold must advance"
+    assert wm.turn_id is not None and wm.turn_id > 1, "must advance past legacy turn 1"
+    assert len(journal.read_all()) == 0, "nothing was written — that's the point"
