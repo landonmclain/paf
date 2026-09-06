@@ -400,6 +400,17 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
                     if t is None:
                         break
                     yield _frame(*t)
+
+            # Turn done: drain any task frames still queued (e.g. a consolidation
+            # process that transitioned running->done just as the turn ended) so
+            # the UI's process row reflects the last known state instead of being
+            # silently dropped. Non-blocking: we only surface frames already
+            # produced; we never wait on the background worker itself.
+            while not task_q.empty():
+                t = task_q.get_nowait()
+                if t is None:
+                    break
+                yield _frame(*t)
         finally:
             # Cooperative teardown: cancel the session's CancellationToken, NOT
             # the turn task directly. turn.cancel() injects asyncio.CancelledError
