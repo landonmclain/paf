@@ -192,3 +192,102 @@ def _mk_user(content: str) -> Any:
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
     return ModelRequest(parts=[UserPromptPart(content=content)])
+
+
+@contextmanager
+def _temp_titles_dir(tmp_path):
+    """Point the titles store's memory dir at a temp path so PATCH/GET title
+    tests never touch the real data/memory dir."""
+    import paf.capabilities.memory._window as win
+
+    def _mfa(agent_: str) -> "sse.Path":
+        return tmp_path / agent_
+
+    old = win.memory_dir_for
+    win.memory_dir_for = _mfa
+    try:
+        yield
+    finally:
+        win.memory_dir_for = old
+
+
+def test_patch_title_persists_and_merges_over_derived(tmp_path, monkeypatch) -> None:
+    """PATCH sets a durable title; GET overlays it over the auto-derived one,
+    and it survives across requests (persistence through the seam)."""
+    _reset_registry()
+    # Live lane with a derived title (from last prompt).
+    key = sse._session_key(sse.DEFAULT_AGENT, "conv-t")
+    sse._sessions[key] = _FakeSession([_mk_user("derived title")])
+    sse._sessions_last_used[key] = 300.0
+
+    with _empty_store(tmp_path, monkeypatch), _temp_titles_dir(tmp_path):
+        client = TestClient(sse.app)
+
+        # Before rename: derived title.
+        body = client.get("/api/conversations").json()
+        assert any(
+            c["conversation_id"] == "conv-t" and c["title"] == "derived title"
+            for c in body["conversations"]
+        )
+
+        # Rename.
+        resp = client.patch("/api/conversations/conv-t", json={"title": "My Rename"})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "My Rename"
+
+        # Merge: the saved title wins over the derived one.
+        body = client.get("/api/conversations").json()
+        lane = next(c for c in body["conversations"] if c["conversation_id"] == "conv-t")
+        assert lane["title"] == "My Rename"
+
+
+def test_patch_title_agent_namespaced(tmp_path, monkeypatch) -> None:
+    """A title set for one agent's lane must not leak into another agent's list."""
+    _reset_registry()
+    # Same conversation id in two agents' lanes.
+    k_a = sse._session_key("agent_a", "share")
+    k_b = sse._session_key("agent_b", "share")
+    sse._sessions_last_used[k_a] = 100.0
+    sse._sessions_last_used[k_b] = 100.0
+
+    with _empty_store(tmp_path, monkeypatch), _temp_titles_dir(tmp_path):
+        client = TestClient(sse.app)
+        client.patch("/api/conversations/share", json={"title": "A's title"}, params={"agent": "agent_a"})
+
+        # agent_a's list shows the rename.
+        body_a = client.get("/api/conversations", params={"agent": "agent_a"}).json()
+        assert any(
+            c["conversation_id"] == "share" and c["title"] == "A's title"
+            for c in body_a["conversations"]
+        )
+        # agent_b's list must NOT show it.
+        body_b = client.get("/api/conversations", params={"agent": "agent_b"}).json()
+        assert any(
+            c["conversation_id"] == "share" and c["title"] != "A's title"
+            for c in body_b["conversations"]
+        )
+
+
+def test_patch_title_clear_restores_derived(tmp_path, monkeypatch) -> None:
+    """Clearing a title (empty string) removes it and the list falls back to the
+    auto-derived title."""
+    _reset_registry()
+    key = sse._session_key(sse.DEFAULT_AGENT, "conv-c")
+    sse._sessions[key] = _FakeSession([_mk_user("origin")])
+    sse._sessions_last_used[key] = 200.0
+
+    with _empty_store(tmp_path, monkeypatch), _temp_titles_dir(tmp_path):
+        client = TestClient(sse.app)
+        client.patch("/api/conversations/conv-c", json={"title": "Temp"})
+        client.patch("/api/conversations/conv-c", json={"title": ""})
+        body = client.get("/api/conversations").json()
+        lane = next(c for c in body["conversations"] if c["conversation_id"] == "conv-c")
+        assert lane["title"] == "origin"  # derived title restored
+
+
+def test_patch_title_requires_title_param(tmp_path, monkeypatch) -> None:
+    _reset_registry()
+    with _empty_store(tmp_path, monkeypatch), _temp_titles_dir(tmp_path):
+        client = TestClient(sse.app)
+        resp = client.patch("/api/conversations/conv-x", json={})
+        assert resp.status_code == 400
