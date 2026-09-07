@@ -28,6 +28,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, status
@@ -103,6 +104,49 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
         _sessions[key] = session
     _sessions_last_used[key] = _now()
     return session
+
+
+# ---------------------------------------------------------------------------
+# Conversation titles store
+#
+# The ONE durable store of user-set conversation names. It is a proper
+# consumer of the shared storage seam (``paf.capabilities._storage``) — not a
+# flat-file-fixed write — so its backend is swappable like any other stored
+# artifact. It is rooted at the memory store root (``data/memory/``), keyed by
+# agent name, kind ``conversation-titles``, which lands at
+# ``data/memory/<agent>/conversation-titles.json`` — the same per-agent,
+# greppable/diffable location chosen earlier, now behind the seam. Keyed by
+# bare conversation_id because the per-agent key already scopes it (namespaced
+# by agent, so a rename can never bleed into another agent's lane of the same
+# id). Survives restarts; default edit is ``write`` (atomic rewrite of the id
+# -> {title, updated_at} map).
+# ---------------------------------------------------------------------------
+
+_TITLES_KIND = "conversation-titles"
+
+
+def _title_store(agent: str) -> "FlatFileStorage":
+    """A seam-backed store rooted at the memory dir, scoped to one agent.
+
+    <memory_root>/<agent>/conversation-titles.json — the same per-agent memory
+    dir layout, now routed through the shared StorageService (FlatFileStorage).
+    """
+    from paf.capabilities._storage import FlatFileStorage
+    from paf.capabilities.memory._window import memory_dir_for
+
+    root = Path(memory_dir_for(agent)).parent
+    return FlatFileStorage(root)
+
+
+def _load_titles(agent: str) -> dict[str, dict[str, Any]]:
+    """Read the agent's titles (None -> {}); never raises."""
+    data = _title_store(agent).read(_TITLES_KIND, agent)
+    return data if isinstance(data, dict) else {}
+
+
+def _save_titles(agent: str, titles: dict[str, dict[str, Any]]) -> None:
+    """Write the agent's titles atomically through the storage seam."""
+    _title_store(agent).write(_TITLES_KIND, agent, titles)
 
 
 def _close_session(key: str) -> None:
@@ -374,8 +418,15 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
         log.warning("store backstop scan failed", exc_info=True)
 
     out = list(by_lane.values())
+
+    # 3. Overlay user-set titles (conversation-titles.json) — the user's rename
+    #    always wins over the auto-derived one, and survives daemon restarts.
+    titles = _load_titles(agent)
     for lane in out:
-        if not lane.get("title"):
+        saved = titles.get(lane["conversation_id"])
+        if saved and isinstance(saved, dict) and saved.get("title"):
+            lane["title"] = saved["title"]
+        elif not lane.get("title"):
             lane["title"] = "New conversation"
     out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
     return {"conversations": out}
@@ -392,6 +443,36 @@ async def create_conversation(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     conversation_id = f"paf-{uuid.uuid4().hex[:12]}"
     _sessions_last_used[_session_key(agent, conversation_id)] = _now()
     return {"conversation_id": conversation_id, "agent": agent}
+
+
+@app.patch("/api/conversations/{conversation_id}")
+async def set_conversation_title(
+    conversation_id: str, body: dict[str, Any], agent: str = DEFAULT_AGENT
+) -> dict[str, Any]:
+    """Set (or clear) a conversation's user-facing title, durably.
+
+    Persists to the per-agent ``conversation-titles.json`` sidecar under the
+    agent's memory directory (``memory_dir_for``), so a rename is exclusive to
+    one agent's lane and survives restarts. A non-empty title replaces the
+    derived one; an empty string clears it back to the auto-derived title.
+    """
+    raw = body.get("title")
+    if raw is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="title required")
+    title = str(raw).strip()
+
+    titles = _load_titles(agent)
+    if title:
+        titles[conversation_id] = {"title": title, "updated_at": _now()}
+    else:
+        titles.pop(conversation_id, None)
+    _save_titles(agent, titles)
+
+    return {
+        "conversation_id": conversation_id,
+        "agent": agent,
+        "title": title or None,
+    }
 
 
 def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIterator[str]:
