@@ -112,29 +112,30 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
 # The ONE durable store of user-set conversation names. It is a proper
 # consumer of the shared storage seam (``paf.capabilities._storage``) — not a
 # flat-file-fixed write — so its backend is swappable like any other stored
-# artifact. It is rooted at the memory store root (``data/memory/``), keyed by
-# agent name, kind ``conversation-titles``, which lands at
-# ``data/memory/<agent>/conversation-titles.json`` — the same per-agent,
-# greppable/diffable location chosen earlier, now behind the seam. Keyed by
-# bare conversation_id because the per-agent key already scopes it (namespaced
-# by agent, so a rename can never bleed into another agent's lane of the same
-# id). Survives restarts; default edit is ``write`` (atomic rewrite of the id
-# -> {title, updated_at} map).
+# artifact. It lives OUTSIDE ``data/memory/`` deliberately: conversation titles
+# are a UI/conversation concern, not agent memory, so they must not be coupled
+# to the memory capability (which can be disabled or re-architected). Home:
+# ``<project_root>/data/conversations/<agent>/conversation-titles.json``.
+# Keyed by bare conversation_id because the per-agent key already scopes it
+# (namespaced by agent, so a rename can never bleed into another agent's lane
+# of the same id). Survives restarts; default edit is ``write`` (atomic
+# rewrite of the id -> {title, updated_at} map).
 # ---------------------------------------------------------------------------
 
 _TITLES_KIND = "conversation-titles"
 
 
 def _title_store(agent: str) -> "FlatFileStorage":
-    """A seam-backed store rooted at the memory dir, scoped to one agent.
+    """A seam-backed store rooted at the neutral conversations dir, per agent.
 
-    <memory_root>/<agent>/conversation-titles.json — the same per-agent memory
-    dir layout, now routed through the shared StorageService (FlatFileStorage).
+    <project_root>/data/conversations/<agent>/conversation-titles.json — a
+    dedicated home that shares NO location or import with the memory
+    capability, routed through the shared StorageService (FlatFileStorage).
     """
     from paf.capabilities._storage import FlatFileStorage
-    from paf.capabilities.memory._window import memory_dir_for
+    from paf.config import PROJECT_ROOT
 
-    root = Path(memory_dir_for(agent)).parent
+    root = PROJECT_ROOT / "data" / "conversations"
     return FlatFileStorage(root)
 
 
@@ -451,9 +452,10 @@ async def set_conversation_title(
 ) -> dict[str, Any]:
     """Set (or clear) a conversation's user-facing title, durably.
 
-    Persists to the per-agent ``conversation-titles.json`` sidecar under the
-    agent's memory directory (``memory_dir_for``), so a rename is exclusive to
-    one agent's lane and survives restarts. A non-empty title replaces the
+    Persists to the per-agent ``conversation-titles.json`` sidecar under
+    ``data/conversations/<agent>/`` — kept OUT of ``data/memory/`` so titles are
+    not coupled to the memory capability — so a rename is exclusive to one
+    agent's lane and survives restarts. A non-empty title replaces the
     derived one; an empty string clears it back to the auto-derived title.
     """
     raw = body.get("title")

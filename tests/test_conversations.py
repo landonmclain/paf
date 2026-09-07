@@ -12,6 +12,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from paf.capabilities._storage import FlatFileStorage
+
 from ui import sse
 
 
@@ -196,19 +198,20 @@ def _mk_user(content: str) -> Any:
 
 @contextmanager
 def _temp_titles_dir(tmp_path):
-    """Point the titles store's memory dir at a temp path so PATCH/GET title
-    tests never touch the real data/memory dir."""
-    import paf.capabilities.memory._window as win
+    """Redirect the conversation-title store to a temp dir so PATCH/GET title
+    tests never touch the real ``data/conversations/`` tree.
 
-    def _mfa(agent_: str) -> "sse.Path":
-        return tmp_path / agent_
-
-    old = win.memory_dir_for
-    win.memory_dir_for = _mfa
+    ``_title_store`` builds a ``FlatFileStorage`` rooted at the project's
+    ``data/conversations`` dir; we swap it for one rooted at ``tmp_path`` so
+    renames write under the test sandbox (storage root is the only thing the
+    seam needs to change — proving the seam is swappable).
+    """
+    real_store = sse._title_store
+    sse._title_store = lambda agent: FlatFileStorage(tmp_path)
     try:
         yield
     finally:
-        win.memory_dir_for = old
+        sse._title_store = real_store
 
 
 def test_patch_title_persists_and_merges_over_derived(tmp_path, monkeypatch) -> None:
