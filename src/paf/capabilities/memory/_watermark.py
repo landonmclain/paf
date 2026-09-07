@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ._atomic import write_atomic
+from paf.capabilities._storage._atomic import write_atomic
 
 _WATERMARK_FILENAME = "memory-watermark.json"
 

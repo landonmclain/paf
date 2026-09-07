@@ -48,7 +48,7 @@ import os
 import threading
 from datetime import UTC, datetime
 
-from ._atomic import write_atomic
+from paf.capabilities._storage._atomic import write_atomic
 
 _JOURNAL_FILENAME = "memory-journal.jsonl"
 

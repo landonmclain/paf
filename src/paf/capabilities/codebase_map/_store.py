@@ -25,8 +25,6 @@ are answered is ``_retrieval.py``'s job. Swapping storage does not make search s
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 import subprocess
 from enum import StrEnum
 from pathlib import Path
@@ -34,33 +32,12 @@ from typing import Any, Protocol
 
 from ._schema import BlockRef
 
-# --- Inlined atomic-write helpers (verbatim from ``memory._atomic``) ---------
-# Kept in-capability so codebase_map has zero coupling to the memory capability
-# (the storage seam must be self-contained: swap the medium, not the neighbor).
-# A plain ``Path.write_text`` on a long JSON artifact can be interrupted midway,
-# leaving a torn file a later read fails on; staging + ``os.replace`` makes the
-# write all-or-nothing on the same filesystem.
-
-def _write_atomic(path: str | Path, content: str) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_name(f".{path.name}.staging")
-    staging.write_text(content, encoding="utf-8")
-    os.replace(staging, path)
-
-
-def _write_json_atomic(path: str | Path, payload: object) -> None:
-    _write_atomic(path, json.dumps(payload, indent=2, ensure_ascii=False))
-
-
-def _read_json(path: str | Path, default: object = None) -> object:
-    path = Path(path)
-    if not path.exists():
-        return default
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return default
+# --- Atomic-write helpers: shared canonical import ---------------------------
+# These were inlined per-capability (verbatim from ``memory._atomic``); the
+# canonical copies now live in ``paf.capabilities._storage._atomic`` and this
+# capability conforms to them. Behavior is byte-identical (staging + ``os.replace``);
+# the storage seam stays self-contained without coupling to any other capability.
+from paf.capabilities._storage._atomic import read_json, write_json_atomic
 
 
 class ArtifactKind(StrEnum):
@@ -265,12 +242,12 @@ class FlatFileStorage:
 
     # -- StorageService protocol --------------------------------------------
     def read(self, kind: ArtifactKind, scan_root: str | Path) -> Any | None:
-        return _read_json(self._path_for(kind, scan_root))
+        return read_json(self._path_for(kind, scan_root))
 
     def write(self, kind: ArtifactKind, scan_root: str | Path, payload: Any) -> None:
         path = self._path_for(kind, scan_root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _write_json_atomic(path, payload)
+        write_json_atomic(path, payload)
 
     def list_scan_roots(self) -> list[Path]:
         """List scan roots that have at least one artifact in their co-located index dir.

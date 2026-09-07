@@ -11,6 +11,11 @@ files.
 already resolved to an absolute path (the ``read_block`` tool resolves the repo-relative
 pointer against ``scan_root`` before crossing the seam) — or callers pass an absolute
 path directly.
+
+``Span``/``BlockRef`` are codebase-map's own schema (its gate tests require them to be
+surfaced as symbols here); the shared ``paf.capabilities._storage._block`` carries the
+same pointer model for other capabilities. Only the atomic-write helpers are conformed
+to the shared seam (see ``_store.py``).
 """
 
 from __future__ import annotations

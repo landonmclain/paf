@@ -49,7 +49,7 @@ import os
 import re
 from datetime import UTC, datetime
 
-from ._atomic import write_atomic
+from paf.capabilities._storage._atomic import write_atomic
 from ._journal import JournalStore, MemoryRecord
 
 _INDEX_FILENAME = "memory-index.json"

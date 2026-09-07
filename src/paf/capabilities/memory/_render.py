@@ -259,7 +259,7 @@ def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
     Returns the rendered markdown. Uses the memory package's atomic writer so a
     crash mid-write never leaves a torn notebook.
     """
-    from ._atomic import write_atomic  # local import keeps top of module import-light
+    from paf.capabilities._storage._atomic import write_atomic  # local import keeps top of module import-light
     from ._overrides import (
         load_overrides,  # local import keeps top of module import-light
     )
