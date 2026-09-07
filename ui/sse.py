@@ -318,28 +318,68 @@ def _last_prompt(session: Session) -> str | None:
 
 @app.get("/api/conversations")
 async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
-    """List known conversation lanes (live registry) for the left sidebar.
+    """List known conversation lanes for the left sidebar, newest first.
 
-    Returns id + last user prompt + last-activity time, newest first. Only live
-    (in-memory) lanes are returned in v1; idle lanes are cheap to re-create on
-    first use, so a store-scan fallback is a later enhancement.
+    Returns id + last user prompt + last-activity time. The result is a UNION of
+    two sources so a sidebar survives daemon restarts:
+
+    1. The live in-memory registry (current titles / last-activity, real-time).
+    2. The persisted step store (``FileStepStore.list_runs``), grouped by
+       conversation id — this is what makes idle/restarted lanes still appear.
+       Only lanes scoped to this agent's profile (``<profile>:<cid>``) are
+       included so CLI/smoke/benchmark/UUID lanes in the shared store are not
+       surfaced.
     """
-    prefix = f"{agent}:"
-    out = []
+    profile = _profile_for(agent)
+    store_prefix = f"{getattr(profile, 'name', agent)}:"
+    agent_prefix = f"{agent}:"
+
+    by_lane: dict[str, dict[str, Any]] = {}
+
+    # 1. Live registry (real-time titles / activity).
     for key, last in _sessions_last_used.items():
-        if not key.startswith(prefix):
+        if not key.startswith(agent_prefix):
             continue
-        conversation_id = key[len(prefix):]
+        conversation_id = key[len(agent_prefix):]
         session = _sessions.get(key)
-        title = _last_prompt(session) if session is not None else None
-        out.append({
+        by_lane[conversation_id] = {
             "conversation_id": conversation_id,
             "agent": agent,
-            "title": title or "New conversation",
+            "title": _last_prompt(session) if session is not None else None,
             "updated_at": last,
-        })
+        }
+
+    # 2. Persisted store backstop (durability across restarts).
+    try:
+        from paf.capabilities.persistence import _build_store
+        store = _build_store()
+        for run in await store.list_runs():
+            cid = run.conversation_id
+            if not cid or not cid.startswith(store_prefix):
+                continue
+            lane_id = cid[len(store_prefix):]
+            started = run.started_at.timestamp() if run.started_at else 0.0
+            cur = by_lane.get(lane_id)
+            if cur is not None and (cur.get("updated_at") or 0) >= started:
+                continue  # live registry already has this lane, at least as fresh
+            by_lane[lane_id] = {
+                "conversation_id": lane_id,
+                "agent": agent,
+                # No live session to read a last prompt from — show the id so
+                # persisted lanes are identifiable, not a generic placeholder.
+                "title": lane_id,
+                "updated_at": started,
+            }
+    except Exception:  # noqa: BLE001 - store scan must never break the endpoint
+        log.warning("store backstop scan failed", exc_info=True)
+
+    out = list(by_lane.values())
+    for lane in out:
+        if not lane.get("title"):
+            lane["title"] = "New conversation"
     out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
     return {"conversations": out}
+
 
 
 @app.post("/api/conversations")
