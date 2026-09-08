@@ -43,6 +43,7 @@ from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
+from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault as _Vault
 from paf.capabilities.visual import Visual as _Visual
 from paf.capabilities.web import Web as _Web
@@ -148,6 +149,24 @@ def _build_memory(
         # It writes only to the override sidecar (never the journal/index).
         overrides=OverrideStore(memory_dir),
     )
+
+
+def _build_thread_summarizer(
+    store, thread_config: dict | None = None, agent_name: str | None = None
+) -> ThreadSummarizer:
+    """Build the ThreadSummarizer shell (Phase 0).
+
+    Phase 0 — the capability is a registration/spec shell with no capture, no
+    background worker, and no in-context injection yet (those land in Phase 1-3).
+    ``store`` (the shared persistence store) and ``thread_config`` (the spec's
+    top-level ``thread_summarizer:`` block, if any) are accepted for a uniform
+    builder signature + forward-compat, but unused for now. `agent_name` will
+    scope the conversation-keyed data/summaries store in Phase 1.
+
+    gated by the profile allowlist exactly like every other builder (the loop
+    skips names not in `profile.capability_names`).
+    """
+    return ThreadSummarizer.from_spec()
 
 
 def _conversation_search_suppressed(store):
@@ -612,6 +631,10 @@ def build_runtime_capabilities(
         # run store, so its builder ignores the arg — but keeping it here means the
         # profile's `Memory` allowlist entry actually gets built (un-gated, live-test beat).
         "Memory": _build_memory,
+        # Per-conversation background thread summarizer (Phase 0 shell; capture/
+        # worker/injection land in later phases). OFF by default — only built
+        # when the profile allowlists it.
+        "ThreadSummarizer": _build_thread_summarizer,
         # Scoped filesystem (paf-owned harness copy) rooted at the project root.
         "FileSystem": _build_filesystem,
         # Shell command execution (paf-owned harness copy) rooted at the project root.
@@ -676,6 +699,11 @@ def build_runtime_capabilities(
             # top-level `memory:` block. The background queue is a separate
             # framework-level service the Memory capability hands values down to.
             capabilities.append(_build_memory(store, memory_config, agent_name))
+        elif name == "ThreadSummarizer":
+            # Phase 0 shell; keeps the (agent_name, future thread_config) wiring
+            # seam ready for the Phase-1 capture hook. Gated by the allowlist
+            # via the loop's `name not in capability_names` continue above.
+            capabilities.append(_build_thread_summarizer(store, None, agent_name))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

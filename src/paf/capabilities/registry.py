@@ -39,6 +39,7 @@ from paf.capabilities.memory import Memory
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
+from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault
 from paf.capabilities.visual import Visual
 from paf.capabilities.web import Web
@@ -70,6 +71,12 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # assistant profile it IS the recall-ladder owner (see profiles.py). Has
     # `from_spec`, so it ALSO resolves declaratively (`- Memory: {...}`).
     "Memory": Memory,
+    # Per-conversation background thread summarizer (eviction-blocks beats) —
+    # INTRA-conversation chronological, distinct from Memory's cross-conversation
+    # semantic facts. Phase 0 shell: registration + spec serializability only;
+    # capture/worker/injection land in later phases. OFF by default (not in the
+    # assistant profile) — the profile allowlist is the ON/OFF switch.
+    "ThreadSummarizer": ThreadSummarizer,
     # Scoped filesystem access (read/write/edit/list/search/find) rooted at a
     # directory, copied verbatim from the harness. Has `get_toolset`/`from_spec`
     # so it resolves declaratively from a spec (`- FileSystem: {root_dir: ...}`)
