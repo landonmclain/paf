@@ -300,6 +300,53 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
     return cfg
 
 
+def _spec_skills_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``skills:`` block into a Skills config dict.
+
+    Mirrors ``_spec_vault_config`` / ``_spec_browser_config``: pydantic-ai's
+    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
+    YAML separately for per-agent skill-library config. The block shape:
+
+        skills:
+          libraries:        # one or more full paths (~ expands); absent -> the
+            - ~/.hermes/skills          # paf-owned data/skills/ default
+            - ~/projects/Personal/skill-library
+          top_k: 3           # optional; default number of point_to_skill pointers
+
+    ``libraries`` are **full absolute paths** (``~`` expanded via
+    ``os.path.expanduser``); each is a directory scanned for ``SKILL.md`` skills
+    and plain ``.md`` notes. ``top_k`` is the default number of
+    ``point_to_skill`` pointer hints returned per call. Unknown keys inside
+    ``skills:`` are ignored so the schema can grow without breaking older spec
+    files.
+
+    Returns a dict (or ``None`` when the block is absent/unreadable). Absent
+    members fall back to their code-level defaults in ``_build_skills`` (whose
+    default library is the paf-owned ``data/skills/`` — no implicit disk
+    scanning beyond what a spec names explicitly).
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("skills")
+    if not isinstance(block, dict):
+        return None
+    cfg: dict[str, object] = {}
+    libraries = block.get("libraries")
+    if isinstance(libraries, list) and libraries:
+        cfg["libraries"] = [os.path.expanduser(str(v)) for v in libraries if str(v)]
+    top_k = block.get("top_k")
+    if isinstance(top_k, int) and not isinstance(top_k, bool) and top_k > 0:
+        cfg["top_k"] = top_k
+    if not cfg:
+        return None
+    return cfg
+
+
 def _spec_memory_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``memory:`` block into a Memory config dict.
 
@@ -566,6 +613,10 @@ def build_agent(
     # vault root (+ optional allow/deny subtree patterns). Absent -> the paf-owned
     # data/vault/ playground default (see _spec_vault_config / _build_vault).
     vault_config = _spec_vault_config(spec_path)
+    # Per-assistant skill library: the spec's top-level `skills:` block names
+    # one or more full-path skill directories (+ optional top_k). Absent -> the
+    # paf-owned data/skills/ default (see _spec_skills_config / _build_skills).
+    skills_config = _spec_skills_config(spec_path)
     # Per-assistant memory config: the spec's top-level `memory:` block tunes
     # the Memory capability (e.g. `consolidate_every` — the background
     # consolidation cadence). Absent -> the Memory capability's code-level
@@ -631,6 +682,7 @@ def build_agent(
             shell_config=shell_config,
             git_config=git_config,
             codebase_map_config=codebase_map_config,
+            skills_config=skills_config,
             agent_name=agent_name,
         ),
         **overrides,

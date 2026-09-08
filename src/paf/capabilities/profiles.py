@@ -154,7 +154,7 @@ DEMO_PROFILE = AgentProfile(
         # list_skills/load_skill keep the prompt thin; point_to_skill pre-arms
         # which skill a message needs (zero-LLM BM25, skill-note-hint re-homed).
         # One paf-native capability for all skill functionality, wired to the
-        # repo's demo_skills/ library.
+        # repo's data/skills/ library.
         "Skills",
         # Framework-level tool-return reduction (BUILTIN, not a paf port) —
         # spills/summarizes/truncates oversized tool results so a giant return
