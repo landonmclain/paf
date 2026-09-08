@@ -28,6 +28,7 @@ from paf.capabilities.thread_summarizer._capture import (
     CapturedMessage,
     EvictionBlock,
     append_eviction_block,
+    capture_eviction_span,
     next_sequence,
     now_iso,
 )
@@ -104,6 +105,9 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
             messages=[CapturedMessage(**r) for r in rows],
         )
         append_eviction_block(self._capture_directory, block)
+        # Trace the eviction *after* the durable append, so a telemetry failure
+        # never loses the record. Nests under the run's paf.run.<cid> root span.
+        capture_eviction_span(block)
 
     @classmethod
     def from_spec(cls, **kwargs: object) -> ThreadSummarizer[AgentDepsT]:

@@ -27,6 +27,7 @@ from paf.capabilities.thread_summarizer._capture import (
     CapturedMessage,
     EvictionBlock,
     append_eviction_block,
+    capture_eviction_span,
     iter_blocks,
     next_sequence,
 )
@@ -289,3 +290,49 @@ def test_demo_profile_ons_capture_and_wires_hook():
     # the attached capability writes to the per-agent capture dir
     summarizer = next(c for c in caps if isinstance(c, ThreadSummarizer))
     assert summarizer.capture_directory.name == "demo_assistant"
+
+
+# --- eviction trace (observability) ---
+
+
+def _tracer(exporter):
+    """An in-memory OTel tracer, mirroring test_observability's helper."""
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    return provider.get_tracer("test")
+
+
+def test_eviction_emits_paf_eviction_span():
+    """capture_eviction_span emits a paf.eviction span with block attributes."""
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    exporter = InMemorySpanExporter()
+    block = EvictionBlock(
+        seq=3,
+        conversation_id="prof:cid",
+        evicted_at="2026-09-08T00:00:00+00:00",
+        keep_messages=2,
+        messages=[
+            CapturedMessage(ref="run-a:0", role="user", text="hi"),
+            CapturedMessage(ref="run-a:0", role="model", text="yo"),
+        ],
+    )
+    capture_eviction_span(block, tracer=_tracer(exporter))
+    exporter.force_flush()
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1, f"expected 1 eviction span, got {len(spans)}"
+    span = spans[0]
+    assert span.name == "paf.eviction"
+    attrs = dict(span.attributes)
+    assert attrs["conversation_id"] == "prof:cid"
+    assert attrs["eviction.seq"] == 3
+    assert attrs["eviction.keep_messages"] == 2
+    assert attrs["eviction.count"] == 2
+    payload = json.loads(attrs["langfuse.observation.input"])
+    assert payload["refs"] == ["run-a:0", "run-a:0"]

@@ -29,12 +29,11 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from paf.capabilities._storage._atomic import write_atomic
 
 EVICTIONS_FILENAME = "evictions.jsonl"
-
-
 @dataclass(frozen=True)
 class CapturedMessage:
     """One evicted message, identified by a stable ``{run_id}:{turn_id}`` ref.
@@ -129,3 +128,49 @@ def iter_blocks(directory: str | os.PathLike) -> list[EvictionBlock]:
         except (json.JSONDecodeError, KeyError, TypeError):
             continue  # skip a corrupt/partial line defensively
     return out
+
+
+def capture_eviction_span(
+    block: EvictionBlock,
+    *,
+    tracer: Any | None = None,
+) -> None:
+    """Emit one ``paf.eviction`` trace span for an eviction (observability).
+
+    Runs *after* the block is durably appended, so the WAL is already correct
+    even if telemetry fails. Because capture fires inside the run's
+    ``paf.run.<conversation_id>`` root span (during ``iter()`` → harness →
+    ``compact()``), the eviction span nests under the *same* trace — Langfuse
+    shows each eviction as a child span of the turn that triggered it, which is
+    exactly the "trace when eviction happens" event we want.
+
+    Attributes mirror the block so evictions are filterable at a glance
+    (``conversation_id``, ``seq``, ``keep_messages``, evicted count) plus the
+    structured payload under ``langfuse.observation.input`` for the I/O column.
+    No-op when tracing is disabled (a no-op tracer) or OTel is not installed —
+    no hard dependency, mirroring ``root_span``. ``tracer`` is injectable for
+    tests (in-memory span capture).
+    """
+    from opentelemetry import trace
+
+    tracer = tracer or trace.get_tracer("paf")
+    span = tracer.start_span(
+        "paf.eviction",
+        attributes={
+            "conversation_id": str(block.conversation_id),
+            "eviction.seq": block.seq,
+            "eviction.keep_messages": block.keep_messages,
+            "eviction.count": len(block.messages),
+            "langfuse.observation.input": json.dumps(
+                {
+                    "conversation_id": block.conversation_id,
+                    "seq": block.seq,
+                    "evicted_at": block.evicted_at,
+                    "keep_messages": block.keep_messages,
+                    "refs": [m.ref for m in block.messages],
+                },
+                default=str,
+            ),
+        },
+    )
+    span.end()
