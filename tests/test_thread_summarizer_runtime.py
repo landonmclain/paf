@@ -50,6 +50,13 @@ def _store(tmp_path: Path, runs: dict[str, list[ModelMessage]], conversation_id:
     """Write a FileStepStore with one run per key, all under one conversation."""
     store = FileStepStore(directory=tmp_path / "store")
     for i, (run_id, msgs) in enumerate(runs.items()):
+        # Stamp run_id on each message the way the persistence layer does, so
+        # the worker can resolve {run_id}:{turn_id} refs from the stored span.
+        for m in msgs:
+            try:
+                m.run_id = run_id
+            except Exception:
+                pass
         asyncio.run(
             store.register_run(
                 RunRecord(
@@ -79,9 +86,8 @@ async def _beats_from_span(span: list, cid: str) -> BeatsRecord:
     refs = [r for r in refs if r is not None]
     return BeatsRecord(
         turns_covered=refs,
-        beats=[Beat(at=refs[0], what="did work", why="grounded in span")] if refs else [],
-        open=[],
-        resumed_from="work",
+        beats=[Beat(at=refs[0], what="did work")] if refs else [],
+        summary="started the work and progressed",
     )
 
 
@@ -100,15 +106,14 @@ def test_trigger_off_does_not_touch_store(tmp_path: Path) -> None:
         assert session._background_tasks == {}
 
 
-def test_trigger_enqueues_past_cadence_and_advances_watermark(tmp_path: Path) -> None:
-    """Past cadence -> trigger resolves the span, worker folds, watermark advances."""
+def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> None:
+    """>= BLOCK_TURNS complete turns -> trigger resolves span, worker folds, advances."""
     msgs: list[ModelMessage] = []
-    for i in range(12):
+    for i in range(11):  # 10 complete turns (turn 10 is the in-flight tip)
         msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
     store = _store(tmp_path, {"run-a": msgs}, "profile:cid")
-    # Note: _store uses started_at ascending; runs[-1] = run-a.
     capture_root = str(tmp_path / "summaries" / "assistant")
-    # force cadence to fire: a fresh watermark (nothing consumed) => should_fire True
+    # fresh watermark => whole backlog is new; 10 complete turns >= BLOCK_TURNS.
     wm_store = ThreadSummaryStore(capture_root, "profile:cid")
     wm_store.directory.mkdir(parents=True, exist_ok=True)
 
@@ -118,40 +123,43 @@ def test_trigger_enqueues_past_cadence_and_advances_watermark(tmp_path: Path) ->
         resume=False,
         store=store,
         thread_summarize_span=_beats_from_span,
-        thread_summarize_every=10,
     ) as session:
         session._thread_capture_root = capture_root
         session._thread_summarizer_enabled = True
 
         async def scenario():
             await session._maybe_trigger_thread_summarize("profile:cid")
-            for tid, t in session._background_tasks.items():
-                print("TASK", tid, t.status, t.detail)
             q = session.thread_summarizer_queue
-            assert q is not None, "cadence reached -> the queue must be constructed"
+            assert q is not None, ">= 10 complete turns -> the queue must be constructed"
             await q.drain("profile:cid")
 
         asyncio.run(scenario())
 
-    # watermark advanced to the last COMPLETE turn folded (turn 10; turn 11 is tip)
+    # watermark advanced to the last COMPLETE turn folded (turn 9; turn 10 is tip)
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.run_id == "run-a"
-    assert wm.turn_id == 10
+    assert wm.turn_id == 9
     assert any(task.status == "done" for task in session._background_tasks.values())
 
+    # exactly one 10-turn block was written (sparse {at,what} beats + a summary)
+    recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
+    assert len(recs) == 1
+    assert len(recs[0].refs) == 10  # deduped to the 10 distinct covered refs
+    assert recs[0].summary != ""
 
-def test_trigger_skips_below_cadence(tmp_path: Path) -> None:
-    """Below cadence -> never enqueues, queue never constructed."""
+
+def test_trigger_skips_below_turn_threshold(tmp_path: Path) -> None:
+    """< BLOCK_TURNS complete turns since the watermark -> never enqueues."""
     msgs: list[ModelMessage] = []
-    for i in range(5):
+    for i in range(11):  # 10 total complete turns, but watermark consumed turn 8
         msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
     store = _store(tmp_path, {"run-a": msgs}, "profile:cid")
     capture_root = str(tmp_path / "summaries" / "assistant")
-    # Fresh watermark would fire; set a "just now" consumed_ts => below 30-min cadence.
+    # watermark at turn 8 => span = turns 9..9 = 1 turn < BLOCK_TURNS => skip.
     store_dir = ThreadSummaryStore(capture_root, "profile:cid").directory
     store_dir.mkdir(parents=True, exist_ok=True)
     MemoryWatermark(
-        run_id="run-a", turn_id=0, consumed_ts=datetime.now(UTC)
+        run_id="run-a", turn_id=8, consumed_ts=datetime.now(UTC)
     ).save(store_dir, filename=THREAD_WATERMARK_FILENAME)
 
     with Session(

@@ -21,13 +21,13 @@ from paf.capabilities.thread_summarizer._store import (
 )
 
 
-def _record(run: str = "run-a", turn: int = 0, cid: str = "p:c1", thread: str = "t") -> ThreadSummaryRecord:
+def _record(run: str = "run-a", turn: int = 0, cid: str = "p:c1", summary: str = "t") -> ThreadSummaryRecord:
     return ThreadSummaryRecord(
         conversation_id=cid,
         run_id=run,
         turn_id=turn,
         summarized_at="2026-09-08T00:00:00+00:00",
-        thread=thread,
+        summary=summary,
         refs=[f"{run}:{turn}"],
     )
 
@@ -50,7 +50,7 @@ def test_summary_append_rejects_wrong_conversation_and_conflicting_duplicate(tmp
     with pytest.raises(ValueError, match="conversation_id"):
         store.append_summary(_record(run="run-b", turn=0, cid="p:c2"))
     with pytest.raises(ValueError, match="different content"):
-        store.append_summary(_record(run="run-a", turn=0, thread="changed"))
+        store.append_summary(_record(run="run-a", turn=0, summary="changed"))
 
 
 def test_summary_append_requires_increasing_anchor(tmp_path) -> None:

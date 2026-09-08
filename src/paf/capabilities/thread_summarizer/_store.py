@@ -52,7 +52,7 @@ def conversation_directory(root: str | os.PathLike, conversation_id: str) -> Pat
 
 @dataclass(frozen=True)
 class ThreadSummaryRecord:
-    """One derived summary for one summarized conversation turn-span.
+    """One derived narrative block for one ~10-turn conversation span.
 
     Anchored by ``{run_id, turn_id}`` — the position the per-conversation
     thread watermark advanced to when this span was successfully summarized —
@@ -64,7 +64,7 @@ class ThreadSummaryRecord:
     run_id: str
     turn_id: int
     summarized_at: str
-    thread: str
+    summary: str
     refs: list[str] = field(default_factory=list)
     beats: list[dict[str, Any]] = field(default_factory=list)
 
@@ -78,7 +78,7 @@ class ThreadSummaryRecord:
             run_id=str(row.get("run_id", "")),
             turn_id=int(row.get("turn_id", -1)),
             summarized_at=str(row["summarized_at"]),
-            thread=str(row.get("thread", "")),
+            summary=str(row.get("summary", "")),
             refs=[str(ref) for ref in row.get("refs", [])],
             beats=list(row.get("beats", [])),
         )
@@ -129,7 +129,7 @@ class ThreadSummaryStore:
             if (prior.run_id, prior.turn_id) == (record.run_id, record.turn_id):
                 same_content = (
                     prior.conversation_id == record.conversation_id
-                    and prior.thread == record.thread
+                    and prior.summary == record.summary
                     and prior.refs == record.refs
                     and prior.beats == record.beats
                 )

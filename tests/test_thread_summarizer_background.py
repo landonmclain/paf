@@ -49,9 +49,8 @@ def _wm(store: ThreadSummaryStore) -> MemoryWatermark:
 def _beats(run: str = "run-a", turn: int = 0) -> BeatsRecord:
     return BeatsRecord(
         turns_covered=[f"{run}:{turn}"],
-        beats=[Beat(at=f"{run}:{turn}", what=f"did {run}:{turn}", why="grounded in span")],
-        open=[],
-        resumed_from=f"{run}:{turn}",
+        beats=[Beat(at=f"{run}:{turn}", what=f"did {run}:{turn}")],
+        summary=f"started {run}:{turn} and progressed",
     )
 
 
@@ -63,7 +62,8 @@ def test_queue_summarizes_span_and_advances_watermark(tmp_path) -> None:
         seen.append(conversation_id)
         return BeatsRecord(
             turns_covered=["run-a:0", "run-a:1"],
-            beats=[Beat(at="run-a:0", what="hello", why="grounded")],
+            beats=[Beat(at="run-a:0", what="hello")],
+            summary="started and progressed",
         )
 
     queue = ThreadSummarizerQueue(capture_root=str(root), summarize_span_fn=summarize)
@@ -190,8 +190,11 @@ def test_queue_status_and_drain_single_worker(tmp_path) -> None:
     asyncio.run(scenario())
 
 
-def _fake_span(n: int) -> list:
-    """A minimal persisted span with ``n`` complete turns (user + assistant)."""
+def _fake_span(n: int, run_id: str = "run-a") -> list:
+    """A minimal persisted span with ``n`` complete turns (user + assistant).
+
+    Messages carry the ``run_id`` stamp the store persists, so refs resolve.
+    """
     from pydantic_ai.messages import (
         ModelRequest,
         ModelResponse,
@@ -201,6 +204,62 @@ def _fake_span(n: int) -> list:
 
     msgs: list = []
     for i in range(n):
-        msgs.append(ModelRequest(parts=[UserPromptPart(content=f"u{i}")]))
-        msgs.append(ModelResponse(parts=[TextPart(f"a{i}")]))
+        req = ModelRequest(parts=[UserPromptPart(content=f"u{i}")])
+        resp = ModelResponse(parts=[TextPart(f"a{i}")])
+        req.run_id = run_id
+        resp.run_id = run_id
+        msgs.append(req)
+        msgs.append(resp)
     return msgs
+
+
+def test_queue_chunks_span_into_10_turn_blocks(tmp_path) -> None:
+    """A >10-turn span is folded as consecutive 10-turn blocks, each its own record.
+
+    The watermark advances only past successfully-summarized blocks, so a 20-turn
+    span yields exactly two 10-turn records and watermarks at the last turn covered.
+    """
+    import asyncio
+
+    root = tmp_path / "assistant"
+    seen_turns: list[int] = []
+
+    async def summarize(span, conversation_id):
+        from paf.capabilities.thread_summarizer._summarize import _ref_for
+
+        seen_turns.append(len(_refs(span)))
+        refs = _refs(span)
+        return BeatsRecord(
+            turns_covered=refs,
+            beats=[Beat(at=refs[0], what="block beat") for _ in refs if refs],
+            summary="a ten-turn block",
+        )
+
+    def _refs(msgs):
+        from paf.capabilities.thread_summarizer._summarize import _ref_for
+
+        return [r for r in (_ref_for(msgs, i) for i in range(len(msgs))) if r][::2]
+
+    queue = ThreadSummarizerQueue(capture_root=str(root), summarize_span_fn=summarize)
+    target = _target(turn=19)
+
+    async def scenario():
+        queue.enqueue(
+            CID,
+            ThreadSummarizeJob(
+                conversation_id=CID,
+                messages=_fake_span(20, run_id="run-a"),
+                watermark=target,
+            ),
+        )
+        await queue.drain(CID)
+
+    asyncio.run(scenario())
+
+    store = ThreadSummaryStore(root, CID)
+    recs = store.existing_summaries()
+    assert len(recs) == 2  # 20 turns -> two 10-turn blocks
+    assert seen_turns == [10, 10]  # the summarize fn saw two 10-turn slices
+    assert {r.run_id for r in recs} == {"run-a"}
+    assert sorted(r.turn_id for r in recs) == [9, 19]  # anchored at each block's last turn
+    assert _wm(store).turn_id == 19  # advanced past the final block

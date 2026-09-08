@@ -95,6 +95,7 @@ from paf.capabilities.memory._window import memory_dir_for
 from paf.capabilities.persistence import _build_store
 from paf.capabilities.thread_summarizer import capture_directory_for
 from paf.capabilities.thread_summarizer._background import (
+    BLOCK_TURNS,
     ThreadSummarizeJob,
     ThreadSummarizerQueue,
 )
@@ -443,7 +444,6 @@ class Session:
         consolidate_span=None,
         thread_summarize_block=None,
         thread_summarize_span=None,
-        thread_summarize_every: int | None = None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how the CLIs pick the default profile
@@ -474,14 +474,9 @@ class Session:
         # Review cadence defaults to the owner's cadence when a config/stub only
         # provides `consolidate_every` (defensive against partial mock configs).
         self.review_every = _mem_cfg.get("review_every", self.consolidate_every)
-        # Thread-summarize cadence mirrors the memory owner's TIME cadence. A
-        # profile may override with `thread_summarize_every` (minutes); default
-        # to the consolidation cadence so a conversation summarizes no less
-        # often than memory folds its agent.
-        self.thread_summarize_every = (
-            thread_summarize_every if thread_summarize_every is not None
-            else getattr(profile, "thread_summarize_every", self.consolidate_every)
-        )
+        # Thread-summarize cadence is TURN-based (BLOCK_TURNS complete turns
+        # after the per-conversation watermark), not time — see
+        # _maybe_trigger_thread_summarize. No knob: the block size is the gate.
         # Background memory consolidation is the sole memory writer and just RUNS
         # when memory is built for the agent — there is no opt-in flag. The store
         # directory defaults to the per-agent scope (<MEMORY_DIR>/<agent_name>/,
@@ -825,16 +820,20 @@ class Session:
         Mirror of ``_maybe_trigger_consolidation``, but scoped by CONVERSATION,
         not agent: resolve this conversation's unseen turn-span (the portion
         strictly newer than its per-conversation ``MemoryWatermark``), gate on
-        the ``thread_summarize_every`` cadence, single-flight, and hand the
-        PRE-RESOLVED span to the worker. The trigger SCHEDULES only; the worker
-        is the sole per-conversation watermark writer and advances only on a
-        completed (non-error) summarize pass — a failed pass leaves the
-        watermark behind so the span is retried next cadence, never skipped.
+        a TURN COUNT (>= ``BLOCK_TURNS`` complete turns), single-flight, and
+        hand the PRE-RESOLVED span to the worker. The trigger SCHEDULES only;
+        the worker is the sole per-conversation watermark writer and advances
+        only on a completed (non-error) summarize pass — a failed pass leaves
+        the watermark behind so the span is retried next cadence, never skipped.
 
-        Two conversations never share a watermark or cross-summarize: each loads
-        its ``MemoryWatermark`` from its own ``conversations/<hash(cid)>/`` dir,
-        and ``resolve_unseen_span(conversation_id=cid)`` only folds that cid's
-        runs. ``cid`` is already profile-scoped by ``_scoped_cid``.
+        Unlike Memory's TIME cadence, the thread summarizer fires on a TURN
+        COUNT: it only enqueues once at least ``BLOCK_TURNS`` (10) COMPLETE
+        turns have accumulated since the watermark, so a 1-turn trailing thread
+        never triggers a useless 1-turn block. Two conversations never share a
+        watermark or cross-summarize: each loads its ``MemoryWatermark`` from
+        its own ``conversations/<hash(cid)>/`` dir and
+        ``resolve_unseen_span(conversation_id=cid)`` folds only that cid's runs.
+        ``cid`` is already profile-scoped by ``_scoped_cid``.
         """
         if not self._thread_summarizer_enabled or cid is None:
             return
@@ -862,13 +861,23 @@ class Session:
             wm = MemoryWatermark.load(
                 store.directory, run_id=tip_run, filename=THREAD_WATERMARK_FILENAME
             )
-            if not should_fire(
+            # Resolve the unseen span for THIS conversation now; hand the worker
+            # precomputed material so it summarizes exactly what was scheduled.
+            span = await resolve_unseen_span(
+                SnapshotHistorySource(self._store),
                 wm,
-                tip_ts=runs[-1].started_at,
-                every=timedelta(minutes=self.thread_summarize_every),
-            ):
+                tip_run=tip_run,
+                tip_turn=tip_turn,
+                conversation_id=cid,
+            )
+            # TURN-COUNT gate (the thread-specific cadence). A block is only
+            # worth producing once >= BLOCK_TURNS complete turns accumulated;
+            # fewer and the narration is noise, not a thread. Gate BEFORE the
+            # queue is constructed so a skip never creates one.
+            span_turns = len(user_anchor_indices(span.messages)) if span.messages else 0
+            if span_turns < BLOCK_TURNS:
                 task.status = SKIPPED
-                task.detail = "not past the thread-summarize cadence"
+                task.detail = f"only {span_turns} unsettled turn(s); need >= {BLOCK_TURNS}"
                 self._publish_task(task)
                 return
             # Single-flight: skip if a thread summarize is already queued/running.
@@ -879,15 +888,6 @@ class Session:
                 task.detail = "thread summarization already in flight"
                 self._publish_task(task)
                 return
-            # Resolve the unseen span for THIS conversation now; hand the worker
-            # precomputed material so it summarizes exactly what was scheduled.
-            span = await resolve_unseen_span(
-                SnapshotHistorySource(self._store),
-                wm,
-                tip_run=tip_run,
-                tip_turn=tip_turn,
-                conversation_id=cid,
-            )
             queue.enqueue(
                 cid,
                 ThreadSummarizeJob(

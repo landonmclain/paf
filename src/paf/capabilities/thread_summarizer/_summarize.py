@@ -1,30 +1,50 @@
-"""Structured, off-path thread-beat summarization over a conversation turn span."""
+"""Structured, off-path thread summarization over a conversation turn span.
+
+Produces **10-turn narrative blocks**: for each block of ~ten complete turns a
+single (structured-output) model pass emits sparse ``{at, what}`` beats plus a
+dense ``summary`` sentence (the block's narrative arc). Receipts cite the exact
+``{run_id}:{turn_id}`` refs; a validator cross-checks every beat ref against the
+span so "cited" is provable, not prompt-trust.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from paf.capabilities._turns import user_anchor_indices
 
 
 class Beat(BaseModel):
-    """One chronological, receipt-backed event from the summarized span."""
+    """One sparse, receipt-backed marker in a thread block."""
 
-    at: str = Field(description="The exact {run_id}:{turn_id} source ref.")
-    what: str = Field(description="What happened in this span, without speculation.")
-    why: str = Field(description="Why it mattered in the thread, only if grounded in the span.")
+    at: str = Field(description="The exact {run_id}:{turn_id} ref of the turn this marks.")
+    what: str = Field(description="What happened at that turn, in a few words, without speculation.")
 
 
 class BeatsRecord(BaseModel):
-    """The durable structured output of one thread summarization pass."""
+    """The structured output of one 10-turn block summarization pass."""
 
     turns_covered: list[str] = Field(default_factory=list)
     beats: list[Beat] = Field(default_factory=list)
-    open: list[str] = Field(default_factory=list)
-    resumed_from: str = ""
+    summary: str = Field(
+        default="",
+        description=(
+            "A single dense sentence capturing this block's narrative arc "
+            "(started on X, hit Y, landed on Z). Not a per-beat restatement."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _refs_grounded(self) -> "BeatsRecord":
+        """Every beat must cite a real covered ref — receipts are non-negotiable."""
+        covered = set(self.turns_covered)
+        bad = [b.at for b in self.beats if b.at not in covered]
+        if bad:
+            raise ValueError(f"beat(s) cite refs not in turns_covered: {bad}")
+        return self
 
 
 SummarizeSpan = Callable[[list, str], Awaitable[BeatsRecord]]
@@ -45,22 +65,16 @@ def _ref_for(messages: list, idx: int) -> str | None:
 class SummarizerPrompt:
     """Prompt material passed to the background summarizer agent.
 
-    Input is the CONVERSATION TURN SPAN (a list of persisted ``ModelMessage``),
+    Input is one ~10-turn CONVERSATION block (a list of persisted ``ModelMessage``),
     rendered via the curated extraction — user prompts + turn-closing final
     answers only, with thinking / mid-step tool narration dropped (see
-    ``paf.capabilities._window._first_text``). The store is the lossless source
-    of truth, so it does not matter whether a turn is still in context: whatever
-    is unsummarized since the watermark gets summarized here.
+    ``paf.capabilities._window._first_text``).
     """
 
     span: list
     conversation_id: str | None
 
     def render(self) -> str:
-        # NOTE: iterate the CURATED text once so the prompt stays bounded — a
-        # tool-heavy turn collapses from ~15KB of narration to a short user +
-        # final-answer pair. Non-durable messages (thinking/intermediate/tool
-        # returns) render as nothing and are skipped for the model.
         from paf.capabilities._window import _first_text
 
         lines: list[str] = []
@@ -73,16 +87,18 @@ class SummarizerPrompt:
             lines.append(f"[{ref or 'unanchored'}] {role}: {text}")
         messages = "\n".join(lines)
         return (
-            "Summarize this conversation turn-span as chronological episodic beats. "
-            "Do not infer facts or current state beyond these messages. Every beat must cite "
-            "an exact source ref from the span. Return the requested structured BeatsRecord.\n\n"
+            "Summarize this block of conversation turns as a short narrative thread. "
+            "Do not infer facts beyond these messages. Output: a compact set of "
+            "{at, what} beats (at = the exact source ref, what = a few words) and one "
+            "dense `summary` sentence capturing the arc — started on X, hit Y, landed on Z. "
+            "Every `at` must be one of the refs this block covers.\n\n"
             f"Conversation: {self.conversation_id}\n"
             f"Messages:\n{messages}"
         )
 
 
 async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord:
-    """Run the real structured summarizer agent over a conversation turn span."""
+    """Run the real structured summarizer agent over one conversation block."""
     from pydantic_ai import Agent
 
     from paf.capabilities.memory._consolidate import (
