@@ -34,8 +34,8 @@ def _turns(*labels: str) -> list[ModelMessage]:
     return msgs
 
 
-def _resolve(span_source, wm, tip_run, tip_turn):
-    return resolve_unseen_span(span_source, wm, tip_run=tip_run, tip_turn=tip_turn)
+def _resolve(span_source, wm, tip_run, tip_turn, **kw):
+    return resolve_unseen_span(span_source, wm, tip_run=tip_run, tip_turn=tip_turn, **kw)
 
 
 def _user_texts(messages) -> set[str]:
@@ -448,3 +448,52 @@ def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
     assert wm.consumed_ts is not None, "a successful 0-record fold must advance"
     assert wm.turn_id is not None and wm.turn_id > 1, "must advance past legacy turn 1"
     assert len(journal.read_all()) == 0, "nothing was written — that's the point"
+
+
+def test_resolve_unseen_span_filters_by_conversation(tmp_path) -> None:
+    """With a `conversation_id` filter, only that conversation's runs are folded.
+
+    Memory's owner folds cross-conversation (None = all runs); the thread
+    summarizer is strictly per-conversation, so it passes its scoped
+    ``{profile}:{cid}``. Two conversations sharing the store must never bleed
+    into one another's span.
+    """
+    from datetime import UTC, datetime
+
+    from pydantic_ai_harness.conversation_search import SnapshotHistorySource
+    from pydantic_ai_harness.step_persistence import FileStepStore
+    from pydantic_ai_harness.step_persistence._types import (
+        ContinuableSnapshot,
+        RunRecord,
+    )
+
+    store = FileStepStore(directory=tmp_path)
+    runs_by_conv = {
+        "prof:cA": {"a0": _turns("a0", "a1"),
+                    "a1": _turns("a2")},
+        "prof:cB": {"b0": _turns("b0", "b1")},
+    }
+    idx = 0
+    for conv, runs in runs_by_conv.items():
+        for run_id, msgs in runs.items():
+            asyncio.run(store.register_run(RunRecord(
+                run_id=run_id, conversation_id=conv,
+                started_at=datetime(2026, 1, 1 + idx, tzinfo=UTC),
+            )))
+            asyncio.run(store.save_snapshot(ContinuableSnapshot(
+                run_id=run_id, step_index=0, conversation_id=conv, messages=msgs,
+            )))
+            idx += 1
+    src = SnapshotHistorySource(store)
+    wm = MemoryWatermark()
+
+    # Conversation-filtered: only cA's runs are folded (tip = a1's round of a2).
+    span_a = asyncio.run(_resolve(src, wm, tip_run="a1", tip_turn=0, conversation_id="prof:cA"))
+    a_texts = _user_texts(span_a.messages)
+    assert "a0" in a_texts and "a1" in a_texts
+    assert "b0" not in a_texts, "conversation B must not bleed into A's span"
+
+    span_b = asyncio.run(_resolve(src, MemoryWatermark(), tip_run="b0", tip_turn=1, conversation_id="prof:cB"))
+    b_texts = _user_texts(span_b.messages)
+    assert "b0" in b_texts
+    assert not (a_texts & b_texts), "conversation A and B spans must be disjoint"

@@ -1,14 +1,18 @@
 """Per-conversation thread summarizer — the ``ThreadSummarizer`` capability.
 
 Distinct from ``Memory`` (cross-conversation durable-fact extraction): the thread
-summarizer is **intra-conversation chronological beats** over eviction blocks —
-\"what this conversation was doing and how it evolved,\" ordered and
-`(run, turn)`-anchored, so it does not duplicate memory's semantic axis.
+summarizer is **intra-conversation chronological beats** — *what this
+conversation was doing and how it evolved*, ordered and `(run, turn)`-anchored,
+so it does not duplicate memory's semantic axis.
 
-Phase 1 ships eviction **capture**: each ``TurnBoundSlidingWindow`` eviction is
-appended as an immutable, ``conversation_id``-tagged ``EvictionBlock`` to the
-per-agent WAL (``data/summaries/<agent>/evictions.jsonl``). The background
-``beats`` worker and any in-context presentation land in Phases 2-3.
+The summarizer is an independent, separately-enabled capability driven by the
+same cadence + watermark machinery as Memory's owner, but keyed by
+**conversation** (``{profile}:{cid}``), not agent. The runtime trigger resolves
+the unsummarized turn-span directly from the persisted step store
+(``resolve_unseen_span(conversation_id=...)``), the worker summarizes the
+curated user-prompt + final-answer span, and advances a per-conversation
+``MemoryWatermark`` on success. There is no eviction WAL (re-architecture note,
+2026-09-08).
 """
 
 from __future__ import annotations

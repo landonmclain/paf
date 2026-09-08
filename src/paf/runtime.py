@@ -98,7 +98,10 @@ from paf.capabilities.thread_summarizer._background import (
     ThreadSummarizeJob,
     ThreadSummarizerQueue,
 )
-from paf.capabilities.thread_summarizer._store import ThreadSummaryStore
+from paf.capabilities.thread_summarizer._store import (
+    THREAD_WATERMARK_FILENAME,
+    ThreadSummaryStore,
+)
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -439,6 +442,8 @@ class Session:
         memory_directory: str | None = None,
         consolidate_span=None,
         thread_summarize_block=None,
+        thread_summarize_span=None,
+        thread_summarize_every: int | None = None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how the CLIs pick the default profile
@@ -469,6 +474,14 @@ class Session:
         # Review cadence defaults to the owner's cadence when a config/stub only
         # provides `consolidate_every` (defensive against partial mock configs).
         self.review_every = _mem_cfg.get("review_every", self.consolidate_every)
+        # Thread-summarize cadence mirrors the memory owner's TIME cadence. A
+        # profile may override with `thread_summarize_every` (minutes); default
+        # to the consolidation cadence so a conversation summarizes no less
+        # often than memory folds its agent.
+        self.thread_summarize_every = (
+            thread_summarize_every if thread_summarize_every is not None
+            else getattr(profile, "thread_summarize_every", self.consolidate_every)
+        )
         # Background memory consolidation is the sole memory writer and just RUNS
         # when memory is built for the agent — there is no opt-in flag. The store
         # directory defaults to the per-agent scope (<MEMORY_DIR>/<agent_name>/,
@@ -483,7 +496,7 @@ class Session:
         )
         self._thread_capture_root = str(capture_directory_for(self.agent_name))
         self._thread_queue: ThreadSummarizerQueue | None = None
-        self._thread_summarize_block = thread_summarize_block
+        self._thread_summarize_span = thread_summarize_span if thread_summarize_span is not None else thread_summarize_block
         self._thread_summarizer_seq = 0
         self._review_watermark_path = (
             self._memory_directory.rstrip("/\\") + "/memory-review-watermark.json"
@@ -787,7 +800,7 @@ class Session:
         if self._thread_queue is None:
             self._thread_queue = ThreadSummarizerQueue(
                 capture_root=self._thread_capture_root,
-                summarize_block_fn=self._thread_summarize_block,
+                summarize_span_fn=self._thread_summarize_span,
                 on_complete=self._complete_thread_summarize,
             )
         return self._thread_queue
@@ -807,36 +820,86 @@ class Session:
                 self._publish_task(task)
 
     async def _maybe_trigger_thread_summarize(self, cid: str | None) -> None:
-        """Enqueue thread summarization when this conversation has WAL backlog.
+        """Fire conversation-scoped thread summarization on its own cadence.
 
-        The capture WAL is append-only and authoritative. This trigger only
-        observes a gap and schedules work; the queue is the sole watermark writer.
-        Profiles without ThreadSummarizer return before touching the store.
+        Mirror of ``_maybe_trigger_consolidation``, but scoped by CONVERSATION,
+        not agent: resolve this conversation's unseen turn-span (the portion
+        strictly newer than its per-conversation ``MemoryWatermark``), gate on
+        the ``thread_summarize_every`` cadence, single-flight, and hand the
+        PRE-RESOLVED span to the worker. The trigger SCHEDULES only; the worker
+        is the sole per-conversation watermark writer and advances only on a
+        completed (non-error) summarize pass — a failed pass leaves the
+        watermark behind so the span is retried next cadence, never skipped.
+
+        Two conversations never share a watermark or cross-summarize: each loads
+        its ``MemoryWatermark`` from its own ``conversations/<hash(cid)>/`` dir,
+        and ``resolve_unseen_span(conversation_id=cid)`` only folds that cid's
+        runs. ``cid`` is already profile-scoped by ``_scoped_cid``.
         """
         if not self._thread_summarizer_enabled or cid is None:
             return
         self._thread_summarizer_seq += 1
         task_id = f"thread_summarize.{cid}.{self._thread_summarizer_seq}"
         task = BackgroundTask(id=task_id, label=f"Summarizing thread ({cid})")
-        self._publish_task(task)
+        self._publish_task(task)  # queued
         try:
-            store = ThreadSummaryStore(self._thread_capture_root, cid)
-            if not store.pending_blocks():
+            runs = await self._store.list_runs(conversation_id=cid)
+            if not runs:
                 task.status = SKIPPED
-                task.detail = "no pending eviction blocks"
+                task.detail = "no persisted runs yet"
                 self._publish_task(task)
                 return
+            tip_run = runs[-1].run_id
+            tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+            anchors = user_anchor_indices(tip_history)
+            if not anchors:
+                task.status = SKIPPED
+                task.detail = "no persisted turns"
+                self._publish_task(task)
+                return
+            tip_turn = len(anchors) - 1
+            store = ThreadSummaryStore(self._thread_capture_root, cid)
+            wm = MemoryWatermark.load(
+                store.directory, run_id=tip_run, filename=THREAD_WATERMARK_FILENAME
+            )
+            if not should_fire(
+                wm,
+                tip_ts=runs[-1].started_at,
+                every=timedelta(minutes=self.thread_summarize_every),
+            ):
+                task.status = SKIPPED
+                task.detail = "not past the thread-summarize cadence"
+                self._publish_task(task)
+                return
+            # Single-flight: skip if a thread summarize is already queued/running.
             queue = self._ensure_thread_summarizer_queue()
-            status = queue.status(cid)
-            if status.queued > 0 or status.running:
+            cst = queue.status(cid)
+            if cst.queued > 0 or cst.running:
                 task.status = SKIPPED
                 task.detail = "thread summarization already in flight"
                 self._publish_task(task)
                 return
-            queue.enqueue(cid, ThreadSummarizeJob(cid))
-            task.status = PROCESSING
-            self._publish_task(task)
-        except Exception as exc:  # trigger must never break the completed turn
+            # Resolve the unseen span for THIS conversation now; hand the worker
+            # precomputed material so it summarizes exactly what was scheduled.
+            span = await resolve_unseen_span(
+                SnapshotHistorySource(self._store),
+                wm,
+                tip_run=tip_run,
+                tip_turn=tip_turn,
+                conversation_id=cid,
+            )
+            queue.enqueue(
+                cid,
+                ThreadSummarizeJob(
+                    conversation_id=cid,
+                    messages=span.messages,
+                    watermark=span.watermark,
+                ),
+            )
+            if self._background_tasks.get(task_id) is not None:
+                task.status = PROCESSING  # job handed to the worker
+                self._publish_task(task)
+        except Exception as exc:  # trigger path itself failed (rare); never break the turn
             task.status = ERROR
             task.detail = str(exc)
             self._publish_task(task)

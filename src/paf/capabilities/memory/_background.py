@@ -81,6 +81,7 @@ async def resolve_unseen_span(
     *,
     tip_run: str,
     tip_turn: int,
+    conversation_id: str | None = None,
 ) -> ResolvedSpan:
     """Resolve the persisted span the owner hasn't yet consumed — **full turns only**.
 
@@ -96,6 +97,13 @@ async def resolve_unseen_span(
     turn — so only finished turns enter the journal. A single-turn transcript
     therefore folds nothing.
 
+    When ``conversation_id`` is given, ONLY runs belonging to that conversation
+    are considered (``run.conversation_id == conversation_id``). Memory's owner
+    folds cross-conversation per agent (``None`` = all runs, the default); the
+    thread summarizer is strictly per-conversation and passes its scoped
+    ``{profile}:{cid}`` here so one conversation's beats never bleed into
+    another's.
+
     The watermark is a ``{run_id, turn_id}`` ref (see ``_watermark.py``):
       - runs strictly before the watermark's run: fully consumed, skipped;
       - the watermark's run: turns ``<= turn_id`` consumed, the tail is new;
@@ -107,6 +115,9 @@ async def resolve_unseen_span(
     anchors the watermark**; no timestamp is required (per design).
     """
     runs = await source.list_runs()
+
+    if conversation_id is not None:
+        runs = [r for r in runs if getattr(r, "conversation_id", None) == conversation_id]
 
     tip_idx = next(
         (i for i, r in enumerate(runs) if r.run_id == tip_run),

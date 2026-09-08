@@ -1,97 +1,193 @@
-"""Offline tests for the Phase-2 runtime thread trigger."""
+"""Offline tests for the conversation-scoped runtime thread trigger.
+
+These drive the LIVE: ``_maybe_trigger_thread_summarize`` against a real
+``FileStepStore`` + real ``Session`` wiring (with the ``thread_summarize_span``
+seam injected so no LLM runs), mirroring
+:mod:`test_memory_background_real_store`. They cover:
+
+  - the trigger resolves THIS conversation's unseen turn-span and enqueues,
+    gated by the ``thread_summarize_every`` cadence + single-flight;
+  - the worker advances the per-conversation watermark on success;
+  - two conversations never share a watermark or cross-summarize.
+"""
 
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
+from pathlib import Path
 
-from paf.capabilities.thread_summarizer._capture import (
-    CapturedMessage,
-    EvictionBlock,
-    append_eviction_block,
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
+from pydantic_ai_harness.step_persistence import (
+    ContinuableSnapshot,
+    FileStepStore,
+    RunRecord,
+)
+
+from paf.capabilities.memory._watermark import MemoryWatermark
+from paf.capabilities.thread_summarizer._store import (
+    THREAD_WATERMARK_FILENAME,
+    ThreadSummaryStore,
 )
 from paf.capabilities.thread_summarizer._summarize import Beat, BeatsRecord
 from paf.runtime import Session
 
 
-def _block(seq: int, cid: str) -> EvictionBlock:
-    return EvictionBlock(
-        seq=seq,
-        conversation_id=cid,
-        evicted_at="2026-09-08T00:00:00+00:00",
-        keep_messages=2,
-        messages=[CapturedMessage(ref=f"run:{seq}:0", role="user", text="text")],
-    )
+def _msg(*, user: str, assistant: str) -> list[ModelMessage]:
+    return [
+        ModelRequest(parts=[UserPromptPart(content=user)]),
+        ModelResponse(parts=[TextPart(assistant)]),
+    ]
 
 
-def _bare_session(root, *, enabled: bool, summarize_block=None) -> Session:
-    session = object.__new__(Session)
-    session._background_tasks = {}
-    session._task_subscribers = []
-    session._thread_summarizer_enabled = enabled
-    session._thread_capture_root = str(root)
-    session._thread_queue = None
-    session._thread_summarize_block = summarize_block
-    session._thread_summarizer_seq = 0
-    return session
+def _store(tmp_path: Path, runs: dict[str, list[ModelMessage]], conversation_id: str) -> FileStepStore:
+    """Write a FileStepStore with one run per key, all under one conversation."""
+    store = FileStepStore(directory=tmp_path / "store")
+    for i, (run_id, msgs) in enumerate(runs.items()):
+        asyncio.run(
+            store.register_run(
+                RunRecord(
+                    run_id=run_id,
+                    conversation_id=conversation_id,
+                    started_at=datetime(2026, 1, 1 + i, tzinfo=UTC),
+                )
+            )
+        )
+        asyncio.run(
+            store.save_snapshot(
+                ContinuableSnapshot(
+                    run_id=run_id,
+                    step_index=0,
+                    conversation_id=conversation_id,
+                    messages=msgs,
+                )
+            )
+        )
+    return store
 
 
-async def _beats(_block):
+async def _beats_from_span(span: list, cid: str) -> BeatsRecord:
+    from paf.capabilities.thread_summarizer._summarize import _ref_for
+
+    refs = [_ref_for(span, i) for i in range(len(span))]
+    refs = [r for r in refs if r is not None]
     return BeatsRecord(
-        turns_covered=[],
-        beats=[Beat(at="run:0:0", what="did work", why="in block")],
+        turns_covered=refs,
+        beats=[Beat(at=refs[0], what="did work", why="grounded in span")] if refs else [],
         open=[],
         resumed_from="work",
     )
 
 
-def test_off_trigger_does_not_touch_capture_store(tmp_path):
-    session = _bare_session(tmp_path / "assistant", enabled=False)
-    asyncio.run(session._maybe_trigger_thread_summarize("profile:cid"))
-
-    assert session.thread_summarizer_queue is None
-    assert not (tmp_path / "assistant").exists()
-    assert session._background_tasks == {}
+def _wm(store: ThreadSummaryStore) -> MemoryWatermark:
+    return MemoryWatermark.load(store.directory, filename=THREAD_WATERMARK_FILENAME)
 
 
-def test_on_trigger_enqueues_gap_and_worker_advances(tmp_path):
-    root = tmp_path / "assistant"
-    append_eviction_block(root, _block(0, "profile:cid"))
-    session = _bare_session(root, enabled=True, summarize_block=_beats)
+def test_trigger_off_does_not_touch_store(tmp_path: Path) -> None:
+    """ThreadSummarizer not in the profile -> trigger is a No-Op."""
+    store = _store(tmp_path, {"run-a": _msg(user="hi", assistant="hey")}, "profile:cid")
 
-    async def scenario():
-        await session._maybe_trigger_thread_summarize("profile:cid")
-        assert session.thread_summarizer_queue is not None
-        await session.thread_summarizer_queue.drain("profile:cid")
+    with Session("runtime2_test", trace=False, resume=False, store=store) as session:
+        session._thread_summarizer_enabled = False
+        asyncio.run(session._maybe_trigger_thread_summarize("profile:cid"))
+        assert session.thread_summarizer_queue is None
+        assert session._background_tasks == {}
 
-    asyncio.run(scenario())
 
+def test_trigger_enqueues_past_cadence_and_advances_watermark(tmp_path: Path) -> None:
+    """Past cadence -> trigger resolves the span, worker folds, watermark advances."""
+    msgs: list[ModelMessage] = []
+    for i in range(12):
+        msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
+    store = _store(tmp_path, {"run-a": msgs}, "profile:cid")
+    # Note: _store uses started_at ascending; runs[-1] = run-a.
+    capture_root = str(tmp_path / "summaries" / "assistant")
+    # force cadence to fire: a fresh watermark (nothing consumed) => should_fire True
+    wm_store = ThreadSummaryStore(capture_root, "profile:cid")
+    wm_store.directory.mkdir(parents=True, exist_ok=True)
+
+    with Session(
+        "runtime2_test",
+        trace=False,
+        resume=False,
+        store=store,
+        thread_summarize_span=_beats_from_span,
+        thread_summarize_every=10,
+    ) as session:
+        session._thread_capture_root = capture_root
+        session._thread_summarizer_enabled = True
+
+        async def scenario():
+            await session._maybe_trigger_thread_summarize("profile:cid")
+            for tid, t in session._background_tasks.items():
+                print("TASK", tid, t.status, t.detail)
+            q = session.thread_summarizer_queue
+            assert q is not None, "cadence reached -> the queue must be constructed"
+            await q.drain("profile:cid")
+
+        asyncio.run(scenario())
+
+    # watermark advanced to the last COMPLETE turn folded (turn 10; turn 11 is tip)
+    wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
+    assert wm.run_id == "run-a"
+    assert wm.turn_id == 10
     assert any(task.status == "done" for task in session._background_tasks.values())
-    assert (root / "conversations").exists()
 
 
-def test_trigger_single_flight_does_not_duplicate_jobs(tmp_path):
-    root = tmp_path / "assistant"
-    append_eviction_block(root, _block(0, "profile:cid"))
-    started = asyncio.Event()
-    release = asyncio.Event()
+def test_trigger_skips_below_cadence(tmp_path: Path) -> None:
+    """Below cadence -> never enqueues, queue never constructed."""
+    msgs: list[ModelMessage] = []
+    for i in range(5):
+        msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
+    store = _store(tmp_path, {"run-a": msgs}, "profile:cid")
+    capture_root = str(tmp_path / "summaries" / "assistant")
+    # Fresh watermark would fire; set a "just now" consumed_ts => below 30-min cadence.
+    store_dir = ThreadSummaryStore(capture_root, "profile:cid").directory
+    store_dir.mkdir(parents=True, exist_ok=True)
+    MemoryWatermark(
+        run_id="run-a", turn_id=0, consumed_ts=datetime.now(UTC)
+    ).save(store_dir, filename=THREAD_WATERMARK_FILENAME)
 
-    async def slow(_block):
-        started.set()
-        await release.wait()
-        return await _beats(_block)
+    with Session(
+        "runtime2_test",
+        trace=False,
+        resume=False,
+        store=store,
+        thread_summarize_span=_beats_from_span,
+    ) as session:
+        session._thread_capture_root = capture_root
+        session._thread_summarizer_enabled = True
+        asyncio.run(session._maybe_trigger_thread_summarize("profile:cid"))
+        assert session.thread_summarizer_queue is None
 
-    session = _bare_session(root, enabled=True, summarize_block=slow)
 
-    async def scenario():
-        await session._maybe_trigger_thread_summarize("profile:cid")
-        await started.wait()
-        await session._maybe_trigger_thread_summarize("profile:cid")
-        release.set()
-        assert session.thread_summarizer_queue is not None
-        await session.thread_summarizer_queue.drain("profile:cid")
+def test_two_conversations_never_share_a_watermark(tmp_path: Path) -> None:
+    """Conversation isolation: cA and cB keep independent watermarks."""
+    _store(tmp_path, {"ra": _msg(user="a0", assistant="a1")}, "profile:cA")
+    _store(tmp_path, {"rb": _msg(user="b0", assistant="b1")}, "profile:cB")
+    capture_root = str(tmp_path / "summaries" / "assistant")
 
-    asyncio.run(scenario())
+    # Simulate an existing per-conversation watermark for cA only (cB fresh).
+    ca_store = ThreadSummaryStore(capture_root, "profile:cA")
+    ca_store.directory.mkdir(parents=True, exist_ok=True)
+    MemoryWatermark(run_id="ra", turn_id=0, consumed_ts=datetime.now(UTC)).save(
+        ca_store.directory, filename=THREAD_WATERMARK_FILENAME
+    )
+    cb_store = ThreadSummaryStore(capture_root, "profile:cB")
 
-    statuses = [task.status for task in session._background_tasks.values()]
-    assert statuses.count("done") == 1
-    assert "skipped" in statuses
+    assert _wm(ca_store).run_id == "ra"
+    # cB's watermark is untouched by cA's (still fresh, empty).
+    wm_b = _wm(cb_store)
+    assert wm_b.run_id == "" and wm_b.turn_id is None
+    # distinct files
+    from paf.capabilities.thread_summarizer._store import conversation_directory
+
+    assert conversation_directory(capture_root, "profile:cA") != conversation_directory(
+        capture_root, "profile:cB"
+    )

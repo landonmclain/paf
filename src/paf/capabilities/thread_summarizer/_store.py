@@ -1,14 +1,17 @@
-"""Conversation-scoped storage for the thread summarizer worker.
+"""Conversation-scoped storage for the thread summarizer.
 
-The capture WAL is shared by an agent:
-``data/summaries/<agent>/evictions.jsonl``.  Each row carries its
-``conversation_id``.  Derived summaries and the consumption cursor are scoped
-below ``conversations/<stable-key>/`` so two conversations can consume the
-shared WAL independently without sharing a watermark.
+The worker owns a per-**conversation** thread watermark
+(:class:`paf.capabilities.memory._watermark.MemoryWatermark`) persisted below
+``conversations/<stable-key>/`` — one watermark per ``{profile}:{cid}``, so two
+conversations never share a cursor or cross-summarize. Summaries are appended
+to the same per-conversation ``summaries.jsonl``, anchored by the
+``{run_id, turn_id}`` position the watermark advanced to on a successful pass,
+making a retried pass idempotent.
 
-This module is deliberately deterministic and model-free.  The worker owns the
-watermark; callers may read pending blocks and append summaries, but cursor
-advancement is an explicit operation performed only after a successful pass.
+This module is deterministic and model-free. The worker advances the watermark
+ONLY after a completed (non-error) summarize pass; callers may read and append,
+but advancement is an explicit post-success operation — mirroring the Memory
+owner's advance-on-normal-return contract.
 """
 
 from __future__ import annotations
@@ -22,46 +25,44 @@ from pathlib import Path
 from typing import Any
 
 from paf.capabilities._storage._atomic import write_atomic
-from paf.capabilities.thread_summarizer._capture import (
-    EVICTIONS_FILENAME,
-    EvictionBlock,
-    iter_blocks,
-)
 
-WATERMARK_FILENAME = "watermark.json"
 SUMMARIES_FILENAME = "summaries.jsonl"
+#: Per-conversation thread watermark (a ``MemoryWatermark`` in a distinct file so
+#: it tracks alongside, but independently of, any memory watermark in the same dir).
+THREAD_WATERMARK_FILENAME = "thread-watermark.json"
 
 
-@dataclass
-class ThreadWatermark:
-    """The last eviction sequence consumed for one conversation."""
+def thread_watermark_filename() -> str:
+    return THREAD_WATERMARK_FILENAME
 
-    eviction_seq: int = -1
 
-    @classmethod
-    def load(cls, directory: str | os.PathLike) -> ThreadWatermark:
-        path = Path(directory) / WATERMARK_FILENAME
-        if not path.exists():
-            return cls()
-        try:
-            row = json.loads(path.read_text(encoding="utf-8"))
-            return cls(eviction_seq=int(row.get("eviction_seq", -1)))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
-            # The WAL remains authoritative; a bad cursor only causes replay.
-            return cls()
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
-    def save(self, directory: str | os.PathLike) -> None:
-        path = Path(directory) / WATERMARK_FILENAME
-        payload = json.dumps({"eviction_seq": self.eviction_seq}, ensure_ascii=False) + "\n"
-        write_atomic(path, payload)
+
+def conversation_key(conversation_id: str) -> str:
+    """Return a stable filesystem-safe key for a scoped conversation ID."""
+    return hashlib.sha256(conversation_id.encode("utf-8")).hexdigest()[:24]
+
+
+def conversation_directory(root: str | os.PathLike, conversation_id: str) -> Path:
+    """Derived-store directory for ``conversation_id`` below an agent root."""
+    return Path(root) / "conversations" / conversation_key(conversation_id)
 
 
 @dataclass(frozen=True)
 class ThreadSummaryRecord:
-    """One derived summary for one captured eviction block."""
+    """One derived summary for one summarized conversation turn-span.
 
-    eviction_seq: int
+    Anchored by ``{run_id, turn_id}`` — the position the per-conversation
+    thread watermark advanced to when this span was successfully summarized —
+    so a retried/duplicate pass over the same span is a no-op, mirroring
+    Memory's idempotent append by source ref.
+    """
+
     conversation_id: str
+    run_id: str
+    turn_id: int
     summarized_at: str
     thread: str
     refs: list[str] = field(default_factory=list)
@@ -73,23 +74,14 @@ class ThreadSummaryRecord:
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> ThreadSummaryRecord:
         return cls(
-            eviction_seq=int(row["eviction_seq"]),
             conversation_id=str(row["conversation_id"]),
+            run_id=str(row.get("run_id", "")),
+            turn_id=int(row.get("turn_id", -1)),
             summarized_at=str(row["summarized_at"]),
             thread=str(row.get("thread", "")),
             refs=[str(ref) for ref in row.get("refs", [])],
             beats=list(row.get("beats", [])),
         )
-
-
-def conversation_key(conversation_id: str) -> str:
-    """Return a stable filesystem-safe key for a scoped conversation ID."""
-    return hashlib.sha256(conversation_id.encode("utf-8")).hexdigest()[:24]
-
-
-def conversation_directory(root: str | os.PathLike, conversation_id: str) -> Path:
-    """Derived-store directory for ``conversation_id`` below an agent root."""
-    return Path(root) / "conversations" / conversation_key(conversation_id)
 
 
 def _lines(path: Path) -> list[str]:
@@ -110,42 +102,31 @@ def _read_summary_records(path: Path) -> list[ThreadSummaryRecord]:
 
 
 class ThreadSummaryStore:
-    """Read the shared eviction WAL and write one conversation's derived files."""
+    """Read/write one conversation's thread beats + watermark (no eviction WAL).
+
+    The conversation-scoped directory holds both the appended ``summaries.jsonl``
+    and the per-conversation ``MemoryWatermark``. The shared eviction WAL is no
+    longer consumed — the trigger resolves the unsummarized span directly from
+    the persisted step store via ``resolve_unseen_span(conversation_id=...)``.
+    """
 
     def __init__(self, root: str | os.PathLike, conversation_id: str) -> None:
         self.root = Path(root)
         self.conversation_id = conversation_id
         self.directory = conversation_directory(root, conversation_id)
-        self.wal_path = self.root / EVICTIONS_FILENAME
         self.summaries_path = self.directory / SUMMARIES_FILENAME
-        self.watermark_path = self.directory / WATERMARK_FILENAME
-
-    def load_watermark(self) -> ThreadWatermark:
-        return ThreadWatermark.load(self.directory)
-
-    def pending_blocks(self) -> list[EvictionBlock]:
-        """Return this conversation's WAL blocks after its cursor, in order."""
-        watermark = self.load_watermark()
-        return [
-            block
-            for block in sorted(iter_blocks(self.root), key=lambda item: item.seq)
-            if block.conversation_id == self.conversation_id
-            and block.seq > watermark.eviction_seq
-        ]
 
     def existing_summaries(self) -> list[ThreadSummaryRecord]:
         return _read_summary_records(self.summaries_path)
 
     def append_summary(self, record: ThreadSummaryRecord) -> None:
-        """Append a summary exactly once, atomically and idempotently by seq."""
+        """Append a summary exactly once, idempotently by its run/turn anchor."""
         if record.conversation_id != self.conversation_id:
             raise ValueError("summary conversation_id does not match store")
         lines = _lines(self.summaries_path)
         existing = _read_summary_records(self.summaries_path)
         for prior in existing:
-            if prior.eviction_seq == record.eviction_seq:
-                # Retry-safe: timestamps are generated per attempt, but the
-                # derived content/provenance must remain identical.
+            if (prior.run_id, prior.turn_id) == (record.run_id, record.turn_id):
                 same_content = (
                     prior.conversation_id == record.conversation_id
                     and prior.thread == record.thread
@@ -154,23 +135,15 @@ class ThreadSummaryStore:
                 )
                 if same_content:
                     return
-                raise ValueError(f"summary seq {record.eviction_seq} already has different content")
-        if existing and record.eviction_seq <= existing[-1].eviction_seq:
-            raise ValueError("summary eviction_seq must increase")
+                raise ValueError(
+                    f"summary anchor ({record.run_id}:{record.turn_id}) already has different content"
+                )
+        if existing and (record.run_id, record.turn_id) <= (
+            existing[-1].run_id,
+            existing[-1].turn_id,
+        ):
+            raise ValueError("summary run/turn anchor must increase")
         write_atomic(
             self.summaries_path,
             "".join([*lines, json.dumps(record.to_row(), ensure_ascii=False) + "\n"]),
         )
-
-    def advance(self, eviction_seq: int) -> None:
-        """Advance this conversation's cursor atomically; never move backward."""
-        watermark = self.load_watermark()
-        if eviction_seq < watermark.eviction_seq:
-            raise ValueError("watermark cannot move backward")
-        watermark.eviction_seq = eviction_seq
-        watermark.save(self.directory)
-
-
-def now_iso() -> str:
-    """ISO-8601 UTC timestamp for derived summary records."""
-    return datetime.now(UTC).isoformat()

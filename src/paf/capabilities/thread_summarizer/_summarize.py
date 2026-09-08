@@ -1,4 +1,4 @@
-"""Structured, off-path thread-beat summarization."""
+"""Structured, off-path thread-beat summarization over a conversation turn span."""
 
 from __future__ import annotations
 
@@ -7,15 +7,15 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-from paf.capabilities.thread_summarizer._capture import EvictionBlock
+from paf.capabilities._turns import user_anchor_indices
 
 
 class Beat(BaseModel):
-    """One chronological, receipt-backed event from an eviction block."""
+    """One chronological, receipt-backed event from the summarized span."""
 
     at: str = Field(description="The exact {run_id}:{turn_id} source ref.")
-    what: str = Field(description="What happened in this block, without speculation.")
-    why: str = Field(description="Why it mattered in the thread, only if grounded in the block.")
+    what: str = Field(description="What happened in this span, without speculation.")
+    why: str = Field(description="Why it mattered in the thread, only if grounded in the span.")
 
 
 class BeatsRecord(BaseModel):
@@ -27,32 +27,62 @@ class BeatsRecord(BaseModel):
     resumed_from: str = ""
 
 
-SummarizeBlock = Callable[[EvictionBlock], Awaitable[BeatsRecord]]
+SummarizeSpan = Callable[[list, str], Awaitable[BeatsRecord]]
+
+
+def _ref_for(messages: list, idx: int) -> str | None:
+    """``{run_id}:{turn_id}`` ref for ``messages[idx]`` (greatest user anchor <= idx)."""
+    msg = messages[idx]
+    run_id = getattr(msg, "run_id", None)
+    if run_id is None:
+        return None
+    anchors = user_anchor_indices(messages)
+    tid = next((a for a in range(len(anchors) - 1, -1, -1) if anchors[a] <= idx), None)
+    return f"{run_id}:{tid}" if tid is not None else None
 
 
 @dataclass(frozen=True)
 class SummarizerPrompt:
-    """Prompt material passed to the background summarizer agent."""
+    """Prompt material passed to the background summarizer agent.
 
-    block: EvictionBlock
+    Input is the CONVERSATION TURN SPAN (a list of persisted ``ModelMessage``),
+    rendered via the curated extraction — user prompts + turn-closing final
+    answers only, with thinking / mid-step tool narration dropped (see
+    ``paf.capabilities._window._first_text``). The store is the lossless source
+    of truth, so it does not matter whether a turn is still in context: whatever
+    is unsummarized since the watermark gets summarized here.
+    """
+
+    span: list
+    conversation_id: str | None
 
     def render(self) -> str:
-        messages = "\n".join(
-            f"[{message.ref or 'unanchored'}] {message.role}: {message.text or ''}"
-            for message in self.block.messages
-        )
+        # NOTE: iterate the CURATED text once so the prompt stays bounded — a
+        # tool-heavy turn collapses from ~15KB of narration to a short user +
+        # final-answer pair. Non-durable messages (thinking/intermediate/tool
+        # returns) render as nothing and are skipped for the model.
+        from paf.capabilities._window import _first_text
+
+        lines: list[str] = []
+        for i, msg in enumerate(self.span):
+            text = _first_text(msg)
+            if not text:
+                continue  # thinking / tool narration / retry — not durable
+            ref = _ref_for(self.span, i)
+            role = type(msg).__name__
+            lines.append(f"[{ref or 'unanchored'}] {role}: {text}")
+        messages = "\n".join(lines)
         return (
-            "Summarize ONLY this evicted conversation block as chronological episodic beats. "
+            "Summarize this conversation turn-span as chronological episodic beats. "
             "Do not infer facts or current state beyond these messages. Every beat must cite "
-            "an exact source ref from the block. Return the requested structured BeatsRecord.\n\n"
-            f"Block sequence: {self.block.seq}\n"
-            f"Conversation: {self.block.conversation_id}\n"
+            "an exact source ref from the span. Return the requested structured BeatsRecord.\n\n"
+            f"Conversation: {self.conversation_id}\n"
             f"Messages:\n{messages}"
         )
 
 
-async def summarize_block(block: EvictionBlock) -> BeatsRecord:
-    """Run the real structured summarizer agent for one eviction block."""
+async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord:
+    """Run the real structured summarizer agent over a conversation turn span."""
     from pydantic_ai import Agent
 
     from paf.capabilities.memory._consolidate import (
@@ -67,5 +97,5 @@ async def summarize_block(block: EvictionBlock) -> BeatsRecord:
         model_settings=_consolidation_model_settings(),
         retries=2,
     )
-    result = await agent.run(SummarizerPrompt(block).render())
+    result = await agent.run(SummarizerPrompt(span, conversation_id).render())
     return result.output
