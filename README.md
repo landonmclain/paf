@@ -70,6 +70,9 @@ The demo additionally allowlists the harness-style capabilities:
 - **WarnOnCacheBusts** — observer that warns when the prompt-cacheable prefix
   collapses mid-run.
 - **Subagents** — `delegate_task` to named child agents in isolated runs.
+- **ThreadSummarizer** — per-conversation episodic background summarizer.
+  Phase 1: records each eviction block (per-message `{run_id}:{turn_id}` refs) to
+  `data/summaries/demo_assistant/evictions.jsonl`. OFF for the production agent.
 
 Native pydantic-ai capabilities (WebSearch, WebFetch, XSearch, Thinking, MCP,
 ToolSearch, ImageGeneration) resolve directly from the `demo_assistant` spec's
