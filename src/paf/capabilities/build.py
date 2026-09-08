@@ -439,7 +439,7 @@ def _build_skills(store, skills_config: dict | None = None) -> _Skills:
     library is self-contained over its configured library directories, not the
     persistence store. Indexes the configured SKILL.md skills + .md notes at
     construction; `list_skills`/`load_skill` expose the load mechanism (prompt
-    stays thin, bodies pulled on demand) and `point_to_skill` pre-arms which
+    stays thin, bodies pulled on demand) and `point_skills` pre-arms which
     skill a message needs via zero-LLM BM25 over the declared frontmatter vocab
     (the skill-note-hint pointer engine re-homed into paf). One paf-native
     capability for all skill functionality (Landon 2026-08-19).

@@ -1,17 +1,20 @@
 """paf-owned Skills capability — one capability for all skill functionality.
 
 Unifies two layers (Landon 2026-08-19):
-  1. Load-on-demand — `list_skills`/`load_skill` (the load mechanism idea from
-     the harness `Skills` / pydantic-ai deferred-capability catalog), so the
-     prompt stays thin and only the skills the model actually needs get pulled.
-  2. The deterministic trigger — `point_to_skill` re-homing the skill-note-hint
-     pointer engine, so the model is *pre-armed* with which skill a message
-     needs rather than relying on self-noticing a floating menu.
+  1. Load-on-demand — `list_skills`/`load_skill`/`list_skill_files`/
+     `read_skill_file` (the load mechanism idea from the harness `Skills` /
+     pydantic-ai deferred-capability catalog), so the prompt stays thin and
+     only the skills the model actually needs get pulled.
+  2. The hint pointer engine — `point_skills` re-homing the skill-note-hint
+     pointer, so the agent is **pre-armed** with which skill a message needs.
+     This is an **internal primitive** for the auto per-turn hint layer, NOT an
+     agent-facing tool (Skills-Capability-Spec §6) — the initial v1 shipped it
+     as a tool, which we reversed because a volitional search the model must
+     remember to call never fires reliably.
 
 Indexes a skill-library directory at construction; re-reads SKILL.md bodies on
 demand. Kept paf-native (AbstractCapability wrapping a FunctionToolset) in the
-same shape as FileSystem/Shell/Git/Web, not a deferred `Capability` bundle — it
-SHOULD be tools, per Landon.
+same shape as FileSystem/Shell/Git/Web.
 """
 
 from __future__ import annotations
@@ -27,18 +30,20 @@ from ._toolset import SkillToolset
 
 @dataclass
 class Skills(AbstractCapability[AgentDepsT]):
-    """List, load, and point-to-skills over a library directory.
+    """List, load, and read resources over a skill-library tree.
 
-    `libraries` is one or more directories whose immediate `SKILL.md` files
-    (skills) and plain `.md` files (notes) form the hint corpus. `top_k` is the
-    default number of `point_to_skill` pointers per call.
+    `libraries` is one or more directories containing skills, each a directory
+    with a `SKILL.md` (optionally nested under a category), plus skill-scoped
+    resources (`references/`/`scripts/`/`templates/`/`assets/`). Skills only —
+    plain notes are a vault-capability concern. `top_k` is the default number of
+    `point_skills` pointers the hint layer emits per call.
     """
 
     libraries: tuple[str | Path, ...] = ("skills",)
-    """Directories to scan for SKILL.md skills and .md notes."""
+    """Directories to scan for SKILL.md skills."""
 
     top_k: int = 3
-    """Default number of `point_to_skill` pointers to return per call."""
+    """Default number of `point_skills` hints the hint layer returns per call."""
 
     def __post_init__(self) -> None:
         if isinstance(self.libraries, (str, Path)):

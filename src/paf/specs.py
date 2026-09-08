@@ -311,14 +311,14 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
           libraries:        # one or more full paths (~ expands); absent -> the
             - ~/.hermes/skills          # paf-owned data/skills/ default
             - ~/projects/Personal/skill-library
-          top_k: 3           # optional; default number of point_to_skill pointers
+          top_k: 3           # optional; default number of point_skills hints
 
     ``libraries`` are **full absolute paths** (``~`` expanded via
     ``os.path.expanduser``); each is a directory scanned for ``SKILL.md`` skills
-    and plain ``.md`` notes. ``top_k`` is the default number of
-    ``point_to_skill`` pointer hints returned per call. Unknown keys inside
-    ``skills:`` are ignored so the schema can grow without breaking older spec
-    files.
+    (a skill tree: ``<root>/<category>/<skill>/SKILL.md`` or flat). ``top_k`` is
+    the default number of ``point_skills`` hint pointers returned per call.
+    Unknown keys inside ``skills:`` are ignored so the schema can grow without
+    breaking older spec files.
 
     Returns a dict (or ``None`` when the block is absent/unreadable). Absent
     members fall back to their code-level defaults in ``_build_skills`` (whose

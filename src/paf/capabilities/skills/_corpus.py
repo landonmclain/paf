@@ -11,9 +11,9 @@ tree** (the Hermes/Claude shape) instead of a flat skill/note dump (Landon
 - A skill's **resources** — files under `references/`, `scripts/`, `templates/`,
   `assets/` — are attached to that skill, NOT indexed as standalone notes.
 - The corpus indexes **skills only**. ``rank()`` BM25s over skill vocabulary
-  (name + description + tags), so `point_to_skill` never scores against a
-  polluted note dump (the v1 failure mode: pointed at a real tree it indexed
-  480 docs — 130 skills + 350 junk notes).
+  (name + description + tags), so the pointer engine (`point_skills`) never
+  scores against a polluted note dump (the v1 failure mode: pointed at a real
+  tree it indexed 480 docs — 130 skills + 350 junk notes).
 
 Ranking reuses paf's own dependency-free BM25 core
 (`paf.capabilities.search._ranking`) — paf owns exactly one BM25.

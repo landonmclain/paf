@@ -1,9 +1,9 @@
 """Tests for the paf Skills capability — list/load + deterministic pointer trigger.
 
 Covers the unified capability (Landon 2026-08-19): the load mechanism
-(list_skills / load_skill, folding in the harness Skills / pydantic-ai
-deferred-catalog idea) paired with the skill-note-hint pointer engine
-(point_to_skill, zero-LLM BM25 over frontmatter vocab). Uses the checked-in
+(list_skills / load_skill / list_skill_files / read_skill_file) paired with the
+skill-hint pointer engine (point_skills — internal primitive, zero-LLM BM25 over
+frontmatter vocab, for the auto per-turn hint layer). Uses the checked-in
 `tests/fixtures/skills/` corpus as the deterministic test library.
 """
 
@@ -34,16 +34,24 @@ def _toolset(top_k: int = 3) -> SkillToolset:
 # ---------------------------------------------------------------------------
 
 
-def test_skill_toolset_registers_five_tools() -> None:
-    """The skill toolset exposes tree listing, loading, pointing, and resource reads."""
+def test_skill_toolset_registers_four_tools() -> None:
+    """The skill toolset exposes list/load/resource tools (pointer is internal)."""
     ts = _toolset()
     assert set(ts.tools) == {
         "list_skills",
         "load_skill",
-        "point_to_skill",
         "list_skill_files",
         "read_skill_file",
     }
+
+
+def test_point_skills_is_internal_not_a_tool() -> None:
+    """The BM25 pointer is a capability primitive, NOT an agent-facing tool."""
+    ts = _toolset()
+    assert "point_skills" not in ts.tools
+    # But the engine is still callable directly (for the hint layer).
+    out = ts.point_skills("can you review this pull request")
+    assert "consider: code-review" in out
 
 
 def test_capability_validates_top_k() -> None:
@@ -71,7 +79,6 @@ def test_skills_cataloged_and_wired() -> None:
     assert set(sk.get_toolset().tools) == {
         "list_skills",
         "load_skill",
-        "point_to_skill",
         "list_skill_files",
         "read_skill_file",
     }
@@ -203,12 +210,12 @@ def test_read_skill_file_rejects_traversal_and_non_resources() -> None:
 
 
 # ---------------------------------------------------------------------------
-# point_to_skill (the deterministic trigger)
+# point_skills (the internal hint-pointer trigger)
 # ---------------------------------------------------------------------------
 
 
-def test_point_to_skill_returns_pointer_hints() -> None:
-    out = _toolset().point_to_skill("can you review this pull request")
+def test_point_skills_returns_pointer_hints() -> None:
+    out = _toolset().point_skills("can you review this pull request")
     assert "consider: code-review" in out
     # a pointer, never content
     assert "# Skill" not in out
@@ -221,15 +228,15 @@ def test_point_to_skill_ranks_matching_skill() -> None:
     assert top_name == "vectorized-backtest"
 
 
-def test_point_to_skill_respects_top_k() -> None:
-    out = _toolset(top_k=1).point_to_skill("code review pull request")
+def test_point_skills_respects_top_k() -> None:
+    out = _toolset(top_k=1).point_skills("code review pull request")
     lines = [ln for ln in out.splitlines() if ln.strip()]
     assert len(lines) == 1
 
 
-def test_point_to_skill_no_match_reports_cleanly() -> None:
+def test_point_skills_no_match_reports_cleanly() -> None:
     # terms absent from every indexed doc's vocab -> zero BM25 overlap
-    out = _toolset().point_to_skill("elephant astronomy")
+    out = _toolset().point_skills("elephant astronomy")
     assert "No skills" in out
 
 
@@ -248,7 +255,6 @@ def test_build_skills_defaults_to_data_skills() -> None:
     assert set(sk.get_toolset().tools) == {
         "list_skills",
         "load_skill",
-        "point_to_skill",
         "list_skill_files",
         "read_skill_file",
     }

@@ -151,7 +151,7 @@ DEMO_PROFILE = AgentProfile(
         # Headless + private-address-blocked defaults set in build.py `_build_browser`.
         "Browser",
         # Skill library — LIST / LOAD on demand + deterministic POINTER trigger.
-        # list_skills/load_skill keep the prompt thin; point_to_skill pre-arms
+        # list_skills/load_skill keep the prompt thin; point_skills pre-arms
         # which skill a message needs (zero-LLM BM25, skill-note-hint re-homed).
         # One paf-native capability for all skill functionality, wired to the
         # repo's data/skills/ library.

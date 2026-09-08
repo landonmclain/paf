@@ -148,7 +148,7 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # One paf-native capability for all skill functionality (Landon 2026-08-19):
     # loads the load-on-demand idea from the harness Skills / pydantic-ai
     # deferred-capability catalog (list_skills/load_skill keep the prompt thin)
-    # AND re-homes the skill-note-hint pointer engine (point_to_skill pre-arms
+    # AND re-homes the skill-note-hint pointer engine (point_skills pre-arms
     # which skill a message needs via zero-LLM BM25 over frontmatter vocab).
     # paf icon-capability (FunctionToolset wrapped in AbstractCapability), same
     # shape as FileSystem/Shell/Git/Web — NOT the deferred-Capability bundle.

@@ -6,12 +6,15 @@ skill-scoped resources (`references/`, `scripts/`, `templates/`, `assets/`)
 that belong to their skill rather than polluting a flat note corpus. See the
 vault `Skills-Capability-Spec.md`.
 
-Tools:
+Tools (agent-facing):
   - ``list_skills``    — the skill tree: category-grouped names + descriptions.
   - ``load_skill``     — full SKILL.md body (plus a resource manifest) on demand.
-  - ``point_to_skill`` — BM25 pointer: `consider: <skill_id>` for a user message.
   - ``list_skill_files`` — enumerate one skill's support resources.
   - ``read_skill_file`` — read one resource, confined to its skill's directory.
+
+Internal (NOT agent tools):
+  - ``point_skills``   — BM25 pointer engine (`consider: <skill_id>`), called by
+    the auto per-turn hint layer, not offered to the model.
 """
 
 from __future__ import annotations
@@ -49,10 +52,12 @@ class SkillToolset(FunctionToolset[object]):
 
         # Register the method-tools explicitly (FunctionToolset pops `.tools`
         # from `add_function`, not from plain subclass methods — same pattern as
-        # the FileSystem toolset).
+        # the FileSystem toolset). Note: `point_skills` (the BM25 pointer engine)
+        # is deliberately NOT registered — it is an internal capability
+        # primitive for the auto per-turn hint layer, not an agent-facing tool
+        # (see vault Skills-Capability-Spec §6).
         self.add_function(self.list_skills, name="list_skills")
         self.add_function(self.load_skill, name="load_skill")
-        self.add_function(self.point_to_skill, name="point_to_skill")
         self.add_function(self.list_skill_files, name="list_skill_files")
         self.add_function(self.read_skill_file, name="read_skill_file")
 
@@ -209,15 +214,17 @@ class SkillToolset(FunctionToolset[object]):
             content = content[:_READ_MAX_CHARS] + f"\n… [truncated at {_READ_MAX_CHARS} chars]"
         return f"{rel}\n\n{content}"
 
-    def point_to_skill(self, query: str, top_k: int | None = None) -> str:
-        """Given a user message or task, return pointer hints to the most relevant skill.
+    def point_skills(self, query: str, top_k: int | None = None) -> str:
+        """INTERNAL primitive (NOT an agent tool): BM25 pointer hints for the hint layer.
 
         Deterministic BM25 over the skill library's declared vocabulary
         (name/description/tags) — zero LLM cost. Returns one line per hit like
         `consider: <skill_id>` (canonical, category-qualified), most relevant
-        first. A pointer names *where to look*, not the answer; follow it by
-        calling load_skill to pull the full instructions. Fire this when a task
-        matches a known procedure but the model is not already holding that skill.
+        first. A pointer names *where to look*, not the answer; the auto per-turn
+        hint layer (Skills-Capability-Spec §6) calls this and injects
+        `consider:` lines into turn context; the agent then follows up with
+        load_skill / read_skill_file. Deliberately NOT in `.tools` — it is not a
+        tool the model should call on its own volition.
         """
         k = top_k if top_k is not None else self.top_k
         hits = self._corpus.rank(query, k=k)
