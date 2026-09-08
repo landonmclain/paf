@@ -180,6 +180,72 @@ def test_window_never_evicts_active_turn():
 
 
 # ---------------------------------------------------------------------------
+# Curation on capture — WAL stores user prompt + final answer ONLY
+# ---------------------------------------------------------------------------
+
+
+def test_capture_drops_thinking_and_intermediate_keeps_final_text(tmp_path):
+    """The eviction hook stores the model's FINAL answer, not thinking/narration.
+
+    Regression guard for the thread-summarizer bloat fix: evicted blocks must
+    carry only durable signal — the user prompt (cleaned) and the turn-closing
+    model response. `ThinkingPart` (reasoning), intermediate responses that
+    still call a tool, and tool results must be dropped so downstream
+    summaries are never fed the model's mid-step narration.
+    """
+    from pydantic_ai.messages import (
+        ThinkingPart,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+
+    # turn 0 (the completed/evictable prefix): thinking + tool narration + final
+    user0 = ModelRequest(parts=[UserPromptPart(content="actual user question")], run_id="run-z")
+    intermediate = ModelResponse(
+        parts=[
+            ThinkingPart("let me think about this..."),
+            TextPart("Let me check the codebase first."),
+            ToolCallPart(tool_name="read_file", args={"path": "x"}),
+        ],
+        run_id="run-z",
+    )
+    # the tool return (must NOT be captured as durable text)
+    toolret = ModelRequest(
+        parts=[ToolReturnPart(tool_name="read_file", content="file contents here")],
+        run_id="run-z",
+    )
+    # the turn-closing response: final answer, no tool call
+    final0 = ModelResponse(
+        parts=[
+            ThinkingPart("let me finalize..."),
+            TextPart("Let me check the codebase first."),
+            TextPart("Here is the final answer."),
+        ],
+        run_id="run-z",
+    )
+    # turn 1 opens the ACTIVE turn (never evicted) — makes turn 0 the evictable prefix
+    user1 = ModelRequest(parts=[UserPromptPart(content="next question")], run_id="run-z")
+
+    msgs: list[ModelMessage] = [user0, intermediate, toolret, final0, user1]
+    captured: list[tuple[list[dict], int]] = []
+    window = TurnBoundSlidingWindow(max_messages=100, keep_messages=0, capture_hook=lambda rows, keep: captured.append((rows, keep)))
+    asyncio.run(window.compact(msgs, _ctx_like("prof:cid")))
+
+    assert captured  # something was evicted
+    rows = captured[0][0]
+    # only user prompt + final answer survive; thinking/intermediate/tool dropped
+    texts = [r["text"] for r in rows if r["text"] is not None]
+    assert "actual user question" in texts
+    assert "Here is the final answer." in texts
+    # narration / tool chatter must NOT appear
+    for t in texts:
+        assert "Let me check the codebase" not in (t or "")
+        assert "file contents here" not in (t or "")
+    # thinking-only messages contribute no text (dropped)
+    assert "let me think about this..." not in texts
+
+
+# ---------------------------------------------------------------------------
 # Task 1.2 — capability capture → WAL, and build wiring
 # ---------------------------------------------------------------------------
 

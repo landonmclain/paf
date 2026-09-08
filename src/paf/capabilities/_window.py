@@ -27,10 +27,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, TextContent, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextContent,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai_harness.compaction import SlidingWindowCompaction
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
+from paf.capabilities._markers import injected_artifact_markers
 from paf.capabilities._turns import user_anchor_indices
 
 if TYPE_CHECKING:
@@ -55,16 +64,63 @@ def _is_real_user_prompt(message: ModelMessage) -> bool:
     )
 
 
+def _user_prompt_text(part: UserPromptPart) -> str | None:
+    """Durable user-prompt text, dropping injected artifacts (e.g. `<memory>`).
+
+    The thread summarizer (and any downstream reader) only wants the *user's
+    real words*, not the transient blocks paf injects each request (memory
+    notebook, turn-index, etc.). Injected `TextContent` is tagged with a marker
+    (see `paf.capabilities._markers`) and dropped; a plain `str` content is kept
+    verbatim; a list keeps only untagged text blocks.
+    """
+    if isinstance(part.content, str):
+        return part.content
+    texts: list[str] = []
+    for item in part.content:
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, TextContent):
+            meta = getattr(item, "metadata", None)
+            if meta is None or not any(
+                str(meta).startswith(marker) for marker in injected_artifact_markers()
+            ):
+                texts.append(item.content)
+    return " ".join(texts) or None
+
+
 def _first_text(message: ModelMessage) -> str | None:
-    """First usable text payload of a message, or ``None`` (synthetic/no text)."""
-    for part in (getattr(message, "parts", None) or []):
-        content = getattr(part, "content", None)
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            texts = [c.content for c in content if isinstance(c, TextContent)]
-            if texts:
-                return " ".join(texts)
+    """Curated text payload of an evicted message, or ``None``.
+
+    The thread-summarizer WAL should capture **only** the durable signal per
+    message — the user's prompt and the model's *final* answer — never the
+    model's mid-step reasoning narration (``ThinkingPart``), interim tool
+    chatter, or transient injected blocks:
+
+    - ``ModelRequest`` → the user prompt text, injected blocks stripped.
+    - ``ModelResponse`` → the LAST ``TextPart`` (the model's final answer),
+      skipping ``ThinkingPart`` / ``ToolCallPart`` entirely.
+    - anything else → ``None`` (no durable text worth summarizing).
+    """
+    if isinstance(message, ModelResponse):
+        # Only a TURN-CLOSING response (one that does NOT call a tool) is the
+        # model's final answer. Intermediate responses that issue a tool call
+        # carry mid-step narration ("Let me..."), not durable content, so they
+        # are dropped wholesale. Return the last real TextPart of the closing
+        # response; `ThinkingPart` / `ToolCallPart` are never durable text.
+        if any(isinstance(part, ToolCallPart) for part in message.parts):
+            return None
+        last: str | None = None
+        for part in message.parts:
+            if isinstance(part, TextPart):
+                content = getattr(part, "content", None)
+                if isinstance(content, str) and content:
+                    last = content
+        return last
+    if isinstance(message, ModelRequest):
+        for part in message.parts:
+            if isinstance(part, UserPromptPart):
+                return _user_prompt_text(part)
+        return None
     return None
 
 
