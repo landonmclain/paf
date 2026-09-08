@@ -18,6 +18,7 @@ build on this WAL.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic_ai.capabilities import AbstractCapability
@@ -47,6 +48,7 @@ def capture_directory_for(agent_name: str | None) -> Path:
     return Path(_DEFAULT_CAPTURE_ROOT) / (agent_name or "agent")
 
 
+@dataclass(init=False)
 class ThreadSummarizer(AbstractCapability[AgentDepsT]):
     """Background per-conversation thread summarizer (eviction-blocks beats).
 
@@ -54,6 +56,12 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
     with the active thread's ``conversation_id`` (learned from ``ctx`` each
     turn). Presentation/injection is still deferred — ``before_model_request``
     does no context mutation, it only records the thread id.
+
+    ``@dataclass(init=False)`` is REQUIRED, not cosmetic: pydantic-ai's spec
+    loader validates that every custom capability class carries
+    ``__dataclass_fields__`` (see ``get_capability_registry``'s
+    ``_validate_capability``), and `init=False` keeps this type's hand-written
+    ``__init__`` (which wires the capture hook) intact.
     """
 
     def __init__(

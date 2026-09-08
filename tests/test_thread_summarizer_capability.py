@@ -25,6 +25,30 @@ def test_thread_summarizer_is_spec_serializable() -> None:
     assert ThreadSummarizer.get_serialization_name() == "ThreadSummarizer"
 
 
+def test_thread_summarizer_passes_capability_registry_validation() -> None:
+    """Custom capabilities MUST be (dataclass-like) or the spec registry rejects them.
+
+    pydantic-ai's ``get_capability_registry`` (agent/spec.py ``_validate_capability``)
+    requires every custom capability class to carry ``__dataclass_fields__`` in its
+    own ``__dict__`` — a plain class fails with
+    'All custom capability classes must be decorated with @dataclass'. We use
+    ``@dataclass(init=False)``: it satisfies the check while keeping the
+    hand-written ``__init__`` (which wires the capture hook) intact.
+    """
+    assert "__dataclass_fields__" in ThreadSummarizer.__dict__
+    # The full registry build (what Agent.from_spec runs for the demo profile)
+    # must not raise — this is the path that broke before the @dataclass fix.
+    from pydantic_ai.agent.spec import get_capability_registry
+
+    from paf.capabilities.profiles import DEMO_PROFILE
+
+    registry = get_capability_registry(DEMO_PROFILE.capability_types())
+    assert "ThreadSummarizer" in registry
+    # The hand-written init still works after @dataclass(init=False).
+    cap = ThreadSummarizer()
+    assert cap.capture_directory is not None
+
+
 def test_from_spec_builds_instance() -> None:
     """from_spec returns a real ThreadSummarizer instance."""
     cap = ThreadSummarizer.from_spec()

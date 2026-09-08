@@ -93,6 +93,12 @@ from paf.capabilities.memory._background import (
 from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
 from paf.capabilities.memory._window import memory_dir_for
 from paf.capabilities.persistence import _build_store
+from paf.capabilities.thread_summarizer import capture_directory_for
+from paf.capabilities.thread_summarizer._background import (
+    ThreadSummarizeJob,
+    ThreadSummarizerQueue,
+)
+from paf.capabilities.thread_summarizer._store import ThreadSummaryStore
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -432,6 +438,7 @@ class Session:
         store=None,
         memory_directory: str | None = None,
         consolidate_span=None,
+        thread_summarize_block=None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how the CLIs pick the default profile
@@ -470,6 +477,14 @@ class Session:
         self._consolidate_span = consolidate_span
         self._memory_queue: MemoryConsolidationQueue | None = None
         self._review_queue: MemoryReviewQueue | None = None
+        self._thread_summarizer_enabled = bool(
+            profile is not None
+            and "ThreadSummarizer" in getattr(profile, "capability_names", ())
+        )
+        self._thread_capture_root = str(capture_directory_for(self.agent_name))
+        self._thread_queue: ThreadSummarizerQueue | None = None
+        self._thread_summarize_block = thread_summarize_block
+        self._thread_summarizer_seq = 0
         self._review_watermark_path = (
             self._memory_directory.rstrip("/\\") + "/memory-review-watermark.json"
         )
@@ -512,6 +527,11 @@ class Session:
     def review_queue(self) -> MemoryReviewQueue | None:
         """The lazily-built background reviewer queue (None until first use)."""
         return self._review_queue
+
+    @property
+    def thread_summarizer_queue(self) -> ThreadSummarizerQueue | None:
+        """The lazy thread queue (None when the profile leaves it OFF)."""
+        return self._thread_queue
 
     # -- profile namespace (conversation identity scoping) --------------------
 
@@ -762,6 +782,65 @@ class Session:
             )
         return self._review_queue
 
+    def _ensure_thread_summarizer_queue(self) -> ThreadSummarizerQueue:
+        """Build the conversation-scoped thread worker lazily."""
+        if self._thread_queue is None:
+            self._thread_queue = ThreadSummarizerQueue(
+                capture_root=self._thread_capture_root,
+                summarize_block_fn=self._thread_summarize_block,
+                on_complete=self._complete_thread_summarize,
+            )
+        return self._thread_queue
+
+    def _complete_thread_summarize(
+        self, conversation_id: str, success: bool, detail: str
+    ) -> None:
+        """Publish completion for active thread-summarizer task rows."""
+        for task in self._background_tasks.values():
+            if (
+                task.id.startswith(f"thread_summarize.{conversation_id}.")
+                and task.status in (QUEUED, PROCESSING)
+            ):
+                task.status = DONE if success else ERROR
+                task.detail = detail
+                task.progress = 1.0 if success else None
+                self._publish_task(task)
+
+    async def _maybe_trigger_thread_summarize(self, cid: str | None) -> None:
+        """Enqueue thread summarization when this conversation has WAL backlog.
+
+        The capture WAL is append-only and authoritative. This trigger only
+        observes a gap and schedules work; the queue is the sole watermark writer.
+        Profiles without ThreadSummarizer return before touching the store.
+        """
+        if not self._thread_summarizer_enabled or cid is None:
+            return
+        self._thread_summarizer_seq += 1
+        task_id = f"thread_summarize.{cid}.{self._thread_summarizer_seq}"
+        task = BackgroundTask(id=task_id, label=f"Summarizing thread ({cid})")
+        self._publish_task(task)
+        try:
+            store = ThreadSummaryStore(self._thread_capture_root, cid)
+            if not store.pending_blocks():
+                task.status = SKIPPED
+                task.detail = "no pending eviction blocks"
+                self._publish_task(task)
+                return
+            queue = self._ensure_thread_summarizer_queue()
+            status = queue.status(cid)
+            if status.queued > 0 or status.running:
+                task.status = SKIPPED
+                task.detail = "thread summarization already in flight"
+                self._publish_task(task)
+                return
+            queue.enqueue(cid, ThreadSummarizeJob(cid))
+            task.status = PROCESSING
+            self._publish_task(task)
+        except Exception as exc:  # trigger must never break the completed turn
+            task.status = ERROR
+            task.detail = str(exc)
+            self._publish_task(task)
+
     async def _maybe_trigger_review(self, cid: str | None) -> None:
         """Fire the background reviewer hook on its own ``review_every`` cadence.
 
@@ -988,6 +1067,7 @@ class Session:
         self.history = [*self.history, *result.new_messages()]
         await self._maybe_trigger_consolidation(scoped)
         await self._maybe_trigger_review(scoped)
+        await self._maybe_trigger_thread_summarize(scoped)
 
     async def run(
         self,
