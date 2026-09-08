@@ -40,6 +40,7 @@ from paf.capabilities.git import Git as _Git
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
+from paf.capabilities.registry import TieredCompaction
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
@@ -154,19 +155,18 @@ def _build_memory(
 def _build_thread_summarizer(
     store, thread_config: dict | None = None, agent_name: str | None = None
 ) -> ThreadSummarizer:
-    """Build the ThreadSummarizer shell (Phase 0).
+    """Build the ThreadSummarizer capability (Phase 1: capture shell).
 
-    Phase 0 — the capability is a registration/spec shell with no capture, no
-    background worker, and no in-context injection yet (those land in Phase 1-3).
-    ``store`` (the shared persistence store) and ``thread_config`` (the spec's
-    top-level ``thread_summarizer:`` block, if any) are accepted for a uniform
-    builder signature + forward-compat, but unused for now. `agent_name` will
-    scope the conversation-keyed data/summaries store in Phase 1.
-
-    gated by the profile allowlist exactly like every other builder (the loop
-    skips names not in `profile.capability_names`).
+    Phase 1 — the capability owns the eviction **capture** side: it learns the
+    active thread from ``ctx.conversation_id`` and its capture hook appends an
+    immutable ``EvictionBlock`` per eviction to ``data/summaries/<agent>/``.
+    ``store`` (shared persistence) and ``thread_config`` (a spec
+    ``thread_summarizer:`` block) settle in later phases. ``agent_name`` scopes
+    the per-agent capture WAL dir. The window hook is attached in
+    ``build_runtime_capabilities`` only when the profile allowlists BOTH
+    ``ThreadSummarizer`` and ``Compaction`` (OFF by default).
     """
-    return ThreadSummarizer.from_spec()
+    return ThreadSummarizer.from_spec(agent_name=agent_name, capture_directory=None)
 
 
 def _conversation_search_suppressed(store):
@@ -708,4 +708,21 @@ def build_runtime_capabilities(
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
         capabilities.append(build_compaction(compaction_config))
+    # Phase-1 capture wiring: when the profile allowlists BOTH ThreadSummarizer
+    # and Compaction, bind the summarizer's capture hook to the eviction window
+    # so evictions are recorded as immutable blocks in the WAL. OFF by default
+    # (ThreadSummarizer is not in ASSISTANT_PROFILE): neither mention nor attach.
+    if (
+        "ThreadSummarizer" in profile.capability_names
+        and _COMPACTION_CAPABILITY in profile.capability_names
+    ):
+        from paf.capabilities._window import TurnBoundSlidingWindow
+
+        compaction = next((c for c in capabilities if isinstance(c, TieredCompaction)), None)
+        summarizer = next((c for c in capabilities if isinstance(c, ThreadSummarizer)), None)
+        if compaction is not None and summarizer is not None:
+            for tier in compaction.tiers:
+                if isinstance(tier, TurnBoundSlidingWindow):
+                    summarizer.attach_to_window(tier)
+                    break
     return capabilities

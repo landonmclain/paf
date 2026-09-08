@@ -24,11 +24,14 @@ a no-op, so a window costs nothing on turns where it would not trim.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, TextContent, UserPromptPart
 from pydantic_ai_harness.compaction import SlidingWindowCompaction
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
+
+from paf.capabilities._turns import user_anchor_indices
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
@@ -52,6 +55,19 @@ def _is_real_user_prompt(message: ModelMessage) -> bool:
     )
 
 
+def _first_text(message: ModelMessage) -> str | None:
+    """First usable text payload of a message, or ``None`` (synthetic/no text)."""
+    for part in (getattr(message, "parts", None) or []):
+        content = getattr(part, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            texts = [c.content for c in content if isinstance(c, TextContent)]
+            if texts:
+                return " ".join(texts)
+    return None
+
+
 class TurnBoundSlidingWindow(SlidingWindowCompaction):
     """Turn-bounded, trim-only sliding window — never evicts the active turn.
 
@@ -69,7 +85,52 @@ class TurnBoundSlidingWindow(SlidingWindowCompaction):
     healthy minimum, ``find_safe_cutoff`` may still back-walk *within the settled
     prefix* — but it can never reach the active turn, because that turn is sliced
     out and re-appended by this gate.
+
+    Optional ``capture_hook``: a callable invoked after an eviction as
+    ``capture_hook(evicted_rows, keep_messages)`` where ``evicted_rows`` are the
+    dropped messages as plain ``{"ref", "role", "text"}`` dicts (oldest first)
+    and ``keep_messages`` is this window's retain count. This is a generic
+    eviction *report* seam — the window stays decoupled from any consumer (it
+    emits provenance data, it never imports memory or the thread summarizer).
+    When ``None`` (default) the window does no extra work.
     """
+
+    def __init__(self, *args: object, capture_hook: Callable[[list[dict], int], None] | None = None, **kwargs: object) -> None:
+        """Pass through to ``SlidingWindowCompaction`` + an optional capture hook.
+
+        A keyword-only ``capture_hook`` is folded in after the base dataclass
+        init (the base is ``@dataclass`` and won't accept an extra field unless
+        this subclass redeclares an ``__init__``). Existing call sites
+        (``build_compaction``) are unchanged.
+        """
+        super().__init__(*args, **kwargs)
+        self.capture_hook = capture_hook
+
+    @staticmethod
+    def _evicted_message_data(evicted: list[ModelMessage], settled: list[ModelMessage]) -> list[dict]:
+        """Refs + role + text for each dropped message, oldest first.
+
+        ``ref`` is ``{run_id}:{turn_id}`` — ``turn_id`` = ordinal of the
+        message's greatest user-prompt anchor within the PRE-eviction ``settled``
+        list, identical to the walk search/memory use, so ``read_turn`` can
+        re-verify the original. ``None`` when the message carries no ``run_id``.
+        """
+        anchors = user_anchor_indices(settled)
+        rows: list[dict] = []
+        for idx, m in enumerate(evicted):
+            run_id = getattr(m, "run_id", None)
+            tid = next(
+                (a for a in range(len(anchors) - 1, -1, -1) if anchors[a] <= idx),
+                None,
+            )
+            rows.append(
+                {
+                    "ref": f"{run_id}:{tid}" if run_id is not None and tid is not None else None,
+                    "role": type(m).__name__,
+                    "text": _first_text(m),
+                }
+            )
+        return rows
 
     async def compact(
         self,
@@ -109,6 +170,10 @@ class TurnBoundSlidingWindow(SlidingWindowCompaction):
         cutoff = find_safe_cutoff(settled, self.keep_messages)
         if cutoff <= 0:
             return messages
+        # Report the eviction to an optional capture hook (plain provenance
+        # dicts — never evicts the active turn, fires only on a real trim).
+        if self.capture_hook is not None:
+            self.capture_hook(self._evicted_message_data(settled[:cutoff], settled), self.keep_messages)
         # Run the base window over the settled prefix ONLY, then reattach the
         # active turn verbatim. The base's find_safe_cutoff / find_token_cutoff
         # can therefore never reach the active prompt.
