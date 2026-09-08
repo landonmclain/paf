@@ -328,8 +328,8 @@ def _build_agent(
         # (writable=False) — it can never contaminate durable memory. The
         # consolidation owner (writable=True) is the sole writer, folding each
         # about-to-evict slice into the store at the eviction boundary.
+        from paf.capabilities._window import TurnBoundSlidingWindow
         from paf.capabilities.memory import Memory
-        from paf.capabilities.memory._window import TurnBoundSlidingWindow
 
         mem_dir = memory_dir or Path("memory")
         # Per-question isolation (run_lmem): the subject's memory store must

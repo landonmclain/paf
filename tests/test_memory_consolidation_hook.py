@@ -21,7 +21,7 @@ import types
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
-from paf.capabilities.memory._window import TurnBoundSlidingWindow
+from paf.capabilities._window import TurnBoundSlidingWindow
 
 
 def _make_messages(n: int) -> list[ModelRequest]:

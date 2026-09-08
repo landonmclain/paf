@@ -21,6 +21,7 @@ from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
+from paf.capabilities._window import TurnBoundSlidingWindow
 from paf.capabilities.browser import Browser
 from paf.capabilities.browser._toolset import (
     EgressPolicy,
@@ -29,7 +30,6 @@ from paf.capabilities.browser._toolset import (
     is_blocked_address,
 )
 from paf.capabilities.compaction import build_compaction
-from paf.capabilities.memory._window import TurnBoundSlidingWindow
 from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual

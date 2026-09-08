@@ -138,8 +138,8 @@ Here are messages from a conversation. Remember anything durable from them:
 """
 
 # Imported lazily to avoid a circular import at module load: _consolidate
-# imports Memory (for the owner's writable=True construct) and _window imports
-# consolidate. resolve lazily inside the function.
+# imports Memory (for the owner's writable=True construct). Resolve lazily
+# inside the function.
 _MODULE_MEMORY: Memory | None = None
 
 

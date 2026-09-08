@@ -30,12 +30,12 @@ from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.capabilities._window import TurnBoundSlidingWindow
 from paf.capabilities.browser import Browser
 from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
 from paf.capabilities.memory import Memory
-from paf.capabilities.memory._window import TurnBoundSlidingWindow
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills

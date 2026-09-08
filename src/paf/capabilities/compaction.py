@@ -113,7 +113,7 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     behavior. When ``config`` supplies values, they replace only the fields set.
 
     The single sliding-window tier is always
-    :class:`~paf.capabilities.memory._window.TurnBoundSlidingWindow` — turn-bounded
+    :class:`~paf.capabilities._window.TurnBoundSlidingWindow` — turn-bounded
     (never evicts the active user prompt) and **trim-only** (does no memory work).
     There is no ``consolidate`` flag: durable-fact capture is owned solely by the
     background watermark worker, never by eviction (retired 2026-09-02).
@@ -141,7 +141,7 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     win_max = cfg.window_max_messages if cfg.window_max_messages is not None else 10
     win_keep = cfg.window_keep_messages if cfg.window_keep_messages is not None else 20
 
-    from paf.capabilities.memory._window import TurnBoundSlidingWindow
+    from paf.capabilities._window import TurnBoundSlidingWindow
 
     window = TurnBoundSlidingWindow(
         max_messages=win_max,

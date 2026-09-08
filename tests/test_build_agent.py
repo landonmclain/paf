@@ -178,7 +178,7 @@ def test_recall_agent_uses_turn_bounded_trim_only_window() -> None:
     memory. The ladder's sliding-window tier must be `TurnBoundSlidingWindow`
     (turn-bounded: never evicts the active user prompt; trim-only: no memory).
     """
-    from paf.capabilities.memory._window import TurnBoundSlidingWindow
+    from paf.capabilities._window import TurnBoundSlidingWindow
 
     root = _build_recall_agent()
     comp = _find_compaction(root)
