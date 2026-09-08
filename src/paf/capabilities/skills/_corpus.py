@@ -1,55 +1,87 @@
-"""Corpus ingestion for the paf Skills capability.
+"""Corpus ingestion for the paf Skills capability (v2 — tree-aware).
 
-Adapted from `skill_note_hint.corpus` (MIT, https://github.com/...skill-note-hint)
-so the pointer engine lives inside paf as a first-class capability instead of a
-foreign standalone package. This is the "copy skill-note-hint functionality into
-a custom skills capability" direction Landon signed off on (2026-08-19).
+Adapted from `skill_note_hint.corpus` (MIT) so the pointer engine lives inside
+paf as a first-class capability. v2 reworks the corpus to model **skills as a
+tree** (the Hermes/Claude shape) instead of a flat skill/note dump (Landon
+2026-09-08; see vault `Skills-Capability-Spec.md`):
 
-A tiny, flat, swappable corpus of hint docs. It scans a set of root directories
-for knowledge files (`SKILL.md` skills and plain `.md` notes), parses their YAML
-frontmatter into a small indexable text surface, and exposes a `HintCorpus` that
-can be ranked against a user query. Only stdlib.
+- A **skill** is a directory containing a `SKILL.md`, optionally under a
+  *category* directory: `<root>/<category>/<skill>/SKILL.md` (or flat
+  `<root>/<skill>/SKILL.md`, category ``""``).
+- A skill's **resources** — files under `references/`, `scripts/`, `templates/`,
+  `assets/` — are attached to that skill, NOT indexed as standalone notes.
+- The corpus indexes **skills only**. ``rank()`` BM25s over skill vocabulary
+  (name + description + tags), so `point_to_skill` never scores against a
+  polluted note dump (the v1 failure mode: pointed at a real tree it indexed
+  480 docs — 130 skills + 350 junk notes).
 
 Ranking reuses paf's own dependency-free BM25 core
-(`paf.capabilities.search._ranking`) rather than vendoring a second copy — paf
-owns exactly one BM25.
+(`paf.capabilities.search._ranking`) — paf owns exactly one BM25.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from paf.capabilities.search._ranking import bm25_rank, tokenize
 
-__all__ = ["SkillDoc", "HintCorpus", "parse_frontmatter", "tokenize"]
+__all__ = [
+    "SkillDoc",
+    "SkillResource",
+    "HintCorpus",
+    "parse_frontmatter",
+    "tokenize",
+]
+
+# Recognized resource subdirectories under a skill root, mapped to a kind.
+_RESOURCE_DIRS: dict[str, Literal["reference", "script", "template", "asset"]] = {
+    "references": "reference",
+    "scripts": "script",
+    "templates": "template",
+    "assets": "asset",
+}
 
 
+@dataclass
+class SkillResource:
+    """One support file belonging to a skill (references/, scripts/, ...)."""
+
+    relative_path: str
+    """Path relative to the skill root, e.g. ``references/x.md``."""
+    kind: Literal["reference", "script", "template", "asset", "other"]
+    """Resource class, inferred from the enclosing subdir."""
+
+
+@dataclass
 class SkillDoc:
-    """One indexable hint source.
+    """One indexable skill in the tree.
 
     ``text`` is what BM25 scores (name + description + tags, lowercased);
-    ``hint`` is the one-line pointer injected (e.g. ``consider: skill-x``);
-    ``ref`` is the on-disk path so ``load_skill`` can pull the full body.
+    ``hint`` is the one-line pointer injected (``consider: <skill_id>``);
+    ``skill_file`` is the on-disk SKILL.md so `load_skill` can read the body;
+    ``skill_root`` is the skill's directory; ``resources`` are its support files.
     """
 
-    def __init__(
-        self,
-        name: str,
-        kind: str = "skill",
-        text: str = "",
-        hint: str | None = None,
-        ref: str | None = None,
-        description: str = "",
-    ) -> None:
-        self.name = name
-        self.kind = kind  # 'skill' | 'note'
-        self.text = text
-        self.hint = hint or f"{'consider' if kind == 'skill' else 'note'}: {name}"
-        self.ref = ref
-        self.description = description
+    skill_id: str
+    """Canonical id: ``<category>/<name>`` (or ``<name>`` when flat at root)."""
+    name: str
+    """Short name — the skill directory's basename."""
+    category: str
+    """Category path component (``""`` for a flat, root-level skill)."""
+    skill_root: Path
+    """Directory containing SKILL.md."""
+    skill_file: Path
+    """The SKILL.md itself."""
+    description: str = ""
+    text: str = ""
+    kind: str = "skill"
+    hint: str = ""
+    resources: tuple[SkillResource, ...] = field(default_factory=tuple)
 
     def __repr__(self) -> str:
-        return f"SkillDoc(name={self.name!r}, kind={self.kind!r}, hint={self.hint!r})"
+        return f"SkillDoc(skill_id={self.skill_id!r}, category={self.category!r})"
 
 
 def parse_frontmatter(path: Path) -> dict:
@@ -110,55 +142,98 @@ def parse_frontmatter(path: Path) -> dict:
     return fm
 
 
+def _collect_resources(skill_root: Path) -> tuple[SkillResource, ...]:
+    """Gather a skill's support files under references//scripts//templates//assets/.
+
+    Only recognized resource subdirs are included; files directly in the skill
+    root (e.g. the SKILL.md itself) are not resources. Returns an empty tuple
+    when the skill has no resource subdirs.
+    """
+    resources: list[SkillResource] = []
+    for subdir, kind in _RESOURCE_DIRS.items():
+        base = skill_root / subdir
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*")):
+            if p.is_file():
+                resources.append(
+                    SkillResource(
+                        relative_path=f"{subdir}/{p.relative_to(base)}",
+                        kind=kind,
+                    )
+                )
+    return tuple(resources)
+
+
 class HintCorpus:
-    """Tiny, flat, swappable corpus of hint docs. Scanned once on init, cached."""
+    """Tiny, swappable, tree-aware corpus of skills. Scanned once on init, cached.
+
+    Indexes **skills only** (SKILL.md files), each with its category, canonical
+    id, and attached resources. Plain .md files are NOT indexed — the
+    standalone-note pointer is a vault-capability concern, not Skills (see the
+    vault spec).
+    """
 
     def __init__(self, roots: list[str] | str) -> None:
         if isinstance(roots, str):
             roots = [roots]
         self.roots = [Path(r) for r in roots]
         self.docs: list[SkillDoc] = []
+        # Canonical id -> doc (unique) and short name -> docs (may be several).
+        self.by_id: dict[str, SkillDoc] = {}
+        self.by_short_name: dict[str, list[SkillDoc]] = {}
         self._load()
 
     def _load(self) -> None:
         self.docs.clear()
+        self.by_id.clear()
+        self.by_short_name.clear()
+        # Resolve each library root once so flat-vs-nested category detection is
+        # robust regardless of how the spec spelled the path.
+        resolved_roots = {r.resolve() for r in self.roots if r.exists()}
         for root in self.roots:
             if not root.exists():
                 continue
-            # skills: any SKILL.md under the root (handles nested category dirs)
             for p in root.rglob("SKILL.md"):
-                self._ingest(p, kind="skill")
-            # notes: plain .md files that AREN'T SKILL.md
-            for p in root.rglob("*.md"):
-                if p.name == "SKILL.md":
+                doc = self._ingest(root, p, resolved_roots)
+                if doc is None:
                     continue
-                self._ingest(p, kind="note")
+                self.docs.append(doc)
+                self.by_id[doc.skill_id] = doc
+                self.by_short_name.setdefault(doc.name, []).append(doc)
 
-    def _ingest(self, path: Path, kind: str) -> None:
-        fm = parse_frontmatter(path)
-        name = fm.get("name") or path.stem
+    def _ingest(self, root: Path, skill_file: Path, resolved_roots: set[Path]) -> SkillDoc | None:
+        skill_root = skill_file.parent
+        name = skill_root.name
+        # Category: the parent dir of the skill root, when that parent is not a
+        # library root itself (i.e. the skill is nested, not flat at root).
+        parent = skill_root.parent
+        category = "" if parent.resolve() in resolved_roots else parent.name
+        skill_id = f"{category}/{name}" if category else name
+        fm = parse_frontmatter(skill_file)
         description = fm.get("description", "")
         tags = fm.get("tags", "")
-        # fold nested metadata.hermes.tags if top-level tags absent
         if not tags and fm.get("metadata.hermes.tags"):
             tags = fm["metadata.hermes.tags"]
         text = f"{name} {description} {tags}".strip().lower()
         if not text:
-            return
-        ref = str(path)
-        hint = f"consider: {name}" if kind == "skill" else f"note: {path.stem}"
-        self.docs.append(
-            SkillDoc(
-                name=name,
-                kind=kind,
-                text=text,
-                hint=hint,
-                ref=ref,
-                description=description,
-            )
+            return None
+        resources = _collect_resources(skill_root)
+        return SkillDoc(
+            skill_id=skill_id,
+            name=name,
+            category=category,
+            skill_root=skill_root,
+            skill_file=skill_file,
+            description=description,
+            text=text,
+            hint=f"consider: {skill_id}",
+            resources=resources,
         )
 
     def rank(self, query: str, k: int) -> list[tuple[SkillDoc, float]]:
         texts = [d.text for d in self.docs]
+        if not texts:
+            return []
         hits = bm25_rank(query, texts)
         return [(self.docs[idx], score) for idx, score in hits[:k]]

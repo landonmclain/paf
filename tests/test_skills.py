@@ -34,14 +34,16 @@ def _toolset(top_k: int = 3) -> SkillToolset:
 # ---------------------------------------------------------------------------
 
 
-def test_skill_toolset_registers_three_tools() -> None:
-    """The skill toolset exposes exactly list_skills / load_skill / point_to_skill.
-
-    Same pattern as the FileSystem toolset: methods are registered via
-    `add_function`, so they appear in `.tools` and reach the agent.
-    """
+def test_skill_toolset_registers_five_tools() -> None:
+    """The skill toolset exposes tree listing, loading, pointing, and resource reads."""
     ts = _toolset()
-    assert set(ts.tools) == {"list_skills", "load_skill", "point_to_skill"}
+    assert set(ts.tools) == {
+        "list_skills",
+        "load_skill",
+        "point_to_skill",
+        "list_skill_files",
+        "read_skill_file",
+    }
 
 
 def test_capability_validates_top_k() -> None:
@@ -66,7 +68,13 @@ def test_skills_cataloged_and_wired() -> None:
     assert "Skills" in caps
     sk = next(c for c in built if type(c).__name__ == "Skills")
     assert isinstance(sk, Skills)
-    assert set(sk.get_toolset().tools) == {"list_skills", "load_skill", "point_to_skill"}
+    assert set(sk.get_toolset().tools) == {
+        "list_skills",
+        "load_skill",
+        "point_to_skill",
+        "list_skill_files",
+        "read_skill_file",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -74,16 +82,27 @@ def test_skills_cataloged_and_wired() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_corpus_indexes_demo_skill_library() -> None:
-    """The fixture yields exactly the two SKILL.md skills (README is a note)."""
+def test_corpus_indexes_tree_skills_and_resources() -> None:
+    """The fixture indexes five skills and attaches resources to their owner."""
     corpus = HintCorpus(roots=FIXTURE_SKILLS)
-    # Exactly two SKILL.md skills in the fixture (deterministic), regardless of
-    # how many plain .md notes (e.g. this README) may also be scanned.
-    skills = [d for d in corpus.docs if d.kind == "skill"]
-    assert sorted(d.name for d in skills) == ["code-review", "vectorized-backtest"]
-    assert all(d.kind == "skill" for d in skills)
-    # ref points at the on-disk SKILL.md so load_skill can read the body.
-    assert all(d.ref and d.ref.endswith("SKILL.md") for d in skills)
+    assert sorted(d.skill_id for d in corpus.docs) == [
+        "code-review",
+        "mlops/lean-backtest",
+        "mlops/tools",
+        "research/tools",
+        "vectorized-backtest",
+    ]
+    assert {
+        doc.skill_id for doc in corpus.by_short_name["tools"]
+    } == {"mlops/tools", "research/tools"}
+    lean = corpus.by_id["mlops/lean-backtest"]
+    assert lean.category == "mlops"
+    assert lean.skill_file.name == "SKILL.md"
+    assert [r.relative_path for r in lean.resources] == [
+        "references/bar-level-debug.md",
+        "scripts/generate_universe.py",
+    ]
+    assert all(d.kind == "skill" for d in corpus.docs)
 
 
 def test_parse_frontmatter_flat_dict() -> None:
@@ -125,6 +144,62 @@ def test_load_skill_unknown_raises_model_retry() -> None:
         _toolset().load_skill("no-such-skill")
     assert "no-such-skill" in str(excinfo.value)
     assert "Available skills" in str(excinfo.value)
+
+
+def test_list_skills_renders_categories() -> None:
+    out = _toolset().list_skills()
+    assert "(root)/" in out
+    assert "mlops/" in out
+    assert "research/" in out
+    assert "  - code-review: Review a code change" in out
+    assert "  - lean-backtest: Run a vectorized LEAN backtest" in out
+    assert "  - tools: ML-ops tooling" in out
+
+
+def test_load_skill_returns_body_and_resource_manifest() -> None:
+    body = _toolset().load_skill("mlops/lean-backtest")
+    assert "# Skill: lean-backtest" in body
+    assert "Available resources:" in body
+    assert "references/bar-level-debug.md" in body
+    assert "scripts/generate_universe.py" in body
+
+
+def test_load_skill_rejects_ambiguous_short_name() -> None:
+    with pytest.raises(ModelRetry) as excinfo:
+        _toolset().load_skill("tools")
+    assert "tools" in str(excinfo.value)
+    assert "Available skills" in str(excinfo.value)
+
+
+def test_load_skill_accepts_unique_short_name() -> None:
+    assert "# Skill: lean-backtest" in _toolset().load_skill("lean-backtest")
+
+
+# ---------------------------------------------------------------------------
+# skill resources
+# ---------------------------------------------------------------------------
+
+
+def test_list_and_read_skill_files() -> None:
+    ts = _toolset()
+    files = ts.list_skill_files("mlops/lean-backtest")
+    assert files.splitlines() == [
+        "references/bar-level-debug.md",
+        "scripts/generate_universe.py",
+    ]
+    content = ts.read_skill_file("mlops/lean-backtest", "references/bar-level-debug.md")
+    assert content.startswith("references/bar-level-debug.md\n\n")
+    assert "LogErrorHandler" in content
+    script = ts.read_skill_file("mlops/lean-backtest", "scripts/generate_universe.py")
+    assert "def universe" in script
+
+
+def test_read_skill_file_rejects_traversal_and_non_resources() -> None:
+    ts = _toolset()
+    with pytest.raises(ModelRetry, match="escapes"):
+        ts.read_skill_file("mlops/lean-backtest", "../../README.md")
+    with pytest.raises(ModelRetry, match="not a resource"):
+        ts.read_skill_file("mlops/lean-backtest", "SKILL.md")
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +245,13 @@ def test_build_skills_defaults_to_data_skills() -> None:
     spec'd path is PROJECT_ROOT/data/skills (gitignored, free to grow/shrink).
     """
     sk = _build_skills(store=None)
-    assert set(sk.get_toolset().tools) == {"list_skills", "load_skill", "point_to_skill"}
+    assert set(sk.get_toolset().tools) == {
+        "list_skills",
+        "load_skill",
+        "point_to_skill",
+        "list_skill_files",
+        "read_skill_file",
+    }
     assert sk.libraries == (PROJECT_ROOT / "data" / "skills",)
     assert sk.top_k == 3
 
