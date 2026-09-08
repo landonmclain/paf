@@ -266,3 +266,26 @@ def test_build_does_not_wire_hook_when_compaction_absent():
     caps = _runtime_capabilities_for(("ThreadSummarizer",))
     assert any(isinstance(c, ThreadSummarizer) for c in caps)
     assert _window_in(caps) is None
+
+
+def test_demo_profile_ons_capture_and_wires_hook():
+    """demo_assistant (everything sandbox) now ONs ThreadSummarizer + wires the hook.
+
+    DEMO_PROFILE lists BOTH ThreadSummarizer and Compaction -> the built window's
+    capture_hook is set, so evictions write to data/summaries/demo_assistant/.
+    The production assistant stays OFF (covered by test_off_profile_never_builds_it).
+    """
+    from paf.capabilities.profiles import DEMO_PROFILE
+
+    assert "ThreadSummarizer" in DEMO_PROFILE.capability_names
+    assert "Compaction" in DEMO_PROFILE.capability_names
+
+    from paf.capabilities.build import build_runtime_capabilities
+
+    caps = build_runtime_capabilities(DEMO_PROFILE, agent_name="demo_assistant")
+    window = _window_in(caps)
+    assert window is not None
+    assert window.capture_hook is not None
+    # the attached capability writes to the per-agent capture dir
+    summarizer = next(c for c in caps if isinstance(c, ThreadSummarizer))
+    assert summarizer.capture_directory.name == "demo_assistant"

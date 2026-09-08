@@ -180,6 +180,13 @@ DEMO_PROFILE = AgentProfile(
         # each request as a cache-safe tail reminder. Built in Python (build.py
         # `_build_planning`) so the profile gate controls it.
         "Planning",
+        # Thread-conversation summarizer — per-conversation episodic background
+        # summarizer. Phase 1: captures each eviction block (with per-message
+        # {run_id}:{turn_id} refs) to data/summaries/<agent>/evictions.jsonl via
+        # the window hook (wired only when BOTH ThreadSummarizer and Compaction
+        # are allowlisted). OFF for the production assistant; ON here so the
+        # "everything sandbox" exercises the capture waterfall live.
+        "ThreadSummarizer",
     ),
 )
 
