@@ -42,6 +42,7 @@ from paf.capabilities.memory._background import (
 )
 from paf.capabilities.memory._journal import JournalStore
 from paf.capabilities.memory._watermark import MemoryWatermark
+from paf.capabilities.persistence import build_history_source
 
 
 def _msg(*, user: str, assistant: str) -> list[ModelMessage]:
@@ -390,3 +391,83 @@ def test_queue_folds_real_store_and_advances_watermark(tmp_path: Path) -> None:
     assert any(str(r.fact) == "hello" for _, r in rows), rows
     # the in-flight tip turn was NOT folded
     assert not any(str(r.fact) == "tip" for _, r in rows), rows
+
+
+# ---------------------------------------------------------------------------
+# 5. Within-run cumulative-snapshot duplication (real-live-branch regression)
+# ---------------------------------------------------------------------------
+
+
+def _multi_snapshot_store(tmp_path: Path, conversation_id: str = "c1") -> FileStepStore:
+    """One run whose SNAPSHOTS carry cumulative history, like the live harness.
+
+    A ``ContinuableSnapshot`` in this store is the FULL accumulating history
+    re-instantiated each step, so snapshot N repeats everything snapshot N-1
+    had plus one new turn (the live branch's step-persistence pattern). Each
+    snapshot is written from a freshly-instantiated message list, mirroring the
+    real deserialization that gives parts distinct ``timestamp`` values.
+    """
+    store = FileStepStore(directory=tmp_path)
+    run_id = "run-multi"
+    asyncio.run(
+        store.register_run(
+            RunRecord(run_id=run_id, conversation_id=conversation_id,
+                      started_at=datetime(2026, 2, 1, tzinfo=UTC))
+        )
+    )
+    turns = [("t0", "a0"), ("t1", "a1"), ("t2", "a2"), ("t3", "a3")]
+    for i in range(len(turns)):
+        # Build a FRESH cumulative message list (new parts -> new timestamps)
+        # each snapshot, exactly as the harness does when it re-serializes the
+        # accumulating history at every step.
+        cumulative: list[ModelMessage] = []
+        for user, assistant in turns[: i + 1]:
+            cumulative.extend(_msg(user=user, assistant=assistant))
+        asyncio.run(
+            store.save_snapshot(
+                ContinuableSnapshot(
+                    run_id=run_id,
+                    step_index=i,
+                    conversation_id=conversation_id,
+                    messages=cumulative,
+                )
+            )
+        )
+    return store
+
+
+def from_harness_run_history(store: FileStepStore, run_id: str) -> bool:
+    """True if the harness's own ``run_history`` duplicates turns on this store."""
+    harness = SnapshotHistorySource(store)
+    history = asyncio.run(harness.run_history(run_id=run_id))
+    turns = _turns(history)
+    return len(turns) != len(set(turns))
+
+
+def test_stable_history_source_dedups_within_run_cumulative_snapshots(tmp_path: Path) -> None:
+    """Each turn appears exactly once in ``run_history`` under the stable source.
+
+    The harness's own ``SnapshotHistorySource.run_history`` reconciles the
+    snapshot union with ``message_hash`` (timestamp-unstable), so every
+    cumulative snapshot re-appends the whole history — the within-run
+    duplication the live 18-run conversation was hit by (61+ snapshots -> each
+    turn repeated dozens of times). ``build_history_source`` keys on
+    content-stable hashes, so a turn carried forward by later snapshots is
+    emitted once.
+    """
+    store = _multi_snapshot_store(tmp_path)
+
+    # Guard: the harness source is genuinely broken on this shape (proves the
+    # regression exists and the stable source is what fixes it, not something
+    # already calling it). If this ever starts passing, the harness fixed its
+    # hashing and StableSnapshotHistorySource may become redundant.
+    harness_broken = from_harness_run_history(store, "run-multi")
+    assert harness_broken, (
+        "harness run_history unexpectedly deduped; StableSnapshotHistorySource "
+        "may now be redundant"
+    )
+
+    stable = build_history_source(store)
+    history = asyncio.run(stable.run_history(run_id="run-multi"))
+    turns = _turns(history)
+    assert turns == ["t0", "t1", "t2", "t3"], turns

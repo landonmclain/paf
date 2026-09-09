@@ -78,11 +78,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai_harness.conversation_search import SnapshotHistorySource
 from pydantic_ai_harness.step_persistence import continue_run
 
 from paf.capabilities import PROFILES
 from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities.persistence import build_history_source
 from paf.capabilities.memory._background import (
     ConsolidationJob,
     MemoryConsolidationQueue,
@@ -723,7 +723,7 @@ class Session:
                         task.progress = 1.0 if kind == DONE else None
                         self._publish_task(task)
 
-            source = SnapshotHistorySource(self._store)
+            source = build_history_source(self._store)
 
             async def span_source(run_id: str, up_to_turn_id: int):
                 wm = MemoryWatermark.load(self._memory_directory, run_id=run_id)
@@ -849,7 +849,7 @@ class Session:
                 self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
-            tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
                 task.status = SKIPPED
@@ -864,7 +864,7 @@ class Session:
             # Resolve the unseen span for THIS conversation now; hand the worker
             # precomputed material so it summarizes exactly what was scheduled.
             span = await resolve_unseen_span(
-                SnapshotHistorySource(self._store),
+                build_history_source(self._store),
                 wm,
                 tip_run=tip_run,
                 tip_turn=tip_turn,
@@ -920,7 +920,7 @@ class Session:
             if not runs:
                 return
             tip_run = runs[-1].run_id
-            tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
                 return
@@ -981,7 +981,7 @@ class Session:
                 self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
-            tip_history = await SnapshotHistorySource(self._store).run_history(run_id=tip_run)
+            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
                 task.status = SKIPPED
@@ -1017,7 +1017,7 @@ class Session:
             # completed (non-error) fold; a failed fold leaves the watermark
             # behind so this span is retried next cadence, never skipped.
             span = await resolve_unseen_span(
-                SnapshotHistorySource(self._store), wm,
+                build_history_source(self._store), wm,
                 tip_run=tip_run, tip_turn=tip_turn,
             )
             mq.enqueue(

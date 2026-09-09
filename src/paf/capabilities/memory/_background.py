@@ -28,7 +28,6 @@ watermark spec's "does this break the benchmark" section).
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -38,49 +37,25 @@ from typing import TYPE_CHECKING
 
 from paf.background import BackgroundQueueService, QueueState
 
+from .._hashes import _content_hash
 from .._turns import user_anchor_indices
 from ._journal import JournalStore
 from ._watermark import _WATERMARK_FILENAME, MemoryWatermark
 
 # Cross-run overlap reconciliation (the memory-family lesson): each run's
-# persisted history is cumulative, so spanning multiple runs re-collects the
-# prior runs' prefix unless we reconcile it — the same dedup seam
-# ``SnapshotHistorySource`` uses within a run. ``_overlap_length`` (pure
-# region matching) is reused from the harness; ``message_hash`` is NOT — it
-# hashes the raw serialized bytes including pydantic's per-instantiation
+# persisted history is CUMULATIVE — a snapshot carries the whole conversation
+# from turn 0 forward — so spanning multiple runs re-collects prior runs' turns
+# unless we dedup by turn identity (see ``resolve_unseen_span``). We use our own
+# content-stable ``_content_hash`` rather than the harness ``message_hash``: the
+# latter hashes raw serialized bytes including pydantic's per-instantiation
 # ``timestamp``, so byte-identical content re-instantiated across runs/replay
-# hashes differently and overlap never fires (the resume-duplication bug). We
-# use our own content-stable ``_content_hash`` instead.
-try:  # pragma: no cover - import surface varies by harness version
-    from pydantic_ai_harness.conversation_search._source import _overlap_length
-except Exception:  # pragma: no cover
-    _overlap_length = None
+# hashes differently and overlap never fires (the resume-duplication bug).
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage  # noqa: F401
     from pydantic_ai_harness.conversation_search import HistorySource
 
 log = logging.getLogger(__name__)
-
-
-def _content_hash(message: "ModelMessage") -> str:
-    """Content-stable hash of a message's durable parts, in order.
-
-    The harness ``message_hash`` hashes raw serialized bytes, which include
-    pydantic's per-instantiation ``timestamp`` on parts — so two byte-identical
-    conversation messages that get re-instantiated across runs (replay /
-    ``continue_run`` / steer) hash DIFFERENTLY and the cross-run overlap in
-    :func:`resolve_unseen_span` computes 0, re-collecting the already-consumed
-    cumulative prefix (the resume-duplication bug). Hashing durable content
-    (part kind + text) makes overlap equality recognizable across runs while
-    still distinguishing repeated identical content at distinct positions.
-    """
-    toks: list[str] = []
-    for part in getattr(message, "parts", ()):
-        text = getattr(part, "content", None)
-        toks.append(f"{type(part).__name__}:{text}" if isinstance(text, str) else type(part).__name__)
-    return hashlib.sha256("\n".join(toks).encode()).hexdigest()
-
 
 
 def _turn_bounds(anchors: list[int], turn: int, n: int) -> tuple[int, int]:
@@ -93,22 +68,6 @@ def _turn_bounds(anchors: list[int], turn: int, n: int) -> tuple[int, int]:
     start = anchors[turn] if 0 <= turn < len(anchors) else n
     end = anchors[turn + 1] if turn + 1 < len(anchors) else n
     return start, end
-
-
-def _first_anchor_not_overlapped(anchors: list[int], overlap: int, n: int) -> int:
-    """Index of the first turn whose messages begin at/after ``overlap``.
-
-    ``overlap`` is the number of leading messages of this run already present in
-    the accumulated span (from a prior run's cumulative history). Turns that end
-    at or before ``overlap`` are fully collected; the first turn whose start is
-    ``>= overlap`` is where this run contributes new content. 0 when overlap is 0.
-    """
-    if overlap <= 0 or not anchors:
-        return 0
-    for t, _a in enumerate(anchors):
-        if _turn_bounds(anchors, t, n)[0] >= overlap:
-            return t
-    return len(anchors)
 
 
 @dataclass(frozen=True)
@@ -176,7 +135,14 @@ async def resolve_unseen_span(
     )
 
     collected: list[ModelMessage] = []
-    collected_hashes: list[str] = []
+    # Content-hash identity of every complete turn already folded into
+    # ``collected`` (per-turn = concatenated per-message content hashes). Runs
+    # are CUMULATIVE — each snapshot carries the whole conversation from turn 0
+    # forward — so a later run repeats earlier runs' turns verbatim. Matching a
+    # run against this set tells us exactly how many leading turns are already
+    # covered, regardless of where the watermark sits (see the cross-run note
+    # below).
+    seen_turn_keys: set[str] = set()
     last_complete: MemoryWatermark | None = None
 
     # Position of the watermark's run. Runs strictly older than it are fully
@@ -189,6 +155,23 @@ async def resolve_unseen_span(
         if _r.run_id == watermark.run_id:
             wm_run_idx = _i
             break
+
+    # Seed ``seen_turn_keys`` with the turns the watermark has ALREADY consumed
+    # (its run's turns ``0..turn_id``). A later cumulative run repeats that
+    # history verbatim, so without this seed the run would re-collect turns the
+    # owner folded on a PREVIOUS cadence — the many-run duplication. The seed is
+    # derived from the durable watermark (not from this call's ``collected``),
+    # so it is correct even when the entire span below is a prior-cadence carry.
+    if watermark.turn_id is not None:
+        wm_hist = await source.run_history(run_id=watermark.run_id)
+        if wm_hist:
+            wm_anchors = user_anchor_indices(wm_hist)
+            wm_n = len(wm_hist)
+            for _t in range(min(watermark.turn_id + 1, len(wm_anchors))):
+                _s, _e = _turn_bounds(wm_anchors, _t, wm_n)
+                seen_turn_keys.add(
+                    "\n".join(_content_hash(m) for m in wm_hist[_s:_e])
+                )
 
     for i, r in enumerate(runs):
         if i < wm_run_idx:
@@ -219,20 +202,20 @@ async def resolve_unseen_span(
             continue
 
         # CROSS-RUN OVERLAP (the memory-family lesson): each run's history is
-        # CUMULATIVE — it starts from the conversation's oldest turn and carries
-        # every prior run's messages forward. So when the watermark's run was
-        # earlier (only its first-turn skip applied) and a LATER run has a fresh
-        # turn_id=0, collecting from turn 0 would re-add all of the already-
-        # collected prefix. Reconcile the accumulated history's suffix against
-        # this run's prefix (the same overlap removal
-        # ``SnapshotHistorySource.run_history`` performs within a run) and start
-        # at the first non-overlapping anchor.
-        hist_hashes = [_content_hash(m) for m in hist]
-        overlap = _overlap_length(collected_hashes, hist_hashes)
-        first_turn = max(
-            first_turn, _first_anchor_not_overlapped(anchors, overlap, n)
-        )
-
+        # CUMULATIVE — a snapshot carries the WHOLE conversation from turn 0
+        # forward, so a later run repeats every prior run's turns verbatim.
+        # Collecting from turn 0 on a later run re-adds the already-collected
+        # prefix. The earlier prefix↔suffix reconciliation only worked while
+        # the collected span stayed prefix-aligned at turn 0 (fresh watermark);
+        # the moment a mid-history watermark advanced ``collected`` past turn 0,
+        # a later cumulative run's prefix (always at turn 0) no longer matched,
+        # overlap computed 0, and the run re-collected its entire history —
+        # the many-run duplication seen in real conversations.
+        #
+        # Correct, structure-independent reconciliation: a turn is an overlap
+        # iff its content identity is already in ``seen_turn_keys``. Cumulative
+        # runs repeat leading turns, so this skips to the first genuinely-new
+        # turn no matter how many runs precede it or where the watermark sits.
         for t in range(first_turn, len(anchors)):
             # Fold full turns only: stop strictly before the in-flight tip. A
             # turn at or after (tip_idx, tip_turn) has not finished settling.
@@ -240,8 +223,12 @@ async def resolve_unseen_span(
                 break
             start, end = _turn_bounds(anchors, t, n)
             slice_msgs = hist[start:end]
+            turn_key = "\n".join(_content_hash(m) for m in slice_msgs)
+            # Duplicate turn from an earlier cumulative run: already folded.
+            if turn_key in seen_turn_keys:
+                continue
             collected.extend(slice_msgs)
-            collected_hashes.extend(_content_hash(m) for m in slice_msgs)
+            seen_turn_keys.add(turn_key)
             # Advance the ref AND the time anchor. consumed_ts is this run's
             # started_at — monotonic across runs, so the next cadence can gauge
             # progress even after a run boundary resets local turn_id.

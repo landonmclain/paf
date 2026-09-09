@@ -34,12 +34,17 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
+from paf.capabilities._hashes import _content_hash
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
+from paf.capabilities.search._render import is_summary_artifact
 from paf.config import PROJECT_ROOT, settings
+
+if TYPE_CHECKING:
+    from pydantic_ai.messages import ModelMessage
 
 # Canonical store root for M1 persistence + recall. A directory of flat files
 # (JSONL events, JSON snapshots per run) — greppable/inspectable, no DB to
@@ -53,6 +58,52 @@ def _build_store() -> FileStepStore:
     """Build the single shared persistence store."""
     _STORE_DIR.mkdir(parents=True, exist_ok=True)
     return FileStepStore(directory=_STORE_DIR)
+
+
+class StableSnapshotHistorySource(SnapshotHistorySource):
+    """``SnapshotHistorySource`` with content-stable within-run overlap removal.
+
+    The harness's ``run_history`` reconciles the accumulated history's suffix
+    against each snapshot's prefix using the harness ``message_hash``, which
+    hashes raw serialized bytes INCLUDING pydantic's per-instantiation
+    ``timestamp``. Every snapshot is re-instantiated on read, so byte-identical
+    messages across snapshots hash differently, overlap computes 0, and the
+    run's full cumulative history is appended once per snapshot — the
+    within-run duplication that blows up a conversation's span (up to
+    ``#snapshots`` copies of every turn). We reimplement the same union with
+    :func:`_content_hash` (content-stable across re-instantiation), so a run's
+    ``run_history`` returns each turn exactly once.
+    """
+
+    async def run_history(self, *, run_id: str) -> list["ModelMessage"]:
+        history: list["ModelMessage"] = []
+        history_keys: set[str] = set()
+        for snapshot in await self._store.list_snapshots(run_id=run_id):
+            messages = [
+                message
+                for message in snapshot.messages
+                if not is_summary_artifact(message)
+            ]
+            uniq: list["ModelMessage"] = []
+            for message in messages:
+                key = _content_hash(message)
+                if key in history_keys:
+                    continue  # already carried by an earlier (cumulative) snapshot
+                history_keys.add(key)
+                uniq.append(message)
+            history.extend(uniq)
+        return history
+
+
+def build_history_source(store: FileStepStore) -> StableSnapshotHistorySource:
+    """Build the recall history source with content-stable overlap dedup.
+
+    Every consumer that reads persisted history to resolve an unseen span (the
+    memory owner and the thread summarizer) should use this instead of a raw
+    harness ``SnapshotHistorySource`` so neither re-collects duplicated turns
+    from cumulative snapshots / runs.
+    """
+    return StableSnapshotHistorySource(store)
 
 
 def _build_step_persistence(store: FileStepStore) -> StepPersistence:
