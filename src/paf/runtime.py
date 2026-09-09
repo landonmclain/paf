@@ -767,7 +767,7 @@ class Session:
         """Build the self-contained background reviewer queue.
 
         Peer to the consolidation queue: same engine, different cadence and job.
-        The reviewer curates the whole rendered memory on ``review_every`` turns.
+        The reviewer curates the whole rendered memory on ``review_every`` minutes.
         ``review_span`` defaults to the real reviewer (``_review.review``); a
         test injects a journal-fenced stand-in so the queue + trigger mechanics
         are proven without an LLM call.
@@ -911,8 +911,8 @@ class Session:
         """Fire the background reviewer hook on its own ``review_every`` cadence.
 
         Like ``_maybe_trigger_consolidation`` but for the reviewer: after each
-        completed turn, check the review watermark; when ``review_every`` turns
-        have accumulated since the last review pass, enqueue a ``ReviewJob``.
+        completed turn, check the review watermark; when ``review_every`` minutes
+        have elapsed since the last review pass, enqueue a ``ReviewJob``.
         The reviewer curates the whole rendered memory (not just pending
         suggestions), so it fires on cadence regardless of pending count.
         """

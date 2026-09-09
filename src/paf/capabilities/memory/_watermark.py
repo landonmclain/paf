@@ -10,22 +10,23 @@ This module holds the pure, testable pieces — the watermark record and the
 ``should_fire`` trigger predicate — with **no model and no persistence calls**.
 The queue consumer that uses them lives in :mod:`. _background`.
 
-Ref model (LOCKED, see ``_journal.py``): every message carries a
-``{run_id}:{turn_id}`` address, where ``turn_id`` is the ordinal of the run's
-user-prompt anchor, stable for the life of the run (unlike a
-``message_index`` which rots as messages append). The watermark is therefore a
-single ``{run_id, turn_id}`` pair: *"the last user-turn the owner has consumed."*
+Ref model (see ``_journal.py``): a turn's durable address is anchored on the
+run's persisted ``started_at`` (a native UTC timestamp, index-sorted on the
+store), which is **monotonic across runs** — unlike a ``turn_id`` ordinal,
+which resets when a session forks/continues and therefore can't anchor
+cross-run cadence. The watermark is a single ``consumed_ts`` timestamp: the
+last time the owner folded durable turns.
 
 Design notes from ``Designs/Background-Memory-Watermark-Spec.md``:
 - Flat-file-first — ``memory-watermark.json`` sits beside the journal /
   ``MEMORY.md``, diffable and swappable (no opaque DB).
-- The turn-count metric runs **ahead of** the window's ``keep_messages`` (e.g.
-  keep 20 → fire every 10) so the owner always consumes *before* eviction, and
-  eviction stays only a safety net.
-- ``turn_id`` is only monotonic *within one run*; cross-run enumeration needs
-  the persisted ``started_at`` ordering (documented in the spec). The trigger
-  predicate here is deliberately run-scoped; cross-run anchoring is handled by
-  the queue consumer's window selection, not this predicate.
+- The cadence is a **time** metric: ``should_fire`` fires once at least
+  ``consolidate_every`` **minutes** have elapsed since ``consumed_ts`` (and
+  immediately on a fresh/legacy watermark with no anchor). This is decoupled
+  from context eviction — eviction is trim-only and never calls memory — so
+  eviction is just a safety net, not a trigger or dependency.
+- The trigger predicate here is deliberately time-anchored; the queue
+  consumer's window selection handles which turns were new since the anchor.
 
 Nothing here imports ``pydantic_ai`` or any LLM. Everything is a pure func /
 dataclass so the trigger is unit-tested without paying for a model call.
@@ -150,8 +151,9 @@ def should_fire(
     yet (fresh / legacy watermark with no ``consumed_ts``) — the whole backlog is
     new.
 
-    ``every`` is the cadence; the spec mandates it run ahead of eviction
-    (``every < keep``) so the owner always consumes before the window trims.
+    ``every`` is the cadence (a positive :class:`datetime.timedelta`, minutes in
+    practice). Pure time-based and decoupled from context eviction — eviction
+    is trim-only and never calls memory, so nothing binds this to the window.
     """
     if every is None or every <= timedelta(0):
         raise ValueError(f"every must be a positive timedelta, got {every!r}")

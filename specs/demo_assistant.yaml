@@ -246,13 +246,15 @@ compact:
 # it is handed these values as injected constructor args when it gets a live
 # construction site.
 #
-# consolidate_every: how many user-turns must accumulate past the memory
-#   watermark before the background consolidation owner fires (decoupled from
-#   eviction, so the owner runs ahead of it). Keep below
-# `compact.window_keep_messages` (20) so consolidation always runs BEFORE the
-#   sliding window drops messages. Absent -> default (10).
-#   NOTE: not yet live-driven — the queue's construction site lands when the
-#   background consumer is wired; this just establishes the declarative surface.
+# consolidate_every: background-consolidation cadence, in **minutes** —
+#   a time metric (time-anchored watermark: `should_fire` fires once at least
+#   this many minutes have elapsed since the watermark's `consumed_ts`).
+#   Decoupled from context eviction (eviction is trim-only and never calls
+#   memory); the owner just folds durable turns at least this often when new
+#   material has accumulated. Absent -> default (30m in build.py).
+#   `review_every` (default 60m, not set here) is the rarer reviewer cadence.
+#   Background consolidation is LIVE — the runtime triggers it off the
+#   completed-turn path via `_maybe_trigger_consolidation`.
 # - max_memory_size (65536)  chars: per-read cap JournalViewStore truncates MEMORY.md to.
 # - max_tokens (65536)       tokens: token ceiling for the injected <memory> section.
 # - max_lines (1000000)      lines: line cap applied by render_memory_prompt.

@@ -361,8 +361,9 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
           max_lines: 1000000         # optional; line cap for injected section
 
     ``consolidate_every`` is the background-consolidation cadence in **minutes**
-    — a time metric (time-anchored watermark; monotonic across runs) that the
-    owner uses to fire ahead of eviction. ``max_memory_size`` / ``max_tokens`` /
+    — a time metric (time-anchored watermark; monotonic across runs). It is
+    decoupled from context eviction; the owner simply folds at least this often
+    when new material has accumulated. ``max_memory_size`` / ``max_tokens`` /
     ``max_lines`` bound how much of the rendered journal is injected into each
     request (see ``JournalViewStore.read`` / ``render_memory_prompt``). They
     live on **Memory** — the capability owns every memory config variable —
