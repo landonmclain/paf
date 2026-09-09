@@ -21,6 +21,9 @@ from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 
+from paf.capabilities._edit import apply_edits
+from paf.capabilities._storage._atomic import write_atomic
+
 _P = ParamSpec('_P')
 
 # Errors that mean "the model asked for something the tool couldn't do" -- a
@@ -273,48 +276,37 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         return f'Wrote {len(content)} chars ({lines} lines) to {path}. [hash:{new_hash}]'
 
     @_recoverable
-    async def edit_file(self, path: str, old_text: str, new_text: str, *, expected_hash: str | None = None) -> str:
+    async def edit_file(self, path: str, edits: list[dict], *, expected_hash: str | None = None) -> str:
         """Edit a file by exact string replacement with conflict detection.
 
-        The old_text must appear exactly once in the file. Include surrounding
-        context lines to ensure uniqueness.
+        ``edits`` is a list of ``{"old_text", "new_text"}`` pairs applied in one
+        atomic write. Each ``old_text`` must appear exactly once in the file;
+        include surrounding context lines to ensure uniqueness. A single edit is
+        ``edits=[{"old_text": "...", "new_text": "..."}]``; pass several pairs to
+        batch independent changes to the same file in one call.
 
         Args:
             path: File path relative to the root directory.
-            old_text: The exact text to find (must appear exactly once).
-            new_text: The replacement text.
+            edits: ``[{old_text, new_text}, ...]`` pairs to apply, in order.
             expected_hash: If provided, rejects the edit when the file's
                 current hash doesn't match (optimistic concurrency).
 
         Returns:
-            Summary with new hash for subsequent operations.
+            Summary with new hash + per-pair diffs; raises a recoverable error
+            on any failure (never reports success for an unpersisted edit).
         """
         resolved = self._safe_resolve(path, write=True)
         if not resolved.is_file():
             raise FileNotFoundError(f'File not found: {path}')
 
-        text = resolved.read_text(encoding='utf-8')
-        current_hash = _content_hash(text)
-
-        # Optimistic concurrency check
-        if expected_hash is not None and current_hash != expected_hash:
-            raise ValueError(
-                f'Conflict: file {path!r} has changed (expected hash:{expected_hash}, '
-                f'got hash:{current_hash}). Re-read the file and retry.'
-            )
-
-        count = text.count(old_text)
-        if count == 0:
-            raise ValueError(f'old_text not found in {path}.')
-        if count > 1:
-            raise ValueError(
-                f'old_text found {count} times in {path}. Include more surrounding context to make the match unique.'
-            )
-
-        new_content = text.replace(old_text, new_text, 1)
-        resolved.write_text(new_content, encoding='utf-8')
-        new_hash = _content_hash(new_content)
-        return f'Edited {path}. [hash:{new_hash}]'
+        result = apply_edits(
+            resolved,
+            edits,
+            expected_version=expected_hash,
+            read=lambda p: p.read_text(encoding='utf-8'),
+            write=write_atomic,
+        )
+        return result.summary(path)
 
     @_recoverable
     async def list_directory(self, path: str = '.') -> str:

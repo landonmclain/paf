@@ -264,29 +264,48 @@ def test_edit_skill_cas_conflict_and_refuse_blind(tmp_path: Path) -> None:
     ts.create_skill("ops", "deploy", description="Deploy the service.", content="# Skill: deploy\n\nRun the release pipeline.")
     # load reports a version; edit with that version succeeds + bumps it.
     v1 = ts.load_skill("ops/deploy").split("version: ")[1].split("]")[0]
-    out = ts.edit_skill("ops/deploy", "Run the release pipeline.", "Run pipeline + notify.", expected_version=v1)
-    assert "Edited 'ops/deploy'" in out
-    v2 = out.split("[version:")[1].rstrip("]")
+    out = ts.edit_skill("ops/deploy", [{"old_text": "Run the release pipeline.", "new_text": "Run pipeline + notify."}], expected_version=v1)
+    assert "Edited ops/deploy" in out
+    v2 = out.splitlines()[0].split("[version:")[1].rstrip("]")
     assert v2 != v1
     # Refreshed corpus reflects the new body.
     assert "Run pipeline + notify" in ts.load_skill("ops/deploy")
-    # Stale version -> conflict, no write.
-    stale = ts.edit_skill("ops/deploy", "Run pipeline + notify.", "CHANGED", expected_version=v1)
-    assert "Conflict" in stale
+    # Stale version -> conflict, no write (raises, never lies).
+    with pytest.raises(ModelRetry, match="Conflict"):
+        ts.edit_skill(
+            "ops/deploy", [{"old_text": "Run pipeline + notify.", "new_text": "CHANGED"}], expected_version=v1
+        )
     assert "CHANGED" not in ts.load_skill("ops/deploy")
     # old_text not found -> clean refusal.
-    assert "not found" in ts.edit_skill("ops/deploy", "no such text", "x")
+    with pytest.raises(ModelRetry, match="old_text not found"):
+        ts.edit_skill("ops/deploy", [{"old_text": "no such text", "new_text": "x"}])
+
+
+def test_edit_skill_batch_applies_all_pairs(tmp_path: Path) -> None:
+    ts = _toolset_at(str(tmp_path))
+    ts.create_skill("ops", "deploy", description="Deploy the service.", content="# Skill: deploy\n\nRun the release pipeline.")
+    out = ts.edit_skill(
+        "ops/deploy",
+        [
+            {"old_text": "Run the release pipeline.", "new_text": "Run pipeline + notify."},
+            {"old_text": "Deploy the service.", "new_text": "Deploys the service."},
+        ],
+    )
+    assert "Edited ops/deploy" in out
+    body = ts.load_skill("ops/deploy")
+    assert "Run pipeline + notify" in body
+    assert "Deploys the service." in body
 
 
 def test_edit_skill_refuses_ambiguous_and_unknown(tmp_path: Path) -> None:
     ts = _toolset_at(str(tmp_path))
     # Duplicate old_text -> refuse (never edit blindly).
     ts.create_skill("ops", "deploy", description="d", content="# Skill: deploy\n\nstep one\n\nstep two\n")
-    out = ts.edit_skill("ops/deploy", "step", "STEP")
-    assert "found 2 times" in out
+    with pytest.raises(ModelRetry, match="found 2 times"):
+        ts.edit_skill("ops/deploy", [{"old_text": "step", "new_text": "STEP"}])
     # Unknown skill -> ModelRetry.
     with pytest.raises(ModelRetry):
-        ts.edit_skill("nope/nowhere", "a", "b")
+        ts.edit_skill("nope/nowhere", [{"old_text": "a", "new_text": "b"}])
 
 
 # ---------------------------------------------------------------------------

@@ -29,22 +29,35 @@ adopt vault's mkstemp semantics.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 
 def write_atomic(path: str | Path, content: str) -> None:
-    """Write ``content`` to ``path`` atomically (staging + rename).
+    """Write ``content`` to ``path`` atomically (unique temp + os.replace).
 
-    The staging file lives in the same directory (so ``os.replace`` is an
-    atomic rename on the same filesystem) with a ``.<name>.staging`` name that
-    any reader skips or cleans up lazily.
+    The temp file lives in the same directory (so ``os.replace`` is an atomic
+    rename on the same filesystem) with a **process-unique** name
+    (``tempfile.mkstemp``), so concurrent writers to the SAME target can never
+    steal each other's staging file mid-replace (a fixed ``.<name>.staging``
+    name raced — one thread's ``os.replace`` could consume the staging file
+    another thread was about to move, raising ``FileNotFoundError``). The
+    temp is removed on any failure so no ``*.tmp`` debris is left behind.
     """
+    import os
+    import tempfile
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    staging = path.with_name(f".{path.name}.staging")
-    staging.write_text(content, encoding="utf-8")
-    os.replace(staging, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def write_json_atomic(path: str | Path, payload: object) -> None:

@@ -39,6 +39,8 @@ from pathlib import Path
 
 from pydantic_ai.toolsets import FunctionToolset
 
+from paf.capabilities._edit import apply_edits
+
 from ._markdown import rename_note_title, resolve_note, rewrite_wikilink_target
 from ._store import (
     FlatFileVaultStorage,
@@ -546,24 +548,28 @@ class VaultToolset(FunctionToolset):
     def note_edit(
         self,
         path: str,
-        old_text: str,
-        new_text: str,
+        edits: list[dict],
         *,
         expected_version: str | None = None,
     ) -> str:
         """Edit a note by exact string replacement, with conflict detection.
 
-        Replaces the first occurrence of ``old_text`` with ``new_text`` inside
-        the note. ``old_text`` must appear exactly once; include enough
-        surrounding context to make it unique (passing a string that appears
-        zero or multiple times is an error, so you never edit blindly).
+        ``edits`` is a list of ``{"old_text", "new_text"}`` pairs, applied in
+        one atomic write. Each ``old_text`` must appear exactly once; include
+        enough surrounding context to make it unique. A single edit is
+        ``edits=[{"old_text": "...", "new_text": "..."}]``; pass several pairs
+        to batch independent changes to the same note in one call.
 
-        ``expected_version`` is the note's content version reported by
-        ``read_note`` (the ``version:`` in the read header). If provided, the
-        edit is REJECTED when the note's current version has changed — someone
-        (e.g. a human in Obsidian) edited it since you read it. Re-read the
-        note and retry with the fresh version. Returns a confirmation carrying
-        the new version for your next edit.
+        The whole batch is validated before writing — if ANY pair's ``old_text``
+        is missing or ambiguous, the entire call is rejected (never a partial
+        edit). ``expected_version`` is the note's content version reported by
+        ``read_note`` (the ``version:`` in the read header); if the note changed
+        since you read it, the edit is rejected and you re-read and retry.
+
+        On success returns a confirmation with the new version and a per-pair
+        diff of what landed. On any failure it raises a retryable error (the
+        model is told to re-read and retry) — it never reports success for an
+        edit that did not persist.
         """
         try:
             rel = self._resolve(path)
@@ -575,36 +581,20 @@ class VaultToolset(FunctionToolset):
         if full is None or not full.is_file():
             return f"(note not found on disk: {rel})"
 
-        text = full.read_text(encoding="utf-8", errors="replace")
-        current_version = _content_hash(text)
-
-        # Optimistic concurrency: reject stale edits against the read version.
-        if expected_version is not None and current_version != expected_version:
-            return (
-                f"Conflict: note {rel!r} has changed (expected version: "
-                f"{expected_version}, got version: {current_version}). "
-                f"Re-read the note with read_note and retry."
-            )
-
-        count = text.count(old_text)
-        if count == 0:
-            return f"old_text not found in {rel}."
-        if count > 1:
-            return (
-                f"old_text found {count} times in {rel}. "
-                f"Include more surrounding context to make the match unique."
-            )
-
-        new_content = text.replace(old_text, new_text, 1)
-        self._write_note_atomic(full, new_content)
+        result = apply_edits(
+            full,
+            edits,
+            expected_version=expected_version,
+            read=lambda p: p.read_text(encoding="utf-8", errors="replace"),
+            write=self._write_note_atomic,
+        )
 
         # Refresh this note's index row + snapshot so read_note / note_find /
         # note_search reflect the new content on the next call.
         self._storage.sync_changed(self._root, self._scope)
         build_index(self._root, self._scope, self._storage)
 
-        new_version = _content_hash(new_content)
-        return f"Edited {rel}. [version:{new_version}]"
+        return result.summary(rel)
 
     # -- formatting ----------------------------------------------------------
 

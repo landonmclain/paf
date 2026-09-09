@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic_ai.exceptions import ModelRetry
 
 from paf.capabilities.vault import (
     FlatFileVaultStorage,
@@ -525,7 +526,7 @@ def test_read_note_version_matches_content_hash(vault: tuple[Path, VaultToolset]
 
 def test_note_edit_replaces_exact_once_and_returns_new_version(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    out = toolset.note_edit("Grounding", "See [[Index]].", "See [[Foundations]].")
+    out = toolset.note_edit("Grounding", [{"old_text": "See [[Index]].", "new_text": "See [[Foundations]]."}])
     assert "Edited Grounding.md" in out
     assert "[version:" in out
     text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
@@ -540,21 +541,40 @@ def test_note_edit_version_chaining_read_edit_edit(vault: tuple[Path, VaultTools
     read = toolset.read_note("Grounding")
     assert read is not None
     v1 = read.splitlines()[0].rsplit("version: ", 1)[1].rstrip("]")
-    r1 = toolset.note_edit("Grounding", "See [[Index]].", "First pass.", expected_version=v1)
-    v2 = r1.rsplit("version:", 1)[1].strip("]")
+    r1 = toolset.note_edit(
+        "Grounding", [{"old_text": "See [[Index]].", "new_text": "First pass."}], expected_version=v1
+    )
+    v2 = r1.splitlines()[0].rsplit("version:", 1)[1].strip("]")
     # second edit with the freshly returned version succeeds
-    r2 = toolset.note_edit("Grounding", "First pass.", "Second pass.", expected_version=v2)
+    r2 = toolset.note_edit(
+        "Grounding", [{"old_text": "First pass.", "new_text": "Second pass."}], expected_version=v2
+    )
     assert "Edited Grounding.md" in r2
     assert "Second pass." in (vault[0] / "Grounding.md").read_text(encoding="utf-8")
 
 
+def test_note_edit_batch_applies_all_pairs_in_one_write(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # two independent changes, one atomic call, and a per-pair diff each
+    out = toolset.note_edit(
+        "Grounding",
+        [
+            {"old_text": "See [[Index]].", "new_text": "See [[Foundations]]."},
+            {"old_text": "tags: [grounding, curated]", "new_text": "tags: [grounding, curated, edited]"},
+        ],
+    )
+    assert "Edited Grounding.md" in out
+    text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    assert "See [[Foundations]]." in text
+    assert "tags: [grounding, curated, edited]" in text
+
+
 def test_note_edit_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    out = toolset.note_edit(
-        "Grounding", "See [[Index]].", "Changed.", expected_version="stale-deadbeef"
-    )
-    assert "Conflict" in out
-    assert "changed" in out
+    with pytest.raises(ModelRetry, match="Conflict"):
+        toolset.note_edit(
+            "Grounding", [{"old_text": "See [[Index]].", "new_text": "Changed."}], expected_version="stale-deadbeef"
+        )
     # the note was NOT modified
     text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
     assert "See [[Index]]." in text
@@ -564,14 +584,14 @@ def test_note_edit_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -
 def test_note_edit_no_expected_version_allowed(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
     # expected_version is optional when the caller doesn't need CAS
-    out = toolset.note_edit("Grounding", "See [[Index]].", "See [[Index]] fine.")
+    out = toolset.note_edit("Grounding", [{"old_text": "See [[Index]].", "new_text": "See [[Index]] fine."}])
     assert "Edited Grounding.md" in out
 
 
 def test_note_edit_old_text_not_found(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    out = toolset.note_edit("Grounding", "no such text anywhere", "x")
-    assert "old_text not found" in out
+    with pytest.raises(ModelRetry, match="old_text not found"):
+        toolset.note_edit("Grounding", [{"old_text": "no such text anywhere", "new_text": "x"}])
     assert "See [[Index]]." in (vault[0] / "Grounding.md").read_text(encoding="utf-8")
 
 
@@ -579,21 +599,36 @@ def test_note_edit_old_text_not_unique(vault: tuple[Path, VaultToolset]) -> None
     _, toolset = vault
     # 'Index' appears in both the frontmatter title and the heading; ask to
     # replace it → must refuse because the match isn't unique.
-    out = toolset.note_edit("Index", "Index", "IDX")
-    assert "times" in out
-    assert "more surrounding context" in out
+    with pytest.raises(ModelRetry, match="found 2 times"):
+        toolset.note_edit("Index", [{"old_text": "Index", "new_text": "IDX"}])
     assert "IDX" not in (vault[0] / "Index.md").read_text(encoding="utf-8")
+
+
+def test_note_edit_batch_rejects_all_when_any_pair_fails(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    # one valid + one garbage pair → the WHOLE batch is rejected, nothing lands
+    with pytest.raises(ModelRetry, match="Refusing to edit"):
+        toolset.note_edit(
+            "Grounding",
+            [
+                {"old_text": "See [[Index]].", "new_text": "See [[Foundations]]."},
+                {"old_text": "no such text anywhere", "new_text": "x"},
+            ],
+        )
+    text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    assert "See [[Foundations]]." not in text
+    assert "See [[Index]]." in text
 
 
 def test_note_edit_unknown_or_outside_root(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
     # out-of-root traversal is rejected without touching anything
-    out = toolset.note_edit("../Index.md", "a", "b")
+    out = toolset.note_edit("../Index.md", [{"old_text": "a", "new_text": "b"}])
     assert "(unknown note" in out or "vault" in out
-    out2 = toolset.note_edit("Does Not Exist", "a", "b")
+    out2 = toolset.note_edit("Does Not Exist", [{"old_text": "a", "new_text": "b"}])
     assert "unknown" in out2.lower() or "not found" in out2.lower()
     # unknown path-like ref regrounds rather than guessing
-    out3 = toolset.note_edit("Projects/Index.md", "a", "b")
+    out3 = toolset.note_edit("Projects/Index.md", [{"old_text": "a", "new_text": "b"}])
     assert "do NOT prepend" in out3
 
 
