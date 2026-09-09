@@ -175,7 +175,22 @@ async def _close_idle_loop() -> None:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Start the idle sweeper on boot; close every session on shutdown."""
+    """Start the idle sweeper on boot; close every session on shutdown.
+
+    Holds a process-lifetime *anchor* ref on observability so the 30-min idle
+    sweeper can never drive the shared OTel provider's ref-count to 0 mid-run.
+    If it did, ``shutdown_observability()`` tears the GLOBAL provider down and
+    ``trace.set_tracer_provider`` is set-once (a dead provider cannot be
+    re-armed) — so every later lane silently loses tracing. The anchor keeps
+    refs >= 1 for the process life; the balance in the `finally` releases it on
+    a clean shutdown so a genuine process exit still flushes + shuts down.
+    """
+    from paf.observability.instrumentation import (
+        setup_observability,
+        shutdown_observability,
+    )
+
+    setup_observability()  # process anchor: refs never hit 0 during idle eviction
     sweeper = asyncio.create_task(_close_idle_loop())
     try:
         yield
@@ -183,6 +198,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         sweeper.cancel()
         for key in list(_sessions.keys()):
             _close_session(key)
+        shutdown_observability()  # release the anchor (all lanes already closed)
 
 
 app = FastAPI(title="paf SSE transport", lifespan=_lifespan)
