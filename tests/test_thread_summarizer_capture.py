@@ -166,3 +166,28 @@ def test_capture_drops_thinking_and_intermediate_keeps_final_text():
         curated = _first_text(msg)
         if isinstance(msg, ModelResponse):
             assert curated is None or "Let me check the codebase" not in curated
+
+
+def test_summarizer_prompt_uses_stamped_absolute_refs() -> None:
+    """A worker-stamped block renders conversation-ABSOLUTE refs, not slice-relative.
+
+    The bug: the prompt computed refs with ``_ref_for(span, i)`` *within the
+    slice*, so block 2 of a multi-block span cited ``:0..:N`` instead of the real
+    ``:10..``. The worker now stamps ``_thread_abs_ref`` on each message; the
+    prompt must prefer it so the model's beats cite real ``{run_id}:{turn_id}``.
+    """
+    from paf.capabilities.thread_summarizer._summarize import SummarizerPrompt
+
+    msgs: list[ModelMessage] = []
+    for t in range(10, 14):  # absolute conversation turns 10..13
+        req = ModelRequest(parts=[UserPromptPart(content=f"q{t}")])
+        resp = ModelResponse(parts=[TextPart(f"a{t}")])
+        for m in (req, resp):
+            m._thread_abs_ref = f"run-a:{t}"
+        msgs.extend([req, resp])
+
+    rendered = SummarizerPrompt(msgs, "p:c1").render()
+    assert "[run-a:10]" in rendered and "[run-a:11]" in rendered
+    assert "[run-a:12]" in rendered and "[run-a:13]" in rendered
+    # Slice-relative refs must NOT appear (they'd collide with block 1).
+    assert "[run-a:0]" not in rendered and "[run-a:1]" not in rendered

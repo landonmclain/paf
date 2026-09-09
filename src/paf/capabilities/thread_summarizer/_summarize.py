@@ -82,7 +82,10 @@ class SummarizerPrompt:
             text = _first_text(msg)
             if not text:
                 continue  # thinking / tool narration / retry — not durable
-            ref = _ref_for(self.span, i)
+            # Prefer the conversation-absolute ref stamped by the worker (a
+            # multi-block span must cite real {run_id}:{turn_id}, not slice-relative).
+            stamped = getattr(msg, "_thread_abs_ref", None)
+            ref = stamped or _ref_for(self.span, i)
             role = type(msg).__name__
             lines.append(f"[{ref or 'unanchored'}] {role}: {text}")
         messages = "\n".join(lines)

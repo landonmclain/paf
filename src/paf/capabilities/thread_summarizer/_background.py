@@ -154,7 +154,13 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
             for start in range(0, len(turns), BLOCK_TURNS):
                 block = turns[start : start + BLOCK_TURNS]
                 block_msgs: list = []
-                for turn in block:
+                # Stamp each turn's CONVERSATION-ABSOLUTE ref onto its messages so
+                # the prompt/beats cite the real {run_id}:{turn_id}, not a
+                # slice-relative one.
+                for k, turn in enumerate(block):
+                    abs_ref = turn_refs[start + k]
+                    for m in turn:
+                        m._thread_abs_ref = abs_ref
                     block_msgs.extend(turn)
                 beats: BeatsRecord = await self.summarize_span_fn(block_msgs, job.conversation_id)
                 # Use the span-absolute refs for this block's turn range.
