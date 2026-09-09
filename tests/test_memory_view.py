@@ -39,6 +39,100 @@ def test_read_returns_top_level_rendered_md(mem_dir: Path) -> None:
     assert main.content == RENDERED
 
 
+def _ctx(messages):
+    from pydantic_ai.models import ModelRequestContext
+
+    return ModelRequestContext(
+        model="openrouter:deepseek/deepseek-v4-flash-0731",
+        messages=messages,
+        model_settings={},
+        model_request_parameters={},
+    )
+
+
+def _run_ctx():
+    """A minimal RunContext carrying a NoOpTracer (as the agent graph provides)."""
+    from opentelemetry.trace import NoOpTracer
+    from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.tools import RunContext
+    from pydantic_ai.usage import RunUsage
+
+    def _call(_messages, info):
+        raise AssertionError("unused")
+
+    return RunContext(
+        deps=None,
+        model=FunctionModel(_call),
+        usage=RunUsage(),
+        tracer=NoOpTracer(),
+    )
+
+
+def _memory_cap(mem_dir: Path):
+    from paf.capabilities.memory import Memory
+
+    return Memory(
+        store=JournalViewStore(mem_dir),
+        agent_name="assistant",
+        inject_memory=True,
+        writable=False,
+        expose_tools=False,
+        guidance="",
+    )
+
+
+def test_inject_on_real_user_turn_only(mem_dir: Path) -> None:
+    """Memory injects once per real user turn, not on every model call.
+
+    Regression guard for the mid-turn re-injection noise: `before_model_request`
+    fires before every model request, including each tool-loop continuation.
+    Memory must inject on genuine user-prompt ModelRequests but leave tool-loop
+    ModelRequests (tool returns, no durable user prompt) untouched — so the
+    `<memory>` block stops surfacing at the front of every thinking turn.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest,
+        TextContent,
+        ToolReturnPart,
+        UserPromptPart,
+    )
+
+    cap = _memory_cap(mem_dir)
+
+    async def _run() -> None:
+        # 1. A real user turn anchors the conversation -> inject a <memory> part.
+        user = ModelRequest(parts=[UserPromptPart(content="remember this")])
+        out = await cap.before_model_request(_run_ctx(), _ctx([user]))
+        parts = out.messages[0].parts
+        assert len(parts) == 2  # original user prompt + injected memory block
+        injected = parts[1]
+        assert isinstance(injected, UserPromptPart) or hasattr(injected, "content")
+        assert "<memory>" in str(injected.content)
+
+        # 2. A tool-loop continuation (tool return, no user prompt) -> SKIP.
+        tool_msg = ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="run_command",
+                    tool_call_id="call_1",
+                    content=[TextContent("ok")],
+                )
+            ]
+        )
+        before = _ctx([user, tool_msg])
+        out2 = await cap.before_model_request(_run_ctx(), before)
+        # Latest message (the tool return) must be unchanged — no memory block
+        # appended onto it.
+        assert out2.messages[-1] is before.messages[-1]
+        tool_parts = out2.messages[-1].parts
+        assert all(
+            p.tool_name == "run_command" for p in tool_parts
+        )
+
+    asyncio.run(_run())
+
+
+
 def test_read_ignores_scoped_path(mem_dir: Path) -> None:
     # Injection asks for `assistant/MEMORY.md`; we answer with the root render.
     store = JournalViewStore(mem_dir)

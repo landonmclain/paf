@@ -20,6 +20,8 @@ from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import AgentToolset
 
+from paf.capabilities._turns import _is_user_turn
+
 from ._journal import JournalStore
 from ._overrides import OverrideStore
 from ._store import MemoryStore, validate_store_path
@@ -293,15 +295,38 @@ class Memory(AbstractCapability[AgentDepsT]):
         ctx: RunContext[AgentDepsT],
         request_context: ModelRequestContext,
     ) -> ModelRequestContext:
-        """Add a bounded memory snapshot to only the current user request."""
+        """Add a bounded memory snapshot to *turn starts only*, not every model call.
+
+        Mindful of the mid-turn re-injection noise: paf's agent loop calls
+        `before_model_request` before *every* model request, including each
+        tool-loop continuation. Re-injecting a fresh notebook there (a) wastes
+        tokens on identical content, and (b) surfaces the `<memory>` block at
+        the front of every thinking turn, so the model re-notices and mentions
+        it constantly. Instead we inject **once per real user turn** — only when
+        the latest message is a genuine user prompt (per the shared
+        `_turns._is_user_turn` rule, which treats injected blocks as NOT turn
+        starts). Tool-loop ModelRequests (tool responses, no durable user
+        prompt) are left untouched, so the snapshot already in context from the
+        turn's start stays put; the next real user turn strips the stale block
+        and injects a fresh one.
+
+        Within a turn the journal doesn't change (consolidation is background),
+        so skipping mid-turn loses nothing and cuts the repeated span+append.
+        """
+        if not self.inject_memory:
+            return request_context
+        messages = request_context.messages
+        # Inject only on a real user-turn start. Guard empty/edge histories.
+        if not messages or not _is_user_turn(messages[-1]):
+            # Mid-turn continuation (tool loop): leave the existing injected
+            # block in place — do NOT strip-and-re-inject identical content.
+            return request_context
         store, scope = self.resolve_scope(ctx)
         scope_hash = hashlib.sha256(scope.encode()).hexdigest()[:16]
         # Scope-qualify the marker so several `Memory` capabilities on one agent
         # each refresh only their own injection instead of clobbering each other.
         marker = f"{_MEMORY_PART_METADATA}:{scope_hash}"
-        self._remove_previous_injection(request_context.messages, marker)
-        if not self.inject_memory:
-            return request_context
+        self._remove_previous_injection(messages, marker)
         with ctx.tracer.start_as_current_span(
             "memory.inject", record_exception=False, set_status_on_exception=False
         ) as span:
