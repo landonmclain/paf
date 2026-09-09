@@ -236,6 +236,8 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
             span_runs = [getattr(m, "run_id", None) for m in span_messages]
 
             store = ThreadSummaryStore(self.capture_root, job.conversation_id)
+            last_anchor = store.last_anchor()
+            covered = 0
             summarized = 0
             for start in range(0, len(turns), BLOCK_TURNS):
                 block = turns[start : start + BLOCK_TURNS]
@@ -248,12 +250,35 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                     for m in turn:
                         m._thread_abs_ref = abs_ref
                     block_msgs.extend(turn)
-                beats: BeatsRecord = await self.summarize_span_fn(block_msgs, job.conversation_id)
                 # Use the span-absolute refs for this block's turn range.
                 block_refs = [
                     r for r in turn_refs[start : start + len(block)] if r is not None
                 ]
                 block_anchor = _block_anchor_from_refs(span_runs, block_refs)
+
+                # SELF-HEALING CATCH-UP: if this block's anchor is already
+                # at-or-below the most recently-persisted summary, the turns it
+                # covers were already summarized by a divergent lineage (e.g. a
+                # stale watermark after a process restart, or two workers sharing
+                # one store). Re-summarizing them is wasted work and re-crashes
+                # on "anchor must increase". Instead: skip the model call, treat
+                # the block as converged, and advance the watermark past it so
+                # the worker resumes at the genuinely-new tail. Errors are
+                # expected/messy during development — this recovers instead of
+                # deadlocking the conversation's summarizer forever.
+                if last_anchor is not None and block_anchor is not None:
+                    if (block_anchor.run_id, block_anchor.turn_id or 0) <= last_anchor:
+                        log.info(
+                            "thread_summarizer_catch_up session=%s block already "
+                            "covered at %s:%s — skipping %d turn(s), advancing watermark",
+                            session_id, block_anchor.run_id, block_anchor.turn_id,
+                            len(block),
+                        )
+                        self._advance(job.conversation_id, block_anchor)
+                        covered += len(block)
+                        continue
+
+                beats: BeatsRecord = await self.summarize_span_fn(block_msgs, job.conversation_id)
                 block_start, block_end = _span_range(block)
                 store.append_summary(
                     summary_from_beats(
@@ -277,7 +302,13 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
             self._advance(job.conversation_id, span_target)
 
             n_blocks = (len(turns) + BLOCK_TURNS - 1) // BLOCK_TURNS
-            detail = f"{summarized} turns summarized in {n_blocks} block(s)"
+            if covered:
+                detail = (
+                    f"{summarized} turns summarized in {n_blocks} block(s); "
+                    f"{covered} already-covered turn(s) skipped (catch-up)"
+                )
+            else:
+                detail = f"{summarized} turns summarized in {n_blocks} block(s)"
             log.info(
                 "thread_summarizer_job session=%s success %s watermark=%s",
                 session_id, detail, span_target,

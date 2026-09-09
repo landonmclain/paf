@@ -129,6 +129,24 @@ class ThreadSummaryStore:
     def existing_summaries(self) -> list[ThreadSummaryRecord]:
         return _read_summary_records(self.summaries_path)
 
+    def last_anchor(self) -> tuple[str, int] | None:
+        """``(run_id, turn_id)`` of the most recently-appended summary, if any.
+
+        Used by the worker's catch-up: a block whose would-be anchor is already
+        at-or-below this is a previously-covered span (e.g. after a stale or
+        cross-process-diverged watermark) and should be skipped, advancing the
+        watermark past it rather than hard-failing on "anchor must increase".
+        ``None`` when the file is empty (nothing summarized yet).
+        """
+        recs = _read_summary_records(self.summaries_path)
+        if not recs:
+            return None
+        last = recs[-1]
+        if not last.run_id:
+            return None
+        return (last.run_id, last.turn_id)
+
+
     def append_summary(self, record: ThreadSummaryRecord) -> None:
         """Append a summary exactly once, idempotently by its run/turn anchor."""
         if record.conversation_id != self.conversation_id:

@@ -542,6 +542,22 @@ class Session:
         """The lazy thread queue (None when the profile leaves it OFF)."""
         return self._thread_queue
 
+    def task_history(self, conversation_id: str) -> list[BackgroundTask]:
+        """Background-task rows scoped to a conversation, newest first.
+
+        Includes terminal ``error`` rows (e.g. a failed thread summarizer) so a
+        UI can surface "a background task failed for this conversation" even
+        though the completion lands AFTER the turn's SSE stream closes. Task
+        ids are prefixed ``{kind}.{conversation_id}.{seq}``; we match on the
+        conversation segment (bounds-checked so a cid prefix can't over-match).
+        """
+        needle = f".{conversation_id}."
+        rows = [
+            t for t in self._background_tasks.values() if needle in f".{t.id}"
+        ]
+        rows.sort(key=lambda t: t.updated_at, reverse=True)
+        return rows
+
     # -- profile namespace (conversation identity scoping) --------------------
 
     def _scoped_cid(self, cid: str | None) -> str | None:

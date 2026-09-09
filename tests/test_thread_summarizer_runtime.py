@@ -36,7 +36,7 @@ from paf.capabilities.thread_summarizer._store import (
     ThreadSummaryStore,
 )
 from paf.capabilities.thread_summarizer._summarize import Beat, BeatsRecord
-from paf.runtime import Session
+from paf.runtime import BackgroundTask, Session
 
 
 def _msg(*, user: str, assistant: str) -> list[ModelMessage]:
@@ -199,3 +199,37 @@ def test_two_conversations_never_share_a_watermark(tmp_path: Path) -> None:
     assert conversation_directory(capture_root, "profile:cA") != conversation_directory(
         capture_root, "profile:cB"
     )
+
+
+def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
+    """``task_history`` filters by conversation and keeps terminal error rows.
+
+    The thread summarizer fails AFTER the turn stream closes, so its ERROR task
+    must remain discoverable via ``task_history`` — including the error detail —
+    for a UI to surface "background task failed" without relying on the live
+    turn channel.
+    """
+    store = _store(tmp_path, {"ra": _msg(user="hi", assistant="hey")}, "profile:cA")
+
+    with Session(
+        "runtime2_test", trace=False, resume=False, store=store
+    ) as session:
+        session._thread_summarizer_enabled = True
+        # Simulate a failed thread summarizer task for conversation cA.
+        session._thread_summarizer_seq = 1
+        session._publish_task(
+            BackgroundTask(
+                id="thread_summarize.profile:cA.1",
+                label="Summarizing thread (profile:cA)",
+                status="error",
+                detail="summary run/turn anchor must increase",
+            )
+        )
+
+        got_a = session.task_history("profile:cA")
+        assert len(got_a) == 1
+        assert got_a[0].status == "error"
+        assert "anchor must increase" in got_a[0].detail
+
+        # Conversation isolation: cB (different cid) sees nothing.
+        assert session.task_history("profile:cB") == []

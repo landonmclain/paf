@@ -493,6 +493,39 @@ async def set_conversation_title(
     }
 
 
+@app.get("/api/conversations/{conversation_id}/tasks")
+async def conversation_tasks(
+    conversation_id: str, agent: str = DEFAULT_AGENT
+) -> dict[str, Any]:
+    """Background-task history for a conversation, newest first.
+
+    Background tasks (thread summarizer, memory reviewer, consolidation) can
+    finish AFTER the turn's SSE stream closes, so a failure is never visible on
+    the live turn channel. This endpoint lets a UI query "did anything fail for
+    this conversation" — on load, on turn-end, or on-demand — and surface e.g.
+    ``status: error`` rows with their ``detail``. Rows are advisory/transient
+    (kept in the session registry only), not a durable audit log.
+    """
+    session = await _get_session(conversation_id, agent)
+    tasks = session.task_history(conversation_id)
+    return {
+        "conversation_id": conversation_id,
+        "agent": agent,
+        "tasks": [
+            {
+                "id": t.id,
+                "label": t.label,
+                "status": t.status,
+                "progress": t.progress,
+                "detail": t.detail,
+                "updated_at": t.updated_at,
+            }
+            for t in tasks
+        ],
+    }
+
+
+
 def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIterator[str]:
     """Run one turn, forwarding turn events + background-task frames as SSE."""
 

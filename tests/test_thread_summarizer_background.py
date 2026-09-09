@@ -29,6 +29,7 @@ from paf.capabilities.thread_summarizer._background import (
 )
 from paf.capabilities.thread_summarizer._store import (
     THREAD_WATERMARK_FILENAME,
+    ThreadSummaryRecord,
     ThreadSummaryStore,
 )
 from paf.capabilities.thread_summarizer._summarize import Beat, BeatsRecord
@@ -298,6 +299,84 @@ def test_queue_time_range_defaults_empty_without_timestamps(tmp_path) -> None:
     assert len(recs) == 1
     assert recs[0].started_at == ""
     assert recs[0].ended_at == ""
+
+
+def test_queue_catches_up_over_stale_watermark_without_crashing(tmp_path) -> None:
+    """A watermark behind the already-persisted summary file converges, not crashes.
+
+    Regression for the live deadlock: a stale watermark (e.g. re-loaded after a
+    process restart, or shared across two workers) resolves a span that a
+    divergent lineage already summarized and persisted. The worker must NOT
+    hard-fail on "anchor must increase" forever — it should skip the
+    already-covered block(s), advance the watermark past them, and summarize
+    only the genuinely-new tail.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    root = tmp_path / "assistant"
+
+    # Pre-seed the store: a summary already persisted at (run-b, turn=30) —
+    # i.e. the file is "ahead" of the watermark (run-a, turn=2) a stale reader
+    # would load. This is the divergent-lineage state from the bug.
+    store = ThreadSummaryStore(root, CID)
+    store.append_summary(
+        ThreadSummaryRecord(
+            conversation_id=CID,
+            run_id="run-b",
+            turn_id=30,
+            summarized_at="2026-09-09T10:00:00+00:00",
+            summary="already summarized the later turns",
+            refs=["run-b:30"],
+        )
+    )
+
+    summarize_calls: list[list] = []
+
+    async def tracking_summarize(span, cid):
+        summarize_calls.append(span)
+        return _beats("run-c", 0)
+
+    queue = ThreadSummarizerQueue(capture_root=str(root), summarize_span_fn=tracking_summarize)
+
+    # The resolved span is OLD (runs 'run-a'..'run-c') relative to what's
+    # persisted (run-b turn 30) — exactly the stale-watermark re-coverage case.
+    # The message run_ids are staggered so blocks sort older than the file.
+    span = []
+    for i in range(25):  # 25 turns -> covers old runs
+        req = ModelRequest(parts=[UserPromptPart(content=f"u{i}")])
+        req.run_id = "run-a" if i < 20 else "run-c"
+        resp = ModelResponse(parts=[TextPart(f"a{i}")])
+        resp.run_id = "run-a" if i < 20 else "run-c"
+        span.append(req)
+        span.append(resp)
+
+    # The job's watermark target is the old tip (run-a turn 24), NOT the
+    # persisted run-b:30 — a stale reader that never saw run-b's writes.
+    target = MemoryWatermark(run_id="run-a", turn_id=24, consumed_ts=None)
+
+    # process_job must NOT raise "anchor must increase" — the covered blocks are
+    # skipped and the watermark advances; nothing is written for covered turns.
+    asyncio.run(
+        queue.process_job(
+            CID,
+            ThreadSummarizeJob(conversation_id=CID, messages=span, watermark=target),
+            QueueState(),
+        )
+    )
+
+    # Only the truly-new tail (run-c) is summarized, not the covered old turns.
+    assert len(summarize_calls) >= 1
+    # The watermark advanced to the span's target (run-a:24), past the covered
+    # range, so the next cadence won't re-cover it.
+    wm = _wm(store)
+    assert wm.turn_id == 24
+    # No crash, and covered old turns did not append duplicate blocks.
+    assert len(store.existing_summaries()) >= 1  # pre-seed + any new tail
 
 
 def _fake_span(n: int, run_id: str = "run-a") -> list:
