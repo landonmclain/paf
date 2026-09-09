@@ -144,6 +144,64 @@ def test_resolve_unseen_span_skips_consumed_tail_past_watermark(tmp_path: Path) 
     asyncio.run(go())
 
 
+def test_resolve_unseen_span_cross_run_cumulative_no_duplication(tmp_path: Path) -> None:
+    """A resumed/steered cumulative run must not re-collect the prior run's prefix.
+
+    Regression for the resume-duplication bug: run-b is a ``continue_run`` whose
+    snapshot carries run-a's FULL history forward as a prefix (re-instantiated
+    messages). The cross-run overlap reconciliation must strip that prefix, so
+    fresh-watermark resolution yields each turn ONCE. It relies on the
+    content-stable ``_content_hash`` — the harness ``message_hash`` hashes
+    pydantic's per-instantiation ``timestamp``, so byte-identical re-instantiated
+    messages hash differently and the overlap fires 0 (see the history-dup bug).
+    """
+    # run-b = full copy of run-a + 2 new turns (cumulative, like a resume).
+    run_a = [*_msg(user="q1", assistant="a1"), *_msg(user="q2", assistant="a2")]
+    run_b = [
+        *_msg(user="q1", assistant="a1"),
+        *_msg(user="q2", assistant="a2"),
+        *_msg(user="q3", assistant="a3"),
+        *_msg(user="q4", assistant="a4"),
+    ]
+    store = _store(tmp_path, {"run-a": run_a, "run-b": run_b})
+    source = SnapshotHistorySource(store)
+    wm = MemoryWatermark()  # fresh
+
+    async def go():
+        # q4 is the in-flight tip (excluded); q1/q2/q3 complete.
+        span = await resolve_unseen_span(source, wm, tip_run="run-b", tip_turn=3)
+        # Each turn appears exactly ONCE — the cumulative prefix is not re-added.
+        assert _turns(span.messages) == ["q1", "q2", "q3"]
+        assert span.watermark.run_id == "run-b"
+        assert span.watermark.turn_id == 2
+
+    asyncio.run(go())
+
+
+def test_resolve_unseen_span_cross_run_three_runs_no_duplication(tmp_path: Path) -> None:
+    """A 3-run cumulative chain (two steers) also dedupes to one copy each."""
+    run_a = [*_msg(user="q1", assistant="a1")]
+    run_b = [*_msg(user="q1", assistant="a1"), *_msg(user="q2", assistant="a2")]
+    run_c = [
+        *_msg(user="q1", assistant="a1"),
+        *_msg(user="q2", assistant="a2"),
+        *_msg(user="q3", assistant="a3"),
+        *_msg(user="q4", assistant="a4"),
+    ]
+    store = _store(tmp_path, {"run-a": run_a, "run-b": run_b, "run-c": run_c})
+    source = SnapshotHistorySource(store)
+    wm = MemoryWatermark()  # fresh
+
+    async def go():
+        # q4 in flight; q1/q2/q3 complete and must appear once each.
+        span = await resolve_unseen_span(source, wm, tip_run="run-c", tip_turn=3)
+        assert _turns(span.messages) == ["q1", "q2", "q3"]
+        assert span.watermark.run_id == "run-c"
+        assert span.watermark.turn_id == 2
+
+    asyncio.run(go())
+
+
 def test_resolve_unseen_span_excludes_in_flight_tip(tmp_path: Path) -> None:
     """The in-flight tip turn is never folded (stop on the second-to-last turn)."""
     store = _store(
@@ -164,6 +222,7 @@ def test_resolve_unseen_span_excludes_in_flight_tip(tmp_path: Path) -> None:
         assert span.watermark.turn_id is None
 
     asyncio.run(go())
+
 
 
 # ---------------------------------------------------------------------------
