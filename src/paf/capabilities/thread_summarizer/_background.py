@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from paf.background import BackgroundQueueService, QueueState
-from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities._turns import _real_user_prompt_text, user_anchor_indices
 from paf.capabilities.memory._watermark import MemoryWatermark
 from paf.capabilities.thread_summarizer._store import (
     THREAD_WATERMARK_FILENAME,
@@ -61,21 +61,67 @@ class ThreadSummarizeJob:
 ThreadSpanSource = Callable[[str, int, str], Awaitable]  # (tip_run, tip_turn, conversation_id) -> ResolvedSpan
 
 
-def _span_complete_turns(messages: list) -> list[list]:
-    """Slice ``messages`` into per-complete-turn lists, ordered.
+def _span_complete_turns_with_anchors(messages: list) -> list[tuple[list, int]]:
+    """Per-complete-turn slices, each tagged with its user-anchor message index.
 
-    Every returned slice is one settled turn (user prompt .. prior to the next
-    user anchor); the span is already complete-only (the tip is excluded by
+    Every slice is one settled turn (user prompt .. prior to the next user
+    anchor); the span is already complete-only (the tip is excluded by
     ``resolve_unseen_span``), so every message belongs to some slice.
     """
     from paf.capabilities._turns import user_anchor_indices
 
     anchors = user_anchor_indices(messages)
-    slices: list[list] = []
+    slices: list[tuple[list, int]] = []
     for a, anchor in enumerate(anchors):
         end = anchors[a + 1] if a + 1 < len(anchors) else len(messages)
-        slices.append(messages[anchor:end])
+        slices.append((messages[anchor:end], anchor))
     return slices
+
+
+def _span_complete_turns(messages: list) -> list[list]:
+    """Slice ``messages`` into per-complete-turn lists, ordered (no anchors).
+
+    Thin wrapper over :func:`_span_complete_turns_with_anchors` that drops the
+    anchor indices for callers that only need the slices.
+    """
+    return [s for s, _ in _span_complete_turns_with_anchors(messages)]
+
+
+def _distinct_complete_turns(messages: list) -> tuple[list[list], list[int]]:
+    """Complete-turn slices keyed on **distinct real** user prompts, ordered.
+
+    Same slicing as :func:`_span_complete_turns` (one slice per settled turn),
+    but a later anchor that is just a **re-persisted copy** of an already-seen
+    real user prompt (the same underlying turn re-appearing at another
+    ``{run_id}:{turn_id}`` address, or carrying an injected block) is dropped —
+    the slice is keyed on the real prompt's marker-stripped text, the same
+    "distinct real turn" criterion the trigger gate uses. So a 28-address span
+    that is really 10 distinct prompts yields 10 slices, not 28, and each
+    block a genuine ``BLOCK_TURNS`` real prompts instead of duplicate-padded
+    noise.
+
+    Returns ``(distinct, anchor_indices)`` where ``anchor_indices`` is the
+    message-index of each distinct turn's first (kept) anchor in `messages`.
+    """
+    seen: set[str] = set()
+    distinct: list[list] = []
+    anchors: list[int] = []
+    for turn, anchor in _span_complete_turns_with_anchors(messages):
+        # The turn's real prompt text (None -> injected-only, never counts).
+        text = None
+        for m in turn:
+            text = _real_user_prompt_text(m)
+            if text:
+                break
+        if not text:
+            # No real user prompt anchors this slice; it is not a real turn.
+            continue
+        if text in seen:
+            continue  # re-persisted copy of an already-counted real turn
+        seen.add(text)
+        distinct.append(turn)
+        anchors.append(anchor)
+    return distinct, anchors
 
 
 class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
@@ -139,13 +185,17 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                     self.on_complete(session_id, True, "0 turns summarized")
                 return
 
-            # Slice into ~10-turn blocks and summarize each as its own record.
-            turns = _span_complete_turns(span_messages)
+            # Slice into distinct-real-turn blocks and summarize each as its own
+            # record. `_distinct_complete_turns` collapses re-persisted copies
+            # of the same real user prompt, so `turns` is a Q>=1 list of 1:1
+            # distinct real turns (matching the trigger gate's yardstick), and
+            # each block is a genuine BLOCK_TURNS real prompts, never padded by
+            # duplicate addresses or injected-only slices.
+            turns, turn_anchors = _distinct_complete_turns(span_messages)
             # Absolute per-turn refs across the WHOLE span (each ref's `turn`
             # is its position in conversation history, not within a slice).
             turn_refs: list[str | None] = [
-                self._ref(span_messages, anchor)
-                for anchor in user_anchor_indices(span_messages)  # one ref per turn
+                self._ref(span_messages, anchor) for anchor in turn_anchors
             ]
             span_runs = [getattr(m, "run_id", None) for m in span_messages]
 

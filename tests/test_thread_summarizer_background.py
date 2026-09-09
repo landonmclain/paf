@@ -263,3 +263,75 @@ def test_queue_chunks_span_into_10_turn_blocks(tmp_path) -> None:
     assert {r.run_id for r in recs} == {"run-a"}
     assert sorted(r.turn_id for r in recs) == [9, 19]  # anchored at each block's last turn
     assert _wm(store).turn_id == 19  # advanced past the final block
+
+
+def test_distinct_turns_collapse_repersisted_and_injected(tmp_path) -> None:
+    """Blocks chunk on *distinct real* turns, never raw addresses.
+
+    Guards the live-branch bug: a span whose real user prompts appear at many
+    re-persisted anchor addresses (and interleaved with injected <memory>
+    blocks) was chunked by raw addresses — 28 addresses of ~10 distinct prompts
+    produced 3 tool/noise-heavy blocks instead of 1 clean 10-prompt block. The
+    gate and worker must share the same "distinct real turn" yardstick.
+    """
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextContent, TextPart, UserPromptPart
+
+    from paf.capabilities._markers import injected_artifact_markers
+    from paf.capabilities.thread_summarizer._background import _distinct_complete_turns
+
+    marker = injected_artifact_markers()[1] + ":scope_hash"
+
+    # The same real prompt, re-persisted at 3 different anchors (clean, with an
+    # injected block, and again) — ALL are one distinct turn.
+    def _user() -> ModelRequest:
+        return ModelRequest(parts=[UserPromptPart(content="real question")], run_id="run-a")
+
+    def _injected() -> ModelRequest:
+        return ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=[TextContent(content="\n\n<memory>\n### MEMORY.md\n...", metadata=marker)]
+                )
+            ],
+            run_id="run-a",
+        )
+
+    def _resp(txt: str) -> ModelResponse:
+        r = ModelResponse(parts=[TextPart(txt)])
+        return r
+
+    # A span with one real prompt at 3 addresses + an injected-only request in
+    # between. Real answer differs per copy so the slice still carries its turn.
+    span = [
+        _user(), _resp("answer0"),          # distinct turn 1 (kept, first addr)
+        _injected(),                        # not a user turn
+        _user(), _resp("answer-b"),         # re-persisted copy -> dropped
+        _user(), _resp("answer-c"),         # re-persisted copy -> dropped
+    ]
+    turns, anchors = _distinct_complete_turns(span)
+    assert len(turns) == 1, turns          # ONE distinct real turn, not 3
+    assert len(anchors) == 1
+    assert anchors == [0]                  # kept the FIRST address
+
+    # Now 12 distinct real prompts across 24 addresses (each duplicated) must
+    # collapse to 12 distinct turns (not 24), so chunking yields blocks of real
+    # prompts — and the worker gate/block count agree.
+    big: list = []
+    for i in range(12):
+        req = ModelRequest(parts=[UserPromptPart(content=f"prompt{i}")], run_id="run-a")
+        resp = ModelResponse(parts=[TextPart(f"answer{i}")])
+        big.append(req)
+        big.append(resp)
+        # duplicate the prompt address again
+        req2 = ModelRequest(parts=[UserPromptPart(content=f"prompt{i}")], run_id="run-a")
+        big.append(req2)
+    turns2, anchors2 = _distinct_complete_turns(big)
+    assert len(turns2) == 12, len(turns2)   # dedup the 12 duplicate addresses
+    assert len(anchors2) == 12
+    # each distinct turn keeps a real user prompt (never an injected block)
+    for t in turns2:
+        assert any(
+            isinstance(p.content, str) and p.content.startswith("prompt")
+            for p in (pp for m in t for pp in m.parts)
+            if getattr(p, "content", None) is not None
+        )
