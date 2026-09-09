@@ -231,6 +231,14 @@ class HintCorpus:
             resources=resources,
         )
 
+    def refresh(self) -> None:
+        """Re-scan library roots from disk, rebuilding the in-memory indexes.
+
+        Called after `create_skill` so a newly written skill is immediately
+        indexable (list/load/point) without reconstructing the toolset.
+        """
+        self._load()
+
     def rank(self, query: str, k: int) -> list[tuple[SkillDoc, float]]:
         texts = [d.text for d in self.docs]
         if not texts:

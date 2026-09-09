@@ -11,6 +11,8 @@ Tools (agent-facing):
   - ``load_skill``     — full SKILL.md body (plus a resource manifest) on demand.
   - ``list_skill_files`` — enumerate one skill's support resources.
   - ``read_skill_file`` — read one resource, confined to its skill's directory.
+  - ``create_skill``   — create a new skill (SKILL.md) with valid frontmatter
+    in the configured library (mirrors vault ``note_create``).
 
 Internal (NOT agent tools):
   - ``point_skills``   — BM25 pointer engine (`consider: <skill_id>`), called by
@@ -20,6 +22,7 @@ Internal (NOT agent tools):
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
@@ -60,6 +63,7 @@ class SkillToolset(FunctionToolset[object]):
         self.add_function(self.load_skill, name="load_skill")
         self.add_function(self.list_skill_files, name="list_skill_files")
         self.add_function(self.read_skill_file, name="read_skill_file")
+        self.add_function(self.create_skill, name="create_skill")
 
     # -- helpers -----------------------------------------------------------
 
@@ -213,6 +217,85 @@ class SkillToolset(FunctionToolset[object]):
         if len(content) > _READ_MAX_CHARS:
             content = content[:_READ_MAX_CHARS] + f"\n… [truncated at {_READ_MAX_CHARS} chars]"
         return f"{rel}\n\n{content}"
+
+    def create_skill(
+        self,
+        category: str,
+        name: str,
+        *,
+        description: str,
+        tags: str = "",
+        content: str = "",
+    ) -> str:
+        """Create a new skill (a SKILL.md) in the configured skill library.
+
+        Mirrors the vault capability's `note_create`: the capability owns the
+        *domain conventions* of a skill (valid frontmatter schema, the
+        `<category>/<name>/SKILL.md` layout, canonical name) instead of making
+        the model re-derive them with raw filesystem writes. Writes live **only**
+        inside the configured library (never outside a library root). Refuses to
+        overwrite an existing skill.
+
+        Args:
+            category: Skill category dir (may be ``""``/empty for a root-level
+                skill). Creates the category if it does not exist.
+            name: Skill directory name — becomes the canonical short name and
+                the ``name`` frontmatter field.
+            description: One-line ``description`` frontmatter (what the skill
+                does). Should not contain a newline.
+            tags: Optional space- or comma-separated tags (``description.regex``
+                style); rendered into the frontmatter ``tags`` list. May be empty.
+            content: Optional body text below the frontmatter. When empty a
+                minimal ``# Skill: <name>`` stub is written.
+
+        Returns a confirmation with the canonical id and the on-disk path. The
+        new skill is immediately listable/loadable.
+        """
+        if not name or not name.strip():
+            raise ModelRetry("create_skill requires a non-empty skill `name`.")
+        if not description or not description.strip():
+            raise ModelRetry("create_skill requires a `description` (one line).")
+        for part in (name, category):
+            if part and ("/" in part or "\\" in part or part in {".", ".."}):
+                raise ModelRetry(
+                    f"Skill/category {part!r} must be a single directory name "
+                    "(no separators or traversal)."
+                )
+        if not self.libraries:
+            raise ModelRetry("No skill library is configured — nothing to create into.")
+
+        # Write into the FIRST configured library root (the default authoring target).
+        library_root = Path(self.libraries[0]).expanduser().resolve()
+        dest = (library_root / category / name if category else library_root / name).resolve()
+        if not dest.is_relative_to(library_root):
+            raise ModelRetry(f"Category/name {category!r}/{name!r} escapes the library root.")
+        target = dest / "SKILL.md"
+        if target.exists():
+            raise ModelRetry(
+                f"Skill {name!r} already exists at {target}. Use a different name, "
+                "or edit it with the filesystem tools."
+            )
+
+        tags_clean = " ".join(tags.replace(",", " ").split()) if tags else ""
+        tags_line = f"tags: [{tags_clean}]" if tags_clean else "tags: []"
+        description_line = description.strip().replace("\n", " ")
+        body = content.strip()
+        if not body:
+            body = f"# Skill: {name}\n\n(*stub — add the skill body here.*)"
+        skill_md = (
+            "---\n"
+            f"name: {name}\n"
+            f"description: {description_line}\n"
+            f"{tags_line}\n"
+            "---\n"
+            f"\n{body}\n"
+        )
+
+        dest.mkdir(parents=True, exist_ok=True)
+        target.write_text(skill_md, encoding="utf-8")
+        self._corpus.refresh()
+        skill_id = f"{category}/{name}" if category else name
+        return f"Created skill {skill_id!r} at {target} (category={category or '(root)'!r})."
 
     def point_skills(self, query: str, top_k: int | None = None) -> str:
         """INTERNAL primitive (NOT an agent tool): BM25 pointer hints for the hint layer.

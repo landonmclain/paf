@@ -34,14 +34,15 @@ def _toolset(top_k: int = 3) -> SkillToolset:
 # ---------------------------------------------------------------------------
 
 
-def test_skill_toolset_registers_four_tools() -> None:
-    """The skill toolset exposes list/load/resource tools (pointer is internal)."""
+def test_skill_toolset_registers_five_tools() -> None:
+    """The skill toolset exposes list/load/resource/create tools (pointer is internal)."""
     ts = _toolset()
     assert set(ts.tools) == {
         "list_skills",
         "load_skill",
         "list_skill_files",
         "read_skill_file",
+        "create_skill",
     }
 
 
@@ -81,6 +82,7 @@ def test_skills_cataloged_and_wired() -> None:
         "load_skill",
         "list_skill_files",
         "read_skill_file",
+        "create_skill",
     }
 
 
@@ -210,6 +212,52 @@ def test_read_skill_file_rejects_traversal_and_non_resources() -> None:
 
 
 # ---------------------------------------------------------------------------
+# create_skill (mirrors vault note_create — owns skill conventions)
+# ---------------------------------------------------------------------------
+
+
+def _toolset_at(root: str) -> SkillToolset:
+    return Skills(libraries=(root,), top_k=3).get_toolset()
+
+
+def test_create_skill_writes_valid_skill_and_indexes(tmp_path: Path) -> None:
+    ts = _toolset_at(str(tmp_path))
+    out = ts.create_skill(
+        "ops", "deploy",
+        description="Deploy the service to the staging cluster.",
+        tags="deploy, ops, k8s",
+        content="# Skill: deploy\n\nRun the release pipeline.",
+    )
+    assert "ops/deploy" in out
+    assert (tmp_path / "ops" / "deploy" / "SKILL.md").is_file()
+    body = (tmp_path / "ops" / "deploy" / "SKILL.md").read_text()
+    assert "name: deploy" in body
+    assert "description: Deploy the service to the staging cluster." in body
+    assert "tags: [deploy ops k8s]" in body
+    # Immediately listable + loadable (corpus refreshed).
+    assert "  - deploy: Deploy the service" in ts.list_skills()
+    assert "# Skill: deploy" in ts.load_skill("ops/deploy")
+
+
+def test_create_skill_refuses_existing_and_traversal(tmp_path: Path) -> None:
+    ts = _toolset_at(str(tmp_path))
+    ts.create_skill("ops", "deploy", description="first")
+    with pytest.raises(ModelRetry, match="already exists"):
+        ts.create_skill("ops", "deploy", description="second")
+    with pytest.raises(ModelRetry, match="traversal|single directory name"):
+        ts.create_skill("..", "evil", description="escape")
+    with pytest.raises(ModelRetry, match="description"):
+        ts.create_skill("ops", "nodeploy", description="")
+
+
+def test_create_skill_at_root_category(tmp_path: Path) -> None:
+    ts = _toolset_at(str(tmp_path))
+    ts.create_skill("", "standalone", description="A root-level skill.")
+    assert "standalone" in ts.list_skills()
+    assert "standalone" in (tmp_path / "standalone" / "SKILL.md").read_text()
+
+
+# ---------------------------------------------------------------------------
 # point_skills (the internal hint-pointer trigger)
 # ---------------------------------------------------------------------------
 
@@ -257,6 +305,7 @@ def test_build_skills_defaults_to_data_skills() -> None:
         "load_skill",
         "list_skill_files",
         "read_skill_file",
+        "create_skill",
     }
     assert sk.libraries == (PROJECT_ROOT / "data" / "skills",)
     assert sk.top_k == 3
