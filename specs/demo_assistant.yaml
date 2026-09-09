@@ -142,8 +142,10 @@ browser:
 # root-bearing builders in build.py. These point each capability at a working
 # directory OTHER than PROJECT_ROOT (the paf repo itself).
 #
-# The demo agent is currently pointed at the `landonmclain-site` Astro repo so
-# we can work WITH paf to build it. Absent block -> the builder's PROJECT_ROOT
+# The demo agent's filesystem + shell are scoped to the user root (`~/`) so it
+# can work across the whole home tree. git/codebase_map stay pointed at the
+# `landonmclain-site` Astro repo (working WITH paf to build it), and vault at
+# the Obsidian vault. Absent block -> the builder's PROJECT_ROOT
 # (paf repo) default, so a spec block is purely additive and never weakens a
 # secure default.
 #
@@ -157,9 +159,9 @@ browser:
 # them would strip exactly the protection we want on. Keep the default deny-list
 # and move only `cwd`.
 filesystem:
-  root_dir: ~/projects/Personal/landonmclain-site
+  root_dir: ~/
 shell:
-  cwd: ~/projects/Personal/landonmclain-site
+  cwd: ~/
 git:
   root: ~/projects/Personal/landonmclain-site
 codebase_map:
