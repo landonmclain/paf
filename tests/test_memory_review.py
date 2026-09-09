@@ -325,3 +325,60 @@ def test_review_zero_verdicts_advances_watermark(tmp_path):
     )
     assert wm.turn_id == 7, "a 0-verdict pass is a completed pass and must advance"
     assert wm.consumed_ts is not None
+
+
+# ---------------------------------------------------------------------------
+# Session wiring: reviewer publishes a task-row that completes (like memory)
+# ---------------------------------------------------------------------------
+
+
+def test_session_review_span_publishes_task_done(tmp_path):
+    """The Session's review queue seam flips the in-flight ``memory-review.*``
+    task to DONE and publishes it — so the reviewer shows on the background-task
+    timeline / Processes panel exactly like consolidation, not running silently.
+    """
+    import paf.capabilities.memory._review as _revmod
+    import paf.runtime as runtime
+
+    # Bare session: only the fields the review seam touches.
+    s = object.__new__(runtime.Session)
+    s._background_tasks = {}
+    s._task_subscribers = []
+    s._consolidation_seq = 0
+    s._thread_summarizer_seq = 0
+    s._review_seq = 0
+    s._review_queue = None
+    s._memory_directory = str(tmp_path)
+    s.agent_name = "assistant"
+
+    # Deterministic no-LLM review span (the seam references _revmod.review).
+    async def noop_review(directory, *, overrides=None):
+        return 2
+
+    _saved = _revmod.review
+    _revmod.review = noop_review
+    try:
+        q = s._ensure_review_queue()
+        assert q is not None
+    finally:
+        _revmod.review = _saved
+
+    # Publish the queued task row (what _maybe_trigger_review now does).
+    task = runtime.BackgroundTask(
+        id="memory-review.demo:x.1", label="Reviewing memory (demo:x)"
+    )
+    s._publish_task(task)
+
+    seen: list[tuple[str, str]] = []
+    s.subscribe_tasks(lambda ev: seen.append((ev.kind, ev.status)))
+
+    async def run():
+        assert q is not None
+        await q.review_span(str(tmp_path))
+
+    asyncio.run(run())
+
+    # The in-flight row must transition to done and be visible to subscribers.
+    assert task.status == "done", f"expected done, got {task.status!r}"
+    assert ("task:Reviewing memory (demo:x)", "done") in seen
+

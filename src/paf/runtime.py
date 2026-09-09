@@ -509,6 +509,7 @@ class Session:
             []
         )
         self._consolidation_seq = 0
+        self._review_seq = 0
 
     # -- introspection ---------------------------------------------------------
 
@@ -770,18 +771,38 @@ class Session:
         The reviewer curates the whole rendered memory on ``review_every`` minutes.
         ``review_span`` defaults to the real reviewer (``_review.review``); a
         test injects a journal-fenced stand-in so the queue + trigger mechanics
-        are proven without an LLM call.
+        are proven without an LLM call. The span seam publishes the review
+        ``BackgroundTask`` to done (or error on throw), mirroring the
+        consolidation queue, so the reviewer shows up on the task timeline /
+        Processes panel instead of running silently.
         """
         if self._review_queue is None:
             from paf.capabilities.memory._review import review as _default_review
 
+            def _complete(kind: StepStatus, detail: str = "") -> None:
+                for task_id, task in list(self._background_tasks.items()):
+                    if task_id.startswith("memory-review.") and task.status in (
+                        QUEUED,
+                        PROCESSING,
+                    ):
+                        task.status = kind
+                        task.detail = detail
+                        task.progress = 1.0 if kind == DONE else None
+                        self._publish_task(task)
+
             async def review_span(directory: str) -> int:
                 from paf.capabilities.memory._overrides import OverrideStore
 
-                return await _default_review(
-                    directory,
-                    overrides=OverrideStore(directory),
-                )
+                try:
+                    n = await _default_review(
+                        directory,
+                        overrides=OverrideStore(directory),
+                    )
+                    _complete(DONE, f"{n} verdict(s) applied")
+                    return n
+                except Exception as exc:
+                    _complete(ERROR, str(exc))
+                    raise
 
             self._review_queue = MemoryReviewQueue(
                 memory_directory=self._memory_directory,
@@ -908,24 +929,41 @@ class Session:
             self._publish_task(task)
 
     async def _maybe_trigger_review(self, cid: str | None) -> None:
-        """Fire the background reviewer hook on its own ``review_every`` cadence.
+        """Fire the background reviewer hook, publishing task lifecycle.
 
-        Like ``_maybe_trigger_consolidation`` but for the reviewer: after each
-        completed turn, check the review watermark; when ``review_every`` minutes
-        have elapsed since the last review pass, enqueue a ``ReviewJob``.
-        The reviewer curates the whole rendered memory (not just pending
-        suggestions), so it fires on cadence regardless of pending count.
+        Mirrors ``_maybe_trigger_consolidation``: publish a ``queued`` task row
+        first, then mark skipped / processing. Completion (done/error) is
+        published by the review span seam in ``_ensure_review_queue`` — the
+        reviewer is now visible on the background-task timeline / Processes
+        panel just like consolidation and thread summarization, instead of
+        curating silently.
+
+        Like consolidation: the trigger SCHEDULES only. It enqueues a ReviewJob
+        carrying the resolved tip position; the review worker is the SOLE
+        review-watermark writer and advances it only on a COMPLETED pass. A
+        failed/never-run review leaves the watermark behind so it retries next
+        cadence instead of being silently skipped.
         """
         if cid is None:
             return
+        self._review_seq += 1
+        task_id = f"memory-review.{cid}.{self._review_seq}"
+        task = BackgroundTask(id=task_id, label=f"Reviewing memory ({cid})")
+        self._publish_task(task)  # queued
         try:
             runs = await self._store.list_runs(conversation_id=cid)
             if not runs:
+                task.status = SKIPPED
+                task.detail = "no persisted runs yet"
+                self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
             tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
+                task.status = SKIPPED
+                task.detail = "no persisted turns"
+                self._publish_task(task)
                 return
             tip_turn = len(anchors) - 1
             wm = MemoryWatermark.load(
@@ -936,6 +974,9 @@ class Session:
             if not should_fire(
                 wm, tip_ts=runs[-1].started_at, every=timedelta(minutes=self.review_every)
             ):
+                task.status = SKIPPED
+                task.detail = "review cadence not reached"
+                self._publish_task(task)
                 return
             # Mirror the owner's worker-owns-watermark contract: the trigger
             # SCHEDULES only. It enqueues a ReviewJob carrying the resolved tip
@@ -950,13 +991,22 @@ class Session:
             # Single-flight: skip if a review is already queued or running so a
             # slow worker behind the cadence gate can't pile up duplicate passes.
             rst = rq.status(self.agent_name)
-            if not (rst.queued > 0 or rst.running):
-                rq.enqueue(
-                    self.agent_name,
-                    ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
-                )
-        except Exception:  # noqa: BLE001 - the review hook must not break the turn
-            pass
+            if rst.queued > 0 or rst.running:
+                task.status = SKIPPED
+                task.detail = "memory review already in flight"
+                self._publish_task(task)
+                return
+            rq.enqueue(
+                self.agent_name,
+                ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
+            )
+            if self._background_tasks.get(task_id) is not None:
+                task.status = PROCESSING  # job handed to the worker
+                self._publish_task(task)
+        except Exception as exc:  # the review hook must not break the turn
+            task.status = ERROR
+            task.detail = str(exc)
+            self._publish_task(task)
 
     async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
         """Fire the background-consolidation hook, publishing task lifecycle.
