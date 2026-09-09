@@ -555,19 +555,25 @@ _SUBAGENT_MODEL = os.environ.get(
     "SUBAGENT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
 )
 
+# Model for the `writer` sub-agent — overridable per-profile so the parent
+# assistant stays on its own model while prose drafting runs on a (likely
+# better) writing model. Falls back to SUBAGENT_MODEL, then the demo model.
+_WRITER_MODEL = os.environ.get(
+    "WRITER_MODEL", _SUBAGENT_MODEL or "openrouter:deepseek/deepseek-v4-flash-0731"
+)
+
 
 def _build_subagents(store) -> SubAgents:
-    """Explicit sub-agent delegation (BUILTIN, not a paf port) — demo leaf agents.
+    """Explicit sub-agent delegation (BUILTIN, not a paf port) — demo leaf agent.
 
     Lets the demo agent delegate a self-contained task to a named child agent via
     one `delegate_task(agent_name, task)` tool. Each child runs in its own fresh,
     isolated run and never sees the parent conversation (the parent must pass
-    everything the task needs). Two demo children, both on the demo model:
+    everything the task needs). One demo child:
 
-    - ``researcher`` — gathers/verifies facts and returns a tight evidence-backed
-      brief (no tools, prompt-only; uses the same model as the demo subject).
     - ``writer`` — drafts prose/format from material the parent passes in (no
-      tools; deterministic same-model leaf).
+      tools; deterministic leaf). Should be pointed at a better prose model via
+      `WRITER_MODEL` (falls back to `SUBAGENT_MODEL`, then demo model).
 
     This is a pydantic-ai AbstractCapability consumed from the harness per Landon
     (same drop-in pattern as ToolOutputLimits / WarnOnCacheBusts). It is NOT
@@ -582,19 +588,8 @@ def _build_subagents(store) -> SubAgents:
     """
     from pydantic_ai import Agent
 
-    researcher = Agent(
-        _SUBAGENT_MODEL,
-        name="researcher",
-        description="Gathers and verifies facts, returns a tight evidence-backed brief",
-        system_prompt=(
-            "You are a research sub-agent. You do not see the parent conversation. "
-            "Given a research task, return a concise, factual, evidence-backed brief. "
-            "State what is certain vs. uncertain. Do not fabricate; say 'unknown' when you "
-            "do not have evidence for something."
-        ),
-    )
     writer = Agent(
-        _SUBAGENT_MODEL,
+        _WRITER_MODEL,
         name="writer",
         description="Drafts clear prose from material the delegating agent provides",
         system_prompt=(
@@ -604,7 +599,7 @@ def _build_subagents(store) -> SubAgents:
         ),
     )
     return SubAgents(
-        agents=[SubAgent(researcher), SubAgent(writer)],
+        agents=[SubAgent(writer)],
         agent_folders=None,  # purely explicit, deterministic demo (no disk loading)
     )
 

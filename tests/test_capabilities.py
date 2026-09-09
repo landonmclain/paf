@@ -103,7 +103,7 @@ def test_subagents_cataloged_and_wired() -> None:
     (holds live `Agent` instances; get_serialization_name -> None), so it must be
     built in Python (`_build_subagents`) with explicit child entries. Assert the
     demo build attaches a SubAgents capability whose toolset exposes exactly the
-    two named demo leaf agents.
+    named demo leaf agent (`writer`; researcher removed per Landon 2026-09-09).
     """
     assert CAPABILITY_TYPES["Subagents"] is SubAgents
 
@@ -113,8 +113,8 @@ def test_subagents_cataloged_and_wired() -> None:
     subagents = next((c for c in built if type(c).__name__ == "SubAgents"), None)
     assert subagents is not None
     assert isinstance(subagents, SubAgents)
-    # _by_name is built in __post_init__ from the two explicit SubAgent entries.
-    assert set(subagents._by_name) == {"researcher", "writer"}
+    # _by_name is built in __post_init__ from the explicit SubAgent entries.
+    assert set(subagents._by_name) == {"writer"}
     assert all(isinstance(sa, SubAgent) for sa in subagents._by_name.values())
     # A live toolset is produced so the delegate_task tool is actually exposed.
     toolset = subagents.get_toolset()
