@@ -28,6 +28,7 @@ watermark spec's "does this break the benchmark" section).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -41,11 +42,45 @@ from .._turns import user_anchor_indices
 from ._journal import JournalStore
 from ._watermark import _WATERMARK_FILENAME, MemoryWatermark
 
+# Cross-run overlap reconciliation (the memory-family lesson): each run's
+# persisted history is cumulative, so spanning multiple runs re-collects the
+# prior runs' prefix unless we reconcile it — the same dedup seam
+# ``SnapshotHistorySource`` uses within a run. ``_overlap_length`` (pure
+# region matching) is reused from the harness; ``message_hash`` is NOT — it
+# hashes the raw serialized bytes including pydantic's per-instantiation
+# ``timestamp``, so byte-identical content re-instantiated across runs/replay
+# hashes differently and overlap never fires (the resume-duplication bug). We
+# use our own content-stable ``_content_hash`` instead.
+try:  # pragma: no cover - import surface varies by harness version
+    from pydantic_ai_harness.conversation_search._source import _overlap_length
+except Exception:  # pragma: no cover
+    _overlap_length = None
+
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage  # noqa: F401
     from pydantic_ai_harness.conversation_search import HistorySource
 
 log = logging.getLogger(__name__)
+
+
+def _content_hash(message: "ModelMessage") -> str:
+    """Content-stable hash of a message's durable parts, in order.
+
+    The harness ``message_hash`` hashes raw serialized bytes, which include
+    pydantic's per-instantiation ``timestamp`` on parts — so two byte-identical
+    conversation messages that get re-instantiated across runs (replay /
+    ``continue_run`` / steer) hash DIFFERENTLY and the cross-run overlap in
+    :func:`resolve_unseen_span` computes 0, re-collecting the already-consumed
+    cumulative prefix (the resume-duplication bug). Hashing durable content
+    (part kind + text) makes overlap equality recognizable across runs while
+    still distinguishing repeated identical content at distinct positions.
+    """
+    toks: list[str] = []
+    for part in getattr(message, "parts", ()):
+        text = getattr(part, "content", None)
+        toks.append(f"{type(part).__name__}:{text}" if isinstance(text, str) else type(part).__name__)
+    return hashlib.sha256("\n".join(toks).encode()).hexdigest()
+
 
 
 def _turn_bounds(anchors: list[int], turn: int, n: int) -> tuple[int, int]:
@@ -58,6 +93,22 @@ def _turn_bounds(anchors: list[int], turn: int, n: int) -> tuple[int, int]:
     start = anchors[turn] if 0 <= turn < len(anchors) else n
     end = anchors[turn + 1] if turn + 1 < len(anchors) else n
     return start, end
+
+
+def _first_anchor_not_overlapped(anchors: list[int], overlap: int, n: int) -> int:
+    """Index of the first turn whose messages begin at/after ``overlap``.
+
+    ``overlap`` is the number of leading messages of this run already present in
+    the accumulated span (from a prior run's cumulative history). Turns that end
+    at or before ``overlap`` are fully collected; the first turn whose start is
+    ``>= overlap`` is where this run contributes new content. 0 when overlap is 0.
+    """
+    if overlap <= 0 or not anchors:
+        return 0
+    for t, _a in enumerate(anchors):
+        if _turn_bounds(anchors, t, n)[0] >= overlap:
+            return t
+    return len(anchors)
 
 
 @dataclass(frozen=True)
@@ -125,6 +176,7 @@ async def resolve_unseen_span(
     )
 
     collected: list[ModelMessage] = []
+    collected_hashes: list[str] = []
     last_complete: MemoryWatermark | None = None
 
     # Position of the watermark's run. Runs strictly older than it are fully
@@ -166,13 +218,30 @@ async def resolve_unseen_span(
         ):
             continue
 
+        # CROSS-RUN OVERLAP (the memory-family lesson): each run's history is
+        # CUMULATIVE — it starts from the conversation's oldest turn and carries
+        # every prior run's messages forward. So when the watermark's run was
+        # earlier (only its first-turn skip applied) and a LATER run has a fresh
+        # turn_id=0, collecting from turn 0 would re-add all of the already-
+        # collected prefix. Reconcile the accumulated history's suffix against
+        # this run's prefix (the same overlap removal
+        # ``SnapshotHistorySource.run_history`` performs within a run) and start
+        # at the first non-overlapping anchor.
+        hist_hashes = [_content_hash(m) for m in hist]
+        overlap = _overlap_length(collected_hashes, hist_hashes)
+        first_turn = max(
+            first_turn, _first_anchor_not_overlapped(anchors, overlap, n)
+        )
+
         for t in range(first_turn, len(anchors)):
             # Fold full turns only: stop strictly before the in-flight tip. A
             # turn at or after (tip_idx, tip_turn) has not finished settling.
             if (i, t) >= (tip_idx, tip_turn):
                 break
             start, end = _turn_bounds(anchors, t, n)
-            collected.extend(hist[start:end])
+            slice_msgs = hist[start:end]
+            collected.extend(slice_msgs)
+            collected_hashes.extend(_content_hash(m) for m in slice_msgs)
             # Advance the ref AND the time anchor. consumed_ts is this run's
             # started_at — monotonic across runs, so the next cadence can gauge
             # progress even after a run boundary resets local turn_id.
