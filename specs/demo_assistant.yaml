@@ -70,6 +70,16 @@ model_settings:
       order: [deepinfra, parasail, coreweave]
       quantizations: [fp8]
 
+  # DeepSeek V4 Flash reasoning effort — drop the OpenRouter default (high) to
+  # `low`. DeepSeek V4 Flash supports low/medium/high/none-style effort
+  # (OpenRouter clamps unsupported levels to the closest available). Setting
+  # `low` sharply cuts the long re-derivation "thinking forever" loops on
+  # discussion/direct turns. Uses pydantic-ai's first-class
+  # OpenRouterModelSettings.openrouter_reasoning (forwards verbatim to the
+  # OpenRouter `reasoning` body). Floor is `low` for this model (can't go none).
+  openrouter_reasoning:
+    effort: low
+
 # ---------------------------------------------------------------------------
 # Web trust boundary (option B — lives in the spec, not in Python). Read by
 # `build_agent` -> `_spec_web_config` -> the `fetch_web_page` extract allowlist.
