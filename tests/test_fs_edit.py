@@ -94,3 +94,18 @@ def test_edit_file_ambiguous_refuses(tmp_path: Path) -> None:
     fs = _fs(tmp_path)
     with pytest.raises(Exception, match="found 2 times"):
         _run(fs.edit_file("app.py", [{"old_text": "flag", "new_text": "FLAG"}]))
+
+
+def test_write_file_uses_shared_atomic_no_debris(tmp_path: Path) -> None:
+    fs = _fs(tmp_path)
+    out = _run(fs.write_file("new.txt", "hello world\n"))
+    assert "Wrote 12 chars" in out
+    body = (tmp_path / "new.txt").read_text(encoding="utf-8")
+    assert body == "hello world\n"
+    # write_file goes through the shared mkstemp atomic: no temp/staging debris
+    debris = [p.name for p in tmp_path.glob("*.tmp")] + [p.name for p in tmp_path.glob(".*.tmp")]
+    assert debris == [], f"leftover temp files: {debris}"
+    # overwrite also lands atomically + hash bumps
+    out2 = _run(fs.write_file("new.txt", "second\n"))
+    assert "[hash:" in out2
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "second\n"

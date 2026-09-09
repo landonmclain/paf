@@ -407,14 +407,14 @@ def test_note_create_writes_note_with_frontmatter(vault: tuple[Path, VaultToolse
 
 def test_note_create_refuses_overwrite(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    out = toolset.note_create("Index")
-    assert "already exists" in out
+    with pytest.raises(ModelRetry, match="already exists"):
+        toolset.note_create("Index")
 
 
 def test_note_create_refuses_outside_root(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    out = toolset.note_create("../evil.md")
-    assert "outside the vault root" in out
+    with pytest.raises(ModelRetry, match="outside the vault root"):
+        toolset.note_create("../evil.md")
     assert not (vault[0].parent / "evil.md").exists()
 
 
@@ -425,8 +425,8 @@ def test_note_create_refuses_denied_scope(tmp_path: Path) -> None:
     store = FlatFileVaultStorage(index_root=tmp_path / "ci")
     build_index(root, ScanScope(root, deny=["Private/**"]), store)
     toolset = VaultToolset(vault_root=root, storage=store, deny=["Private/**"])
-    out = toolset.note_create("Private/hidden")
-    assert "excluded by scope" in out
+    with pytest.raises(ModelRetry, match="excluded by scope"):
+        toolset.note_create("Private/hidden")
     assert not (root / "Private/hidden.md").exists()
 
 
@@ -462,11 +462,11 @@ def test_note_rename_updates_auto_title_keeps_custom(vault: tuple[Path, VaultToo
 
 def test_note_rename_refuses_collision_and_escape(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    out = toolset.note_rename("Index", "Grounding")  # collides with existing Grounding.md
-    assert "already exists" in out
+    with pytest.raises(ModelRetry, match="already exists"):
+        toolset.note_rename("Index", "Grounding")  # collides with existing Grounding.md
     assert (vault[0] / "Index.md").exists()  # untouched
-    out2 = toolset.note_rename("Index", "../escape.md")
-    assert "outside the vault root" in out2
+    with pytest.raises(ModelRetry, match="outside the vault root"):
+        toolset.note_rename("Index", "../escape.md")
     assert not (vault[0].parent / "escape.md").exists()
 
 

@@ -270,7 +270,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         if not resolved.parent.exists():
             parent_rel = str(resolved.parent.relative_to(self._root))
             raise FileNotFoundError(f"Parent directory '{parent_rel}' does not exist. Use create_directory first.")
-        resolved.write_text(content, encoding='utf-8')
+        write_atomic(resolved, content)
         new_hash = _content_hash(content)
         lines = len(content.splitlines())
         return f'Wrote {len(content)} chars ({lines} lines) to {path}. [hash:{new_hash}]'

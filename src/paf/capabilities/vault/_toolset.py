@@ -37,6 +37,7 @@ import os
 import posixpath
 from pathlib import Path
 
+from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
 from paf.capabilities._edit import apply_edits
@@ -453,9 +454,9 @@ class VaultToolset(FunctionToolset):
             rel = rel + ".md"
         full = self._in_scope_path(rel)
         if full is None:
-            return f"Refusing to create {path!r}: outside the vault root or excluded by scope."
+            raise ModelRetry(f"Refusing to create {path!r}: outside the vault root or excluded by scope.")
         if full.exists():
-            return f"Refusing to create {rel!r}: a note already exists there."
+            raise ModelRetry(f"Refusing to create {rel!r}: a note already exists there.")
         title = Path(rel).stem
         parts: list[str] = ["---", f"title: {title}"]
         if tags:
@@ -490,9 +491,9 @@ class VaultToolset(FunctionToolset):
             return "New path is the same as the old path; nothing to do."
         new_full = self._in_scope_path(new_rel)
         if new_full is None:
-            return f"Refusing to rename to {new_path!r}: outside the vault root or excluded by scope."
+            raise ModelRetry(f"Refusing to rename to {new_path!r}: outside the vault root or excluded by scope.")
         if new_full.exists():
-            return f"Refusing to rename to {new_rel!r}: a note already exists there."
+            raise ModelRetry(f"Refusing to rename to {new_rel!r}: a note already exists there.")
 
         old_full = self._abs(old_rel)
         if old_full is None or not old_full.is_file():
