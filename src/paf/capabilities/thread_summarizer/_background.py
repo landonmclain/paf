@@ -36,6 +36,43 @@ from paf.capabilities.thread_summarizer._summarize import (
 
 log = logging.getLogger(__name__)
 
+
+def _user_prompt_turn_ts(messages: list) -> str | None:
+    """ISO timestamp of a turn slice's user prompt (first real UserPromptPart).
+
+    ``messages`` is one distinct turn slice (user prompt .. prior to the next
+    user anchor). Returns the ``datetime`` of that turn's ``UserPromptPart``
+    as an ISO string, or ``None`` if no real user prompt is present. This is
+    the wall-clock the conversation happened at — distinct from
+    ``summarized_at`` (when the worker ran).
+    """
+    from paf.capabilities._turns import _user_prompt_text
+
+    for msg in messages:
+        parts = getattr(msg, "parts", None) or []
+        for part in parts:
+            if type(part).__name__ == "UserPromptPart" and _user_prompt_text(part):
+                ts = getattr(part, "timestamp", None)
+                if ts is not None:
+                    return ts.isoformat()
+                return None
+    return None
+
+
+def _span_range(turns: list[list]) -> tuple[str, str]:
+    """(started_at, ended_at) ISO range across distinct turns.
+
+    ``started_at`` = first turn's user-prompt timestamp;
+    ``ended_at`` = last turn's user-prompt timestamp (falling back to the
+    first if a single turn, else the first non-None). Empty strings when no
+    timestamp is resolvable.
+    """
+    stamps = [_user_prompt_turn_ts(t) for t in turns]
+    stamps = [s for s in stamps if s]
+    if not stamps:
+        return "", ""
+    return stamps[0], stamps[-1]
+
 #: Turns per narrative block. The trigger fires only when this many COMPLETE
 #: turns have accumulated since the watermark, and the worker summarizes each
 #: 10-turn slice as its own block (one model call + one appended record).
@@ -68,7 +105,6 @@ def _span_complete_turns_with_anchors(messages: list) -> list[tuple[list, int]]:
     anchor); the span is already complete-only (the tip is excluded by
     ``resolve_unseen_span``), so every message belongs to some slice.
     """
-    from paf.capabilities._turns import user_anchor_indices
 
     anchors = user_anchor_indices(messages)
     slices: list[tuple[list, int]] = []
@@ -218,8 +254,16 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                     r for r in turn_refs[start : start + len(block)] if r is not None
                 ]
                 block_anchor = _block_anchor_from_refs(span_runs, block_refs)
+                block_start, block_end = _span_range(block)
                 store.append_summary(
-                    summary_from_beats(beats, job.conversation_id, block_anchor, block_refs)
+                    summary_from_beats(
+                        beats,
+                        job.conversation_id,
+                        block_anchor,
+                        block_refs,
+                        started_at=block_start,
+                        ended_at=block_end,
+                    )
                 )
                 # Advance positionally past THIS block (idempotent on retry; a
                 # later block failing stops here, so only completed blocks are
@@ -297,12 +341,17 @@ def summary_from_beats(
     conversation_id: str,
     anchor: MemoryWatermark | None,
     block_refs: list[str] | None = None,
+    *,
+    started_at: str = "",
+    ended_at: str = "",
 ) -> object:
     """Build the durable per-conversation block record from a BeatsRecord.
 
     The record's ``{run_id, turn_id}`` anchor + ``refs`` identify exactly which
     turns this block summarizes (receipts), so a retried/duplicate pass over the
     same block is idempotent (see :meth:`ThreadSummaryStore.append_summary`).
+    ``started_at``/``ended_at`` are the block's wall-clock range (first/last
+    distinct real user prompt) — distinct from ``summarized_at``.
     """
     from paf.capabilities.thread_summarizer._store import ThreadSummaryRecord
 
@@ -315,6 +364,8 @@ def summary_from_beats(
         summary=beats.summary,
         refs=refs,
         beats=[beat.model_dump(mode="json") for beat in beats.beats],
+        started_at=started_at,
+        ended_at=ended_at,
     )
 
 

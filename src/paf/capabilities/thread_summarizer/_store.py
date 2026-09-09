@@ -67,6 +67,14 @@ class ThreadSummaryRecord:
     summary: str
     refs: list[str] = field(default_factory=list)
     beats: list[dict[str, Any]] = field(default_factory=list)
+    # ISO timestamps of the summarized span's first and last distinct real user
+    # prompt (started_at .. ended_at). Wall-clock range of the turns this block
+    # covers — distinct from ``summarized_at`` (when the worker ran). Used by the
+    # Phase-3 in-context renderer to give the model + a human a recency/span
+    # signal. Backward-compatible: absent on legacy records (``from_row``
+    # defaults to "").
+    started_at: str = ""
+    ended_at: str = ""
 
     def to_row(self) -> dict[str, Any]:
         return asdict(self)
@@ -81,6 +89,8 @@ class ThreadSummaryRecord:
             summary=str(row.get("summary", "")),
             refs=[str(ref) for ref in row.get("refs", [])],
             beats=list(row.get("beats", [])),
+            started_at=str(row.get("started_at", "")),
+            ended_at=str(row.get("ended_at", "")),
         )
 
 

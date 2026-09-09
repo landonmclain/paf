@@ -38,7 +38,7 @@ class BeatsRecord(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _refs_grounded(self) -> "BeatsRecord":
+    def _refs_grounded(self) -> BeatsRecord:
         """Every beat must cite a real covered ref — receipts are non-negotiable."""
         covered = set(self.turns_covered)
         bad = [b.at for b in self.beats if b.at not in covered]

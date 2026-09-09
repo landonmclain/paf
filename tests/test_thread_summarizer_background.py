@@ -54,6 +54,10 @@ def _beats(run: str = "run-a", turn: int = 0) -> BeatsRecord:
     )
 
 
+async def _async_beats(*_args, **__kwargs) -> BeatsRecord:
+    return _beats()
+
+
 def test_queue_summarizes_span_and_advances_watermark(tmp_path) -> None:
     root = tmp_path / "assistant"
     seen: list[MemoryWatermark] = []
@@ -190,6 +194,112 @@ def test_queue_status_and_drain_single_worker(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_queue_stamps_block_time_range(tmp_path) -> None:
+    """Each summarized block records the span's wall-clock range.
+
+    ``started_at`` = first distinct turn's user-prompt timestamp;
+    ``ended_at`` = last distinct turn's user-prompt timestamp. Distinct from
+    ``summarized_at`` (when the worker ran). Empty strings when no timestamp
+    resolves (e.g. legacy/injected-only messages).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    root = tmp_path / "assistant"
+    t0 = datetime(2026, 9, 9, 9, 0, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=30)
+    t2 = t0 + timedelta(hours=3)
+
+    # three distinct real turns with explicit, well-separated user-prompt times
+    span = []
+    for i, ts in enumerate((t0, t1, t2)):
+        req = ModelRequest(parts=[UserPromptPart(content=f"u{i}", timestamp=ts)])
+        req.run_id = "run-a"
+        resp = ModelResponse(parts=[TextPart(f"a{i}")])
+        resp.run_id = "run-a"
+        span.append(req)
+        span.append(resp)
+
+    queue = ThreadSummarizerQueue(
+        capture_root=str(root),
+        summarize_span_fn=lambda span, cid: _async_beats(),
+    )
+    target = _target(turn=2)
+
+    async def scenario():
+        queue.enqueue(
+            CID,
+            ThreadSummarizeJob(conversation_id=CID, messages=span, watermark=target),
+        )
+        await queue.drain(CID)
+
+    asyncio.run(scenario())
+
+    store = ThreadSummaryStore(root, CID)
+    recs = store.existing_summaries()
+    assert len(recs) == 1
+    # range = first .. last distinct user-prompt timestamps (NOT summarized_at)
+    assert recs[0].started_at == t0.isoformat()
+    assert recs[0].ended_at == t2.isoformat()
+    assert recs[0].started_at != recs[0].summarized_at
+    assert recs[0].ended_at != recs[0].summarized_at
+
+
+def test_queue_time_range_defaults_empty_without_timestamps(tmp_path) -> None:
+    """A block whose turns carry no resolvable timestamp stores empty range."""
+
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    root = tmp_path / "assistant"
+    span = []
+    for i in range(5):
+        # UserPromptPart timestamp is default-instantiated; simulate unset by
+        # building a request with no UserPromptPart timestamp reachable.
+        req = ModelRequest(parts=[UserPromptPart(content=f"u{i}")])
+        req.run_id = "run-a"
+        resp = ModelResponse(parts=[TextPart(f"a{i}")])
+        resp.run_id = "run-a"
+        span.append(req)
+        span.append(resp)
+
+    # Delete the timestamp field on every user part to emulate a legacy/no-ts
+    # message path (field is required by the dataclass, so set to None).
+    for m in span:
+        for p in getattr(m, "parts", []):
+            if isinstance(p, UserPromptPart):
+                object.__setattr__(p, "timestamp", None)
+
+    queue = ThreadSummarizerQueue(
+        capture_root=str(root), summarize_span_fn=_async_beats
+    )
+    asyncio.run(
+        queue.process_job(
+            CID,
+            ThreadSummarizeJob(
+                conversation_id=CID, messages=span, watermark=_target(turn=4)
+            ),
+            QueueState(),
+        )
+    )
+
+    store = ThreadSummaryStore(root, CID)
+    recs = store.existing_summaries()
+    assert len(recs) == 1
+    assert recs[0].started_at == ""
+    assert recs[0].ended_at == ""
+
+
 def _fake_span(n: int, run_id: str = "run-a") -> list:
     """A minimal persisted span with ``n`` complete turns (user + assistant).
 
@@ -225,7 +335,6 @@ def test_queue_chunks_span_into_10_turn_blocks(tmp_path) -> None:
     seen_turns: list[int] = []
 
     async def summarize(span, conversation_id):
-        from paf.capabilities.thread_summarizer._summarize import _ref_for
 
         seen_turns.append(len(_refs(span)))
         refs = _refs(span)
@@ -274,7 +383,13 @@ def test_distinct_turns_collapse_repersisted_and_injected(tmp_path) -> None:
     produced 3 tool/noise-heavy blocks instead of 1 clean 10-prompt block. The
     gate and worker must share the same "distinct real turn" yardstick.
     """
-    from pydantic_ai.messages import ModelRequest, ModelResponse, TextContent, TextPart, UserPromptPart
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextContent,
+        TextPart,
+        UserPromptPart,
+    )
 
     from paf.capabilities._markers import injected_artifact_markers
     from paf.capabilities.thread_summarizer._background import _distinct_complete_turns

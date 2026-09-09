@@ -32,6 +32,46 @@ def _record(run: str = "run-a", turn: int = 0, cid: str = "p:c1", summary: str =
     )
 
 
+def test_summary_round_trips_time_range_and_legacy_compat(tmp_path) -> None:
+    store = ThreadSummaryStore(tmp_path / "assistant", "p:c1")
+
+    # 1. New records persist started_at/ended_at through append + read.
+    rec = ThreadSummaryRecord(
+        conversation_id="p:c1",
+        run_id="run-a",
+        turn_id=5,
+        summarized_at="2026-09-09T10:00:00+00:00",
+        summary="block",
+        refs=["run-a:5"],
+        started_at="2026-09-09T09:00:00+00:00",
+        ended_at="2026-09-09T09:40:00+00:00",
+    )
+    store.append_summary(rec)
+    assert store.existing_summaries() == [rec]
+    assert store.existing_summaries()[0].started_at == "2026-09-09T09:00:00+00:00"
+    assert store.existing_summaries()[0].ended_at == "2026-09-09T09:40:00+00:00"
+
+    # 2. A legacy record (no started_at/ended_at keys) still reads back with
+    #    empty defaults — old on-disk rows never break the reader.
+    legacy_row = {
+        "conversation_id": "p:c1",
+        "run_id": "run-old",
+        "turn_id": 1,
+        "summarized_at": "2026-09-08T00:00:00+00:00",
+        "summary": "old block",
+        "refs": ["run-old:1"],
+        "beats": [],
+    }
+    (store.directory).mkdir(parents=True, exist_ok=True)
+    with (store.directory / SUMMARIES_FILENAME).open("a", encoding="utf-8") as fh:
+        fh.write("".join([json.dumps(legacy_row, ensure_ascii=False) + "\n"]))
+    recs = store.existing_summaries()
+    assert len(recs) == 2
+    legacy = next(r for r in recs if r.run_id == "run-old")
+    assert legacy.started_at == ""
+    assert legacy.ended_at == ""
+
+
 def test_summary_append_is_idempotent_by_run_turn_anchor(tmp_path) -> None:
     store = ThreadSummaryStore(tmp_path / "assistant", "p:c1")
     record = _record(run="run-a", turn=2)
