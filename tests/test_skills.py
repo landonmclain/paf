@@ -34,8 +34,8 @@ def _toolset(top_k: int = 3) -> SkillToolset:
 # ---------------------------------------------------------------------------
 
 
-def test_skill_toolset_registers_five_tools() -> None:
-    """The skill toolset exposes list/load/resource/create tools (pointer is internal)."""
+def test_skill_toolset_registers_six_tools() -> None:
+    """The skill toolset exposes list/load/resource/create/edit tools (pointer is internal)."""
     ts = _toolset()
     assert set(ts.tools) == {
         "list_skills",
@@ -43,6 +43,7 @@ def test_skill_toolset_registers_five_tools() -> None:
         "list_skill_files",
         "read_skill_file",
         "create_skill",
+        "edit_skill",
     }
 
 
@@ -83,6 +84,7 @@ def test_skills_cataloged_and_wired() -> None:
         "list_skill_files",
         "read_skill_file",
         "create_skill",
+        "edit_skill",
     }
 
 
@@ -257,6 +259,36 @@ def test_create_skill_at_root_category(tmp_path: Path) -> None:
     assert "standalone" in (tmp_path / "standalone" / "SKILL.md").read_text()
 
 
+def test_edit_skill_cas_conflict_and_refuse_blind(tmp_path: Path) -> None:
+    ts = _toolset_at(str(tmp_path))
+    ts.create_skill("ops", "deploy", description="Deploy the service.", content="# Skill: deploy\n\nRun the release pipeline.")
+    # load reports a version; edit with that version succeeds + bumps it.
+    v1 = ts.load_skill("ops/deploy").split("version: ")[1].split("]")[0]
+    out = ts.edit_skill("ops/deploy", "Run the release pipeline.", "Run pipeline + notify.", expected_version=v1)
+    assert "Edited 'ops/deploy'" in out
+    v2 = out.split("[version:")[1].rstrip("]")
+    assert v2 != v1
+    # Refreshed corpus reflects the new body.
+    assert "Run pipeline + notify" in ts.load_skill("ops/deploy")
+    # Stale version -> conflict, no write.
+    stale = ts.edit_skill("ops/deploy", "Run pipeline + notify.", "CHANGED", expected_version=v1)
+    assert "Conflict" in stale
+    assert "CHANGED" not in ts.load_skill("ops/deploy")
+    # old_text not found -> clean refusal.
+    assert "not found" in ts.edit_skill("ops/deploy", "no such text", "x")
+
+
+def test_edit_skill_refuses_ambiguous_and_unknown(tmp_path: Path) -> None:
+    ts = _toolset_at(str(tmp_path))
+    # Duplicate old_text -> refuse (never edit blindly).
+    ts.create_skill("ops", "deploy", description="d", content="# Skill: deploy\n\nstep one\n\nstep two\n")
+    out = ts.edit_skill("ops/deploy", "step", "STEP")
+    assert "found 2 times" in out
+    # Unknown skill -> ModelRetry.
+    with pytest.raises(ModelRetry):
+        ts.edit_skill("nope/nowhere", "a", "b")
+
+
 # ---------------------------------------------------------------------------
 # point_skills (the internal hint-pointer trigger)
 # ---------------------------------------------------------------------------
@@ -306,6 +338,7 @@ def test_build_skills_defaults_to_data_skills() -> None:
         "list_skill_files",
         "read_skill_file",
         "create_skill",
+        "edit_skill",
     }
     assert sk.libraries == (PROJECT_ROOT / "data" / "skills",)
     assert sk.top_k == 3

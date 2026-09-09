@@ -13,6 +13,8 @@ Tools (agent-facing):
   - ``read_skill_file`` — read one resource, confined to its skill's directory.
   - ``create_skill``   — create a new skill (SKILL.md) with valid frontmatter
     in the configured library (mirrors vault ``note_create``).
+  - ``edit_skill``     — CAS conflict-safe edit of a skill's SKILL.md (mirrors
+    vault ``note_edit``; paired with ``create_skill``).
 
 Internal (NOT agent tools):
   - ``point_skills``   — BM25 pointer engine (`consider: <skill_id>`), called by
@@ -21,6 +23,9 @@ Internal (NOT agent tools):
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -31,6 +36,34 @@ from ._corpus import HintCorpus, SkillDoc
 
 _MAX_DESCRIPTION_CHARS = 240  # keep list_skills output tight
 _READ_MAX_CHARS = 16_000  # read_skill_file content bound (spill beyond this)
+
+
+def _content_hash(content: str) -> str:
+    """Short content hash — the CAS version token for skill writes.
+
+    Mirrors ``fs._content_hash`` / vault ``_content_hash`` (sha256 truncated to
+    12 hex chars): opaque, cheap, stable for a given SKILL.md body. ``load_skill``
+    reports it so the model can pass it back as ``expected_version`` to
+    ``skill_edit`` for conflict-safe (optimistic-concurrency) writes.
+    """
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+
+
+def _write_atomic(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` atomically (unique temp + rename).
+
+    A process-unique temp name per write so concurrent writers never race on a
+    shared staging file (same pattern as memory/fs ``_write_atomic``).
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".skill-tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 class SkillToolset(FunctionToolset[object]):
@@ -64,6 +97,7 @@ class SkillToolset(FunctionToolset[object]):
         self.add_function(self.list_skill_files, name="list_skill_files")
         self.add_function(self.read_skill_file, name="read_skill_file")
         self.add_function(self.create_skill, name="create_skill")
+        self.add_function(self.edit_skill, name="edit_skill")
 
     # -- helpers -----------------------------------------------------------
 
@@ -153,10 +187,12 @@ class SkillToolset(FunctionToolset[object]):
                 f"Skill {doc.skill_id!r} has no readable SKILL.md on disk ({doc.skill_file!r})."
             )
         body = doc.skill_file.read_text(encoding="utf-8", errors="ignore")
+        version = _content_hash(body)
         manifest = self._resource_manifest(doc)
+        head = f"[skill: {doc.skill_id}  version: {version}]"
         if manifest:
-            return f"{textwrap.dedent(body).strip()}\n\n{manifest}"
-        return textwrap.dedent(body).strip()
+            return f"{head}\n\n{textwrap.dedent(body).strip()}\n\n{manifest}"
+        return f"{head}\n\n{textwrap.dedent(body).strip()}"
 
     def list_skill_files(self, skill_id: str) -> str:
         """List the support resources attached to one skill (references/scripts/etc.).
@@ -296,6 +332,70 @@ class SkillToolset(FunctionToolset[object]):
         self._corpus.refresh()
         skill_id = f"{category}/{name}" if category else name
         return f"Created skill {skill_id!r} at {target} (category={category or '(root)'!r})."
+
+    def edit_skill(
+        self,
+        skill_id: str,
+        old_text: str,
+        new_text: str,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
+        """Edit a skill's SKILL.md by exact string replacement, with conflict detection.
+
+        Mirrors the vault capability's `note_edit` (paired with our `create_skill`):
+        of ``old_text`` with ``new_text`` inside the skill's SKILL.md. ``old_text``
+        must appear exactly once — include enough surrounding context to make it
+        unique (zero or multiple matches is an error, so you never edit blindly).
+
+        ``expected_version`` is the skill's content version reported by
+        ``load_skill`` (the ``version:`` in its header). If provided, the edit is
+        REJECTED when the skill's current version has changed — someone (e.g. a
+        human) edited it since you read it. Re-load the skill and retry with the
+        fresh version. Returns a confirmation carrying the new version for your
+        next edit. Writes atomically and refreshes the corpus so the change is
+        immediately reflected in list/load/point.
+
+        Args:
+            skill_id: Canonical skill id (`category/name`) or unique short name.
+            old_text: Exact text to replace (must appear exactly once).
+            new_text: Replacement text.
+            expected_version: Optional version token from `load_skill` for CAS.
+
+        Returns a confirmation with the new version, or a conflict/error message.
+        """
+        doc = self._find(skill_id)
+        if doc is None:
+            known = ", ".join(sorted(self._by_id)) or "(none)"
+            raise ModelRetry(
+                f"Unknown skill {skill_id!r}. Available skills: {known}. "
+                "Use the full id like `category/name`."
+            )
+        if not doc.skill_file.is_file():
+            raise ModelRetry(
+                f"Skill {doc.skill_id!r} has no readable SKILL.md on disk ({doc.skill_file!r})."
+            )
+        text = doc.skill_file.read_text(encoding="utf-8", errors="replace")
+        current_version = _content_hash(text)
+        if expected_version is not None and current_version != expected_version:
+            return (
+                f"Conflict: skill {doc.skill_id!r} has changed (expected version: "
+                f"{expected_version}, got version: {current_version}). "
+                "Re-load the skill with load_skill and retry."
+            )
+        count = text.count(old_text)
+        if count == 0:
+            return f"old_text not found in {doc.skill_id!r}."
+        if count > 1:
+            return (
+                f"old_text found {count} times in {doc.skill_id!r}. "
+                "Include more surrounding context to make the match unique."
+            )
+        new_content = text.replace(old_text, new_text, 1)
+        _write_atomic(doc.skill_file, new_content)
+        self._corpus.refresh()
+        new_version = _content_hash(new_content)
+        return f"Edited {doc.skill_id!r}. [version:{new_version}]"
 
     def point_skills(self, query: str, top_k: int | None = None) -> str:
         """INTERNAL primitive (NOT an agent tool): BM25 pointer hints for the hint layer.
