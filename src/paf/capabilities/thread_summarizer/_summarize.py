@@ -78,15 +78,22 @@ class SummarizerPrompt:
         from paf.capabilities._window import _first_text
 
         lines: list[str] = []
+        seen_by_role: dict[str, set[str]] = {}
         for i, msg in enumerate(self.span):
             text = _first_text(msg)
             if not text:
                 continue  # thinking / tool narration / retry — not durable
+            role = type(msg).__name__
+            # content-dedup: an identical prompt/answer re-persisted at a later
+            # address (clean copy vs. one with an injected block attached) must
+            # render once, not twice — collapse to the first occurrence.
+            if text in seen_by_role.setdefault(role, set()):
+                continue
+            seen_by_role[role].add(text)
             # Prefer the conversation-absolute ref stamped by the worker (a
             # multi-block span must cite real {run_id}:{turn_id}, not slice-relative).
             stamped = getattr(msg, "_thread_abs_ref", None)
             ref = stamped or _ref_for(self.span, i)
-            role = type(msg).__name__
             lines.append(f"[{ref or 'unanchored'}] {role}: {text}")
         messages = "\n".join(lines)
         return (

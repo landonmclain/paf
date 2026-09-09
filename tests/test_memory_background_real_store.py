@@ -24,6 +24,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    TextContent,
     TextPart,
     UserPromptPart,
 )
@@ -471,3 +472,40 @@ def test_stable_history_source_dedups_within_run_cumulative_snapshots(tmp_path: 
     history = asyncio.run(stable.run_history(run_id="run-multi"))
     turns = _turns(history)
     assert turns == ["t0", "t1", "t2", "t3"], turns
+
+
+def test_injected_marker_blocks_do_not_anchor_turns() -> None:
+    """Injected `<memory>`/index blocks never count as user turns (marker SOP).
+
+    The thread summarizer's minimum-turn gate must count *distinct real* user
+    turns. Injected context (harness `TextContent` tagged with an artifact
+    marker) must be stripped so it cannot inflate the floor, while real user
+    prompts — whether plain-str or list-wrapped — still anchor.
+    """
+    from paf.capabilities._markers import injected_artifact_markers
+    from paf.capabilities._turns import _is_user_turn, distinct_user_turn_texts
+
+    marker = injected_artifact_markers()[1] + ":scope_hash"
+    real_req = ModelRequest(parts=[UserPromptPart(content="real question")], run_id="r")
+    # harness memory injection: UserPromptPart whose content is a list of
+    # marker-tagged TextContent (system context, not user speech).
+    injected_req = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=[
+                    TextContent(content="\n\n<memory>\n### MEMORY.md\n...", metadata=marker)
+                ]
+            )
+        ],
+        run_id="r",
+    )
+    # list-wrapped real prompt (the shape test/read fixtures use): still real.
+    listwrapped_req = ModelRequest(parts=[UserPromptPart(content=["real question"])], run_id="r")
+
+    assert _is_user_turn(real_req) is True
+    assert _is_user_turn(listwrapped_req) is True
+    assert _is_user_turn(injected_req) is False, "injected <memory> block must not anchor"
+
+    msgs = [real_req, injected_req, listwrapped_req]
+    # the real prompt appears twice (clean + listwrapped) -> collapses to one
+    assert distinct_user_turn_texts(msgs) == ["real question"]

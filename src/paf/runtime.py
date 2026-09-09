@@ -81,7 +81,7 @@ from pydantic_ai.messages import (
 from pydantic_ai_harness.step_persistence import continue_run
 
 from paf.capabilities import PROFILES
-from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities._turns import distinct_user_turn_texts, user_anchor_indices
 from paf.capabilities.persistence import build_history_source
 from paf.capabilities.memory._background import (
     ConsolidationJob,
@@ -871,10 +871,13 @@ class Session:
                 conversation_id=cid,
             )
             # TURN-COUNT gate (the thread-specific cadence). A block is only
-            # worth producing once >= BLOCK_TURNS complete turns accumulated;
-            # fewer and the narration is noise, not a thread. Gate BEFORE the
-            # queue is constructed so a skip never creates one.
-            span_turns = len(user_anchor_indices(span.messages)) if span.messages else 0
+            # worth producing once >= BLOCK_TURNS *distinct real* turns
+            # accumulated; fewer and the narration is noise, not a thread.
+            # Count distinct real user turns (dedup re-persisted copies and
+            # exclude injected <memory>/index blocks) so the floor is honest.
+            span_turns = (
+                len(distinct_user_turn_texts(span.messages)) if span.messages else 0
+            )
             if span_turns < BLOCK_TURNS:
                 task.status = SKIPPED
                 task.detail = f"only {span_turns} unsettled turn(s); need >= {BLOCK_TURNS}"

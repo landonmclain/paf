@@ -31,7 +31,6 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
-    TextContent,
     TextPart,
     ToolCallPart,
     UserPromptPart,
@@ -39,7 +38,7 @@ from pydantic_ai.messages import (
 from pydantic_ai_harness.compaction import SlidingWindowCompaction
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
-from paf.capabilities._markers import injected_artifact_markers
+from paf.capabilities._turns import _user_prompt_text, _is_user_turn as _turns_is_user_turn
 from paf.capabilities._turns import user_anchor_indices
 
 if TYPE_CHECKING:
@@ -58,34 +57,13 @@ if TYPE_CHECKING:
 # they are deliberately NOT turn starts — this mirrors runtime2._is_turn_start
 # so the gate and the resume_window renderer see the same turns.
 def _is_real_user_prompt(message: ModelMessage) -> bool:
-    return isinstance(message, ModelRequest) and any(
-        isinstance(part, UserPromptPart) and isinstance(part.content, str)
-        for part in (getattr(message, "parts", None) or [])
-    )
+    """Whether `message` is a real (non-injected) user-turn anchor.
 
-
-def _user_prompt_text(part: UserPromptPart) -> str | None:
-    """Durable user-prompt text, dropping injected artifacts (e.g. `<memory>`).
-
-    The thread summarizer (and any downstream reader) only wants the *user's
-    real words*, not the transient blocks paf injects each request (memory
-    notebook, turn-index, etc.). Injected `TextContent` is tagged with a marker
-    (see `paf.capabilities._markers`) and dropped; a plain `str` content is kept
-    verbatim; a list keeps only untagged text blocks.
+    Delegates to the shared ``_turns._is_user_turn`` so the "strip markers after
+    pulling from persistence" rule (an injected ``<memory>``/index block with
+    non-str content is NOT a user turn) lives in exactly one place.
     """
-    if isinstance(part.content, str):
-        return part.content
-    texts: list[str] = []
-    for item in part.content:
-        if isinstance(item, str):
-            texts.append(item)
-        elif isinstance(item, TextContent):
-            meta = getattr(item, "metadata", None)
-            if meta is None or not any(
-                str(meta).startswith(marker) for marker in injected_artifact_markers()
-            ):
-                texts.append(item.content)
-    return " ".join(texts) or None
+    return _turns_is_user_turn(message)
 
 
 def _first_text(message: ModelMessage) -> str | None:

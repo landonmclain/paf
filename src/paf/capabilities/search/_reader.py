@@ -31,6 +31,8 @@ from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.conversation_search._source import HistorySource
 
+from paf.capabilities._turns import _is_user_turn as _turns_is_user_turn
+
 from .._markers import injected_artifact_markers
 
 # Char caps for the bounded (non-`full`) read. Mirrors `search/_render.py` so the
@@ -67,10 +69,12 @@ turn is not enough and you need a wider picture, escalate to
 
 
 def _is_user_turn(message: ModelMessage) -> bool:
-    """A `ModelRequest` carrying a `UserPromptPart` anchors a user turn."""
-    return isinstance(message, ModelRequest) and any(
-        isinstance(part, UserPromptPart) for part in message.parts
-    )
+    """A *real* (non-injected) `UserPromptPart` anchors a user turn.
+
+    Delegates to the shared ``_turns._is_user_turn`` (strict: injected
+    ``<memory>``/index blocks with non-str content are not user turns).
+    """
+    return _turns_is_user_turn(message)
 
 
 def _source_session_id(message: ModelMessage) -> str | None:
