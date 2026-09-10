@@ -52,12 +52,14 @@ _PENDING_MARKER = " *(archive pending review)*"
 _TIER_ORDER = ("t1", "t2", "t3")
 
 # Bounded-presentation caps (per tier) for the LIVE index render — Gap A of
-# Global-Durable-Memory-Maintenance. t1 (stable "who they are") is stable
-# identity/preference and stays UNBOUNDED; t2 (goals/current) and t3
-# (ephemeral) are capped to the most-recent N winners so the injected
-# MEMORY.md stays small and current instead of a growing wall that a small
-# model misreads as corruption (trace cfe9030e, web-demo_assistant).
-_TIER_CAPS: dict[str, int | None] = {"t1": None, "t2": 25, "t3": 15}
+# Global-Durable-Memory-Maintenance. Each tier is capped to the most-recent N
+# winners so the injected MEMORY.md stays small and current instead of a growing
+# wall that a small model misreads as corruption (trace cfe9030e,
+# web-demo_assistant): t1 (stable identity/prefs) 75, t2 (goals/current) 25,
+# t3 (ephemeral) 15. Old facts fall out of the injected view but stay in the
+# journal/index — never lost. (t1 was previously unbounded; capping it is what
+# keeps a reviewer's usual accumulation from bloating every request.)
+_TIER_CAPS: dict[str, int | None] = {"t1": 75, "t2": 25, "t3": 15}
 
 
 def _group_by_tier(records: list[MemoryRecord]) -> dict[str, list[MemoryRecord]]:
@@ -259,7 +261,10 @@ def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
     Returns the rendered markdown. Uses the memory package's atomic writer so a
     crash mid-write never leaves a torn notebook.
     """
-    from paf.capabilities._storage._atomic import write_atomic  # local import keeps top of module import-light
+    from paf.capabilities._storage._atomic import (
+        write_atomic,  # local import keeps top of module import-light
+    )
+
     from ._overrides import (
         load_overrides,  # local import keeps top of module import-light
     )

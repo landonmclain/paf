@@ -270,16 +270,17 @@ def test_write_render_index_keeps_distinct_facts(tmp_path):
     assert len(lines) == 2  # two DISTINCT winners both survive
 
 
-def test_index_render_bounds_t2_and_t3_keeps_all_t1(tmp_path):
-    """Gap A: the LIVE index render caps t2/t3 by recency; t1 stays unbounded.
+def test_index_render_bounds_all_tiers(tmp_path):
+    """Gap A: the LIVE index render caps EACH tier by recency.
 
-    t1 (stable) must never fall off; t2 (goals) caps to 25 newest; t3
+    t1 (stable identity) caps to 75 newest, t2 (goals) caps to 25 newest, t3
     (ephemeral) caps to 15 newest — oldest records drop out of the injected
-    view but remain in the journal/index (never lost).
+    view but remain in the journal/index (never lost). t1 is no longer
+    unbounded (it was the source of injected-memory bloat); same rule applies.
     """
     from paf.capabilities.memory._render import render_index_memory
 
-    T1, T2, T3 = 30, 40, 30  # t1 above any cap, t2/t3 above their caps
+    T1, T2, T3 = 100, 40, 30  # all above their caps
     recs = []
     born = "2026-01-01T00:00:00Z"
     # fully-disjoint token sets per record (real facts are distinct) — the
@@ -306,6 +307,6 @@ def test_index_render_bounds_t2_and_t3_keeps_all_t1(tmp_path):
             cur = ln[3:]
         elif ln.startswith("- ") and cur is not None:
             tiers[cur] = tiers.get(cur, 0) + 1
-    assert tiers.get("t1", 0) == T1        # unbounded: all survive
+    assert tiers.get("t1", 0) == 75        # capped to newest 75
     assert tiers.get("t2", 0) == 25        # capped to newest 25
     assert tiers.get("t3", 0) == 15        # capped to newest 15

@@ -162,10 +162,19 @@ cheap to keep and expensive to lose; only act on the HIGH-CONFIDENCE cases below
 Act ONLY on facts that clearly fall into one of these classes, otherwise leave
 the fact untouched:
 
-- archive: the fact is directly contradicted by a newer fact in this view, or
-  factually superseded by one, or is a verbatim/near-identical duplicate of
-  another line (keep the more complete copy). Do NOT archive for age,
-  redundancy, being historical/process/moot, or being less central.
+- archive: a duplication-resolution rule first, then contradiction. When
+  several lines are close to the same thing (same subject + predicate, near-
+  identical wording, differing only by detail or date), keep ONE and archive the
+  rest:
+    - keep the MOST THOROUGH line (the one carrying the most/richest detail);
+    - if two are almost identical (same detail, no material difference), keep
+      the MOST RECENT (newest date);
+    - archive every other near-duplicate.
+  Also archive a fact directly contradicted or factually superseded by a newer
+  fact in this view. Don't worry about a fact merely being old or less central —
+  aging is handled automatically: old t3 (ephemeral) facts fall out of the
+  injected view on their own as newer facts arrive, so you don't need to archive
+  them for age.
 - tier_change (ONE step down, t1->t2 or t2->t3 only): a settled live decision
   is being demoted; demote sparingly, a few per pass at most. Never up-tier
   except for a clearly central durable constraint. Do not let the same fact
