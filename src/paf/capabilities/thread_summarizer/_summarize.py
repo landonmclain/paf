@@ -121,7 +121,7 @@ async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord
         name="thread-summarizer",
         output_type=BeatsRecord,
         model_settings=_consolidation_model_settings(),
-        retries=2,
+        retries=5,
     )
     result = await agent.run(SummarizerPrompt(span, conversation_id).render())
     return result.output
