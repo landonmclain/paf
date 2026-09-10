@@ -563,7 +563,7 @@ _WRITER_MODEL = os.environ.get(
 )
 
 
-def _build_subagents(store) -> SubAgents:
+def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     """Explicit sub-agent delegation (BUILTIN, not a paf port) — demo leaf agent.
 
     Lets the demo agent delegate a self-contained task to a named child agent via
@@ -572,8 +572,18 @@ def _build_subagents(store) -> SubAgents:
     everything the task needs). One demo child:
 
     - ``writer`` — drafts prose/format from material the parent passes in (no
-      tools; deterministic leaf). Should be pointed at a better prose model via
-      `WRITER_MODEL` (falls back to `SUBAGENT_MODEL`, then demo model).
+      own tools by default; deterministic leaf). Should be pointed at a better
+      prose model via `WRITER_MODEL` (falls back to `SUBAGENT_MODEL`, then demo
+      model).
+
+    The writer is given the SAME scoped FileSystem capability as the main model
+    via `shared_capabilities`, so it can read its own source notes/files rooted
+    at the same dir the parent uses (root from `filesystem_config` / default
+    PROJECT_ROOT). This keeps the parent's context small — the parent passes
+    file paths in `task` and the child reads the content in its own fresh run.
+    `inherit_tools` stays off (child doesn't inherit the parent's toolset;
+    capability-owned toolsets can't be inherited anyway — see harness
+    `_inherited_toolsets`).
 
     This is a pydantic-ai AbstractCapability consumed from the harness per Landon
     (same drop-in pattern as ToolOutputLimits / WarnOnCacheBusts). It is NOT
@@ -582,9 +592,7 @@ def _build_subagents(store) -> SubAgents:
     entries — it can never resolve from a YAML spec. `agent_folders=None` disables
     disk-agent loading entirely so the demo is purely explicit and deterministic
     (it does not vary with whatever markdown agent files happen to exist in
-    `~/.agents/` or the project). `inherit_tools` is off (children don't get the
-    parent's toolset), keeping delegation a clean leaf call. `store` unused
-    (uniform builder signature).
+    `~/.agents/` or the project). `store` unused (uniform builder signature).
     """
     from pydantic_ai import Agent
 
@@ -632,6 +640,7 @@ def _build_subagents(store) -> SubAgents:
     return SubAgents(
         agents=[SubAgent(writer)],
         agent_folders=None,  # purely explicit, deterministic demo (no disk loading)
+        shared_capabilities=[_build_filesystem(store, filesystem_config)],
     )
 
 
@@ -749,6 +758,13 @@ def build_runtime_capabilities(
             # seam ready for the Phase-1 capture hook. Gated by the allowlist
             # via the loop's `name not in capability_names` continue above.
             capabilities.append(_build_thread_summarizer(store, None, agent_name))
+        elif name == "Subagents":
+            # The writer sub-agent gets the SAME scoped FileSystem capability as
+            # the main model (root from `filesystem_config` / default PROJECT_ROOT)
+            # via `shared_capabilities`, so the parent passes file paths in `task`
+            # and the child reads the content in its own fresh run — keeping the
+            # parent's context small.
+            capabilities.append(_build_subagents(store, filesystem_config))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
