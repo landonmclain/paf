@@ -80,8 +80,20 @@ def test_watermark_roundtrips(tmp_path) -> None:
 
 
 def test_watermark_fresh_when_file_absent(tmp_path) -> None:
+    """A missing file is FRESH (nothing consumed) — do NOT pre-anchor run_id.
+
+    Regression (2026-09-09): ``load(..., run_id=tip_run)`` returned a fresh
+    watermark re-anchored at the tip run, which ``resolve_unseen_span`` reads
+    as *mid-history* (all runs strictly older are consumed). A turn-count-
+    gated consumer (thread summarizer, >=10 unsettled turns) then deadlocked:
+    only in-tip turns counted, never reached the threshold, the watermark was
+    never persisted, and it re-bootstrapped at the new tip each turn — a brand-
+    new conversation's whole backlog looked already-consumed. A missing file
+    means nothing has been consumed, so the fresh watermark is empty and the
+    whole backlog is seen as new.
+    """
     loaded = MemoryWatermark.load(tmp_path, run_id="r1")
-    assert loaded.run_id == "r1"
+    assert loaded.run_id == ""  # not re-anchored at the tip
     assert loaded.turn_id is None
     assert loaded.is_empty()
 

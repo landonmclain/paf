@@ -148,6 +148,69 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
     assert recs[0].summary != ""
 
 
+def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> None:
+    """Regression: a brand-new conversation's WHOLE backlog must be seen as new.
+
+    Reproduces the deadlock (2026-09-09): the production trigger loads the
+    per-conversation watermark via ``MemoryWatermark.load(dir, run_id=tip_run)``.
+    Before the fix, a missing watermark file returned a fresh watermark re-
+    anchored at the TIP run, and ``resolve_unseen_span`` read that as
+    *mid-history* — every run strictly older than the tip was treated as
+    consumed. For a conversation whose >=10-turn backlog is spread across
+    several runs (each run individually < BLOCK_TURNS), only the tip run's
+    turns counted, the threshold was never reached, the watermark was never
+    persisted, and it re-bootstrapped at the new tip every turn: the whole
+    backlog was silently discarded and summarization never fired.
+
+    Here: 6 turns in run-a + 6 in run-b (each < 10, but 12 total). A fresh
+    watermark must treat the WHOLE backlog as new -> >=10 -> enqueues.
+    """
+    msgs_a = []
+    for i in range(6):
+        msgs_a.extend(_msg(user=f"a{i}", assistant=f"ra{i}"))
+    msgs_b = []
+    for i in range(6):
+        msgs_b.extend(_msg(user=f"b{i}", assistant=f"rb{i}"))
+    store = _store(
+        tmp_path, {"run-a": msgs_a, "run-b": msgs_b}, "profile:cid"
+    )
+    capture_root = str(tmp_path / "summaries" / "assistant")
+    # Fresh watermark: ThreadSummaryStore dir exists but holds NO watermark file.
+    ThreadSummaryStore(capture_root, "profile:cid").directory.mkdir(parents=True, exist_ok=True)
+
+    with Session(
+        "runtime2_test",
+        trace=False,
+        resume=False,
+        store=store,
+        thread_summarize_span=_beats_from_span,
+    ) as session:
+        session._thread_capture_root = capture_root
+        session._thread_summarizer_enabled = True
+
+        async def scenario():
+            await session._maybe_trigger_thread_summarize("profile:cid")
+            q = session.thread_summarizer_queue
+            assert q is not None, ">=10 complete turns across the backlog -> must enqueue"
+            await q.drain("profile:cid")
+
+        asyncio.run(scenario())
+
+    # Whole backlog must be folded (up to the in-flight tip of run-b).
+    wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
+    assert wm.turn_id is not None
+    assert any(task.status == "done" for task in session._background_tasks.values())
+    recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
+    assert len(recs) >= 1
+    refs = recs[0].refs
+    # The fold must straddle BOTH runs — run-a's 6 turns AND run-b's lead turns.
+    # (Before the fix, only the tip run counted and this never enqueued at all.)
+    assert any(r.startswith("run-a:") for r in refs)
+    assert any(r.startswith("run-b:") for r in refs)
+    # 10 complete turns folded (12 total - in-flight tip - one trailing partial).
+    assert len(refs) == 10
+
+
 def test_trigger_skips_below_turn_threshold(tmp_path: Path) -> None:
     """< BLOCK_TURNS complete turns since the watermark -> never enqueues."""
     msgs: list[ModelMessage] = []

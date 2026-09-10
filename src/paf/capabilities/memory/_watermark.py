@@ -91,6 +91,20 @@ class MemoryWatermark:
         ``consumed_ts`` is likewise treated as fresh — the append-only journal
         is the lossless source of truth, so a missing watermark only defers a
         beat, never loses a fact.
+
+        A totally absent file is a **fresh** watermark (nothing consumed). It
+        is returned with ``run_id=""`` and ``turn_id=None`` — NOT re-anchored
+        at the ``run_id`` argument — because ``resolve_unseen_span`` treats a
+        watermark whose run is found in ``list_runs`` as *mid-history* (all
+        runs strictly older are consumed). Pre-anchoring a fresh watermark at
+        the tip run made a brand-new conversation's whole backlog look
+        already-consumed, so a turn-count-gated consumer (e.g. the thread
+        summarizer, which won't fire until >=10 *unsettled* turns) deadlocked:
+        only in-tip turns counted, never reached the threshold, the watermark
+        was never persisted, and it re-bootstrapped at the new tip every turn.
+        An empty fresh watermark resolves the whole backlog as new (the
+        documented "fresh => everything new" contract). ``run_id`` is still
+        honored for the file-exists (legacy / round-trip) paths below.
         """
         path = Path(directory) / filename
         if path.exists():
@@ -110,7 +124,7 @@ class MemoryWatermark:
                 # lossless source of truth, a missing watermark only defers a
                 # beat, never loses a fact.
                 pass
-        return cls(run_id=run_id)
+        return cls()
 
     def save(
         self, directory: str | os.PathLike, filename: str = _WATERMARK_FILENAME
