@@ -148,6 +148,56 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
     assert recs[0].summary != ""
 
 
+def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
+    """Regression: a resolved span with a non-multiple of BLOCK_TURNS leaves a
+    trailing partial block that must NOT be summarized as a thin 1-9 turn record.
+
+    A 12-complete-turn span (12 user/assistant pairs => 11 complete + in-flight
+    tip) chunks as 10 + 1 leftover. Before the fix the worker summarized the
+    leftover 1-turn block too (e.g. a record with n_refs=1 and a "only 1 turn in
+    this block" summary — exactly the live miss). After the fix only the full
+    10-turn block is written; the trailing turn is left to fold into a later
+    >= BLOCK_TURNS block, while the watermark still advances past it.
+    """
+    msgs: list[ModelMessage] = []
+    for i in range(12):  # 11 complete turns, turn 12 is the in-flight tip
+        msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
+    store = _store(tmp_path, {"run-a": msgs}, "profile:cid")
+    capture_root = str(tmp_path / "summaries" / "assistant")
+    wm_store = ThreadSummaryStore(capture_root, "profile:cid")
+    wm_store.directory.mkdir(parents=True, exist_ok=True)
+
+    with Session(
+        "runtime2_test",
+        trace=False,
+        resume=False,
+        store=store,
+        thread_summarize_span=_beats_from_span,
+    ) as session:
+        session._thread_capture_root = capture_root
+        session._thread_summarizer_enabled = True
+
+        async def scenario():
+            await session._maybe_trigger_thread_summarize("profile:cid")
+            q = session.thread_summarizer_queue
+            assert q is not None, ">= 10 complete turns -> queue constructed"
+            await q.drain("profile:cid")
+
+        asyncio.run(scenario())
+
+    # Only the FULL 10-turn block is written — no thin trailing (1-turn) record.
+    recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
+    assert len(recs) == 1
+    assert len(recs[0].refs) == 10
+
+    # The watermark still advances over the trailing turn (turn 10), so it is
+    # NOT re-summarized per turn — it folds into the next >= BLOCK_TURNS block.
+    wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
+    assert wm.run_id == "run-a"
+    assert wm.turn_id == 10
+    assert any(task.status == "done" for task in session._background_tasks.values())
+
+
 def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> None:
     """Regression: a brand-new conversation's WHOLE backlog must be seen as new.
 

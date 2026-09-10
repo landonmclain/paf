@@ -241,6 +241,22 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
             summarized = 0
             for start in range(0, len(turns), BLOCK_TURNS):
                 block = turns[start : start + BLOCK_TURNS]
+                # A trailing partial block (< BLOCK_TURNS real turns) is not a
+                # completed span — summarizing a 1-9 turn sliver yields a thin,
+                # near-useless record (and a comment like "only 1 turn in this
+                # block"). Leave it until a future pass accumulates more turns:
+                # the tail advance below still moves the watermark past it, so
+                # it is NOT re-summarized per turn — it simply folds into the
+                # next >= BLOCK_TURNS block.
+                #
+                # Only skip when at least one full block was already folded in
+                # THIS pass (summarized > 0): the trigger guarantees a real
+                # enqueued span has >= BLOCK_TURNS NEW turns, so a trailing
+                # partial always follows a folded full block. Direct queue users
+                # (unit tests, stale-watermark catch-up) may hand a span whose
+                # only new content is a small partial; that still runs.
+                if len(block) < BLOCK_TURNS and summarized > 0:
+                    continue
                 block_msgs: list = []
                 # Stamp each turn's CONVERSATION-ABSOLUTE ref onto its messages so
                 # the prompt/beats cite the real {run_id}:{turn_id}, not a
