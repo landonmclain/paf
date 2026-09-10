@@ -267,13 +267,20 @@ compact:
 #   `review_every` (default 60m, not set here) is the rarer reviewer cadence.
 #   Background consolidation is LIVE — the runtime triggers it off the
 #   completed-turn path via `_maybe_trigger_consolidation`.
-# - max_memory_size (65536)  chars: per-read cap JournalViewStore truncates MEMORY.md to.
-# - max_tokens (65536)       tokens: token ceiling for the injected <memory> section.
-# - max_lines (1000000)      lines: line cap applied by render_memory_prompt.
-#   Absent -> the high, non-evicting defaults in build.py (full journal shows).
-#   Tune down per agent to bound how much memory is injected into each request.
+# - tier_caps (default {t1: 75, t2: 25, t3: 15}): PER-TIER COUNT caps — the
+#   primary bounding mechanism for the injected <memory> section. The index
+#   render keeps at most this many most-recent winners per tier, so MEMORY.md
+#   stays small instead of a growing wall. A missing key keeps the default;
+#   `t1: null` means unbounded for that tier. Old facts fall out of the
+#   injected view but stay in the journal/index (never lost).
+# - max_memory_size (65536)  chars: per-read safety cap JournalViewStore
+#   truncates MEMORY.md to (independent of tier counts; bounds even a
+#   no-index raw fallback render).
+#   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
   consolidate_every: 10
+  # tier_caps:
+  #   t1: 75
+  #   t2: 25
+  #   t3: 15
   # max_memory_size: 65536
-  # max_tokens: 65536
-  # max_lines: 1000000

@@ -193,7 +193,10 @@ def _select_index_winners(
 
 
 def render_index_memory(
-    store: JournalStore, index, overrides: dict[int, OverrideState] | None = None
+    store: JournalStore,
+    index,
+    overrides: dict[int, OverrideState] | None = None,
+    tier_caps: dict[str, int | None] | None = None,
 ) -> str:
     """Render MEMORY.md **from the derived index** (surviving facts only).
 
@@ -204,22 +207,23 @@ def render_index_memory(
     is the render the live write path uses when an index exists.
 
     **Bounded (Gap A):** each tier is capped to the most-recent N winners
-    (:data:`_TIER_CAPS`) — t1 unbounded, t2 capped, t3 capped. Winners are
-    already deduped and sorted by recency, so the cap keeps the newest facts
-    and lets old ephemeral/goal entries fall out of the injected view (they
-    remain reachable in the journal / index, never lost).
+    (``tier_caps``, default :data:`_TIER_CAPS`) — t1 capped, t2 capped, t3
+    capped. Winners are already deduped and sorted by recency, so the cap keeps
+    the newest facts and lets old ephemeral/goal entries fall out of the
+    injected view (they remain reachable in the journal / index, never lost).
 
     ``overrides`` (optional, folded sidecar map) is honored deterministically
     before grouping: applied archives drop the fact, applied tier-changes move
     it under a new tier, and pending assistant archives render with a
     ``*(archive pending review)*`` marker.
     """
+    caps = tier_caps if tier_caps is not None else _TIER_CAPS
     winners = _select_index_winners(store, index)
     kept, pending = _apply_overrides(winners, overrides)
     groups = _group_by_tier([r for _, r in kept])
-    # Bound each already-recency-sorted group to its tier cap (t1 unbounded).
+    # Bound each already-recency-sorted group to its tier cap.
     groups = {
-        tier: recs[:_TIER_CAPS[tier]] if _TIER_CAPS.get(tier) else recs
+        tier: recs[: caps[tier]] if caps.get(tier) else recs
         for tier, recs in groups.items()
     }
 
@@ -246,7 +250,34 @@ def render_index_memory(
     return "\n\n".join(sections) + ("\n" if sections else "")
 
 
-def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
+def _resolve_tier_caps(agent_name: str | None) -> dict[str, int | None]:
+    """Resolve the per-tier injection caps for an agent from its spec.
+
+    The render owns its own caps — Option B: it reads ``memory.tier_caps``
+    from the agent's spec directly (via ``paf.specs.resolve_memory_tier_caps``),
+    merging any partial overrides over the built-in :data:`_TIER_CAPS`. When
+    ``agent_name`` is ``None``, or the spec is absent / declares no
+    ``tier_caps``, the built-in caps apply unchanged. Neither the runtime
+    Session nor the background queue carries ``tier_caps`` anywhere.
+    """
+    if not agent_name:
+        return dict(_TIER_CAPS)
+    from paf.specs import resolve_memory_tier_caps
+
+    overrides = resolve_memory_tier_caps(agent_name)
+    if not overrides:
+        return dict(_TIER_CAPS)
+    caps = dict(_TIER_CAPS)
+    caps.update(overrides)
+    return caps
+
+
+def write_render(
+    store: JournalStore | list[MemoryRecord],
+    md_path: str,
+    *,
+    agent_name: str | None = None,
+) -> str:
     """Render and atomically write ``md_path`` (e.g. ``MEMORY.md``).
 
     **Index-aware:** when ``store`` is a :class:`JournalStore` and a derived
@@ -257,6 +288,11 @@ def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
     benchmark's fresh directory, or the first render before any fold), it falls
     back to the raw journal render — preserving the benchmark's measured
     contract unchanged.
+
+    ``agent_name`` (optional) lets the render resolve its own per-tier
+    injection caps from the agent's spec (:func:`_resolve_tier_caps`), falling
+    back to :data:`_TIER_CAPS`. Absent, it uses the built-in caps. Bounding
+    applies only to the index-aware render.
 
     Returns the rendered markdown. Uses the memory package's atomic writer so a
     crash mid-write never leaves a torn notebook.
@@ -270,11 +306,14 @@ def write_render(store: JournalStore | list[MemoryRecord], md_path: str) -> str:
     )
 
     overrides = load_overrides(str(Path(md_path).parent))
+    tier_caps = _resolve_tier_caps(agent_name)
 
     if isinstance(store, JournalStore):
         index = _load_index_beside(md_path)
         if index is not None:
-            content = render_index_memory(store, index, overrides=overrides)
+            content = render_index_memory(
+                store, index, overrides=overrides, tier_caps=tier_caps
+            )
         else:
             content = render_journal_memory(store, overrides=overrides)
     else:

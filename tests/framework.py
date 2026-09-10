@@ -358,13 +358,9 @@ def _build_agent(
                 # Search), not memory tools. Inject-only memory.
                 expose_tools=False,
                 # The journal view is a finite, curated render of the journal —
-                # never a growing legacy notebook. Inject it WHOLE: no line or
-                # token budget gating (the legacy `render_memory_prompt` head/
-                # tail truncation is for MarkdownStorage's unbounded MEMORY.md,
-                # not for our journal-rendered view). Max-lines/max-tokens high
-                # so the full notebook passes through verbatim.
-                max_lines=1_000_000,
-                max_tokens=65_536,
+                # never a growing legacy notebook. Inject it WHOLE: the
+                # journal-rendered MEMORY.md is capped per-tier by the index
+                # render (t1/t2/t3), not by line/token budgets.
                 # guidance="" disables the Memory instruction block entirely —
                 # the single system prompt owns all static guidance. Only the
                 # dynamic MEMORY.md body still injects (before_model_request).

@@ -357,18 +357,25 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
         memory:
           consolidate_every: 10      # optional; background consolidation cadence
           max_memory_size: 65536     # optional; per-read char cap for MEMORY.md
-          max_tokens: 65536          # optional; token ceiling for injected section
-          max_lines: 1000000         # optional; line cap for injected section
+          tier_caps:                 # optional; per-tier COUNT caps (render-owned)
+            t1: 75
+            t2: 25
+            t3: 15
 
     ``consolidate_every`` is the background-consolidation cadence in **minutes**
     — a time metric (time-anchored watermark; monotonic across runs). It is
     decoupled from context eviction; the owner simply folds at least this often
-    when new material has accumulated. ``max_memory_size`` / ``max_tokens`` /
-    ``max_lines`` bound how much of the rendered journal is injected into each
-    request (see ``JournalViewStore.read`` / ``render_memory_prompt``). They
-    live on **Memory** — the capability owns every memory config variable —
-    and are handed to the background queue (a dumb service) only as injected
-    construction args, never read by the queue itself.
+    when new material has accumulated. ``max_memory_size`` bounds how much of
+    the rendered journal is injected per read (see ``JournalViewStore.read``).
+    ``tier_caps`` (a ``{t1/t2/t3: int|None}`` dict) are PER-TIER COUNT caps on
+    the injected index render, owned by the render itself — see
+    ``paf.specs.resolve_memory_tier_caps`` (read here, not in this scalar loop).
+
+    ``consolidate_every`` / ``max_memory_size`` live on **Memory** — the
+    capability owns every memory config variable — and are handed to the
+    background queue (a dumb service) only as injected construction args, never
+    read by the queue itself. The queue's ``write_render`` forwards its own
+    ``agent_name`` so the render resolves ``tier_caps`` from the spec directly.
 
     Unknown keys inside ``memory:`` are ignored so the schema can grow without
     breaking older spec files.
@@ -376,8 +383,8 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     Returns a dict (or ``None`` when the block is absent/unreadable). Absent
     members fall back to their code-level defaults in ``_build_memory`` / the
     ``Memory`` capability (``consolidate_every`` defaults to
-    ``DEFAULT_CONSOLIDATE_EVERY``; the injection bounds default to the
-    high, non-evicting caps in ``build.py``).
+    ``DEFAULT_CONSOLIDATE_EVERY``; ``max_memory_size`` to ``DEFAULT_MEMORY_MAX_SIZE``;
+    ``tier_caps`` to ``_render._TIER_CAPS``).
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -394,8 +401,6 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
         "consolidate_every",
         "review_every",
         "max_memory_size",
-        "max_tokens",
-        "max_lines",
     ):
         value = block.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
@@ -443,6 +448,51 @@ def resolve_memory_config(
         ):
             review_every = review_candidate
     return {"consolidate_every": every, "review_every": review_every}
+
+
+def resolve_memory_tier_caps(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> dict[str, int | None] | None:
+    """Best-effort read of the spec's ``memory: tier_caps`` block.
+
+    ``tier_caps`` is a per-tier count bound for the injected index render
+    (``{t1/t2/t3: int | None}``). It is NOT a single int like the cadence
+    values, so it needs its own reader rather than riding inside
+    :func:`resolve_memory_config`. The render (``_render.py``) owns resolving
+    its own caps and calls this directly — neither the background queue nor
+    the runtime Session carries ``tier_caps`` anywhere.
+
+    Returns a **partial** dict of only the per-tier caps the spec declares
+    (``None`` meaning unbounded for that tier), or ``None`` when the spec is
+    absent/unreadable or declares no usable ``tier_caps`` block. The caller
+    merges this over its built-in defaults (``_TIER_CAPS``), so unspecified
+    tiers keep the code default — not a surprise unbounded.
+    """
+    try:
+        with get_spec_path(agent_name, spec_directory).open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except Exception:  # noqa: BLE001 - spec read is best-effort sugar
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("memory")
+    if not isinstance(block, dict):
+        return None
+    raw = block.get("tier_caps")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    from paf.capabilities.memory._journal import MEMORY_TIERS
+
+    out: dict[str, int | None] = {}
+    for tier, cap in raw.items():
+        if tier not in MEMORY_TIERS:
+            continue  # ignore unknown tiers so schema can grow safely
+        if cap is None:
+            out[tier] = None  # explicit unbounded
+        elif isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+            out[tier] = cap
+    return out or None
 
 
 def resolve_profile_name(

@@ -67,15 +67,13 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 DEFAULT_CONSOLIDATE_EVERY = 30  # minutes; owner fires at least this often with new material
 DEFAULT_REVIEW_EVERY = 60  # minutes; reviewer fires at most this often
 
-# Default injection bounds for the assistant's Memory capability. Mirrors the
-# benchmark assembly: high, non-evicting caps so the full rendered journal
-# always shows in prod unless a spec's `memory:` block tunes them down.
-# `max_memory_size` is the per-read char cap JournalViewStore truncates to;
-# `max_tokens` / `max_lines` bound the rendered <memory> section. Memory owns
-# every memory config variable; the spec overrides per agent.
+# Default bounds for the assistant's Memory capability. `max_memory_size`
+# remains the per-read char cap JournalViewStore truncates MEMORY.md to (a
+# hard safety net, independent of tier counts). Per-tier COUNT caps
+# (`memory: tier_caps`) are owned by the render (_render.py), which resolves
+# them from the agent's spec itself — see `_render._resolve_tier_caps`.
+# Memory owns every memory config variable; the spec overrides per agent.
 DEFAULT_MEMORY_MAX_SIZE = 65_536
-DEFAULT_MEMORY_MAX_TOKENS = 65_536
-DEFAULT_MEMORY_MAX_LINES = 1_000_000
 
 
 def _read_positive_int(memory_config: dict, key: str, default: int) -> int:
@@ -101,19 +99,21 @@ def _build_memory(
 
     `store` (the shared persistence store) is accepted for a uniform builder
     signature but unused. inject_memory=True, writable=False, and an empty
-    guidance string mirror _build_agent; max_lines / max_tokens / max_memory_size
-    default to high, non-evicting caps so the full rendered journal always
-    shows, and are overridable per agent from the spec's ``memory:`` block.
+    guidance string mirror _build_agent; only `max_memory_size` (a hard,
+    non-evicting per-read char cap on the injected journal) is set here, and
+    is overridable per agent from the spec's ``memory:`` block.
 
     `memory_config` is the spec's top-level ``memory:`` block (see
     ``specs._spec_memory_config``). **Memory owns every memory config
     variable** — ``consolidate_every`` (background-consolidation cadence) plus
-    the injection bounds ``max_memory_size`` / ``max_tokens`` / ``max_lines``.
-    Absent/``None`` -> the code-level defaults above. The background
-    consolidation queue (a framework-level service, NOT a capability) is never
-    handed the config to read itself; when it gets a live construction site,
-    Memory hands it the values it needs as injected constructor args
-    (``consolidate_every``, ``memory_directory``, ``span_source``).
+    the injection bound ``max_memory_size``. Per-tier COUNT caps
+    (``memory: tier_caps``) are owned by the render (`_render._resolve_tier_caps`),
+    which reads them from the agent's spec directly — neither the runtime
+    Session nor the background queue carries ``tier_caps`` anywhere. The
+    background consolidation queue (a framework-level service, NOT a
+    capability) is never handed the config to read itself; it only forwards
+    its own ``agent_name`` to ``write_render`` so the owner re-render resolves
+    the same spec caps.
     """
     from paf.capabilities.memory._overrides import OverrideStore
     from paf.capabilities.memory._view import JournalViewStore
@@ -127,8 +127,6 @@ def _build_memory(
     max_memory_size = _read_positive_int(
         cfg, "max_memory_size", DEFAULT_MEMORY_MAX_SIZE
     )
-    max_tokens = _read_positive_int(cfg, "max_tokens", DEFAULT_MEMORY_MAX_TOKENS)
-    max_lines = _read_positive_int(cfg, "max_lines", DEFAULT_MEMORY_MAX_LINES)
 
     memory_dir = str(memory_dir_for(agent_name)) if agent_name else Path(_MEMORY_DIR)
 
@@ -137,8 +135,6 @@ def _build_memory(
         inject_memory=True,
         writable=False,
         expose_tools=False,
-        max_lines=max_lines,
-        max_tokens=max_tokens,
         max_memory_size=max_memory_size,
         # None → `_DEFAULT_MEMORY_GUIDANCE` (the tiered, read-only notebook
         # guidance the assistant should always carry). A spec may opt out with

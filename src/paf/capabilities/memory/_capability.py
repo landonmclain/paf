@@ -30,7 +30,7 @@ from ._toolset import (
     JournalAppendToolset,
     OverrideToolset,
     ReviewerToolset,
-    injection_listing_limit,
+    injected_subfile_limit,
     list_subfiles,
     render_memory_prompt,
 )
@@ -108,14 +108,14 @@ class Memory(AbstractCapability[AgentDepsT]):
     inject_memory: bool = True
     """Inject stored memory when true; otherwise inject static tool guidance only."""
 
-    max_tokens: int = 2_000
-    """Approximate total token ceiling for the complete injected memory section."""
-
-    max_lines: int = 200
-    """Maximum number of `MEMORY.md` content lines considered for injection."""
-
     max_memory_size: int = 65_536
-    """Per-file character boundary for backend reads, search, and writes."""
+    """Per-file character boundary for backend reads (hard safety net).
+
+    Independent of tier counts: bounds how much of MEMORY.md is read into
+    context even if a render ever bypasses the tier caps (e.g. the no-index
+    raw-journal fallback). Kept as a ceiling so an unbounded MEMORY.md can
+    never be injected verbatim.
+    """
 
     max_search_results: int = 10
     """Maximum matches returned by one search."""
@@ -204,8 +204,6 @@ class Memory(AbstractCapability[AgentDepsT]):
     )
 
     def __post_init__(self) -> None:
-        _validate_positive("max_tokens", self.max_tokens)
-        _validate_non_negative("max_lines", self.max_lines)
         _validate_positive("max_memory_size", self.max_memory_size)
         _validate_positive("max_search_results", self.max_search_results)
         _validate_positive("max_search_result_chars", self.max_search_result_chars)
@@ -253,8 +251,8 @@ class Memory(AbstractCapability[AgentDepsT]):
             # For the REVIEWER agent (reviewer=True), the same sidecar is the
             # curation channel but exposes `memory_review` (apply directly).
             if self.reviewer:
-                return ReviewerToolset(self.overrides)
-            return OverrideToolset(self.overrides)
+                return ReviewerToolset(self.overrides, agent_name=self.agent_name)
+            return OverrideToolset(self.overrides, agent_name=self.agent_name)
         if not self.expose_tools:
             # Injection-only memory: the assistant carries NO memory tools. The
             # journal-rendered notebook is injected in-context and the recall
@@ -286,8 +284,6 @@ class Memory(AbstractCapability[AgentDepsT]):
             [],
             heading=self.heading,
             guidance=guidance,
-            max_lines=self.max_lines,
-            max_tokens=self.max_tokens,
         )
 
     async def before_model_request(
@@ -343,7 +339,7 @@ class Memory(AbstractCapability[AgentDepsT]):
                 subfiles, files_truncated = await list_subfiles(
                     store,
                     scope,
-                    limit=injection_listing_limit(self.max_tokens),
+                    limit=injected_subfile_limit(),
                 )
             except Exception as exc:
                 if span.is_recording():
@@ -360,42 +356,44 @@ class Memory(AbstractCapability[AgentDepsT]):
             main_content = "" if main is None else main.content
             rendered = ""
             guidance = self._render_guidance()
-            content_budget = (
-                self.max_tokens * 4
-                - len(guidance or "")
-                - len(_MEMORY_DATA_PREFIX)
-                - len(_MEMORY_DATA_SUFFIX)
-            )
-            if content_budget > 0:
-                if main_content or subfiles or files_truncated:
-                    rendered = render_memory_prompt(
-                        main_content,
-                        subfiles,
-                        heading=self.heading,
-                        guidance="",
-                        max_lines=self.max_lines,
-                        max_tokens=max(1, content_budget // 4),
-                        main_truncated=main is not None and main.truncated,
-                        files_truncated=files_truncated,
-                    )[:content_budget]
-                    if not rendered.strip():
-                        rendered = _EMPTY_MAIN
-                else:
-                    # Empty scope: still show the notebook surface so the model
-                    # is cued to maintain it and make the first write.
-                    rendered = _EMPTY_MAIN
-                rendered = f"{_MEMORY_DATA_PREFIX}{rendered}{_MEMORY_DATA_SUFFIX}"
-                part = UserPromptPart([TextContent(rendered, metadata=marker)])
-                latest = request_context.messages[-1]
-                if not isinstance(
-                    latest, ModelRequest
-                ):  # pragma: no cover - guaranteed by the agent graph
-                    raise RuntimeError(
-                        "model request history must end with a ModelRequest"
-                    )
-                request_context.messages[-1] = replace(
-                    latest, parts=[*latest.parts, part]
+            if main_content or subfiles or files_truncated:
+                rendered = render_memory_prompt(
+                    main_content,
+                    subfiles,
+                    heading=self.heading,
+                    guidance=guidance or "",
+                    main_truncated=main is not None and main.truncated,
+                    files_truncated=files_truncated,
                 )
+                if not rendered.strip():
+                    rendered = _EMPTY_MAIN
+            elif guidance:
+                # No memory files yet: still show the guidance surface so the
+                # model is cued to the durability contract.
+                rendered = render_memory_prompt(
+                    "",
+                    [],
+                    heading=self.heading,
+                    guidance=guidance,
+                )
+            else:
+                # Empty scope, no guidance: show the notebook surface so the
+                # model is cued to maintain it and make the first write.
+                rendered = _EMPTY_MAIN
+
+            rendered = f"{_MEMORY_DATA_PREFIX}{rendered}{_MEMORY_DATA_SUFFIX}"
+            part = UserPromptPart([TextContent(rendered, metadata=marker)])
+            latest = request_context.messages[-1]
+            if not isinstance(
+                latest, ModelRequest
+            ):  # pragma: no cover - guaranteed by the agent graph
+                raise RuntimeError(
+                    "model request history must end with a ModelRequest"
+                )
+            request_context.messages[-1] = replace(
+                latest, parts=[*latest.parts, part]
+            )
+
             if span.is_recording():
                 span.set_attributes(
                     {
@@ -454,8 +452,6 @@ class Memory(AbstractCapability[AgentDepsT]):
         heading: str = "",
         namespace: str = "",
         inject_memory: bool = True,
-        max_tokens: int = 2_000,
-        max_lines: int = 200,
         max_memory_size: int = 65_536,
         max_search_results: int = 10,
         max_search_result_chars: int = 4_000,
@@ -482,8 +478,6 @@ class Memory(AbstractCapability[AgentDepsT]):
             heading=heading,
             namespace=namespace,
             inject_memory=inject_memory,
-            max_tokens=max_tokens,
-            max_lines=max_lines,
             max_memory_size=max_memory_size,
             max_search_results=max_search_results,
             max_search_result_chars=max_search_result_chars,

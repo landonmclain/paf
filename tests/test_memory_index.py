@@ -310,3 +310,45 @@ def test_index_render_bounds_all_tiers(tmp_path):
     assert tiers.get("t1", 0) == 75        # capped to newest 75
     assert tiers.get("t2", 0) == 25        # capped to newest 25
     assert tiers.get("t3", 0) == 15        # capped to newest 15
+
+
+def test_resolve_memory_tier_caps_reads_spec(tmp_path):
+    """Option B: the render resolves its caps from the agent's spec itself.
+
+    `resolve_memory_tier_caps` returns a PARTIAL dict of only the tiers the
+    spec declares (None = explicit unbounded) or None when the spec declares
+    no usable block. The render merges that over `_TIER_CAPS`, so unspecified
+    tiers keep the code defaults.
+    """
+    from paf.specs import resolve_memory_tier_caps
+
+    # partial override: t1 bumped, t2 explicitly unbounded
+    spec = tmp_path / "capsassist.yaml"
+    spec.write_text(
+        "memory:\n"
+        "  tier_caps:\n"
+        "    t1: 3\n"
+        "    t2: null\n",
+        encoding="utf-8",
+    )
+    caps = resolve_memory_tier_caps("capsassist", spec_directory=tmp_path)
+    assert caps["t1"] == 3
+    assert caps["t2"] is None          # explicit unbounded preserved
+    assert "t3" not in caps            # unspecified -> kept out (defaults win)
+
+
+def test_resolve_memory_tier_caps_absent_specs(tmp_path):
+    """No spec / no memory block / no tier_caps -> None (render uses defaults)."""
+    from paf.specs import resolve_memory_tier_caps
+
+    # nonexistent agent
+    assert resolve_memory_tier_caps("no_such_agent", spec_directory=tmp_path) is None
+    # spec exists but no memory.tier_caps
+    (tmp_path / "plain.yaml").write_text("agent:\n  name: plain\n", encoding="utf-8")
+    assert resolve_memory_tier_caps("plain", spec_directory=tmp_path) is None
+    # unknown tier names are ignored but known ones kept
+    (tmp_path / "weird.yaml").write_text(
+        "memory:\n  tier_caps:\n    t1: 5\n    t9: 999\n",
+        encoding="utf-8",
+    )
+    assert resolve_memory_tier_caps("weird", spec_directory=tmp_path) == {"t1": 5}

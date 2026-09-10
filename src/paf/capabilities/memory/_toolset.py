@@ -40,6 +40,12 @@ _MAX_SEARCH_QUERY_CHARS = 1_000
 _MAX_SEARCH_TERMS = 32
 _MIN_FILENAME_LIST_CHARS = 6
 
+# Maximum topic-file names surfaced in the injected memory listing. Tier caps
+# bound MEMORY.md itself; this is a separate, small cap on how many other
+# memory files are listed (a handful is plenty — the rest are reachable via
+# search_memory).
+_MAX_INJECTED_SUBFILES = 20
+
 
 class MemoryWriteResult(TypedDict):
     """Result from a memory append — echoes the recorded fact back so the model
@@ -91,9 +97,9 @@ async def list_subfiles(
     return names[:limit], len(names) > limit or len(returned_paths) >= request_limit
 
 
-def injection_listing_limit(max_tokens: int) -> int:
-    """Derive a finite backend listing bound from the complete prompt budget."""
-    return max(1, max_tokens * _CHARS_PER_TOKEN // _MIN_FILENAME_LIST_CHARS)
+def injected_subfile_limit() -> int:
+    """Fixed cap on the topic-file names surfaced in the injected listing."""
+    return _MAX_INJECTED_SUBFILES
 
 
 def render_memory_prompt(
@@ -102,90 +108,32 @@ def render_memory_prompt(
     *,
     heading: str,
     guidance: str,
-    max_lines: int,
-    max_tokens: int,
     main_truncated: bool = False,
     files_truncated: bool = False,
 ) -> str:
-    """Render a complete memory section within the strict approximate token budget."""
-    budget = max_tokens * _CHARS_PER_TOKEN
-    rendered_guidance = guidance
+    """Render a complete memory section for injection.
+
+    Bounding is handled upstream, not here: MEMORY.md is capped per-tier by
+    count (``tier_caps`` in the index render) and read capped by
+    ``max_memory_size``, so ``main_content`` arrives already bounded. This
+    function only assembles the markdown and keeps the informational
+    truncation markers (older lines dropped / files omitted / notebook over
+    the read cap) so the model knows the view is bounded, not exhaustively
+    complete.
+    """
     source_lines = main_content.rstrip().splitlines()
-    kept_lines = source_lines[-max_lines:] if max_lines else []
-    dropped_lines = len(source_lines) - len(kept_lines)
-
-    max_filename_candidates = min(len(subfiles), budget // 4)
-    shown_files = subfiles[:max_filename_candidates]
-    omitted_files = len(subfiles) - len(shown_files)
-
-    rendered = _render_sections(
+    shown_files = list(subfiles)
+    omitted_files = 0
+    return _render_sections(
         heading,
-        rendered_guidance,
-        kept_lines,
-        dropped_lines,
+        guidance,
+        source_lines,
+        0,
         shown_files,
         omitted_files,
         main_truncated,
         files_truncated,
     )
-    while len(rendered) > budget and shown_files:
-        shown_files.pop()
-        omitted_files += 1
-        rendered = _render_sections(
-            heading,
-            rendered_guidance,
-            kept_lines,
-            dropped_lines,
-            shown_files,
-            omitted_files,
-            main_truncated,
-            files_truncated,
-        )
-    while len(rendered) > budget and kept_lines:
-        kept_lines.pop(0)
-        dropped_lines += 1
-        rendered = _render_sections(
-            heading,
-            rendered_guidance,
-            kept_lines,
-            dropped_lines,
-            shown_files,
-            omitted_files,
-            main_truncated,
-            files_truncated,
-        )
-    if len(rendered) > budget and dropped_lines:
-        dropped_lines = 0
-        rendered = _render_sections(
-            heading,
-            rendered_guidance,
-            kept_lines,
-            dropped_lines,
-            shown_files,
-            omitted_files,
-            main_truncated,
-            files_truncated,
-        )
-    if len(rendered) > budget and rendered_guidance:
-        rendered_guidance = rendered_guidance[
-            : max(0, len(rendered_guidance) - (len(rendered) - budget))
-        ]
-        rendered = _render_sections(
-            heading,
-            rendered_guidance,
-            kept_lines,
-            dropped_lines,
-            shown_files,
-            omitted_files,
-            main_truncated,
-            files_truncated,
-        )
-    if len(rendered) <= budget:
-        return rendered
-    if omitted_files or files_truncated:
-        marker = "[Memory files omitted; use search_memory]"
-        return marker[:budget]
-    return rendered[:budget]
 
 
 def _render_sections(
@@ -317,13 +265,15 @@ class OverrideResult(TypedDict):
 class _CurationToolset(FunctionToolset[AgentDepsT]):
     """Shared base for the override sidecar toolsets (assistant + reviewer).
 
-    Holds the ``OverrideStore`` handle, the eager re-render helper, and nothing
-    else — the concrete subclass registers its single curation tool.
+    Holds the ``OverrideStore`` handle, the agent name (so the eager
+    re-render can resolve the spec's per-tier caps), and nothing else — the
+    concrete subclass registers its single curation tool.
     """
 
-    def __init__(self, overrides: OverrideStore) -> None:
+    def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
         super().__init__(id="memory")
         self._overrides = overrides
+        self._agent_name = agent_name
 
     def _refresh_render(self) -> None:
         """Re-materialize ``MEMORY.md`` from the journal, honoring the sidecar.
@@ -338,7 +288,9 @@ class _CurationToolset(FunctionToolset[AgentDepsT]):
 
         directory = self._overrides.directory
         md_path = directory.rstrip("/\\") + "/" + MAIN_FILENAME
-        write_render(JournalStore(directory), md_path)
+        write_render(
+            JournalStore(directory), md_path, agent_name=self._agent_name
+        )
 
 
 class OverrideToolset(_CurationToolset[AgentDepsT]):
@@ -352,8 +304,8 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
     journal and index.
     """
 
-    def __init__(self, overrides: OverrideStore) -> None:
-        super().__init__(overrides)
+    def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
+        super().__init__(overrides, agent_name=agent_name)
         self.add_function(self.memory_archive_suggestion, name="memory_archive_suggestion")
 
     async def memory_archive_suggestion(
@@ -440,8 +392,8 @@ class ReviewerToolset(_CurationToolset[AgentDepsT]):
     the journal or index directly, addressing facts by their stable ``#N`` line id.
     """
 
-    def __init__(self, overrides: OverrideStore) -> None:
-        super().__init__(overrides)
+    def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
+        super().__init__(overrides, agent_name=agent_name)
         self.add_function(self.memory_review, name="memory_review")
 
     async def memory_review(

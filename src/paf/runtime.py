@@ -82,7 +82,6 @@ from pydantic_ai_harness.step_persistence import continue_run
 
 from paf.capabilities import PROFILES
 from paf.capabilities._turns import distinct_user_turn_texts, user_anchor_indices
-from paf.capabilities.persistence import build_history_source
 from paf.capabilities.memory._background import (
     ConsolidationJob,
     MemoryConsolidationQueue,
@@ -92,7 +91,7 @@ from paf.capabilities.memory._background import (
 )
 from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
 from paf.capabilities.memory._window import memory_dir_for
-from paf.capabilities.persistence import _build_store
+from paf.capabilities.persistence import _build_store, build_history_source
 from paf.capabilities.thread_summarizer import capture_directory_for
 from paf.capabilities.thread_summarizer._background import (
     BLOCK_TURNS,

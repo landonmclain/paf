@@ -394,7 +394,11 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             # the exact render the eviction path and benchmark produce.
             from ._render import write_render
 
-            write_render(journal, str(Path(directory) / "MEMORY.md"))
+            write_render(
+                journal,
+                str(Path(directory) / "MEMORY.md"),
+                agent_name=self.agent_name,
+            )
             # Derived index of surviving facts (dedup winners, incremental, pure
             # derivation from the journal) — regenerated beside MEMORY.md so they
             # can't disagree. First fold on a journal with pre-existing history
