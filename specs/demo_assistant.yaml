@@ -279,8 +279,8 @@ compact:
 #   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
   consolidate_every: 10
-  # tier_caps:
-  #   t1: 75
-  #   t2: 25
-  #   t3: 15
+  tier_caps:
+    t1: 50
+    t2: 25
+    t3: 15
   # max_memory_size: 65536

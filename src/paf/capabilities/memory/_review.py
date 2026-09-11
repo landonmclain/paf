@@ -34,60 +34,6 @@ if TYPE_CHECKING:
     from ._capability import Memory
 logger = logging.getLogger(__name__)
 
-REVIEWER_GUIDANCE = """\
-You are the memory reviewer. You curate this user's durable memory — you do NOT
-add new facts (that's the owner's job). You review what is already stored and
-decide what stays, what gets archived, and where things should live.
-
-Your input is the current rendered memory: a tiered list (## t1 / ## t2 / ## t3)
-of facts, each on a line ending with its journal line id (#N). Some lines carry
-a `*(archive pending review)*` marker — those are the assistant's suggestions
-awaiting your verdict.
-
-THE FIRST RULE IS CONSERVATION. Memory is cheap to keep and expensive to lose.
-A fact you archive is gone from the injected view forever unless someone
-deliberately re-appends it. When in doubt, DO NOTHING to that fact. Aggressive
-archiving is a bug, not a feature — missing a live constraint is far worse than
-carrying a little harmless redundancy. Most facts should be left exactly as-is.
-
-Only ARCHIVE a fact when it falls into one of these HIGH-CONFIDENCE classes:
-  1. DIRECTLY CONTRADICTED — a newer fact in the same view states the opposite
-     of this one (e.g. "rm is denied" vs "rm works"). Archive the wrong one.
-  2. FACTUALLY SUPERSEDED — a newer fact fully replaces this one (e.g. "needs a
-     way to persist the server" superseded by "server runs in tmux now").
-  3. VERBATIM / NEAR-IDENTICAL DUPLICATE — two lines state the SAME fact almost
-     word-for-word (the same claim, same subject). Archive the weaker copy only.
-Do NOT archive merely because a fact is "aged", "redundant", "historical",
-"process-related", "moot", "planned-then-executed", or "less central". Those are
-TIER_CHANGE (or nothing), never archive. Redundancy across facts that each carry
-some distinct nuance is expected and fine.
-
-Use TIER_CHANGE sparingly and only down one step at a time (t1->t2 or t2->t3):
-  - A fact that was a live decision/goal but is now settled-and-recorded may
-    move ONE tier down (t1->t2, t2->t3). It is still a real fact; it just is no
-    longer the current focus.
-  - Do NOT move every old design fact to t3 — that turns t3 into a graveyard and
-    destroys the tier ladder's meaning. A few well-placed demotions per pass is
-    plenty. Most things you think about demoting, you should instead leave.
-  - Never move a fact UP tier (t2->t1) reflexively; only do so for a clearly
-    central, durable constraint.
-
-DO NOT LET THE SAME FACT LIVE AT MULTIPLE TIERS. If you notice one fact is
-expressed in more than one line (e.g. a t1/t2 line and a t3 line saying the same
-thing), that is the one situation where you may resolve it — keep the single
-most complete/central copy and archive the merely-repeated weaker copies. Left
-alone, split copies make the tiers inconsistent.
-
-For pending-marked lines (`*(archive pending review)*`):
-  - AGREE (it truly is contradicted/superseded/duplicate) -> archive.
-  - DISAGREE (it's still true, just aged) -> `reject` (keep as-is, clear marker).
-  Err toward `reject`: a pending marker is the assistant guessing; you are the
-  approver. If you would not archive the fact on your own, reject the suggestion.
-
-Be decisive on clear cases and passive on everything else. A pass that archives
-NOTHING and changes ONE tier is a perfectly good pass. Restraint is the metric.
-"""
-
 
 def review_model() -> str:
     """The reviewer model — same as the owner's by decision."""
@@ -115,7 +61,7 @@ def _build_reviewer_memory(
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=False,  # reads the render via read_render, not injection
-        guidance=REVIEWER_GUIDANCE,
+        guidance="",  # single reviewer prompt is REVIEW_PROMPT (the user message)
         writable=False,
         expose_tools=True,  # carries the reviewer toolset (memory_review)
         overrides=overrides,
@@ -148,44 +94,46 @@ def _build_reviewer(
 
 
 REVIEW_PROMPT = """\
-Below is the user's current durable memory, tiered (## t1 / ## t2 / ## t3),
-one fact per line, each ending in its journal line id (#N). Some lines carry a
-`*(archive pending review)*` marker — those are assistant suggestions awaiting
-your verdict.
+You are the memory reviewer. You curate this user's durable memory — you do NOT
+add new facts (that's the owner's job). Your input is the current rendered
+memory below, tiered (## t1 / ## t2 / ## t3), one fact per line, each ending in
+its journal line id (#N). Some lines carry a `*(archive pending review)*`
+marker — those are assistant suggestions awaiting your verdict.
 
 {rendered}
 
-You are under NO obligation to do anything. Producing zero verdicts is a
-perfectly normal, good pass — the memory may simply be healthy as-is. Memory is
-cheap to keep and expensive to lose; only act on the HIGH-CONFIDENCE cases below.
+Your ONE job is to keep this memory tight and non-redundant so real, distinct
+facts don't get crowded out. The tier list has a hard size limit: everything
+above it is silently dropped from what the agent sees. Every duplicate line you
+leave standing is a slot a genuinely distinct fact should have.
 
-Act ONLY on facts that clearly fall into one of these classes, otherwise leave
-the fact untouched:
+ARCHIVE — collapse duplicates aggressively, then handle contradiction:
+- When several lines say the same thing in different words (same subject and
+  same core claim, differing only in phrasing or incidental detail), keep ONE
+  and archive the rest. This is your most important action. Do NOT require
+  identical wording — restatements of the same fact are still duplicates. For
+  example, five lines all describing the same writing-voice rule in slightly
+  different words are one fact, not five.
+    - keep the MOST THOROUGH line (richest detail);
+    - if two are equally complete, keep the most recent (newest date);
+    - archive every other duplicate.
+- Archive a fact directly contradicted or factually superseded by a newer fact
+  in this view (e.g. "rm is denied" superseded by "rm works").
 
-- archive: a duplication-resolution rule first, then contradiction. When
-  several lines are close to the same thing (same subject + predicate, near-
-  identical wording, differing only by detail or date), keep ONE and archive the
-  rest:
-    - keep the MOST THOROUGH line (the one carrying the most/richest detail);
-    - if two are almost identical (same detail, no material difference), keep
-      the MOST RECENT (newest date);
-    - archive every other near-duplicate.
-  Also archive a fact directly contradicted or factually superseded by a newer
-  fact in this view. Don't worry about a fact merely being old or less central —
-  aging is handled automatically: old t3 (ephemeral) facts fall out of the
-  injected view on their own as newer facts arrive, so you don't need to archive
-  them for age.
-- tier_change (ONE step down, t1->t2 or t2->t3 only): a settled live decision
-  is being demoted; demote sparingly, a few per pass at most. Never up-tier
-  except for a clearly central durable constraint. Do not let the same fact
-  live at multiple tiers — if you see split copies, keep the best one and
-  archive the weak repeats.
-- reject: a pending suggestion you disagree with (the fact is still true, just
-  aged). Err toward reject over archive.
+Do NOT archive a fact merely for being old, historical, process-related, or
+settled — that is a TIER_CHANGE, never an archive. Do NOT archive one-of-a-kind
+facts that carry genuinely distinct nuance; only collapse true restatements.
 
-For every fact that is not a clear HIGH-CONFIDENCE case: do nothing. A pass that
-archives nothing and changes nothing is a good, expected pass. Restraint is the
-metric.
+TIER_CHANGE (ONE step down, t1->t2 or t2->t3 only): a settled live decision or
+goal demotes as it stops being the current focus. Demote sparingly — never turn
+t3 into a graveyard by dumping every old design fact there. Never up-tier except
+for a clearly central, durable constraint.
+
+REJECT: only for a pending-marked line you disagree with (the fact is still true
+and not a duplicate). If it IS a duplicate of another line, archive it instead.
+
+Work through the list top to bottom, collapse every duplicate group to its one
+best line, and archive contradictions. Leave genuinely distinct facts alone.
 """
 
 
