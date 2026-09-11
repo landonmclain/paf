@@ -61,6 +61,19 @@ class FileSystem(AbstractCapability[AgentDepsT]):
     max_find_results: int = 1000
     """Maximum number of matches returned by `find_files`."""
 
+    # search_files result-bound guards (PAF-UI: a content search for a common
+    # string walked the whole ~/ tree, read multi-MB JSON journals/snapshots in
+    # full, and returned a 13MB / 6-minute result). Bounds below are the
+    # "sensible defaults" agreed with Landon.
+    max_search_file_bytes: int = 200 * 1024
+    """Skip files larger than this in `search_files` (read via read_file instead)."""
+
+    search_excerpt_chars: int = 200
+    """Return at most this many chars of each matching `search_files` line."""
+
+    max_search_total_bytes: int = 256 * 1024
+    """Hard cap on the total `search_files` result string."""
+
     def __post_init__(self) -> None:
         # Runtime validation: dataclass field annotations are advisory, not enforced.
         # A config-driven caller could pass a string that would otherwise propagate.
@@ -68,6 +81,9 @@ class FileSystem(AbstractCapability[AgentDepsT]):
             'max_read_lines': self.max_read_lines,
             'max_search_results': self.max_search_results,
             'max_find_results': self.max_find_results,
+            'max_search_file_bytes': self.max_search_file_bytes,
+            'search_excerpt_chars': self.search_excerpt_chars,
+            'max_search_total_bytes': self.max_search_total_bytes,
         }
         for name, value in values.items():
             if not isinstance(value, int) or value <= 0:
@@ -83,4 +99,7 @@ class FileSystem(AbstractCapability[AgentDepsT]):
             max_read_lines=self.max_read_lines,
             max_search_results=self.max_search_results,
             max_find_results=self.max_find_results,
+            max_search_file_bytes=self.max_search_file_bytes,
+            search_excerpt_chars=self.search_excerpt_chars,
+            max_search_total_bytes=self.max_search_total_bytes,
         )

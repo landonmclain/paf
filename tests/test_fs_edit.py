@@ -24,6 +24,9 @@ def _fs(tmp_path: Path) -> FileSystemToolset:
         max_read_lines=2000,
         max_search_results=1000,
         max_find_results=1000,
+        max_search_file_bytes=200 * 1024,
+        search_excerpt_chars=200,
+        max_search_total_bytes=256 * 1024,
     )
 
 
@@ -106,6 +109,53 @@ def test_write_file_uses_shared_atomic_no_debris(tmp_path: Path) -> None:
     debris = [p.name for p in tmp_path.glob("*.tmp")] + [p.name for p in tmp_path.glob(".*.tmp")]
     assert debris == [], f"leftover temp files: {debris}"
     # overwrite also lands atomically + hash bumps
+
     out2 = _run(fs.write_file("new.txt", "second\n"))
     assert "[hash:" in out2
     assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "second\n"
+
+
+def test_search_files_excerpts_long_lines(tmp_path: Path) -> None:
+    """A single huge JSON line must be excerpted, not returned whole (PAF-UI fix)."""
+    big = '{"TARGET":1,"' + "x" * 300000 + ',"TARGET":2,"' + "y" * 300000 + "}"
+    (tmp_path / "big.json").write_text(big, encoding="utf-8")
+    fs = _fs(tmp_path)
+    out = _run(fs.search_files("TARGET", path="."))
+    for line in out.splitlines():
+        assert len(line) < 250, f"matching line not excerpted: {len(line)} chars"
+
+
+def test_search_files_skips_oversized_files(tmp_path: Path) -> None:
+    """Files over the size threshold are skipped, not read in full."""
+    (tmp_path / "huge.dat").write_text("TARGET " * 100000, encoding="utf-8")  # ~700KB
+    (tmp_path / "small.txt").write_text("TARGET small\n", encoding="utf-8")
+    fs = _fs(tmp_path)
+    out = _run(fs.search_files("TARGET", path="."))
+    assert "huge.dat" not in out
+    assert "small.txt" in out
+
+
+def test_search_files_byte_cap(tmp_path: Path) -> None:
+    """Total result string is byte-capped even with many small matches."""
+    for i in range(40):
+        lines = ["HIT " + "z" * 100 + f" file{i} line{j}" for j in range(200)]
+        (tmp_path / f"f{i}.txt").write_text("\n".join(lines), encoding="utf-8")
+    fs = FileSystemToolset(
+        root_dir=tmp_path,
+        allowed_patterns=[],
+        denied_patterns=[],
+        protected_patterns=[".git/**", ".env"],
+        max_read_lines=2000,
+        max_search_results=1_000_000,
+        max_find_results=1000,
+        max_search_file_bytes=200 * 1024,
+        search_excerpt_chars=10_000,
+        max_search_total_bytes=256 * 1024,
+    )
+    out = _run(fs.search_files("HIT", path="."))
+    # Capped at ~256KB + one boundary entry (262,144 cap), versus ~880KB if the
+    # 8,000 matching lines were all returned. The truncation marker must fire.
+    assert "bytes]" in out
+    assert len(out.encode("utf-8")) < 300 * 1024  # far under the uncapped result
+
+

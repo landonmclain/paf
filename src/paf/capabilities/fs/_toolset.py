@@ -103,6 +103,9 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         max_read_lines: int,
         max_search_results: int,
         max_find_results: int,
+        max_search_file_bytes: int,
+        search_excerpt_chars: int,
+        max_search_total_bytes: int,
     ) -> None:
         super().__init__()
         self._root = root_dir.resolve()
@@ -113,6 +116,9 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         self._max_read_lines = max_read_lines
         self._max_search_results = max_search_results
         self._max_find_results = max_find_results
+        self._max_search_file_bytes = max_search_file_bytes
+        self._search_excerpt_chars = search_excerpt_chars
+        self._max_search_total_bytes = max_search_total_bytes
 
         self.add_function(self.read_file, name='read_file')
         self.add_function(self.write_file, name='write_file')
@@ -372,6 +378,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
             raise ValueError(f'Invalid regex pattern: {e}') from e
 
         results: list[str] = []
+        total_bytes = 0
 
         if resolved.is_file():
             files = [resolved]
@@ -396,6 +403,14 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
                 continue
             if include_glob and not fnmatch.fnmatch(rel_str, include_glob):
                 continue
+            # Guard 1: skip oversized files (e.g. memory journals / paf
+            # snapshots are huge single-line JSON). A content search rarely
+            # wants a multi-MB blob; read_file is the tool for that. Reading
+            # every giant file in a walked tree is what turned a simple search
+            # into a minutes-long, megabyte-result stall (PAF-UI issue).
+            size = file_path.stat().st_size
+            if size > self._max_search_file_bytes:
+                continue
             try:
                 raw = file_path.read_bytes()
             except OSError:  # pragma: no cover
@@ -404,8 +419,23 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
                 continue
             text = raw.decode('utf-8', errors='replace')
             for line_num, line in enumerate(text.splitlines(), start=1):
-                if compiled.search(line):
-                    results.append(f'{rel_str}:{line_num}:{line}')
+                if not compiled.search(line):
+                    continue
+                # Guard 2: excerpt the matching line rather than returning the
+                # whole (possibly 300KB) single-line record.
+                excerpt = line[: self._search_excerpt_chars]
+                if len(line) > self._search_excerpt_chars:
+                    excerpt += '...'
+                entry = f'{rel_str}:{line_num}:{excerpt}'
+                # Guard 3: hard byte cap on the whole result string so a walk
+                # over many small matches can't balloon the tool return either.
+                total_bytes += len(entry)
+                results.append(entry)
+                if total_bytes >= self._max_search_total_bytes:
+                    results.append(
+                        f'[... truncated at {self._max_search_total_bytes} bytes]'
+                    )
+                    return '\n'.join(results)
             if len(results) >= self._max_search_results:
                 results.append(f'[... truncated at {self._max_search_results} matches]')
                 break
