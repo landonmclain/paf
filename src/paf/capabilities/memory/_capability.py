@@ -361,30 +361,27 @@ class Memory(AbstractCapability[AgentDepsT]):
 
             main_content = "" if main is None else main.content
             rendered = ""
-            guidance = self._render_guidance()
             if main_content or subfiles or files_truncated:
+                # The per-turn injected block is DATA-ONLY: no usage guidance
+                # (that lives in the instruction channel / system prompt via
+                # `get_instructions`) and no internal MEMORY.md filename label
+                # (pure token waste). Just the snapshot facts, bounded by the
+                # tier caps / max_memory_size applied upstream.
                 rendered = render_memory_prompt(
                     main_content,
                     subfiles,
                     heading=self.heading,
-                    guidance=guidance or "",
+                    guidance="",
                     main_truncated=main is not None and main.truncated,
                     files_truncated=files_truncated,
+                    show_filename=False,
                 )
                 if not rendered.strip():
                     rendered = _EMPTY_MAIN
-            elif guidance:
-                # No memory files yet: still show the guidance surface so the
-                # model is cued to the durability contract.
-                rendered = render_memory_prompt(
-                    "",
-                    [],
-                    heading=self.heading,
-                    guidance=guidance,
-                )
             else:
-                # Empty scope, no guidance: show the notebook surface so the
-                # model is cued to maintain it and make the first write.
+                # Empty scope: show the notebook surface so the model is cued
+                # to maintain it and make the first write. (Guidance stays in
+                # the instruction channel; it is not re-injected here.)
                 rendered = _EMPTY_MAIN
 
             rendered = f"{_MEMORY_DATA_PREFIX}{rendered}{_MEMORY_DATA_SUFFIX}"

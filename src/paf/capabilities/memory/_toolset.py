@@ -110,6 +110,7 @@ def render_memory_prompt(
     guidance: str,
     main_truncated: bool = False,
     files_truncated: bool = False,
+    show_filename: bool = True,
 ) -> str:
     """Render a complete memory section for injection.
 
@@ -120,6 +121,13 @@ def render_memory_prompt(
     truncation markers (older lines dropped / files omitted / notebook over
     the read cap) so the model knows the view is bounded, not exhaustively
     complete.
+
+    ``guidance`` and ``show_filename`` let the caller shape the surface. The
+    instruction channel (``get_instructions``) uses both; the per-turn data
+    injection passes ``guidance=""`` and ``show_filename=False`` so the
+    user-role ``<memory>`` block carries only the snapshot facts — no usage
+    preamble (that lives in the system prompt) and no internal filename
+    label (pure token waste the model doesn't need).
     """
     source_lines = main_content.rstrip().splitlines()
     shown_files = list(subfiles)
@@ -133,6 +141,7 @@ def render_memory_prompt(
         omitted_files,
         main_truncated,
         files_truncated,
+        show_filename,
     )
 
 
@@ -145,6 +154,7 @@ def _render_sections(
     omitted_files: int,
     main_truncated: bool,
     files_truncated: bool,
+    show_filename: bool = True,
 ) -> str:
     sections = [f"## {heading}"] if heading else []
     if guidance:
@@ -160,7 +170,10 @@ def _render_sections(
             lines.append(
                 "... [notebook exceeds `max_memory_size`; bounded prefix shown] ..."
             )
-        sections.append(f"### {MAIN_FILENAME}\n\n" + "\n".join(lines))
+        if show_filename:
+            sections.append(f"### {MAIN_FILENAME}\n\n" + "\n".join(lines))
+        else:
+            sections.append("\n".join(lines))
     if subfiles or omitted_files or files_truncated:
         listing = [f"- {name}" for name in subfiles]
         if files_truncated:
