@@ -14,6 +14,7 @@ import asyncio
 from datetime import UTC
 
 import pytest
+from pydantic_ai import ModelRetry
 
 from paf.capabilities.memory._index import build_index
 from paf.capabilities.memory._journal import JournalStore, MemoryRecord
@@ -184,7 +185,186 @@ def test_read_render_returns_full_unbounded_view(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_review_queue_runs_review_span(tmp_path):
+def test_reviewer_toolset_with_journal_exposes_merge(tmp_path):
+    from paf.capabilities.memory._journal import JournalStore
+
+    rt = ReviewerToolset(OverrideStore(tmp_path), journal=JournalStore(tmp_path))
+    assert "memory_review" in rt.tools
+    assert "memory_merge" in rt.tools
+    # The reviewer still has NO standalone append path (merge is its only write).
+    assert "append_memory" not in rt.tools
+
+
+# ---------------------------------------------------------------------------
+# memory_merge: consolidate complementary fragments into one canonical line
+# ---------------------------------------------------------------------------
+
+
+def _seed_identity_cluster(tmp_path):
+    """Three complementary fragments of the SAME identity fact (not duplicates)."""
+    store = JournalStore(tmp_path)
+    store.append_record(_mk_record("The user is named Landon", typ="identity"))
+    store.append_record(_mk_record("Landon is married to Melanie", typ="identity"))
+    store.append_record(
+        _mk_record("Landon has three kids: Caleb, Elizabeth, Benjamin",
+                   typ="identity")
+    )
+    build_index(tmp_path)
+    return store
+
+
+def test_memory_merge_appends_archives_and_rerenders(tmp_path):
+    _seed_identity_cluster(tmp_path)
+    rt = ReviewerToolset(OverrideStore(tmp_path), agent_name="assistant",
+                         journal=JournalStore(tmp_path))
+
+    result = asyncio.run(
+        rt.memory_merge(
+            _FakeCtx(),
+            merge_ids=[1, 2, 3],
+            fact=(
+                "The user is Landon, married to Melanie, with three kids: "
+                "Caleb, Elizabeth, Benjamin"
+            ),
+            tier="t1",
+            type="identity",
+            reason="same identity, one canonical line",
+        )
+    )
+    assert result["status"] == "applied"
+    assert result["op"] == "merge"
+    assert result["archived"] == [1, 2, 3]
+
+    # 1) The canonical record was appended to the journal, traceable to sources.
+    journal = JournalStore(tmp_path)
+    rows = journal.read_all()
+    merged_id, merged = rows[-1]
+    assert merged_id == result["merged_id"]
+    assert "Landon, married to Melanie, with three kids" in merged.fact
+    assert merged.source_ref == "merge(#1,#2,#3)"  # exactly the absorbed lines
+    assert merged.tier == "t1"
+    assert merged.type == "identity"
+
+    # 2) The three sources were archived through the sidecar.
+    archived = [r["target_line"] for r in OverrideStore(tmp_path).read_all()
+                if r["op"] == "archive"]
+    assert sorted(archived) == [1, 2, 3]
+
+    # 3) Re-render collapsed the cluster: the merged line renders, the sources
+    #    no longer appear in the injected view (they are archived).
+    md = read_render(str(tmp_path))
+    assert "married to Melanie" in md
+    assert "named Landon" not in md  # source #1 dropped from injection
+    assert "Caleb, Elizabeth, Benjamin" in md  # detail preserved in the merged line
+
+
+def test_memory_merge_preserves_distinct_detail_into_one_render_line(tmp_path):
+    """The merged fact must appear as a SINGLE line in the render — the whole
+    point is that one canonical line replaces N parallel ones."""
+    _seed_identity_cluster(tmp_path)
+    rt = ReviewerToolset(OverrideStore(tmp_path), journal=JournalStore(tmp_path))
+
+    asyncio.run(
+        rt.memory_merge(
+            _FakeCtx(),
+            merge_ids=[1, 2, 3],
+            fact=(
+                "The user is Landon, married to Melanie, with three kids: "
+                "Caleb, Elizabeth, Benjamin"
+            ),
+            tier="t1",
+            type="identity",
+        )
+    )
+    md = read_render(str(tmp_path))
+    # The merged fact appears exactly once (no duplicate parallel lines remain).
+    assert md.count("Landon, married to Melanie") == 1
+
+
+def test_memory_merge_rejects_less_than_two_ids(tmp_path):
+    _seed_identity_cluster(tmp_path)
+    rt = ReviewerToolset(OverrideStore(tmp_path), journal=JournalStore(tmp_path))
+
+    with pytest.raises(ModelRetry, match="at least 2"):  # single-line is not a merge
+        asyncio.run(
+            rt.memory_merge(
+                _FakeCtx(), merge_ids=[1], fact="solo", tier="t1", type="identity"
+            )
+        )
+    with pytest.raises(ModelRetry, match="at least 2"):  # empty is not a merge
+        asyncio.run(
+            rt.memory_merge(
+                _FakeCtx(), merge_ids=[], fact="solo", tier="t1", type="identity"
+            )
+        )
+
+
+def test_memory_merge_rejects_duplicate_ids(tmp_path):
+    _seed_identity_cluster(tmp_path)
+    rt = ReviewerToolset(OverrideStore(tmp_path), journal=JournalStore(tmp_path))
+    with pytest.raises(ModelRetry, match="distinct"):
+        asyncio.run(
+            rt.memory_merge(
+                _FakeCtx(), merge_ids=[1, 1], fact="dup", tier="t1", type="identity"
+            )
+        )
+
+
+def test_memory_merge_requires_tier_and_type(tmp_path):
+    _seed_identity_cluster(tmp_path)
+    rt = ReviewerToolset(OverrideStore(tmp_path), journal=JournalStore(tmp_path))
+
+    # An invalid/excluded tier is refused — tier is an explicit required placement.
+    with pytest.raises(ModelRetry, match="invalid memory tier"):
+        asyncio.run(
+            rt.memory_merge(
+                _FakeCtx(),
+                merge_ids=[1, 2],
+                fact="merged",
+                tier="t9",
+                type="identity",
+            )
+        )
+    with pytest.raises(ModelRetry, match="invalid memory type"):
+        asyncio.run(
+            rt.memory_merge(
+                _FakeCtx(),
+                merge_ids=[1, 2],
+                fact="merged",
+                tier="t1",
+                type="bogus",
+            )
+        )
+
+
+def test_memory_merge_without_journal_is_unavailable(tmp_path):
+    """A standalone ReviewerToolset with no journal exposes no merge — there is
+    nowhere to write the canonical record (and no standalone append either)."""
+    rt = ReviewerToolset(OverrideStore(tmp_path))
+    assert set(rt.tools.keys()) == {"memory_review"}
+    assert "memory_merge" not in rt.tools
+    assert "append_memory" not in rt.tools
+
+
+def test_memory_capability_reviewer_with_journal_wires_merge(tmp_path):
+    from paf.capabilities.memory import Memory
+    from paf.capabilities.memory._journal import JournalStore
+    from paf.capabilities.memory._view import JournalViewStore
+
+    m = Memory(
+        store=JournalViewStore(tmp_path),
+        agent_name="assistant",
+        overrides=OverrideStore(tmp_path),
+        reviewer=True,
+        expose_tools=True,
+        journal=JournalStore(tmp_path),
+    )
+    ts = m.get_toolset()
+    assert isinstance(ts, ReviewerToolset)
+    assert "memory_review" in ts.tools
+    assert "memory_merge" in ts.tools
+    assert "append_memory" not in ts.tools
+
     from paf.capabilities.memory._background import MemoryReviewQueue, ReviewJob
     from paf.capabilities.memory._watermark import MemoryWatermark
 

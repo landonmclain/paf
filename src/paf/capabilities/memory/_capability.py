@@ -193,10 +193,12 @@ class Memory(AbstractCapability[AgentDepsT]):
     """True for the **memory reviewer** agent: curates on a cadence.
 
     When ``overrides`` is set AND ``reviewer=True``, :meth:`get_toolset`
-    returns ``ReviewerToolset`` exposing ONLY ``memory_review`` (apply verdicts
-    directly) instead of the assistant's ``memory_archive_suggestion``. The
-    reviewer curates the whole rendered memory — pending suggestions plus its
-    own proactive archive/tier_change — via the same sidecar write path.
+    returns ``ReviewerToolset`` exposing ``memory_review`` (apply verdicts
+    directly) instead of the assistant's ``memory_archive_suggestion``, plus
+    ``memory_merge`` (consolidate complementary facts into one canonical line)
+    when a ``journal`` is also provided. The reviewer curates the whole
+    rendered memory — pending suggestions plus its own proactive
+    archive/tier_change/merge — via the same sidecar write path.
     """
 
     _resolved_scope: tuple[MemoryStore, str] | None = field(
@@ -251,7 +253,11 @@ class Memory(AbstractCapability[AgentDepsT]):
             # For the REVIEWER agent (reviewer=True), the same sidecar is the
             # curation channel but exposes `memory_review` (apply directly).
             if self.reviewer:
-                return ReviewerToolset(self.overrides, agent_name=self.agent_name)
+                return ReviewerToolset(
+                    self.overrides,
+                    agent_name=self.agent_name,
+                    journal=self.journal,
+                )
             return OverrideToolset(self.overrides, agent_name=self.agent_name)
         if not self.expose_tools:
             # Injection-only memory: the assistant carries NO memory tools. The

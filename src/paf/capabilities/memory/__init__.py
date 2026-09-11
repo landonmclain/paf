@@ -58,6 +58,7 @@ from ._store import (
 from ._toolset import (
     MAIN_FILENAME,
     JournalAppendToolset,
+    MemoryMergeResult,
     MemoryWriteResult,
     OverrideResult,
     OverrideToolset,
@@ -76,6 +77,7 @@ __all__ = [
     "Memory",
     "MemoryConflictError",
     "MemoryFile",
+    "MemoryMergeResult",
     "MemoryMutation",
     "MemoryOperation",
     "MemoryOperationConflictError",

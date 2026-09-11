@@ -8,17 +8,20 @@ pending suggestions:
 
 - resolves the assistant's pending ``memory_review`` proposals (approve /
   reject / re-tier), AND
-- proactively archives stale/wrong facts and changes tiers on its own.
+- proactively archives stale/wrong facts, changes tiers, and merges
+  complementary fragments of one fact into a single canonical line (its one
+  write path, via ``memory_merge`` -> the journal) on its own.
 
 Its read input is the **rendered view only** (``read_render``) — it never reads
 the journal or index directly, addressing facts by their stable ``#N`` journal
 line id (the same address the assistant and the sidecar use). It writes
 verdicts via ``memory_review`` into the same append-only ``memory-overrides.jsonl``
-sidecar the assistant writes to; the render pass applies them deterministically.
+sidecar the assistant writes to (and the merged record appended to the journal);
+the render pass applies them deterministically.
 
 Structure mirrors ``_consolidate.py``: a ``Memory`` capability configured as the
 REVIEWER (``overrides`` set + ``reviewer=True`` -> ``ReviewerToolset`` exposing
-ONLY ``memory_review``), wrapped in an ``Agent``.
+``memory_review`` + ``memory_merge``), wrapped in an ``Agent``.
 """
 
 from __future__ import annotations
@@ -46,12 +49,16 @@ def _build_reviewer_memory(
     *,
     agent_name: str,
     namespace: str,
+    journal=None,
 ) -> Memory:
-    """Build the reviewer's Memory capability (curation-only, no append).
+    """Build the reviewer's Memory capability (curation + merge write).
 
     ``overrides`` set + ``reviewer=True`` => ``get_toolset`` returns
-    ``ReviewerToolset`` exposing ONLY ``memory_review``. The reviewer has no
-    ``append_memory`` (adding facts is the owner's job) and no journal read.
+    ``ReviewerToolset`` exposing ``memory_review`` (apply verdicts) and, when
+    ``journal`` is provided, ``memory_merge`` (the reviewer's one write path:
+    consolidate complementary facts into a canonical record). The reviewer still
+    has no standalone ``append_memory`` (authoring net-new facts is the owner's
+    job); merge is constrained to consolidating lines it names as sources.
     Extracted so the invariants are testable without constructing an ``Agent``.
     """
     from ._capability import Memory  # deferred to avoid circular import
@@ -63,9 +70,10 @@ def _build_reviewer_memory(
         inject_memory=False,  # reads the render via read_render, not injection
         guidance="",  # single reviewer prompt is REVIEW_PROMPT (the user message)
         writable=False,
-        expose_tools=True,  # carries the reviewer toolset (memory_review)
+        expose_tools=True,  # carries the reviewer toolset (memory_review + merge)
         overrides=overrides,
         reviewer=True,
+        journal=journal,
     )
 
 
@@ -75,13 +83,15 @@ def _build_reviewer(
     *,
     agent_name: str,
     namespace: str,
+    journal=None,
 ):
-    """Construct the reviewer agent (curator: memory_review only)."""
+    """Construct the reviewer agent (curator: memory_review + memory_merge)."""
     reviewer_memory = _build_reviewer_memory(
         store,
         overrides,
         agent_name=agent_name,
         namespace=namespace,
+        journal=journal,
     )
     reviewer = Agent(
         review_model(),
@@ -106,6 +116,21 @@ Your ONE job is to keep this memory tight and non-redundant so real, distinct
 facts don't get crowded out. The tier list has a hard size limit: everything
 above it is silently dropped from what the agent sees. Every duplicate line you
 leave standing is a slot a genuinely distinct fact should have.
+
+MERGE — collapse complementary fragments of ONE fact into a single canonical line:
+- When several lines are pieces of the SAME fact (same subject, each carrying
+  distinct detail — e.g. separate lines for the user's name, role, family, and
+  location), merge them into ONE line with `memory_merge`. You pass `merge_ids`
+  (the source line ids), `fact` (ONE consolidated statement preserving EVERY
+  distinct detail from all of them), `tier` (where the merged fact belongs), and
+  `type` (its semantic kind). This is preferred over archiving, because archiving
+  would drop the enriching detail; `memory_merge` keeps it all in one line.
+- The merged `fact` must be the union of the sources' existing detail — if it
+  contains any claim present in NONE of the merged lines, it is NOT a merge; do
+  not. You consolidate, you do not invent.
+- Require at least two sources. Do NOT merge lines that are genuinely distinct
+  facts (different subjects);
+  merge only fragments of the same fact.
 
 ARCHIVE — collapse duplicates aggressively, then handle contradiction:
 - When several lines say the same thing in different words (same subject and
@@ -155,6 +180,7 @@ async def review(
     demo_assistant's t1:50) instead of falling back to the built-in defaults.
     When omitted, ``memory-reviewer`` is used (the reviewer's own namespace).
     """
+    from ._journal import JournalStore
     from ._render import read_render
     from ._view import JournalViewStore
 
@@ -167,20 +193,24 @@ async def review(
         overrides,
         agent_name=agent_name or "memory-reviewer",
         namespace="",
+        # The reviewer's one write path: a writable journal so `memory_merge`
+        # can append the canonical consolidated record before archiving sources.
+        journal=JournalStore(directory),
     )
     result = await reviewer.run(REVIEW_PROMPT.format(rendered=rendered))
     return reviewer_verdict_count(result)
 
 
 def reviewer_verdict_count(result) -> int:
-    """Count ``memory_review`` calls the reviewer made (verdicts applied)."""
+    """Count curation actions the reviewer made (``memory_review`` + ``memory_merge``)."""
     from pydantic_ai.messages import ToolCallPart
 
     count = 0
     for msg in getattr(result, "all_messages", lambda: [])():
         for part in getattr(msg, "parts", []):
-            if isinstance(part, ToolCallPart) and getattr(part, "tool_name", "") == (
-                "memory_review"
+            if isinstance(part, ToolCallPart) and getattr(part, "tool_name", "") in (
+                "memory_review",
+                "memory_merge",
             ):
                 count += 1
     return count

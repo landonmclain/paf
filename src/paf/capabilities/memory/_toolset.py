@@ -377,24 +377,60 @@ class ReviewerResult(TypedDict):
     tier: str | None
 
 
+class MemoryMergeResult(TypedDict):
+    """Result of a reviewer ``memory_merge`` — echoes the canonical record.
+
+    ``merged_id`` is the new journal line id of the appended consolidated fact;
+    ``archived`` lists the line ids of the absorbed sources that were archived.
+    """
+
+    merged_id: int
+    op: Literal["merge"]
+    by: Literal["reviewer"]
+    status: Literal["applied"]
+    fact: str
+    tier: str
+    archived: list[int]
+    reason: str | None
+
+
+
 class ReviewerToolset(_CurationToolset[AgentDepsT]):
-    """The memory reviewer's curation tool: ``memory_review``.
+    """The memory reviewer's curation tools: ``memory_review`` (+ ``memory_merge``).
 
     The reviewer is a periodic, off-band curator (like the watermark owner,
     cadence-fired) with authority the assistant lacks. It curates the **whole
     rendered memory**: approving/rejecting the assistant's pending archive
-    suggestions AND proactively archiving stale facts / changing tiers on its
-    own. It writes ``memory_review`` verdicts directly (they apply at once,
-    unlike the assistant's pending intents) to the same append-only sidecar the
-    assistant writes to, then re-renders.
+    suggestions AND proactively archiving stale facts / changing tiers / merging
+    complementary fragments on its own. It writes ``memory_review`` verdicts
+    directly (they apply at once, unlike the assistant's pending intents) to the
+    same append-only sidecar the assistant writes to, then re-renders.
+
+    When constructed with a writable :class:`JournalStore` (the production
+    reviewer path), it ALSO exposes ``memory_merge`` — its one write path, which
+    appends a canonical consolidated record then archives the absorbed sources.
+    Without a journal (standalone / test construction) it exposes only
+    ``memory_review``; merge is unavailable because there is nowhere to write.
 
     Read input is the **rendered view only** (``read_render``) — it never reads
     the journal or index directly, addressing facts by their stable ``#N`` line id.
     """
 
-    def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
+    def __init__(
+        self,
+        overrides: OverrideStore,
+        *,
+        agent_name: str = "",
+        journal: JournalStore | None = None,
+    ) -> None:
         super().__init__(overrides, agent_name=agent_name)
+        self._journal = journal
         self.add_function(self.memory_review, name="memory_review")
+        # Merge (the reviewer's write path) requires a journal to append to; it
+        # is registered only when one is provided (the production reviewer path).
+        if journal is not None:
+            self.add_function(self.memory_merge, name="memory_merge")
+
 
     async def memory_review(
         self,
@@ -450,4 +486,140 @@ class ReviewerToolset(_CurationToolset[AgentDepsT]):
                 "status": "applied",
                 "reason": reason,
                 "tier": tier,
+            }
+
+    async def memory_merge(
+        self,
+        ctx: RunContext[AgentDepsT],
+        merge_ids: list[int],
+        fact: str,
+        tier: str,
+        type: str,
+        reason: str = "",
+    ) -> MemoryMergeResult:
+        """Consolidate several complementary facts into ONE canonical memory.
+
+        Use this when several lines are fragments of ONE fact (they share a
+        subject and each carries distinct detail) — e.g. separate lines for a
+        user's name, role, family, and location. Archiving alone cannot fix such
+        clusters (dropping the enriching lines loses data), so ``memory_merge``:
+        (1) appends ``fact`` as a NEW journal record — the single canonical line —
+        then (2) archives every line in ``merge_ids``. The cluster collapses to
+        the one merged record. Applied immediately and re-rendered at once.
+
+        ``fact`` must be the UNION of the sources' existing detail — if it
+        contains any claim in none of the merged lines, that is not a merge, do
+        not. You consolidate, you do not invent. You may not merge a single line
+        (that is a rewrite, not a merge): ``merge_ids`` must contain at least two
+        distinct journal line ids.
+
+        Args:
+            merge_ids: At least TWO distinct journal line ids (the ``#N`` shown
+                at the end of each fact's line in the rendered memory view) whose
+                detail folds into the merged record and which then get archived.
+            fact: The single consolidated fact — the union of the sources'
+                distinct detail, subject inline, canonically worded.
+            tier: The merged fact's permanence tier (``t1``/``t2``/``t3``). It is
+                a fresh fact with no keeper line, so you assign placement.
+            type: The merged fact's semantic kind — one of ``identity``,
+                ``preference``, ``fact``, ``event``, ``task``, ``current``.
+            reason: Why this merge; recorded on the archived lines (audit).
+        """
+        if self._journal is None:
+            raise ModelRetry("memory_merge requires a journal; reviewer has none")
+        with ctx.tracer.start_as_current_span(
+            "memory.override.merge",
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            # --- validate merge_ids (>=2 distinct fully-qualified lines) ----
+            try:
+                ids = [int(i) for i in merge_ids]
+            except (TypeError, ValueError):
+                raise ModelRetry(
+                    f"merge_ids must be a list of line ids, got {merge_ids!r}"
+                ) from None
+            if len(ids) < 2:
+                raise ModelRetry(
+                    f"memory_merge requires at least 2 lines to merge, got {len(ids)}; "
+                    "a one-line edit is a rewrite, not a merge"
+                )
+            if len(set(ids)) != len(ids):
+                raise ModelRetry(f"merge_ids must be distinct, got {merge_ids!r}")
+            if any(i < 1 for i in ids):
+                raise ModelRetry(f"merge_ids must be >= 1, got {merge_ids!r}")
+
+            fact = (fact or "").strip()
+            if not fact:
+                raise ModelRetry("fact must be non-empty")
+            if tier not in MEMORY_TIERS:
+                raise ModelRetry(
+                    f"invalid memory tier {tier!r}; expected one of {sorted(MEMORY_TIERS)}"
+                )
+            if type not in MEMORY_TYPES:
+                raise ModelRetry(
+                    f"invalid memory type {type!r}; expected one of {sorted(MEMORY_TYPES)}"
+                )
+
+            # (1) Append the canonical merged record. born_on = today (the merge
+            # happens now and the canonical line should be current); source_ref
+            # records exactly which lines it absorbed so it is fully traceable.
+            from datetime import UTC, datetime
+
+            today = datetime.now(UTC).date().isoformat()
+            new_id = self._journal.count() + 1
+            try:
+                self._journal.append(
+                    type=type,
+                    fact=fact,
+                    tier=tier,
+                    born_on=today,
+                    source_ref="merge(" + ",".join(f"#{i}" for i in ids) + ")",
+                )
+            except ValueError as exc:
+                raise ModelRetry(str(exc)) from exc
+
+            # (2) Archive every absorbed source line through the same sidecar the
+            # reviewer already writes verdicts to.
+            for line_id in ids:
+                try:
+                    self._overrides.append(
+                        op="archive",
+                        target_line=line_id,
+                        by="reviewer",
+                        reason=reason or f"merged into #{new_id}",
+                    )
+                except ValueError as exc:
+                    raise ModelRetry(str(exc)) from exc
+
+            # (3) Fold the new merged record into the derived index (the render is
+            # index-aware, so the new line must be indexed or it won't appear),
+            # then reflect the merge immediately — the canonical line shows, the
+            # absorbed sources drop from the injected view.
+            from ._index import update_index
+
+            update_index(self._overrides.directory)
+            try:
+                self._refresh_render()
+            except Exception:  # pragma: no cover - render must not fail the call
+                pass
+
+            if span.is_recording():
+                span.set_attributes(
+                    {
+                        "memory.override.op": "merge",
+                        "memory.merge.ids": ids,
+                        "memory.merge.merged_id": new_id,
+                        "memory.merge.tier": tier,
+                    }
+                )
+            return {
+                "merged_id": new_id,
+                "op": "merge",
+                "by": "reviewer",
+                "status": "applied",
+                "fact": fact,
+                "tier": tier,
+                "archived": ids,
+                "reason": reason,
             }
