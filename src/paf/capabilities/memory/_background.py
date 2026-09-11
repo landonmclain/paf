@@ -550,5 +550,6 @@ class MemoryReviewQueue(BackgroundQueueService[ReviewJob]):
         verdicts = await review(
             directory,
             overrides=OverrideStore(directory),
+            agent_name=self.agent_name,
         )
         return verdicts

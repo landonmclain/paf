@@ -141,6 +141,7 @@ async def review(
     directory: str,
     *,
     overrides,
+    agent_name: str | None = None,
 ) -> int:
     """Run ONE reviewer curation pass over the rendered memory.
 
@@ -148,6 +149,11 @@ async def review(
     journal/index dependency), runs the reviewer agent with ``memory_review``,
     and returns the number of verdicts it issued. The sidecar writes + eager
     re-render happen inside each ``memory_review`` tool call.
+
+    ``agent_name`` is threaded through to the re-render so the reviewer's
+    post-archive write_render resolves the agent's real spec tier_caps (e.g.
+    demo_assistant's t1:50) instead of falling back to the built-in defaults.
+    When omitted, ``memory-reviewer`` is used (the reviewer's own namespace).
     """
     from ._render import read_render
     from ._view import JournalViewStore
@@ -159,7 +165,7 @@ async def review(
     reviewer, _mem = _build_reviewer(
         JournalViewStore(directory),
         overrides,
-        agent_name="memory-reviewer",
+        agent_name=agent_name or "memory-reviewer",
         namespace="",
     )
     result = await reviewer.run(REVIEW_PROMPT.format(rendered=rendered))

@@ -812,6 +812,7 @@ class Session:
                     n = await _default_review(
                         directory,
                         overrides=OverrideStore(directory),
+                        agent_name=self.agent_name,
                     )
                     _complete(DONE, f"{n} verdict(s) applied")
                     return n

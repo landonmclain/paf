@@ -352,7 +352,7 @@ def test_session_review_span_publishes_task_done(tmp_path):
     s.agent_name = "assistant"
 
     # Deterministic no-LLM review span (the seam references _revmod.review).
-    async def noop_review(directory, *, overrides=None):
+    async def noop_review(directory, *, overrides=None, agent_name=None):
         return 2
 
     _saved = _revmod.review
