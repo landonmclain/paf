@@ -97,6 +97,7 @@ web:
   search_domains:
     - docs.pydantic.dev
     - ai.pydantic.dev
+    - pydantic.dev
     - docs.streamlit.io
     - docs.tavily.com
     - docs.python.org
