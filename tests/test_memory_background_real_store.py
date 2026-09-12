@@ -265,6 +265,7 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
                     )
         return j.count()
 
+    from paf.background import BackgroundCoordinator
     from paf.runtime import Session
 
     with Session(
@@ -272,15 +273,19 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
         trace=False,
         resume=False,
         store=store,
-        memory_directory=str(memdir),
-        consolidate_span=fence,
     ) as session:
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="assistant",
+            memory_directory=str(memdir),
+            consolidate_span=fence,
+        )
         for i in range(12):
             session.history.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
 
         async def scenario():
-            await session._maybe_trigger_consolidation("c1")
-            q = session.memory_queue
+            await session.background._maybe_trigger_consolidation("c1")
+            q = session.background.memory_queue
             assert q is not None, "cadence reached, so the queue must be constructed"
             await q.drain("assistant")  # let the fire-and-forget worker finish
 
@@ -314,6 +319,7 @@ def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
     # UNDER the 30-minute cadence, so the hook must not fire.
     MemoryWatermark(run_id="run-a", consumed_ts=datetime.now(UTC)).save(str(memdir))
 
+    from paf.background import BackgroundCoordinator
     from paf.runtime import Session
 
     with Session(
@@ -321,14 +327,18 @@ def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
         trace=False,
         resume=False,
         store=store,
-        memory_directory=str(memdir),
     ) as session:
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="assistant",
+            memory_directory=str(memdir),
+        )
         for i in range(5):
             session.history.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
 
-        asyncio.run(session._maybe_trigger_consolidation("c1"))
+        asyncio.run(session.background._maybe_trigger_consolidation("c1"))
 
-        q = session.memory_queue
+        q = session.background.memory_queue
         # Below cadence -> the queue is never even constructed.
         assert q is None
 

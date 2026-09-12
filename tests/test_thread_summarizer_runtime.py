@@ -30,6 +30,7 @@ from pydantic_ai_harness.step_persistence import (
     RunRecord,
 )
 
+from paf.background import BackgroundCoordinator
 from paf.capabilities.memory._watermark import MemoryWatermark
 from paf.capabilities.thread_summarizer._store import (
     THREAD_WATERMARK_FILENAME,
@@ -100,10 +101,13 @@ def test_trigger_off_does_not_touch_store(tmp_path: Path) -> None:
     store = _store(tmp_path, {"run-a": _msg(user="hi", assistant="hey")}, "profile:cid")
 
     with Session("runtime2_test", trace=False, resume=False, store=store) as session:
-        session._thread_summarizer_enabled = False
-        asyncio.run(session._maybe_trigger_thread_summarize("profile:cid"))
-        assert session.thread_summarizer_queue is None
-        assert session._background_tasks == {}
+        session.background = BackgroundCoordinator(
+            store=store, agent_name="runtime2_test"
+        )
+        session.background._thread_summarizer_enabled = False
+        asyncio.run(session.background._maybe_trigger_thread_summarize("profile:cid"))
+        assert session.background.thread_summarizer_queue is None
+        assert session.background._background_tasks == {}
 
 
 def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> None:
@@ -122,14 +126,18 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
         trace=False,
         resume=False,
         store=store,
-        thread_summarize_span=_beats_from_span,
     ) as session:
-        session._thread_capture_root = capture_root
-        session._thread_summarizer_enabled = True
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="runtime2_test",
+            thread_summarize_span=_beats_from_span,
+        )
+        session.background._thread_capture_root = capture_root
+        session.background._thread_summarizer_enabled = True
 
         async def scenario():
-            await session._maybe_trigger_thread_summarize("profile:cid")
-            q = session.thread_summarizer_queue
+            await session.background._maybe_trigger_thread_summarize("profile:cid")
+            q = session.background.thread_summarizer_queue
             assert q is not None, ">= 10 complete turns -> the queue must be constructed"
             await q.drain("profile:cid")
 
@@ -139,7 +147,7 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.run_id == "run-a"
     assert wm.turn_id == 9
-    assert any(task.status == "done" for task in session._background_tasks.values())
+    assert any(task.status == "done" for task in session.background._background_tasks.values())
 
     # exactly one 10-turn block was written (sparse {at,what} beats + a summary)
     recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
@@ -172,14 +180,18 @@ def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
         trace=False,
         resume=False,
         store=store,
-        thread_summarize_span=_beats_from_span,
     ) as session:
-        session._thread_capture_root = capture_root
-        session._thread_summarizer_enabled = True
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="runtime2_test",
+            thread_summarize_span=_beats_from_span,
+        )
+        session.background._thread_capture_root = capture_root
+        session.background._thread_summarizer_enabled = True
 
         async def scenario():
-            await session._maybe_trigger_thread_summarize("profile:cid")
-            q = session.thread_summarizer_queue
+            await session.background._maybe_trigger_thread_summarize("profile:cid")
+            q = session.background.thread_summarizer_queue
             assert q is not None, ">= 10 complete turns -> queue constructed"
             await q.drain("profile:cid")
 
@@ -195,7 +207,7 @@ def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.run_id == "run-a"
     assert wm.turn_id == 10
-    assert any(task.status == "done" for task in session._background_tasks.values())
+    assert any(task.status == "done" for task in session.background._background_tasks.values())
 
 
 def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> None:
@@ -233,14 +245,18 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
         trace=False,
         resume=False,
         store=store,
-        thread_summarize_span=_beats_from_span,
     ) as session:
-        session._thread_capture_root = capture_root
-        session._thread_summarizer_enabled = True
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="runtime2_test",
+            thread_summarize_span=_beats_from_span,
+        )
+        session.background._thread_capture_root = capture_root
+        session.background._thread_summarizer_enabled = True
 
         async def scenario():
-            await session._maybe_trigger_thread_summarize("profile:cid")
-            q = session.thread_summarizer_queue
+            await session.background._maybe_trigger_thread_summarize("profile:cid")
+            q = session.background.thread_summarizer_queue
             assert q is not None, ">=10 complete turns across the backlog -> must enqueue"
             await q.drain("profile:cid")
 
@@ -249,7 +265,7 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
     # Whole backlog must be folded (up to the in-flight tip of run-b).
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.turn_id is not None
-    assert any(task.status == "done" for task in session._background_tasks.values())
+    assert any(task.status == "done" for task in session.background._background_tasks.values())
     recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
     assert len(recs) >= 1
     refs = recs[0].refs
@@ -280,12 +296,16 @@ def test_trigger_skips_below_turn_threshold(tmp_path: Path) -> None:
         trace=False,
         resume=False,
         store=store,
-        thread_summarize_span=_beats_from_span,
     ) as session:
-        session._thread_capture_root = capture_root
-        session._thread_summarizer_enabled = True
-        asyncio.run(session._maybe_trigger_thread_summarize("profile:cid"))
-        assert session.thread_summarizer_queue is None
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="runtime2_test",
+            thread_summarize_span=_beats_from_span,
+        )
+        session.background._thread_capture_root = capture_root
+        session.background._thread_summarizer_enabled = True
+        asyncio.run(session.background._maybe_trigger_thread_summarize("profile:cid"))
+        assert session.background.thread_summarizer_queue is None
 
 
 def test_two_conversations_never_share_a_watermark(tmp_path: Path) -> None:
@@ -327,10 +347,13 @@ def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
     with Session(
         "runtime2_test", trace=False, resume=False, store=store
     ) as session:
-        session._thread_summarizer_enabled = True
+        session.background = BackgroundCoordinator(
+            store=store, agent_name="runtime2_test"
+        )
+        session.background._thread_summarizer_enabled = True
         # Simulate a failed thread summarizer task for conversation cA.
-        session._thread_summarizer_seq = 1
-        session._publish_task(
+        session.background._thread_summarizer_seq = 1
+        session.background._publish_task(
             BackgroundTask(
                 id="thread_summarize.profile:cA.1",
                 label="Summarizing thread (profile:cA)",
@@ -339,10 +362,10 @@ def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
             )
         )
 
-        got_a = session.task_history("profile:cA")
+        got_a = session.background.task_history("profile:cA")
         assert len(got_a) == 1
         assert got_a[0].status == "error"
         assert "anchor must increase" in got_a[0].detail
 
         # Conversation isolation: cB (different cid) sees nothing.
-        assert session.task_history("profile:cB") == []
+        assert session.background.task_history("profile:cB") == []

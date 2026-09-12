@@ -517,11 +517,11 @@ def test_session_review_span_publishes_task_done(tmp_path):
     task to DONE and publishes it — so the reviewer shows on the background-task
     timeline / Processes panel exactly like consolidation, not running silently.
     """
+    import paf.background as _bgmod
     import paf.capabilities.memory._review as _revmod
-    import paf.runtime as runtime
 
-    # Bare session: only the fields the review seam touches.
-    s = object.__new__(runtime.Session)
+    # Bare coordinator: only the fields the review seam touches.
+    s = object.__new__(_bgmod.BackgroundCoordinator)
     s._background_tasks = {}
     s._task_subscribers = []
     s._consolidation_seq = 0
@@ -544,7 +544,7 @@ def test_session_review_span_publishes_task_done(tmp_path):
         _revmod.review = _saved
 
     # Publish the queued task row (what _maybe_trigger_review now does).
-    task = runtime.BackgroundTask(
+    task = _bgmod.BackgroundTask(
         id="memory-review.demo:x.1", label="Reviewing memory (demo:x)"
     )
     s._publish_task(task)

@@ -28,8 +28,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +48,9 @@ from pydantic_ai.messages import (
 
 from paf.capabilities import PROFILES
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
+
+if TYPE_CHECKING:
+    from paf.capabilities._storage import FlatFileStorage
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +103,7 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
             conversation_id=conversation_id,
             resume_window=15,
         )
+        session.attach_background()
         _sessions[key] = session
     _sessions_last_used[key] = _now()
     return session
@@ -125,7 +128,7 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
 _TITLES_KIND = "conversation-titles"
 
 
-def _title_store(agent: str) -> "FlatFileStorage":
+def _title_store(agent: str) -> FlatFileStorage:
     """A seam-backed store rooted at the neutral conversations dir, per agent.
 
     <project_root>/data/conversations/<agent>/conversation-titles.json — a
@@ -507,7 +510,8 @@ async def conversation_tasks(
     (kept in the session registry only), not a durable audit log.
     """
     session = await _get_session(conversation_id, agent)
-    tasks = session.task_history(conversation_id)
+    bg = session.background
+    tasks = bg.task_history(conversation_id) if bg is not None else []
     return {
         "conversation_id": conversation_id,
         "agent": agent,
@@ -553,7 +557,11 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
             if not dead["v"]:
                 task_q.put_nowait(_task_frame(ev))
 
-        session.subscribe_tasks(_on_task)
+        # Bind to the session's background coordinator (its own public surface,
+        # not a forwarded Session method). A bare session (background is None)
+        # has nothing to subscribe to — no task frames, and none expected.
+        if session.background is not None:
+            session.background.subscribe_tasks(_on_task)
 
         turn = asyncio.create_task(_pump_turn())
         try:

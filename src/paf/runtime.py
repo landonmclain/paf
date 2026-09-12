@@ -49,11 +49,10 @@ as-is.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic_ai import (
@@ -80,35 +79,25 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai_harness.step_persistence import continue_run
 
+from paf.background import (
+    DONE,
+    ERROR,
+    PROCESSING,
+    QUEUED,
+    SKIPPED,
+    BackgroundCoordinator,
+    BackgroundEvent,
+    BackgroundTask,
+)
 from paf.capabilities import PROFILES
-from paf.capabilities._turns import distinct_user_turn_texts, user_anchor_indices
-from paf.capabilities.memory._background import (
-    ConsolidationJob,
-    MemoryConsolidationQueue,
-    MemoryReviewQueue,
-    ReviewJob,
-    resolve_unseen_span,
-)
-from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
-from paf.capabilities.memory._window import memory_dir_for
-from paf.capabilities.persistence import _build_store, build_history_source
-from paf.capabilities.thread_summarizer import capture_directory_for
-from paf.capabilities.thread_summarizer._background import (
-    BLOCK_TURNS,
-    ThreadSummarizeJob,
-    ThreadSummarizerQueue,
-)
-from paf.capabilities.thread_summarizer._store import (
-    THREAD_WATERMARK_FILENAME,
-    ThreadSummaryStore,
-)
+from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
     setup_observability,
     shutdown_observability,
 )
-from paf.specs import build_agent, resolve_memory_config, resolve_profile_name
+from paf.specs import build_agent, resolve_profile_name
 
 log = logging.getLogger(__name__)
 
@@ -162,13 +151,10 @@ class StreamEvent:
 #   TurnUpdate/result -> BackgroundEvent (paf owns transport; richer event)
 # ---------------------------------------------------------------------------
 
-# Step lifecycle statuses (coding_agent ActionStep.status / MaintenanceStep.status).
-PROCESSING = "running"
-DONE = "done"
-ERROR = "error"
-QUEUED = "queued"
-SKIPPED = "skipped"
-
+# Step lifecycle statuses (PROCESSING/DONE/ERROR/QUEUED/SKIPPED) and the
+# BackgroundTask/BackgroundEvent types now live in ``paf.background`` (moved
+# with the coordinator) and are re-exported at module top. ``StepStatus`` stays
+# here for the turn-side ``MaintenanceEvent``.
 StepStatus = Literal["running", "done", "error", "queued", "skipped"]
 
 
@@ -193,21 +179,6 @@ class ToolError:
 
 
 @dataclass(frozen=True)
-class BackgroundEvent:
-    """Background / long-running work item (consolidation, subagent, ...).
-
-    Kept generic so the first consumer (memory consolidation) and later ones
-    (sub-agents, long-running services) share one surface. ``kind`` names the
-    background task type; ``status`` mirrors :data:`StepStatus`.
-    """
-
-    kind: str
-    status: StepStatus
-    detail: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class MaintenanceEvent:
     """Post-turn maintenance reporting — memory schedule, turn-log, etc.
 
@@ -217,35 +188,6 @@ class MaintenanceEvent:
 
     label: str
     status: StepStatus
-
-
-@dataclass
-class BackgroundTask:
-    """Registry entry for background work (consumer #1 = memory consolidation).
-
-    Mirrors coding_agent ``MaintenanceStep``: one row per background task with a
-    stable ``id`` the UI can mutate ``queued -> running -> done|error|skipped``
-    by. ``progress`` is 0..1 when known; ``detail`` is branch-specific free text
-    (e.g. ``"5 turns -> 1 summary"``). Lives in the Session's task registry and
-    is REPLAYED to late-joining ``subscribe_tasks`` subscribers, so a web tab
-    that connects mid-fold sees ``running`` instead of nothing.
-    """
-
-    id: str
-    label: str
-    status: StepStatus = QUEUED
-    progress: float | None = None
-    detail: str = ""
-    updated_at: str = ""
-
-    def as_event(self) -> BackgroundEvent:
-        """The additive event form subscribers receive on each transition."""
-        return BackgroundEvent(
-            kind=f"task:{self.label}",
-            status=self.status,
-            detail=self.detail,
-            metadata={"id": self.id, "progress": self.progress},
-        )
 
 
 #: The per-tool lifecycle events that ride the turn ``stream()`` (in addition
@@ -418,16 +360,21 @@ def _profile_name(profile: Any) -> str | None:
 # The single self-contained Session (no subclass — absorbed from paf.runtime)
 # ---------------------------------------------------------------------------
 class Session:
-    """Next-gen ``Session``: ``agent.iter()`` control loop + additive events.
+    """The turn runtime—``agent.iter()`` control loop + additive events.
 
-    **Fully self-contained** — absorbs the entirety of :class:`paf.runtime.Session`
-    behavior (init, resume, memory queue, run/run_sync, close, properties),
-    porting it verbatim so the public contract keeps its shape. Profile IS a
-    namespace on conversation identity: the store/resume/run are scoped by
-    ``{profile}:{cid}`` (``_scoped_cid``) so two profiles using the same plain
-    ``conversation_id`` never cross-talk. The machine holds the plain id; the
-    scope is applied at the store boundary, so callers never think about it.
+    The TURN CORE only: profile-scoped conversation identity (``{profile}:{cid}``
+    at the store boundary), resume/restore, the streaming loop, and per-turn
+    steering (``cancel``/``enqueue``). Background machinery (memory
+    consolidation/review, thread summarization) lives in
+    :class:`paf.background.BackgroundCoordinator`, attached by the app/CLI via
+    :meth:`attach_background` — a bare Session (``background is None``) is
+    turn-only. The machine holds the plain conversation id; the profile scope is
+    applied at the store boundary, so callers never think about it.
     """
+
+    # Class-level default so a Session always exposes ``background`` (bare by
+    # default); the app/CLI attaches a coordinator when the profile calls for it.
+    background: BackgroundCoordinator | None = None
 
     def __init__(
         self,
@@ -439,10 +386,6 @@ class Session:
         resume: bool = True,
         resume_window: int | None = None,
         store=None,
-        memory_directory: str | None = None,
-        consolidate_span=None,
-        thread_summarize_block=None,
-        thread_summarize_span=None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how the CLIs pick the default profile
@@ -468,47 +411,17 @@ class Session:
             setup_observability()
         self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
         self.history: list = []
-        _mem_cfg = resolve_memory_config(agent_name)
-        self.consolidate_every = _mem_cfg["consolidate_every"]
-        # Review cadence defaults to the owner's cadence when a config/stub only
-        # provides `consolidate_every` (defensive against partial mock configs).
-        self.review_every = _mem_cfg.get("review_every", self.consolidate_every)
-        # Thread-summarize cadence is TURN-based (BLOCK_TURNS complete turns
-        # after the per-conversation watermark), not time — see
-        # _maybe_trigger_thread_summarize. No knob: the block size is the gate.
-        # Background memory consolidation is the sole memory writer and just RUNS
-        # when memory is built for the agent — there is no opt-in flag. The store
-        # directory defaults to the per-agent scope (<MEMORY_DIR>/<agent_name>/,
-        # created on first use); pass one explicitly to override (tests / custom).
-        self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
-        self._consolidate_span = consolidate_span
-        self._memory_queue: MemoryConsolidationQueue | None = None
-        self._review_queue: MemoryReviewQueue | None = None
-        self._thread_summarizer_enabled = bool(
-            profile is not None
-            and "ThreadSummarizer" in getattr(profile, "capability_names", ())
-        )
-        self._thread_capture_root = str(capture_directory_for(self.agent_name))
-        self._thread_queue: ThreadSummarizerQueue | None = None
-        self._thread_summarize_span = thread_summarize_span if thread_summarize_span is not None else thread_summarize_block
-        self._thread_summarizer_seq = 0
-        self._review_watermark_path = (
-            self._memory_directory.rstrip("/\\") + "/memory-review-watermark.json"
-        )
+        # Background orchestrator — BARE by default. The app/CLI attaches a
+        # :class:`paf.background.BackgroundCoordinator` (via
+        # ``BackgroundCoordinator.for_session(self)``) when the spec/profile
+        # calls for memory/thread machinery; a memory-less profile (e.g.
+        # ``contextbench``) stays ``None`` so it carries no scaffolding.
+        self.background: BackgroundCoordinator | None = None
         # Session-held CancellationToken -> stop (created here so cancel()
         # works and iter() has a token from day one).
         self._token = CancellationToken()
         # Phase 3 wiring: self._run (AgentRun handle) for steer/enqueue.
         self._run: Any = None
-        # Background-task registry (Phase 2): id -> BackgroundTask + the
-        # subscriber callbacks. Subscribers are REPLAYED active tasks on
-        # subscribe so a late-joining connection sees running, not nothing.
-        self._background_tasks: dict[str, BackgroundTask] = {}
-        self._task_subscribers: list[Callable[[BackgroundEvent], Awaitable[Any] | Any]] = (
-            []
-        )
-        self._consolidation_seq = 0
-        self._review_seq = 0
 
     # -- introspection ---------------------------------------------------------
 
@@ -525,37 +438,6 @@ class Session:
     def restored_count(self) -> int:
         """Number of prior messages loaded by ``continue_run`` resume (0 if none)."""
         return len(self.history) if self._restored else 0
-
-    @property
-    def memory_queue(self) -> MemoryConsolidationQueue | None:
-        """The lazily-built background consolidation queue (None until first use)."""
-        return self._memory_queue
-
-    @property
-    def review_queue(self) -> MemoryReviewQueue | None:
-        """The lazily-built background reviewer queue (None until first use)."""
-        return self._review_queue
-
-    @property
-    def thread_summarizer_queue(self) -> ThreadSummarizerQueue | None:
-        """The lazy thread queue (None when the profile leaves it OFF)."""
-        return self._thread_queue
-
-    def task_history(self, conversation_id: str) -> list[BackgroundTask]:
-        """Background-task rows scoped to a conversation, newest first.
-
-        Includes terminal ``error`` rows (e.g. a failed thread summarizer) so a
-        UI can surface "a background task failed for this conversation" even
-        though the completion lands AFTER the turn's SSE stream closes. Task
-        ids are prefixed ``{kind}.{conversation_id}.{seq}``; we match on the
-        conversation segment (bounds-checked so a cid prefix can't over-match).
-        """
-        needle = f".{conversation_id}."
-        rows = [
-            t for t in self._background_tasks.values() if needle in f".{t.id}"
-        ]
-        rows.sort(key=lambda t: t.updated_at, reverse=True)
-        return rows
 
     # -- profile namespace (conversation identity scoping) --------------------
 
@@ -576,6 +458,18 @@ class Session:
         if not pname or cid is None:
             return cid
         return f"{pname}:{cid}"
+
+    def attach_background(self) -> BackgroundCoordinator | None:
+        """Attach the background coordinator for this session (or keep it bare).
+
+        The app/CLI calls this once after constructing the Session: it builds a
+        :class:`paf.background.BackgroundCoordinator` scoped to this session's
+        store/profile and assigns it to ``self.background``. A memory-less
+        profile (e.g. ``contextbench``) yields ``None`` — the session stays
+        turn-only. Returns the attached coordinator (or None).
+        """
+        self.background = BackgroundCoordinator.for_session(self)
+        return self.background
 
     # -- resume ---------------------------------------------------------------
 
@@ -712,397 +606,6 @@ class Session:
         except Exception:  # noqa: BLE001 - resume is sugar; never break the run
             self._restored = False
 
-    # -- background memory consolidation --------------------------------------
-
-    def _ensure_memory_queue(self) -> MemoryConsolidationQueue:
-        """Build the self-contained worker queue, bound to ``self._store``.
-
-        One queue == one worker per session (the engine's composition model).
-        The worker is given a ``span_source`` that resolves the persisted span
-        of complete turns from the same ``HistorySource`` the search capability
-        holds (``SnapshotHistorySource`` over ``self._store``) — it never reads
-        in-memory ``self.history``, so folding stays fully off the critical path
-        and resilient to what the Session may or may not have cached. The fold
-        seam is wrapped so the off-turn worker's completion updates the
-        consolidation ``BackgroundTask`` to ``done`` (or ``error`` on throw).
-        """
-        if self._memory_queue is None:
-            # Mark the currently-queued/running consolidation task done on success.
-            def _complete(kind: StepStatus, detail: str = "") -> None:
-                for task_id, task in list(self._background_tasks.items()):
-                    if task_id.startswith("consolidation.") and task.status in (
-                        QUEUED,
-                        PROCESSING,
-                    ):
-                        task.status = kind
-                        task.detail = detail
-                        task.progress = 1.0 if kind == DONE else None
-                        self._publish_task(task)
-
-            source = build_history_source(self._store)
-
-            async def span_source(run_id: str, up_to_turn_id: int):
-                wm = MemoryWatermark.load(self._memory_directory, run_id=run_id)
-                return await resolve_unseen_span(
-                    source, wm, tip_run=run_id, tip_turn=up_to_turn_id
-                )
-
-            real_fold = self._consolidate_span
-            queue_ref: MemoryConsolidationQueue | None = None
-
-            async def publish_fold(messages, directory, watermark):
-                try:
-                    if real_fold is not None:
-                        n = await real_fold(messages, directory, watermark)
-                    else:
-                        # Production Sessions pass no `consolidate_span`; fall
-                        # back to the queue's real fold so the owner actually
-                        # writes (previously this returned 0 and the worker
-                        # advanced the watermark with nothing folded).
-                        assert queue_ref is not None
-                        n = await queue_ref._default_consolidate_span(
-                            messages, directory, watermark
-                        )
-                    _complete(DONE, f"{n} records folded")
-                    return n
-                except Exception as exc:
-                    _complete(ERROR, str(exc))
-                    raise
-
-            queue = MemoryConsolidationQueue(
-                memory_directory=self._memory_directory,
-                agent_name=self.agent_name,
-                span_source=span_source,
-                consolidate_span=publish_fold,
-            )
-            queue_ref = queue
-            self._memory_queue = queue
-        return self._memory_queue
-
-    def _ensure_review_queue(self) -> MemoryReviewQueue:
-        """Build the self-contained background reviewer queue.
-
-        Peer to the consolidation queue: same engine, different cadence and job.
-        The reviewer curates the whole rendered memory on ``review_every`` minutes.
-        ``review_span`` defaults to the real reviewer (``_review.review``); a
-        test injects a journal-fenced stand-in so the queue + trigger mechanics
-        are proven without an LLM call. The span seam publishes the review
-        ``BackgroundTask`` to done (or error on throw), mirroring the
-        consolidation queue, so the reviewer shows up on the task timeline /
-        Processes panel instead of running silently.
-        """
-        if self._review_queue is None:
-            from paf.capabilities.memory._review import review as _default_review
-
-            def _complete(kind: StepStatus, detail: str = "") -> None:
-                for task_id, task in list(self._background_tasks.items()):
-                    if task_id.startswith("memory-review.") and task.status in (
-                        QUEUED,
-                        PROCESSING,
-                    ):
-                        task.status = kind
-                        task.detail = detail
-                        task.progress = 1.0 if kind == DONE else None
-                        self._publish_task(task)
-
-            async def review_span(directory: str) -> int:
-                from paf.capabilities.memory._overrides import OverrideStore
-
-                try:
-                    n = await _default_review(
-                        directory,
-                        overrides=OverrideStore(directory),
-                        agent_name=self.agent_name,
-                    )
-                    _complete(DONE, f"{n} verdict(s) applied")
-                    return n
-                except Exception as exc:
-                    _complete(ERROR, str(exc))
-                    raise
-
-            self._review_queue = MemoryReviewQueue(
-                memory_directory=self._memory_directory,
-                agent_name=self.agent_name,
-                review_span=review_span,
-            )
-        return self._review_queue
-
-    def _ensure_thread_summarizer_queue(self) -> ThreadSummarizerQueue:
-        """Build the conversation-scoped thread worker lazily."""
-        if self._thread_queue is None:
-            self._thread_queue = ThreadSummarizerQueue(
-                capture_root=self._thread_capture_root,
-                summarize_span_fn=self._thread_summarize_span,
-                on_complete=self._complete_thread_summarize,
-            )
-        return self._thread_queue
-
-    def _complete_thread_summarize(
-        self, conversation_id: str, success: bool, detail: str
-    ) -> None:
-        """Publish completion for active thread-summarizer task rows."""
-        for task in self._background_tasks.values():
-            if (
-                task.id.startswith(f"thread_summarize.{conversation_id}.")
-                and task.status in (QUEUED, PROCESSING)
-            ):
-                task.status = DONE if success else ERROR
-                task.detail = detail
-                task.progress = 1.0 if success else None
-                self._publish_task(task)
-
-    async def _maybe_trigger_thread_summarize(self, cid: str | None) -> None:
-        """Fire conversation-scoped thread summarization on its own cadence.
-
-        Mirror of ``_maybe_trigger_consolidation``, but scoped by CONVERSATION,
-        not agent: resolve this conversation's unseen turn-span (the portion
-        strictly newer than its per-conversation ``MemoryWatermark``), gate on
-        a TURN COUNT (>= ``BLOCK_TURNS`` complete turns), single-flight, and
-        hand the PRE-RESOLVED span to the worker. The trigger SCHEDULES only;
-        the worker is the sole per-conversation watermark writer and advances
-        only on a completed (non-error) summarize pass — a failed pass leaves
-        the watermark behind so the span is retried next cadence, never skipped.
-
-        Unlike Memory's TIME cadence, the thread summarizer fires on a TURN
-        COUNT: it only enqueues once at least ``BLOCK_TURNS`` (10) COMPLETE
-        turns have accumulated since the watermark, so a 1-turn trailing thread
-        never triggers a useless 1-turn block. Two conversations never share a
-        watermark or cross-summarize: each loads its ``MemoryWatermark`` from
-        its own ``conversations/<hash(cid)>/`` dir and
-        ``resolve_unseen_span(conversation_id=cid)`` folds only that cid's runs.
-        ``cid`` is already profile-scoped by ``_scoped_cid``.
-        """
-        if not self._thread_summarizer_enabled or cid is None:
-            return
-        self._thread_summarizer_seq += 1
-        task_id = f"thread_summarize.{cid}.{self._thread_summarizer_seq}"
-        task = BackgroundTask(id=task_id, label=f"Summarizing thread ({cid})")
-        self._publish_task(task)  # queued
-        try:
-            runs = await self._store.list_runs(conversation_id=cid)
-            if not runs:
-                task.status = SKIPPED
-                task.detail = "no persisted runs yet"
-                self._publish_task(task)
-                return
-            tip_run = runs[-1].run_id
-            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
-            anchors = user_anchor_indices(tip_history)
-            if not anchors:
-                task.status = SKIPPED
-                task.detail = "no persisted turns"
-                self._publish_task(task)
-                return
-            tip_turn = len(anchors) - 1
-            store = ThreadSummaryStore(self._thread_capture_root, cid)
-            wm = MemoryWatermark.load(
-                store.directory, run_id=tip_run, filename=THREAD_WATERMARK_FILENAME
-            )
-            # Resolve the unseen span for THIS conversation now; hand the worker
-            # precomputed material so it summarizes exactly what was scheduled.
-            span = await resolve_unseen_span(
-                build_history_source(self._store),
-                wm,
-                tip_run=tip_run,
-                tip_turn=tip_turn,
-                conversation_id=cid,
-            )
-            # TURN-COUNT gate (the thread-specific cadence). A block is only
-            # worth producing once >= BLOCK_TURNS *distinct real* turns
-            # accumulated; fewer and the narration is noise, not a thread.
-            # Count distinct real user turns (dedup re-persisted copies and
-            # exclude injected <memory>/index blocks) so the floor is honest.
-            span_turns = (
-                len(distinct_user_turn_texts(span.messages)) if span.messages else 0
-            )
-            if span_turns < BLOCK_TURNS:
-                task.status = SKIPPED
-                task.detail = f"only {span_turns} unsettled turn(s); need >= {BLOCK_TURNS}"
-                self._publish_task(task)
-                return
-            # Single-flight: skip if a thread summarize is already queued/running.
-            queue = self._ensure_thread_summarizer_queue()
-            cst = queue.status(cid)
-            if cst.queued > 0 or cst.running:
-                task.status = SKIPPED
-                task.detail = "thread summarization already in flight"
-                self._publish_task(task)
-                return
-            queue.enqueue(
-                cid,
-                ThreadSummarizeJob(
-                    conversation_id=cid,
-                    messages=span.messages,
-                    watermark=span.watermark,
-                ),
-            )
-            if self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-                self._publish_task(task)
-        except Exception as exc:  # trigger path itself failed (rare); never break the turn
-            task.status = ERROR
-            task.detail = str(exc)
-            self._publish_task(task)
-
-    async def _maybe_trigger_review(self, cid: str | None) -> None:
-        """Fire the background reviewer hook, publishing task lifecycle.
-
-        Mirrors ``_maybe_trigger_consolidation``: publish a ``queued`` task row
-        first, then mark skipped / processing. Completion (done/error) is
-        published by the review span seam in ``_ensure_review_queue`` — the
-        reviewer is now visible on the background-task timeline / Processes
-        panel just like consolidation and thread summarization, instead of
-        curating silently.
-
-        Like consolidation: the trigger SCHEDULES only. It enqueues a ReviewJob
-        carrying the resolved tip position; the review worker is the SOLE
-        review-watermark writer and advances it only on a COMPLETED pass. A
-        failed/never-run review leaves the watermark behind so it retries next
-        cadence instead of being silently skipped.
-        """
-        if cid is None:
-            return
-        self._review_seq += 1
-        task_id = f"memory-review.{cid}.{self._review_seq}"
-        task = BackgroundTask(id=task_id, label=f"Reviewing memory ({cid})")
-        self._publish_task(task)  # queued
-        try:
-            runs = await self._store.list_runs(conversation_id=cid)
-            if not runs:
-                task.status = SKIPPED
-                task.detail = "no persisted runs yet"
-                self._publish_task(task)
-                return
-            tip_run = runs[-1].run_id
-            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
-            anchors = user_anchor_indices(tip_history)
-            if not anchors:
-                task.status = SKIPPED
-                task.detail = "no persisted turns"
-                self._publish_task(task)
-                return
-            tip_turn = len(anchors) - 1
-            wm = MemoryWatermark.load(
-                self._memory_directory,
-                run_id=tip_run,
-                filename="memory-review-watermark.json",
-            )
-            if not should_fire(
-                wm, tip_ts=runs[-1].started_at, every=timedelta(minutes=self.review_every)
-            ):
-                task.status = SKIPPED
-                task.detail = "review cadence not reached"
-                self._publish_task(task)
-                return
-            # Mirror the owner's worker-owns-watermark contract: the trigger
-            # SCHEDULES only. It enqueues a ReviewJob carrying the resolved tip
-            # position; the review worker is the SOLE review-watermark writer
-            # and advances it only on a COMPLETED (non-error) curation pass. A
-            # failed/never-run review leaves the watermark behind so it retries
-            # next cadence instead of being silently skipped.
-            advance = MemoryWatermark(
-                run_id=tip_run, turn_id=tip_turn, consumed_ts=runs[-1].started_at
-            )
-            rq = self._ensure_review_queue()
-            # Single-flight: skip if a review is already queued or running so a
-            # slow worker behind the cadence gate can't pile up duplicate passes.
-            rst = rq.status(self.agent_name)
-            if rst.queued > 0 or rst.running:
-                task.status = SKIPPED
-                task.detail = "memory review already in flight"
-                self._publish_task(task)
-                return
-            rq.enqueue(
-                self.agent_name,
-                ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
-            )
-            if self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-                self._publish_task(task)
-        except Exception as exc:  # the review hook must not break the turn
-            task.status = ERROR
-            task.detail = str(exc)
-            self._publish_task(task)
-
-    async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
-        """Fire the background-consolidation hook, publishing task lifecycle.
-
-        Consumer #1 of the ``BackgroundEvent`` surface (mirrors coding_agent
-        ``MaintenanceStep``). First publish a ``queued`` task row, then fire the
-        trigger. The trigger builds the queue (and enqueues) ONLY when the
-        watermark says enough turns have accumulated; if the queue is still None,
-        no job is due this turn — mark skipped, don't leave a phantom "running"
-        row.
-
-        ``cid`` here is ALREADY profile-scoped by the caller (``_scoped_cid``).
-        """
-        if cid is None:
-            return
-        self._consolidation_seq += 1
-        task_id = f"consolidation.{cid}.{self._consolidation_seq}"
-        task = BackgroundTask(id=task_id, label=f"Consolidating memory ({cid})")
-        self._publish_task(task)  # queued
-        try:
-            runs = await self._store.list_runs(conversation_id=cid)
-            if not runs:
-                task.status = SKIPPED
-                task.detail = "no persisted runs yet"
-                self._publish_task(task)
-                return
-            tip_run = runs[-1].run_id
-            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
-            anchors = user_anchor_indices(tip_history)
-            if not anchors:
-                task.status = SKIPPED
-                task.detail = "no persisted turns"
-                self._publish_task(task)
-                return
-            tip_turn = len(anchors) - 1
-            wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
-            if not should_fire(
-                wm,
-                tip_ts=runs[-1].started_at,
-                every=timedelta(minutes=self.consolidate_every),
-            ):
-                task.status = SKIPPED
-                task.detail = "not past the consolidation cadence"
-                self._publish_task(task)
-                return
-            # Single-flight: skip if a consolidation is already queued or running
-            # so a slow worker behind the cadence gate can't pile up duplicate folds.
-            mq = self._ensure_memory_queue()
-            mst = mq.status(self.agent_name)
-            if mst.queued > 0 or mst.running:
-                task.status = SKIPPED
-                task.detail = "consolidation already in flight"
-                self._publish_task(task)
-                return
-            # Resolve the unseen span NOW and hand it to the worker as
-            # precomputed material so it folds exactly what was scheduled
-            # (re-resolving inside the worker against the not-yet-advanced
-            # watermark would otherwise see a moving cursor race). The trigger
-            # SCHEDULES only — it does NOT advance the watermark here. The
-            # worker is the sole owner-watermark writer and advances only on a
-            # completed (non-error) fold; a failed fold leaves the watermark
-            # behind so this span is retried next cadence, never skipped.
-            span = await resolve_unseen_span(
-                build_history_source(self._store), wm,
-                tip_run=tip_run, tip_turn=tip_turn,
-            )
-            mq.enqueue(
-                self.agent_name,
-                ConsolidationJob(
-                    run_id=tip_run, turn_id=tip_turn, messages=span.messages,
-                    watermark=span.watermark,
-                ),
-            )
-            if self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-                self._publish_task(task)
-        except Exception as exc:  # trigger path itself failed (rare)
-            task.status = ERROR
-            task.detail = str(exc)
-            self._publish_task(task)
     # -- async core -----------------------------------------------------------
 
     async def stream(
@@ -1197,9 +700,12 @@ class Session:
             )
         self.last_result = result
         self.history = [*self.history, *result.new_messages()]
-        await self._maybe_trigger_consolidation(scoped)
-        await self._maybe_trigger_review(scoped)
-        await self._maybe_trigger_thread_summarize(scoped)
+        # Post-turn background work (consolidation/review/thread-summarize) is
+        # scheduled by the attached coordinator. Bare sessions (no coordinator,
+        # e.g. a memory-less profile) skip straight past — the turn core never
+        # cares about background machinery.
+        if self.background is not None:
+            await self.background.after_turn(scoped)
 
     async def run(
         self,
@@ -1253,39 +759,6 @@ class Session:
         if run is None:
             return None
         return run.enqueue(content, priority=priority)
-
-    def subscribe_tasks(
-        self, cb: Callable[[BackgroundEvent], Awaitable[Any] | Any]
-    ) -> Callable[[BackgroundEvent], Awaitable[Any] | Any]:
-        """Register a consumer for background-task lifecycle.
-
-        The callback is invoked on every ``BackgroundEvent`` (queued/running/
-        done/error/skipped transition) for every registered task. On subscribe,
-        ALREADY-ACTIVE tasks (status queued|running) are REPLAYED synchronously
-        first, so a late-joining connection (e.g. a web tab that opens mid-fold)
-        sees ``running`` instead of missing the transition entirely.
-
-        Returns the callback unchanged (convenient: ``cb = s.subscribe_tasks(cb)``).
-        """
-        if cb not in self._task_subscribers:
-            self._task_subscribers.append(cb)
-        for task in self._background_tasks.values():
-            if task.status in (QUEUED, PROCESSING):
-                cb(task.as_event())
-        return cb
-
-    def _publish_task(self, task: BackgroundTask) -> None:
-        """Store a task in the registry and notify all subscribers."""
-        task.updated_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-        self._background_tasks[task.id] = task
-        ev = task.as_event()
-        for cb in self._task_subscribers:
-            try:
-                result = cb(ev)
-                if inspect.isawaitable(result):
-                    asyncio.ensure_future(result)  # fire-and-forget, never block
-            except Exception:  # a subscriber must never break the session
-                log.exception("background-task subscriber failed task=%s", task.id)
 
     # -- observability lifecycle ---------------------------------------------
 

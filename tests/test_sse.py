@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 
+from paf.background import PROCESSING, BackgroundCoordinator, BackgroundTask
 from paf.runtime import StreamEvent
 from ui import sse
 
@@ -52,6 +53,7 @@ def test_turn_frames_teardown_cancels_cooperatively_and_settles() -> None:
             self.cancel_called = False
             self.task_subscribed = None
             self._released = asyncio.Event()
+            self.background = self  # bare coordinator stub: subscribe routes here
 
         def stream(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
@@ -114,6 +116,7 @@ def test_turn_frames_drains_queued_task_frames_on_turn_end() -> None:
     class _FakeSession:
         def __init__(self) -> None:
             self.task_subscribed = None
+            self.background = self  # bare coordinator stub
 
         def stream(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
@@ -152,6 +155,9 @@ def test_turn_frames_teardown_survives_no_active_turn() -> None:
     """Closing a generator whose turn already finished must be a clean no-op."""
 
     class _FakeSession:
+        def __init__(self) -> None:
+            self.background = self  # bare coordinator stub
+
         def stream(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
 
@@ -173,3 +179,76 @@ def test_turn_frames_teardown_survives_no_active_turn() -> None:
         await frames.aclose()  # turn task already done -> must not raise
 
     asyncio.run(_drive())
+
+
+def test_background_coordinator_task_bytes_identical_via_session_slot() -> None:
+    """Regression (BackgroundCoordinator extraction): a real coordinator reached
+    through the ``session.background`` slot must replay active tasks to
+    ``subscribe_tasks`` subscribers and produce byte-identical ``task:`` SSE
+    frames as before the refactor (when subscribe_tasks/task_history lived ON the
+    Session as forwarders).
+
+    The pre-refactor contract had two halves we pin here on the coordinator:
+    1. ``subscribe_tasks`` REPLAYS already-active (queued/running) tasks
+       SYNCHRONOUSLY on subscribe, so a late-joining SSE tab sees \"running\".
+    2. sse._task_frame maps the replayed BackgroundEvent to the same wire frame
+       sse._frame would emit from the event directly — byte-identical.
+    """
+
+    class _StubStore:
+        def list_runs(self, conversation_id=None):
+            return []
+
+    class _Profile:
+        capability_names = ("Memory",)  # memory-only; no ThreadSummarizer
+
+    coord = BackgroundCoordinator(
+        _StubStore(),
+        agent_name="assistant",
+        # A memory-capable profile so the coordinator is non-bare (mirrors a
+        # real session the sse layer would attach). We don't need for_session
+        # here — the point is the coordinator's OWN subscribe/task_history
+        # surface, which sse binds to via session.background.
+        profile=_Profile(),
+    )
+
+    # Simulate a background job already in flight (registered + promoted to
+    # PROCESSING), exactly as the consolidation trigger would leave it when an
+    # SSE tab joins mid-fold.
+    task = BackgroundTask(id="consolidation.conv-1.3", label="Consolidating memory (conv-1)")
+    task.status = PROCESSING
+    coord._publish_task(task)
+
+    # Half 1: replay on subscribe; capture the replayed event(s).
+    replayed: list = []
+
+    def _on_task(ev) -> None:
+        replayed.append(ev)
+
+    coord.subscribe_tasks(_on_task)
+
+    assert replayed, "active task must be replayed synchronously on subscribe"
+    ev = replayed[0]
+    assert ev.status == PROCESSING
+
+    # Half 2: the SSE wire bytes from this coordinator flow are byte-identical
+    # to building the frame directly from the same event via sse's own
+    # serializer (the path _turn_frames uses).
+    name, data = sse._task_frame(ev)
+    assert name == "task"
+    assert data["id"] == "consolidation.conv-1.3"
+    via_coordinator = sse._frame(name, data)
+
+    # Rebuild the exact frame from the task's own as_event() to prove the byte
+    # contract holds all the way from the coordinator's registry -> replay ->
+    # serialize -> frame (no shape drift in the move).
+    ev2 = task.as_event()
+    name2, data2 = sse._task_frame(ev2)
+    direct = sse._frame(name2, data2)
+    assert via_coordinator == direct, "coordinator replay frame differs from direct serialization"
+
+    # Half 3: task_history scopes to the conversation and returns the row
+    # (the /api/conversations/{id}/tasks endpoint reads this through session.background).
+    rows = coord.task_history("conv-1")
+    assert [r.id for r in rows] == ["consolidation.conv-1.3"]
+    assert coord.task_history("conv-other") == []

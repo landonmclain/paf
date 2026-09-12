@@ -151,47 +151,51 @@ def test_part_delta_text_and_thinking() -> None:
 
 
 # --- background-task registry (no agent build) ----------------------------
+# Imported here (not at module top) so tests above never trigger a paf.background
+# / session-build import at module scope.
+from paf.background import BackgroundCoordinator  # noqa: E402
 
 
-def _bare_session() -> runtime.Session:
-    s = object.__new__(runtime.Session)
-    s._background_tasks = {}
-    s._task_subscribers = []
-    s._consolidation_seq = 0
-    return s
+def _bare_coordinator() -> BackgroundCoordinator:
+    """A coordinator with no store built (pure registry tests)."""
+    c = object.__new__(BackgroundCoordinator)
+    c._background_tasks = {}
+    c._task_subscribers = []
+    c._consolidation_seq = 0
+    return c
 
 
 def test_subscribe_replays_active_task() -> None:
-    s = _bare_session()
+    c = _bare_coordinator()
     seen: list[tuple[str, str]] = []
 
     def cb(ev: runtime.BackgroundEvent) -> None:
         seen.append((ev.kind, ev.status))
 
-    s.subscribe_tasks(cb)
+    c.subscribe_tasks(cb)
     t = runtime.BackgroundTask(id="consolidation.c.1", label="Consolidating memory (c)")
-    s._publish_task(t)  # queued (default)
+    c._publish_task(t)  # queued (default)
 
     # Late subscriber must see the in-flight (queued) task replayed.
     seen2: list[tuple[str, str]] = []
-    s.subscribe_tasks(lambda ev: seen2.append((ev.kind, ev.status)))
+    c.subscribe_tasks(lambda ev: seen2.append((ev.kind, ev.status)))
     assert ("task:Consolidating memory (c)", "queued") in seen2
 
     # Transition to done reaches both subscribers.
     t.status = runtime.DONE
-    s._publish_task(t)
+    c._publish_task(t)
     assert ("task:Consolidating memory (c)", "done") in seen
     assert ("task:Consolidating memory (c)", "done") in seen2
 
 
 def test_done_task_not_replayed() -> None:
-    s = _bare_session()
-    s.subscribe_tasks(lambda ev: None)
+    c = _bare_coordinator()
+    c.subscribe_tasks(lambda ev: None)
     t = runtime.BackgroundTask(id="consolidation.d.1", label="L")
     t.status = runtime.DONE
-    s._publish_task(t)
+    c._publish_task(t)
     seen: list = []
-    s.subscribe_tasks(lambda ev: seen.append(ev))
+    c.subscribe_tasks(lambda ev: seen.append(ev))
     assert seen == []  # only queued/running are active; done is not replayed
 
 
@@ -267,9 +271,6 @@ def test_session2_init_injects_spec_profile_for_keyword_agent_name(
     )
     # Stub the heavy build paths so constructing Session needs no API key.
     monkeypatch.setattr(runtime, "build_agent", lambda name, profile=None: object())
-    monkeypatch.setattr(
-        runtime, "resolve_memory_config", lambda name: {"consolidate_every": 3}
-    )
     monkeypatch.setattr(runtime, "_build_store", lambda: object())
     monkeypatch.setattr(runtime, "setup_observability", lambda: None)
 
@@ -419,8 +420,6 @@ def test_stream_preserves_partial_history_on_stop(monkeypatch) -> None:
         del a, k
 
     s._ensure_resumed = _noop  # type: ignore[attr-defined]
-    s._maybe_trigger_consolidation = _noop  # type: ignore[attr-defined]
-    s._maybe_trigger_review = _noop  # type: ignore[attr-defined]
 
     partial = ModelResponse(parts=[TextPart(content="partial answer")])
 
@@ -475,8 +474,6 @@ def test_stream_propagates_real_cancellation(monkeypatch) -> None:
         del a, k
 
     s._ensure_resumed = _noop  # type: ignore[attr-defined]
-    s._maybe_trigger_consolidation = _noop  # type: ignore[attr-defined]
-    s._maybe_trigger_review = _noop  # type: ignore[attr-defined]
 
     class _CancellingRun:
         def __aiter__(self):

@@ -242,6 +242,7 @@ def test_owner_trigger_does_not_advance_watermark_before_fold(tmp_path) -> None:
     # Legacy (pre-fix) owner watermark: only {run_id, turn_id}, NO consumed_ts.
     MemoryWatermark(run_id="run-a", turn_id=1).save(str(memdir))
 
+    from paf.background import BackgroundCoordinator
     from paf.runtime import Session
 
     # A fold that raises — simulates a model 400 / timeout / no-response.
@@ -253,13 +254,17 @@ def test_owner_trigger_does_not_advance_watermark_before_fold(tmp_path) -> None:
         trace=False,
         resume=False,
         store=store,
-        memory_directory=str(memdir),
-        consolidate_span=failing_fold,
     ) as session:
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="assistant",
+            memory_directory=str(memdir),
+            consolidate_span=failing_fold,
+        )
         for i in range(12):
             session.history.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
-        asyncio.run(session._maybe_trigger_consolidation("c1"))
-        q = session.memory_queue
+        asyncio.run(session.background._maybe_trigger_consolidation("c1"))
+        q = session.background.memory_queue
         assert q is not None
         await_drain = getattr(q, "drain", None)
         if await_drain is not None:
@@ -364,22 +369,28 @@ def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
         )
         return 2  # the two records just written
 
+    from paf.background import BackgroundCoordinator
+
     with Session(
         "assistant",
         trace=False,
         resume=False,
         store=store,
-        memory_directory=str(memdir),
-        consolidate_span=success_fold,
     ) as session:
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="assistant",
+            memory_directory=str(memdir),
+            consolidate_span=success_fold,
+        )
         for t in ["coffee", "remote work", "dark mode"]:
             session.history.extend(_msg(
                 user=f"The user enjoys {t} as a hobby",
                 assistant=f"Recorded the {t} preference.",
             ))
         async def scenario():
-            await session._maybe_trigger_consolidation("c1")
-            q = session.memory_queue
+            await session.background._maybe_trigger_consolidation("c1")
+            q = session.background.memory_queue
             assert q is not None
             await q.drain("assistant")
 
@@ -417,6 +428,7 @@ def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
     journal = JournalStore(str(memdir))
     MemoryWatermark(run_id="run-a", turn_id=1).save(str(memdir))
 
+    from paf.background import BackgroundCoordinator
     from paf.runtime import Session
 
     async def nothing_fold(messages, directory, wm) -> int:
@@ -427,17 +439,21 @@ def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
         trace=False,
         resume=False,
         store=store,
-        memory_directory=str(memdir),
-        consolidate_span=nothing_fold,
     ) as session:
+        session.background = BackgroundCoordinator(
+            store=store,
+            agent_name="assistant",
+            memory_directory=str(memdir),
+            consolidate_span=nothing_fold,
+        )
         for t in ["coffee", "remote work", "dark mode"]:
             session.history.extend(_msg(
                 user=f"The user enjoys {t} as a hobby",
                 assistant=f"Recorded the {t} preference.",
             ))
         async def scenario():
-            await session._maybe_trigger_consolidation("c1")
-            q = session.memory_queue
+            await session.background._maybe_trigger_consolidation("c1")
+            q = session.background.memory_queue
             assert q is not None
             await q.drain("assistant")
 

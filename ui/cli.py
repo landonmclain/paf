@@ -614,6 +614,7 @@ def main() -> int:
     conversation_id = f"cli-{agent_name}-e{CONV_EPOCH}"
 
     with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15) as session:
+        session.attach_background()
         _startup_banner(session)
         console.print("type a message (blank line sends; paste multi-line freely), or \"quit\" to exit")
 
