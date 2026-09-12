@@ -318,9 +318,15 @@ def test_index_root_override_wins(tmp_path: Path) -> None:
     assert not (root / "data").exists()
 
 
-def test_default_index_is_repo_owned_not_in_vault(tmp_path: Path) -> None:
-    """With default storage, the index is keyed under the paf repo's
-    data/.paf-vault-index/, not co-located inside the vault tree."""
+def test_default_index_is_repo_owned_not_in_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With default storage, the index is keyed under the configured index dir
+    (data/.paf-vault-index by default), NOT co-located inside the vault tree.
+
+    The configured index_dir is monkeypatched to a tmp dir so the test writes to a
+    pytest-cleaned location: with a real tmp_path vault root the default hash-keyed
+    dir would accumulate one `data/.paf-vault-index/<sha256(tmp root)>/` folder PER
+    pytest run (pytest's tmp counter is unique each run) and never get cleaned up.
+    """
     from paf.capabilities.vault._store import FlatFileVaultStorage as FFS
     from paf.capabilities.vault._store import index_dir_for_root
     from paf.config import PROJECT_ROOT, settings
@@ -328,11 +334,15 @@ def test_default_index_is_repo_owned_not_in_vault(tmp_path: Path) -> None:
     root = tmp_path / "vault"
     root.mkdir()
     _seed(root, "Index.md", _IDX)
-    store = FFS()  # default storage -> repo-owned index
+    # Point the configured index dir at pytest's tmp area so the "repo-owned,
+    # keyed by vault-root hash" behavior is proven WITHOUT leaking one unique
+    # folder into the real data/.paf-vault-index per test run.
+    monkeypatch.setattr(settings, "vault_index_dir", str(tmp_path / "repo-index"))
+    store = FFS()  # default storage -> configured (monkeypatched) index dir
     build_index(root, ScanScope(root), store)
     expected = PROJECT_ROOT / Path(settings.vault_index_dir) / index_dir_for_root(root).name
     assert expected == index_dir_for_root(root)
-    # index built at the repo-owned location, keyed by the vault root's hash
+    # index built at the configured location, keyed by the vault root's hash
     assert (index_dir_for_root(root) / "index.json").exists()
     # no index artifacts leak into the vault tree
     assert not (root / ".paf-vault").exists()
