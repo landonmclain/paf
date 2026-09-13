@@ -82,13 +82,19 @@ def test_turn_frames_teardown_cancels_cooperatively_and_settles() -> None:
     # The stream task must have settled (no leaked CancelledError from aclose).
 
 
-def test_turn_frames_drains_queued_task_frames_on_turn_end() -> None:
-    """Task frames still queued when the turn ends must be yielded, not dropped.
+def test_turn_frames_does_not_forward_task_frames() -> None:
+    """Background/maintenance task frames must NOT ride the turn's SSE stream.
 
-    Regression for the \"process row stuck running/silent\" gap: a background
-    process (e.g. memory consolidation) that transitions running->done as the
-    turn finishes must surface its final state before the SSE stream closes.
+    Phase 1 of the Unified-Background-Process-Feed-Spec decouples the two: a
+    background ``task`` frame landing mid-turn used to be merged into ``/api/chat``
+    and could tear a thinking/text block (the ``"The u" / "ser asks…"`` split by
+    ``task:Summarizing thread``). ``_turn_frames`` now only drives the turn and
+    never subscribes to the background coordinator — task frames flow on the
+    dedicated ``/api/processes/stream`` feed instead (see
+    ``test_processes_stream_*``).
     """
+
+    subscribed = {"v": False}
 
     class _FakeTurn:
         def __init__(self) -> None:
@@ -103,43 +109,25 @@ def test_turn_frames_drains_queued_task_frames_on_turn_end() -> None:
                 return _event()
             raise StopAsyncIteration
 
-    class _FakeTask:
-        def __init__(self) -> None:
-            self.kind = "task:consolidating memory"
-            self.status = "DONE"
-            self.detail = "5 turns -> 1 summary"
-            self.progress = 1.0
-            self.metadata = {"id": "mem-1", "progress": 1.0}
-
-    frame = "NO_TASK_FRAME"
-
     class _FakeSession:
         def __init__(self) -> None:
-            self.task_subscribed = None
-            self.background = self  # bare coordinator stub
+            self.background = self  # coordinator stub
 
         def stream(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
             return _FakeTurn()
 
         def subscribe_tasks(self, cb) -> None:
-            self.task_subscribed = cb
+            subscribed["v"] = True  # must never be called by _turn_frames
 
         async def cancel(self) -> None:
             pass
 
-    s = _FakeSession()
-    frames = sse._turn_frames(s, "hi", "conv-1")  # type: ignore[attr-defined]
+    frames = sse._turn_frames(_FakeSession(), "hi", "conv-1")  # type: ignore[attr-defined]
 
     async def _drive():
-        nonlocal frame
-        # Grab the text frame first.
         got = await anext(frames)
         assert "partial" in got
-        # Fire a DONE task frame via the subscribed callback (queues it).
-        s.task_subscribed(_FakeTask())
-        # Then drive to the end; the queued task frame must be drained+yielded.
-        frame = await anext(frames)
         try:
             await anext(frames)
         except StopAsyncIteration:
@@ -147,8 +135,7 @@ def test_turn_frames_drains_queued_task_frames_on_turn_end() -> None:
 
     asyncio.run(_drive())
 
-    assert frame != "NO_TASK_FRAME", "queued task frame was dropped at turn end"
-    assert "consolidating memory" in frame and "DONE" in frame
+    assert subscribed["v"] is False, "_turn_frames must not subscribe to background tasks"
 
 
 def test_turn_frames_teardown_survives_no_active_turn() -> None:
@@ -252,3 +239,100 @@ def test_background_coordinator_task_bytes_identical_via_session_slot() -> None:
     rows = coord.task_history("conv-1")
     assert [r.id for r in rows] == ["consolidation.conv-1.3"]
     assert coord.task_history("conv-other") == []
+
+
+def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> None:
+    """The dedicated process feed restores current rows, streams live
+    transitions, stays open past the turn, and unsubscribes on teardown."""
+
+    class _Coordinator:
+        def __init__(self, history: list) -> None:
+            self._history = history
+            self.cb = None
+            self.unsubscribed = {"v": False}
+
+        def task_history(self, conversation_id):
+            assert conversation_id == "conv-1"
+            return self._history
+
+        def subscribe_tasks(self, cb):
+            self.cb = cb
+            return cb
+
+        def unsubscribe_tasks(self, cb):
+            assert cb is self.cb
+            self.unsubscribed["v"] = True
+
+    class _Session:
+        def __init__(self, coord) -> None:
+            self.background = coord
+
+    class _Hist:
+        def __init__(self, tid, status) -> None:
+            self.id = tid
+            self.label = f"task:Consolidating memory ({tid})"
+            self.status = status
+            self.progress = 0.5
+            self.detail = "partial"
+            self.updated_at = "2026-09-13T00:00:00"
+
+    coord = _Coordinator([_Hist("consolidation.conv-1.1", "DONE")])
+    s = _Session(coord)
+
+    feed = sse._process_feed(s, "conv-1")  # type: ignore[attr-defined]
+
+    async def _drive():
+        out = []
+        # Pump frames from the feed as they arrive; drive via subscribe callback.
+        async def _pump():
+            async for f in feed:
+                out.append(f)
+                if len(out) >= 3:
+                    return
+
+        pump_task = asyncio.create_task(_pump())
+        # Let the restore history frame arrive.
+        await asyncio.sleep(0.01)
+
+        # Fire live events through the subscribed callback (simulate queued->running).
+        def _ev(status):
+            class _E:
+                def __init__(self):
+                    self.kind = "task:Consolidating memory (conv-1)"
+                    self.status = status
+                    self.detail = "5 turns -> 1 summary"
+                    self.metadata = {"id": "consolidation.conv-1.2", "progress": 1.0}
+            return _E()
+
+        assert coord.cb is not None
+        coord.cb(_ev("running"))
+        coord.cb(_ev("DONE"))
+
+        await asyncio.wait_for(pump_task, timeout=2)
+        return out
+
+    out = asyncio.run(_drive())
+
+    # Frame 1 = restored history row.
+    assert "consolidation.conv-1.1" in out[0]
+    # Frames 2-3 = live queued/running transition for a NEW row id.
+    joined = "\n".join(out)
+    assert "consolidation.conv-1.2" in joined
+    assert "Consolidating memory" in joined
+    # Teardown (generator exhausted after 3 frames) unsubscribes.
+    assert coord.unsubscribed["v"] is True, "feed teardown must unsubscribe the subscriber"
+
+
+def test_process_feed_bare_session_streams_nothing_and_stays_alive() -> None:
+    """A session with no background coordinator yields nothing (and doesn't
+    crash), and the feed teardown is a clean no-op."""
+
+    class _Session:
+        background = None
+
+    feed = sse._process_feed(_Session(), "conv-1")  # type: ignore[attr-defined]
+
+    async def _drive():
+        await feed.aclose()  # type: ignore[attr-defined] - must not raise on a bare session
+
+    asyncio.run(_drive())

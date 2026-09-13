@@ -6,15 +6,18 @@ background-task timeline over standard SSE, with REST controls for
 steer/cancel, so a decoupled web frontend (paf-ui, Next.js + AI Elements) can
 consume paf without Gradio.
 
-Design (locked 2026-09-02, SSE + REST, per-lane):
+Design (locked 2026-09-02, SSE + REST, per-lane; updated 2026-09-13 Phase 1 of
+Unified-Background-Process-Feed-Spec):
 - One ``Session`` per conversation id, held in an in-memory registry. Each
   active conversation opens its OWN ``/api/chat`` SSE stream; steer/cancel are
   per-lane REST POSTs addressed to that lane's conversation id.
 - The runtime owns resume/date-stamping/``{profile}:{cid}`` scoping — we pass
   the raw prompt + a plain conversation id and let ``Session.stream()`` do it.
-- ``/api/chat`` emits turn events as ``event: <kind>`` frames and ALSO forwards
-  the background-task timeline (``subscribe_tasks``) as ``event: task`` frames,
-  so the UI sees live "memory consolidating" rows without a separate channel.
+- ``/api/chat`` emits turn events as ``event: <kind>`` frames ONLY. Background
+  task frames are NOT merged into the turn stream — they ride the dedicated
+  ``GET /api/processes/stream`` feed (turn-independent, no turn-end sentinel),
+  so background maintenance can never interleave into (and tear) a thinking/
+  text block.
 
 Transport only — no runtime changes, no pydantic-ai imports beyond Session.
 """
@@ -26,7 +29,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -530,12 +533,112 @@ async def conversation_tasks(
 
 
 
+@app.get("/api/processes/stream")
+async def processes_stream(conversation_id: str, agent: str = DEFAULT_AGENT) -> StreamingResponse:
+    """Long-lived, turn-independent SSE feed of background processes/lifecycle.
+
+    Decoupled from ``/api/chat`` (see the Unified-Background-Process-Feed-Spec,
+    Phase 1): background ``task:`` frames are no longer merged into the turn
+    stream — they ride this dedicated feed instead, which opens ONCE per lane
+    and stays open as long as the client wants, with no turn-end sentinel.
+
+    Wire contract is identical to the old in-turn ``task:`` frames (id / label /
+    status / progress / detail / updated_at), so the adapter and ProcessesPanel
+    consume them unchanged. On connect we first restore the conversation's
+    current task history (terminal rows, e.g. a finished/failed summarizer),
+    then subscribe for live transitions (queued -> running -> done|error|skipped).
+    """
+    return _process_response(_process_feed, conversation_id, agent)
+
+
+def _process_response(
+    feed: Callable[[Session, str], AsyncIterator[str]],
+    conversation_id: str,
+    agent: str,
+) -> StreamingResponse:
+    """Adapter from a session-scoped feed generator to an SSE StreamingResponse."""
+
+    async def gen() -> AsyncIterator[str]:
+        session = await _get_session(conversation_id, agent)
+        async for frame in feed(session, conversation_id):
+            yield frame
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
+    """Stream background-process frames for one lane, never tying to a turn.
+
+    On connect: restore the conversation's current task history (terminal +
+    active rows), then subscribe to the coordinator for live transitions. The
+    feed stays open until the client disconnects — no turn-end sentinel.
+    """
+
+    async def _inner() -> AsyncIterator[str]:
+        bg = session.background
+
+        q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        closed = {"v": False}
+
+        def _publish(frame: tuple[str, dict[str, Any]] | None) -> None:
+            if frame is None or closed["v"]:
+                return
+            q.put_nowait(frame)
+
+        # 1. Restore terminal + active history first (so a late-joining tab sees
+        #    the full current state, not just live deltas).
+        if bg is not None:
+            for task in bg.task_history(conversation_id):
+                _publish(
+                    (
+                        "task",
+                        {
+                            "id": task.id,
+                            "label": task.label,
+                            "status": task.status,
+                            "progress": task.progress,
+                            "detail": task.detail,
+                            "updated_at": task.updated_at,
+                        },
+                    )
+                )
+
+        # 2. Subscribe for live events. subscribe_tasks replays already-active
+        #    (queued|running) tasks synchronously *and* fans out live transitions;
+        #    both funnel through the same queue, so ordering is preserved.
+        sub = None
+        if bg is not None:
+            sub = bg.subscribe_tasks(lambda ev: _publish(_task_frame(ev)))
+
+        try:
+            while True:
+                frame = await q.get()
+                if frame is None:
+                    break
+                yield _frame(*frame)
+        finally:
+            closed["v"] = True
+            if sub is not None:
+                try:
+                    bg.unsubscribe_tasks(sub)  # type: ignore[union-attr]
+                except Exception:  # noqa: BLE001 - best-effort teardown
+                    log.warning("processes_stream subscriber teardown failed", exc_info=True)
+
+    return _inner()
+
+
+
 def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIterator[str]:
-    """Run one turn, forwarding turn events + background-task frames as SSE."""
+    """Run one turn, forwarding turn events as SSE.
+
+    Background / maintenance work (``task:`` frames) is NOT mixed in here — it
+    lives on its own dedicated ``GET /api/processes/stream`` feed so it never
+    interleaves into the turn's content stream (which could split a thinking
+    block mid-token). See the Unified-Background-Process-Feed-Spec.
+    """
 
     async def _inner() -> AsyncIterator[str]:
         turn_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
-        task_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
 
         async def _pump_turn() -> None:
             try:
@@ -547,64 +650,21 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
             finally:
                 await turn_q.put(None)  # sentinel: turn stream finished
 
-        # subscribe_tasks fires the callback both synchronously (replay of
-        # already-active tasks) and via ensure_future (live events). put_nowait
-        # is sync-safe on an asyncio.Queue from the same loop thread. The
-        # `dead` flag guards against a stale fire after this generator closes.
-        dead = {"v": False}
-
-        def _on_task(ev: Any) -> None:
-            if not dead["v"]:
-                task_q.put_nowait(_task_frame(ev))
-
-        # Bind to the session's background coordinator (its own public surface,
-        # not a forwarded Session method). A bare session (background is None)
-        # has nothing to subscribe to — no task frames, and none expected.
-        if session.background is not None:
-            session.background.subscribe_tasks(_on_task)
-
         turn = asyncio.create_task(_pump_turn())
         try:
             # Drive the TURN to completion. The stream ends exactly when the turn
-            # ends (clean EOF -> client onDone -> UI shows "done"). Background
-            # task frames are forwarded only while the turn is still producing, so
-            # a trailing consolidation frame can never keep the connection open or
-            # become the terminal event.
+            # ends (clean EOF -> client onDone -> UI shows "done"). There is no
+            # background-task queue here — those frames flow on the separate
+            # /api/processes/stream feed.
             while True:
                 item = await turn_q.get()
                 if item is None:
                     break  # turn finished -- close the SSE stream now
                 yield _frame(*item)
-                # Opportunistically flush any pending task frame (non-blocking).
-                while not task_q.empty():
-                    t = task_q.get_nowait()
-                    if t is None:
-                        break
-                    yield _frame(*t)
-
-            # Turn done: drain any task frames still queued (e.g. a consolidation
-            # process that transitioned running->done just as the turn ended) so
-            # the UI's process row reflects the last known state instead of being
-            # silently dropped. Non-blocking: we only surface frames already
-            # produced; we never wait on the background worker itself.
-            while not task_q.empty():
-                t = task_q.get_nowait()
-                if t is None:
-                    break
-                yield _frame(*t)
         finally:
             # Cooperative teardown: cancel the session's CancellationToken, NOT
-            # the turn task directly. turn.cancel() injects asyncio.CancelledError
-            # into session.stream()'s generator from a DIFFERENT task/context than
-            # the one that opened its OTel root_span, which makes OTel's
-            # context.detach() raise `ValueError: <Token> was created in a
-            # different Context`, the span is never ended/exported (the "tracing
-            # sometimes just stops" bug) and we get `aclose(): already running`.
-            # session.cancel() lets stream() end via its own RunCancelled path in
-            # the SAME task/context that owns the span -> span ends, trace lands,
-            # partial history preserved (commit 24cd3aa). We then drain the turn
-            # task so it settles before the generator is torn down.
-            dead["v"] = True
+            # the turn task directly (see commit 24cd3aa for the OTel span/context
+            # rationale). Then drain the turn task so it settles before teardown.
             try:
                 await session.cancel()
             except Exception:  # noqa: BLE001 - best-effort; never mask teardown

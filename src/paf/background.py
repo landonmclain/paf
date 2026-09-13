@@ -385,6 +385,19 @@ class BackgroundCoordinator:
                 cb(task.as_event())
         return cb
 
+    def unsubscribe_tasks(self, cb: Callable[[BackgroundEvent], Any]) -> None:
+        """Deregister a consumer previously registered via :meth:`subscribe_tasks`.
+
+        Idempotent and best-effort: a callback that isn't registered (or was
+        already removed) is a no-op. Used by long-lived server-side feeds (the
+        dedicated ``/api/processes/stream``) so a disconnecting client doesn't
+        leak a subscriber that keeps pushing into a dead queue.
+        """
+        try:
+            self._task_subscribers.remove(cb)
+        except ValueError:
+            pass
+
     def task_history(self, conversation_id: str) -> list[BackgroundTask]:
         """Background-task rows scoped to a conversation, newest first.
 
