@@ -96,9 +96,12 @@ dev = [
     #
     # The [prompt-injection-defender] extra pulls `stackone-defender`, the
     # builtin PromptInjectionDefender capability (Option A of the guardrails
-    # plan). Declared on the harness line so it rides the harness version — no
-    # separate pin — consistent with "leave builtin, don't pin". Requires
-    # Python 3.11+ (paf is on 3.12).
-    "pydantic-ai-harness[playwright, prompt-injection-defender]",
+    # plan). The [prompt-injection-defender-ml] extra adds `onnxruntime` so
+    # `semantic_detection=True` can run the local MiniLM classifier (Tier 2),
+    # which catches injection under unrecognized fields that pattern detection
+    # (Tier 1) misses. Declared on the harness line so it rides the harness
+    # version — no separate pin — consistent with "leave builtin, don't pin".
+    # Requires Python 3.11+ (paf is on 3.12).
+    "pydantic-ai-harness[playwright, prompt-injection-defender, prompt-injection-defender-ml]",
     "ruff>=0.16.1",
 ]
