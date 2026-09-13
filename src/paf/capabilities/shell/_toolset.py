@@ -33,7 +33,7 @@ _KILL_GRACE_PERIOD: float = 2.0
 _P = ParamSpec('_P')
 
 
-def _recoverable(  # noqa: UP047  # verbatim harness copy; keep byte-identical to upstream
+def _recoverable(  # noqa: UP047  # paf-hardened: also recovers spawn failures (upstream 0.26.0)
     fn: Callable[Concatenate[ShellToolset, _P], Awaitable[str]],
 ) -> Callable[Concatenate[ShellToolset, _P], Awaitable[str]]:
     """Convert model-correctable errors into `ModelRetry`.
@@ -41,14 +41,16 @@ def _recoverable(  # noqa: UP047  # verbatim harness copy; keep byte-identical t
     pyai only feeds `ModelRetry` back to the model as a retry prompt; any other
     exception propagates and aborts the whole run. A denied command is something
     the model can recover from (pick an allowed one), so surface it as a retry
-    instead of crashing the agent.
+    instead of crashing the agent. paf also recovers spawn failures (a missing
+    command binary raises `FileNotFoundError`/`OSError`), so a typo'd command
+    returns to the model instead of aborting the run.
     """
 
     @functools.wraps(fn)
     async def wrapper(self: ShellToolset, *args: _P.args, **kwargs: _P.kwargs) -> str:
         try:
             return await fn(self, *args, **kwargs)
-        except PermissionError as e:
+        except OSError as e:
             raise ModelRetry(str(e)) from e
 
     return wrapper
