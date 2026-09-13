@@ -236,6 +236,25 @@ class BackgroundEvent:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class JobIdleStatus:
+    """Read-only "idle" status for one background job, for the Processes panel.
+
+    Produced by ``BackgroundCoordinator.job_status_summary()`` so a UI can show
+    the three background processes as persistent rows even when nothing is
+    running — with a count and a human reason ("2 turns since last fold ·
+    next ~24 min") instead of an empty panel. ``id`` is the stable row key the
+    frontend coalesces transitions against; when the real task fires later it
+    overlays this idle row (same id, queued/running/done).
+    """
+
+    id: str
+    label: str
+    status: Literal["idle"] = "idle"
+    progress: float | None = None
+    detail: str = ""
+
+
 class BackgroundCoordinator:
     """Owns the session's background machinery: task registry + 3 queues + triggers.
 
@@ -412,6 +431,166 @@ class BackgroundCoordinator:
             t for t in self._background_tasks.values() if needle in f".{t.id}"
         ]
         rows.sort(key=lambda t: t.updated_at, reverse=True)
+        return rows
+
+    async def job_status_summary(self, conversation_id: str) -> list[JobIdleStatus]:
+        """READ-ONLY idle status for the 3 background processes (Processes panel).
+
+        Lets a UI render the background jobs as persistent rows — "idle, N
+        turns, next ~M min" — even when nothing is running, instead of an
+        empty panel. Derives each job's count/reason from the SAME durable
+        state its trigger reads (watermarks + persisted runs), but NEVER
+        enqueues, writes, or advances anything: a read failure yields an
+        "unavailable" idle row rather than a raised error, so a bad watermark
+        can't break (or block) the feed.
+
+        Each row's ``id`` is the STABLE key the real task uses (``consolidation.*``
+        etc.), so when that job fires later the live queued/running/done frames
+        coalesce OVER the idle row instead of duplicating it.
+        """
+        from paf.capabilities._turns import user_anchor_indices
+        from paf.capabilities.memory._background import resolve_unseen_span
+        from paf.capabilities.memory._watermark import MemoryWatermark
+        from paf.capabilities.persistence import build_history_source
+        from paf.capabilities.thread_summarizer._background import BLOCK_TURNS
+        from paf.capabilities.thread_summarizer._store import THREAD_WATERMARK_FILENAME
+        from pathlib import Path
+
+        rows: list[JobIdleStatus] = []
+        source = None
+        tip_run = None
+        tip_turn = 0
+        now = datetime.now(UTC)
+
+        try:
+            source = build_history_source(self._store)
+            # A single pass over persisted runs/history feeds all three counts.
+            runs = await self._store.list_runs(conversation_id=conversation_id)
+            tip_run = runs[-1].run_id if runs else None
+            tip_history = (
+                await source.run_history(run_id=tip_run) if tip_run else []
+            )
+            anchors = user_anchor_indices(tip_history)
+            tip_turn = len(anchors) - 1 if anchors else 0
+        except Exception:
+            # The shared store/history seam is down (or this store can't build
+            # a history source): report all 3 jobs as "unavailable" rather than
+            # raising — the feed must never tear the SSE socket on a status read.
+            for _id, _label in (
+                (f"consolidation.{conversation_id}", "Consolidating memory"),
+                (f"review.{conversation_id}", "Reviewing memory"),
+                (f"thread_summarize.{conversation_id}", "Summarizing thread"),
+            ):
+                rows.append(JobIdleStatus(id=_id, label=_label, detail="idle · status unavailable"))
+            return rows
+
+        async def _span_count(wm: MemoryWatermark) -> int:
+            """Number of complete turns newer than the watermark (0 if none)."""
+            if wm.is_empty():
+                return 0
+            try:
+                span = await resolve_unseen_span(
+                    source, wm, tip_run=tip_run or "", tip_turn=tip_turn,
+                    conversation_id=conversation_id,
+                )
+            except Exception:
+                return 0
+            return len(span.messages)
+
+        # 1. Memory consolidation (agent-scoped, time cadence).
+        try:
+            wm = MemoryWatermark.load(self._memory_directory)
+            n = await _span_count(wm)
+            mins = None
+            if wm.consumed_ts is not None:
+                mins = max(
+                    0, self.consolidate_every
+                    - (now - wm.consumed_ts).total_seconds() / 60
+                )
+            rows.append(
+                JobIdleStatus(
+                    id=f"consolidation.{conversation_id}",
+                    label="Consolidating memory",
+                    detail=(
+                        f"idle · {n} unsettled turn(s) · "
+                        + ("due now" if (mins or 0) <= 0 else f"next ~{int(mins)} min")
+                        if n or mins is not None
+                        else "idle · awaiting first turn"
+                    ),
+                )
+            )
+        except Exception:
+            rows.append(
+                JobIdleStatus(
+                    id=f"consolidation.{conversation_id}",
+                    label="Consolidating memory",
+                    detail="idle · status unavailable",
+                )
+            )
+
+        # 2. Memory review (agent-scoped, time cadence).
+        try:
+            wm = MemoryWatermark.load(
+                self._memory_directory, filename="memory-review-watermark.json"
+            )
+            n = await _span_count(wm)
+            mins = None
+            if wm.consumed_ts is not None:
+                mins = max(
+                    0, self.review_every
+                    - (now - wm.consumed_ts).total_seconds() / 60
+                )
+            rows.append(
+                JobIdleStatus(
+                    id=f"review.{conversation_id}",
+                    label="Reviewing memory",
+                    detail=(
+                        f"idle · {n} unsettled turn(s) · "
+                        + ("due now" if (mins or 0) <= 0 else f"next ~{int(mins)} min")
+                        if n or mins is not None
+                        else "idle · awaiting first turn"
+                    ),
+                )
+            )
+        except Exception:
+            rows.append(
+                JobIdleStatus(
+                    id=f"review.{conversation_id}",
+                    label="Reviewing memory",
+                    detail="idle · status unavailable",
+                )
+            )
+
+        # 3. Thread summarizer (per-conversation, turn-count cadence).
+        if self._thread_summarizer_enabled:
+            try:
+                dir = (
+                    Path(self._thread_capture_root)
+                    / "conversations" / conversation_id
+                )
+                wm = MemoryWatermark.load(dir, filename=THREAD_WATERMARK_FILENAME)
+                n = await _span_count(wm)
+                reason = (
+                    f"{n}/{BLOCK_TURNS} turns to a summary"
+                    if n < BLOCK_TURNS
+                    else "due for a summary"
+                )
+                rows.append(
+                    JobIdleStatus(
+                        id=f"thread_summarize.{conversation_id}",
+                        label="Summarizing thread",
+                        detail=f"idle · {reason}",
+                    )
+                )
+            except Exception:
+                rows.append(
+                    JobIdleStatus(
+                        id=f"thread_summarize.{conversation_id}",
+                        label="Summarizing thread",
+                        detail="idle · status unavailable",
+                    )
+                )
+
         return rows
 
     def _publish_task(self, task: BackgroundTask) -> None:

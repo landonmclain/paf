@@ -603,6 +603,45 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
                     )
                 )
 
+        # 1b. Always-on "idle" snapshot of the 3 background jobs so the panel is
+        # never empty: consolidation / review / summarizer show their idle state +
+        # count + reason even when nothing is running. Rows use STABLE job ids so
+        # a later live transition (queued/running/done) coalesces over the idle
+        # row instead of duplicating it. Re-published on a slow heartbeat so the
+        # countdown ticks and a completed run returns its row to idle.
+        async def _publish_idle() -> None:
+            if bg is None:
+                return
+            try:
+                idle = await bg.job_status_summary(conversation_id)
+                for st in idle:
+                    _publish(
+                        (
+                            "task",
+                            {
+                                "id": st.id,
+                                "label": st.label,
+                                "status": st.status,
+                                "progress": st.progress,
+                                "detail": st.detail,
+                            },
+                        )
+                    )
+            except Exception:
+                log.warning("idle process snapshot failed", exc_info=True)
+
+        await _publish_idle()
+
+        heartbeat: asyncio.Task | None = None
+        if bg is not None:
+
+            async def _heartbeat() -> None:
+                while True:
+                    await asyncio.sleep(30)
+                    await _publish_idle()
+
+            heartbeat = asyncio.create_task(_heartbeat())
+
         # 2. Subscribe for live events. subscribe_tasks replays already-active
         #    (queued|running) tasks synchronously *and* fans out live transitions;
         #    both funnel through the same queue, so ordering is preserved.
@@ -618,6 +657,8 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
                 yield _frame(*frame)
         finally:
             closed["v"] = True
+            if heartbeat is not None:
+                heartbeat.cancel()
             if sub is not None:
                 try:
                     bg.unsubscribe_tasks(sub)  # type: ignore[union-attr]

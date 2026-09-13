@@ -213,3 +213,70 @@ def test_two_independent_queues_run_concurrently() -> None:
     ra, rb = asyncio.run(drive())
     assert ra == ["A0", "A1", "A2", "A3", "A4"]
     assert rb == ["B0", "B1", "B2", "B3", "B4"]
+
+
+class _NoRunsStore:
+    """Store duck-type returning no runs (fresh conversation)."""
+
+    async def list_runs(self, conversation_id=None):
+        return []
+
+    async def run_history(self, run_id):
+        return []
+
+
+def test_job_status_summary_returns_idle_rows_when_idle() -> None:
+    """The Processes-panel snapshot exposes all 3 jobs as idle with a reason.
+
+    A coordinator over a fresh/conversationless store (no runs, no watermarks)
+    must still yield consolidation / review / thread summarizer idle rows with
+    the stable ids the frontend coalesces transitions against — never raise.
+    """
+    from paf.capabilities import PROFILES
+    from paf.background import BackgroundCoordinator
+    from pydantic_ai_harness.step_persistence import FileStepStore
+    from tempfile import mkdtemp
+
+    bg = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),  # real store, no runs yet
+        agent_name="demo_assistant",
+        profile=PROFILES.get("demo"),
+        memory_directory="/nonexistent-memory-dir",  # loads a fresh watermark
+    )
+
+    rows = asyncio.run(bg.job_status_summary("cid123"))
+    by_id = {r.id: r for r in rows}
+
+    assert set(by_id) == {
+        "consolidation.cid123",
+        "review.cid123",
+        "thread_summarize.cid123",
+    }
+    for r in rows:
+        assert r.status == "idle"
+        assert r.detail  # a human reason is always present
+
+
+def test_job_status_summary_degrades_when_store_fails() -> None:
+    """A broken store must degrade to 'unavailable' idle rows, not raise.
+
+    The feed calls this on connect; a failure must never tear the SSE socket.
+    """
+    from paf.capabilities import PROFILES
+    from paf.background import BackgroundCoordinator
+
+    class _BrokenStore(_NoRunsStore):
+        async def list_runs(self, conversation_id=None):
+            raise RuntimeError("store exploded")
+
+    bg = BackgroundCoordinator(
+        _BrokenStore(),
+        agent_name="demo_assistant",
+        profile=PROFILES.get("demo"),
+        memory_directory="/nonexistent-memory-dir",
+    )
+
+    rows = asyncio.run(bg.job_status_summary("cid123"))  # must not raise
+    assert len(rows) == 3
+    assert all(r.status == "idle" for r in rows)
+    assert all("unavailable" in r.detail for r in rows)
