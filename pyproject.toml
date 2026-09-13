@@ -93,6 +93,12 @@ dev = [
     # `playwright install chromium` binary download for live use. Kept on the
     # harness line (dev group) because the builtin capabilities it enables are
     # only present when the dev-synced venv runs the demo/assistant CLIs.
-    "pydantic-ai-harness[playwright]",
+    #
+    # The [prompt-injection-defender] extra pulls `stackone-defender`, the
+    # builtin PromptInjectionDefender capability (Option A of the guardrails
+    # plan). Declared on the harness line so it rides the harness version — no
+    # separate pin — consistent with "leave builtin, don't pin". Requires
+    # Python 3.11+ (paf is on 3.12).
+    "pydantic-ai-harness[playwright, prompt-injection-defender]",
     "ruff>=0.16.1",
 ]
