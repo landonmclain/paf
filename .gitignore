@@ -19,6 +19,9 @@ tests/fixtures/paf-src/
 # Secrets
 .env
 
+# VS Code (machine-specific local editor config: interpreter path + data/ excludes)
+.vscode/
+
 # Hermes workspace-local plans (plan skill output). Plans are preserved in the
 # Obsidian vault (Portfolio-GitHub/History/), not in the public repo.
 .hermes/

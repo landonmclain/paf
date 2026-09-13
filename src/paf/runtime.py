@@ -57,6 +57,7 @@ from typing import Any, Literal
 
 from pydantic_ai import (
     Agent,
+    AgentRun,
     AgentRunResult,
     CancellationToken,
     FunctionToolCallEvent,
@@ -65,7 +66,11 @@ from pydantic_ai import (
     PartStartEvent,
 )
 from pydantic_ai._agent_graph import CallToolsNode, End, ModelRequestNode
-from pydantic_ai.exceptions import RunCancelled
+from pydantic_ai.exceptions import (
+    ModelHTTPError,
+    RunCancelled,
+    UnexpectedModelBehavior,
+)
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -657,6 +662,13 @@ class Session:
         prompt = f"[date: {now.isoformat()}] {prompt}"
 
         result: AgentRunResult | None = None
+        # Local ref to the live AgentRun for partial-state recovery on a
+        # mid-stream model failure (see `except (ModelHTTPError, ...)` below).
+        # Declared before the run so it's bound even if iter() itself raises.
+        _active_run: AgentRun[Any, Any] | None = None
+        # TEMP-DIAG: track how much text actually streamed vs what the settled
+        # result persisted, to pin the "final message missing" truncation.
+        _diag: dict = {"text": "", "thinking": 0, "kinds": [], "last_kind": None}
         with root_span(
             f"paf.run.{scoped or 'default'}",
             **({"langfuse.observation.input": _run_input(prompt, scoped)}),
@@ -669,12 +681,21 @@ class Session:
                     cancellation_token=self._token,
                 ) as run:
                     self._run = run
+                    _active_run = run
                     try:
                         async for node in run:
                             if isinstance(node, (ModelRequestNode, CallToolsNode)):
                                 async with node.stream(run.ctx) as stream:
                                     async for event in stream:
                                         for ev in _dispatch_stream_event(event):
+                                            if getattr(ev, "kind", None) in ("text", "thinking"):
+                                                _diag["kind"] = getattr(ev, "kind", None)
+                                                _diag["kinds"].append(getattr(ev, "kind", None))
+                                                if getattr(ev, "kind", None) == "text":
+                                                    _diag["text"] += getattr(ev, "text", "") or ""
+                                                else:
+                                                    _diag["thinking"] += len(getattr(ev, "text", "") or "")
+                                                _diag["last_kind"] = getattr(ev, "kind", None)
                                             yield ev
                             elif isinstance(node, End):
                                 break
@@ -694,12 +715,76 @@ class Session:
                 # ("The agent run was cancelled.") -- the UI ends the turn itself.
                 self.history = [*self.history, *exc.new_messages()]
                 return
+            except (ModelHTTPError, UnexpectedModelBehavior) as exc:
+                # A mid-stream/upstream failure from the model client (e.g.
+                # OpenRouter `502 Network connection lost` on deepseek-v4-flash).
+                # The turn never settled, but pydantic-ai already captured the
+                # PARTIAL messages (streamed text/thinking + any tool calls) in
+                # the run's message history — the exact same snapshot RunCancelled
+                # uses. Persist them so the partial survives page refresh/resume
+                # instead of being silently lost, then re-raise so the SSE layer
+                # surfaces a clean error frame to the user.
+                if _active_run is not None:
+                    new_msgs = _active_run.new_messages()
+                    if new_msgs:
+                        self.history = [*self.history, *new_msgs]
+                        _span.set_attribute(
+                            "langfuse.observation.output",
+                            _json_dumps({
+                                "partial_saved": len(new_msgs),
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }),
+                        )
+                raise
             assert result is not None, "iter() ended before AgentRun.result settled"
             _span.set_attribute(
                 "langfuse.observation.output", _json_dumps(_run_output(result))
             )
         self.last_result = result
         self.history = [*self.history, *result.new_messages()]
+        # TEMP-DIAG: measure streamed-vs-persisted divergence, and backfill the
+        # missing tail of the final answer when pydantic-ai's node-stream ended
+        # early (intermittent bug: the persisted run is complete but the stream
+        # stopped before the final text was emitted).
+        try:
+            # Target the LAST assistant text part (the message being streamed).
+            settled_final = ""
+            for m_ in reversed(self.history):
+                parts = getattr(m_, "parts", []) or []
+                if any(getattr(p_, "part_kind", None) in ("text", "final") for p_ in parts):
+                    for p_ in parts:
+                        if getattr(p_, "part_kind", None) == "text":
+                            c = getattr(p_, "content", None)
+                            if isinstance(c, str):
+                                settled_final += c
+                    break
+            streamed = _diag["text"]
+            tail = ""
+            if streamed and settled_final.startswith(streamed) and len(streamed) < len(settled_final):
+                tail = settled_final[len(streamed):]
+            elif streamed and settled_final.find(streamed) >= 0:
+                tail = settled_final[settled_final.rfind(streamed) + len(streamed):]
+            if tail:
+                yield StreamEvent(kind="text", text=tail)
+                _diag["text"] += tail
+            print(f"[STREAM-DIAG] streamed text={len(_diag['text'])} thinking={_diag['thinking']} "
+                  f"last_kind={_diag['last_kind']} | settled final={len(settled_final)} "
+                  f"backfilled={len(tail)}", flush=True)
+            # RAW CAPTURE: dump both sides around the first divergence so we can
+            # see byte-for-byte how stream differs from the settled result.
+            _s = _diag["text"]
+            _f = settled_final
+            print(f"[STREAM-RAW-BEGIN len_s={len(_s)} len_f={len(_f)}]", flush=True)
+            import difflib
+            _smatcher = difflib.SequenceMatcher(None, _s, _f)
+            _opcodes = _smatcher.get_opcodes()
+            print(f"[STREAM-RAW] opcodes(first 8)={_opcodes[:8]}", flush=True)
+            # print the streamed text and settled text (first 600 + last 300 chars)
+            print("[STREAM-RAW streamed::] " + repr(_s[:600]) + " ...[::] " + repr(_s[-300:]), flush=True)
+            print("[STREAM-RAW settled::]  " + repr(_f[:600]) + " ...[::] " + repr(_f[-300:]), flush=True)
+            print("[STREAM-RAW-END]", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[STREAM-DIAG] backfill/diag error: {exc!r}", flush=True)
         # Post-turn background work (consolidation/review/thread-summarize) is
         # scheduled by the attached coordinator. Bare sessions (no coordinator,
         # e.g. a memory-less profile) skip straight past — the turn core never

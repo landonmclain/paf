@@ -25,6 +25,7 @@ are answered is ``_retrieval.py``'s job. Swapping storage does not make search s
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from enum import StrEnum
 from pathlib import Path
@@ -76,8 +77,9 @@ _CODEDEX_DIR = "codebase_indexes"
 # Owned skip set — *domain* exclusions that are NOT (and arguably shouldn't be) gitignore
 # concerns: older content we still don't want indexed, plus safety nets for common junk
 # dirs that may not be gitignored (node_modules) or that git always manages anyway.
-# Everything git ignores on its own (`.venv/`, `data/`, `tests/results/`, `__pycache__/`)
-# is handled by `git check-ignore`; this is only what git would NOT ignore but we still skip.
+# These are pruned at the DIRECTORY level during the walk (see ``iter_files``), so a
+# big tree like data/ or .venv/ is never descended into — that is what keeps the scan
+# fast. Names here are single path parts; multi-segment dirs go in _OWNED_SKIP_PATHS.
 _OWNED_SKIP_DIRS = {
     _INDEX_SUBDIR,    # our own derived index — never index the index
     ".git",           # git internals
@@ -91,6 +93,11 @@ _OWNED_SKIP_DIRS = {
     # (In gitignore it's a "runtime persistence" tree; here it's just noise. Owned-skip
     # keeps the walker fast: pure-Python, no need to fight the gitignore re-includes.)
     "data",
+    ".venv",          # virtualenv — huge, never source
+}
+# Multi-segment owned-skip dirs, matched as path prefixes (not single parts).
+_OWNED_SKIP_PATHS = {
+    "tests/results",  # generated benchmark run outputs (JSON/log) — not source
 }
 _OWNED_SKIP_FILES = {"__init__.py"}  # docstring-only + __version__; not indexed (open deferred item)
 
@@ -127,10 +134,13 @@ class ScanScope:
 
     def _owned_skipped(self, p: Path) -> bool:
         """Pure-Python fast path: is this path under an owned-skip dir or filename?"""
-        rel_parts = p.relative_to(self.root).parts
-        if any(part in _OWNED_SKIP_DIRS for part in rel_parts):
+        rel = p.relative_to(self.root)
+        if any(part in _OWNED_SKIP_DIRS for part in rel.parts):
             return True
         if p.name in _OWNED_SKIP_FILES:
+            return True
+        rel_str = rel.as_posix()
+        if any(rel_str == pref or rel_str.startswith(pref + "/") for pref in _OWNED_SKIP_PATHS):
             return True
         return False
 
@@ -162,15 +172,20 @@ class ScanScope:
         """
         root = self.root
         candidates: list[Path] = []
-        for path in sorted(root.rglob("*")):
-            if not path.is_file():
-                continue
-            try:
-                path.relative_to(root)
-            except ValueError:
-                continue
-            if not self._owned_skipped(path):
-                candidates.append(path)
+        # Walk with pruning: never descend into owned-skip dirs (pure-Python fast path).
+        # This is what keeps the scan fast — data/, .venv/, tests/results/ etc. are
+        # dropped at the directory level instead of being walked file-by-file.
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune owned-skip dirs in place so os.walk does not descend into them.
+            dirnames[:] = [
+                d for d in dirnames
+                if not self._owned_skipped(Path(dirpath) / d)
+            ]
+            for fn in filenames:
+                p = Path(dirpath) / fn
+                if not self._owned_skipped(p):
+                    candidates.append(p)
+        candidates.sort()  # stable order (os.walk order is not guaranteed)
 
         if not candidates or not self._probe_git():
             return candidates  # no git (or no files) -> owned-skip is the only filter

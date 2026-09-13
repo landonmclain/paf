@@ -174,9 +174,11 @@ filesystem:
 shell:
   cwd: ~/
 git:
-  root: ~/projects/Personal/landonmclain-site
+  # root: ~/projects/Personal/landonmclain-site
+  root: ~/projects/Personal/pydantic-agent-framework/
 codebase_map:
-  scan_root: ~/projects/Personal/landonmclain-site
+  # scan_root: ~/projects/Personal/landonmclain-site
+  scan_root: ~/projects/Personal/pydantic-agent-framework/
 # Vault: the real Obsidian vault. `~` expands via os.path.expanduser. Deliberate
 # departure from the other four roots (which point at the site repo) — the vault
 # cap is a separate navigation-first note ladder over markdown, rooted here.
