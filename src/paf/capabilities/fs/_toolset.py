@@ -8,12 +8,13 @@ kept as-is; `expected_hash` gives optimistic-concurrency stale-write guarding.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import functools
 import hashlib
 import os
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Concatenate, ParamSpec
 
@@ -31,6 +32,173 @@ _P = ParamSpec('_P')
 # to the model; any other exception aborts the whole run. `_recoverable`
 # converts these so the agent can correct itself and continue.
 _RECOVERABLE_ERRORS = (PermissionError, FileNotFoundError, NotADirectoryError, IsADirectoryError, ValueError)
+
+# How many files a single recursive content/glob walk may visit before it bails
+# with a truncation marker. This is the hard backstop against walking an
+# enormous tree (e.g. `data/benchmarks/` with ~1.8M files / the paf repo at
+# ~1.87M files) — without it a `search_files`/`find_files` over `.` spins for
+# minutes on enumeration before any per-file guard even runs. The 50K default
+# bounds CPU AND wall-clock; a targeted search with `path` narrows past it.
+_WALK_VISIT_BUDGET = 50_000
+# Wall-clock budget for a recursive content/glob walk. There is NO timeout today
+# (the fs `_recoverable` decorator only wraps exceptions into `ModelRetry`, it
+# never bounds runtime) — a 1.8M-file rglob wedges the process until it's
+# killed. `asyncio.wait_for` cancels the awaited walk on expiry.
+_WALK_TIMEOUT_S = 30.0
+
+# Directories we refuse to descend into during a recursive walk, regardless of
+# budget. Dot-directories (`.git`, `.venv`, `node_modules`, `__pycache__` …) are
+# never source an agent wants to content-search; skipping them at the dir level
+# keeps the walk focused. We deliberately do NOT hard-skip non-dot subtrees like
+# `data/` — a root search may legitimately want them — their scale is surfaced
+# by list_directory and guarded by the budget + timeout instead.
+_SKIP_DIRNAME = {'.git', '.venv', 'node_modules', '__pycache__', '.mypy_cache',
+                 '.pytest_cache', '.ruff_cache', '.tox', '.hg', '.svn'}
+
+
+class _WalkReport:
+    """What a bounded recursive walk touched, for the truncation marker."""
+
+    __slots__ = ('visited', 'stopped_in', 'hit_budget', 'timed_out')
+
+    def __init__(self) -> None:
+        self.visited = 0
+        self.stopped_in: str | None = None
+        self.hit_budget = False
+        self.timed_out = False
+
+
+def _iter_walk_files(root: Path, real_root: Path, budget: int,
+                     report: _WalkReport) -> Iterator[tuple[Path, str]]:
+    """Lazily yield ``(absolute_path, rel_str)`` for files under ``root``.
+
+    Replaces ``sorted(rglob('*'))`` — the eager, order-materializing walk that
+    enumerated *every* path in a 25GB tree before any guard ran (the PAF-UI
+    stall). This generator streams files top-down with ``os.walk``, pruning
+    dot-directories at the directory level, and abides by a visit budget so the
+    caller can stop early. ``rel_str`` is relative to ``real_root`` (the
+    canonical root), matching the existing walkers' dot/access filtering.
+    """
+    top = str(root)
+    for dirpath, dirnames, filenames in os.walk(top, topdown=True, followlinks=False):
+        # Prune dot-dirs in place so os.walk won't descend into them.
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRNAME]
+
+        dp = Path(dirpath)
+        if report.visited >= budget:
+            # We haven't looked at this dir yet, so we can't claim it was
+            # searched; note where the walk ran out of budget.
+            if report.stopped_in is None:
+                try:
+                    report.stopped_in = str(dp.relative_to(real_root))
+                except ValueError:
+                    report.stopped_in = str(dp)
+            report.hit_budget = True
+            return
+        for fn in filenames:
+            if report.visited >= budget:
+                report.hit_budget = True
+                return
+            fp = dp / fn
+            try:
+                rel_str = str(fp.relative_to(real_root))
+            except ValueError:
+                continue
+            report.visited += 1
+            yield fp, rel_str
+
+
+def _truncation_marker(report: _WalkReport, reason: str) -> str:
+    """Build the marker shown when a bounded walk stops early."""
+    head = f'[... {reason} after visiting {report.visited} files'
+    if report.stopped_in:
+        head += f' (walk ran out of budget around "{report.stopped_in}")'
+    head += '; narrow the search with the "path" argument to a specific '
+    head += 'subtree to search it fully]'
+    return head
+
+
+def _human_size(num: int) -> str:
+    """Format a byte count for the directory listing scale indicator."""
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if num < 1024 or unit == 'TB':
+            return f'{num:.0f} {unit}' if unit == 'B' else f'{num:.1f} {unit}'
+        num /= 1024.0
+    return f'{num:.1f} TB'
+
+
+def _dir_scale(p: Path, cap: int = 5_000) -> tuple[int, int, bool]:
+    """Boundedly count files + sum bytes under ``p`` (for list_directory).
+
+    Walks the full subtree lazily up to ``cap`` files so `list_directory` can
+    show an honest *scale* hint for a large subdirectory (e.g. paf's `data/` is
+    ~1.8M files / ~25GB) without doing a full 1.8M-file sweep for every subdir.
+    Returns ``(count, total_bytes, capped)`` where ``capped`` means the walk hit
+    ``cap`` files and ``total_bytes`` is a lower bound (marked ``+`` by caller).
+    """
+    count = 0
+    total = 0
+    for dirpath, _, filenames in os.walk(str(p), topdown=True, followlinks=False):
+        base = Path(dirpath)
+        for fn in filenames:
+            if count >= cap:
+                return count, total, True
+            count += 1
+            try:
+                total += (base / fn).lstat().st_size
+            except OSError:  # pragma: no cover
+                continue
+    return count, total, False
+
+
+async def _aiter_files(root: Path, real_root: Path, budget: int,
+                       report: _WalkReport) -> AsyncIterator[tuple[Path, str]]:
+    """Asynchronous wrapper over ``_iter_walk_files`` with a wall-clock budget.
+
+    Yields each ``(abs_path, rel_str)`` as ``_iter_walk_files`` produces it,
+    offloaded to a thread executor so per-file ``stat()``/``read_bytes()`` and
+    the ``os.walk`` dirname scanning don't block the asyncio loop. The caller
+    wraps the ``async for`` in ``asyncio.timeout()``; on expiry that cancels this
+    generator so it stops awaiting further thread pulls and the search returns
+    promptly instead of spinning through a 1.8M-file tree. The generator simply
+    ends when the underlying walk is exhausted or hits the visit budget.
+    """
+    src = _iter_walk_files(root, real_root, budget, report)
+    while True:
+        item = await asyncio.to_thread(_sync_next, src)
+        if item is _SENTINEL:
+            return
+        assert isinstance(item, tuple), 'unexpected walker yield'
+        yield item
+
+
+class _Sentinel:
+    __slots__ = ()
+
+
+_SENTINEL = _Sentinel()
+
+
+def _sync_next(it: Iterator[object]) -> object | _Sentinel:
+    """``next(it)`` that returns a sentinel on exhaustion instead of raising.
+
+    ``StopIteration`` cannot cross an ``asyncio.to_thread`` boundary (asyncio
+    refuses to raise it into a Future), so we convert it to a sentinel here and
+    translate it back in the async generator.
+    """
+    try:
+        return next(it)
+    except StopIteration:
+        return _SENTINEL
+
+
+async def _aiter_single(resolved: Path, real_root: Path) -> AsyncIterator[tuple[Path, str]]:
+    """Yield exactly one file for a direct single-file ``search_files``."""
+    try:
+        rel_str = str(resolved.relative_to(real_root))
+    except ValueError:  # pragma: no cover
+        return
+    yield resolved, rel_str
 
 
 def _recoverable(  # noqa: UP047  # verbatim harness copy; keep byte-identical to upstream
@@ -106,6 +274,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         max_search_file_bytes: int,
         search_excerpt_chars: int,
         max_search_total_bytes: int,
+        walk_visit_budget: int = _WALK_VISIT_BUDGET,
     ) -> None:
         super().__init__()
         self._root = root_dir.resolve()
@@ -119,6 +288,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         self._max_search_file_bytes = max_search_file_bytes
         self._search_excerpt_chars = search_excerpt_chars
         self._max_search_total_bytes = max_search_total_bytes
+        self._walk_visit_budget = walk_visit_budget
 
         self.add_function(self.read_file, name='read_file')
         self.add_function(self.write_file, name='write_file')
@@ -348,7 +518,9 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
             if not self._is_accessible(rel, write=True):
                 continue
             if entry.is_dir():
-                entries.append(f'{rel}/')
+                n, total, capped = _dir_scale(entry)
+                cnt_suffix = '+' if capped else ''
+                entries.append(f'{rel}/  ({n:,}{cnt_suffix} files, {_human_size(total)}{cnt_suffix})')
             else:
                 try:
                     size = entry.stat().st_size
@@ -358,13 +530,20 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         return '\n'.join(entries) if entries else '(empty directory)'
 
     @_recoverable
-    async def search_files(self, pattern: str, *, path: str = '.', include_glob: str | None = None) -> str:
+    async def search_files(self, pattern: str, *, path: str = '.', include_glob: str | None = None,
+                           timeout: float | None = _WALK_TIMEOUT_S) -> str:
         """Search file contents using a regular expression.
 
         Args:
             pattern: Regex pattern to search for.
             path: Directory to search in, relative to the root directory.
             include_glob: If provided, only search files matching this glob (e.g. '*.py').
+            timeout: Wall-clock budget (seconds) for the recursive walk. The
+                walk is cancelled on expiry. There was no timeout before — a
+                content search over a huge tree (paf's `data/` is ~1.8M files)
+                could spin for minutes and wedge the run, because the old
+                `rglob('*')` enumerated and sorted every path before any
+                per-file guard ran.
 
         Returns:
             str: Matching lines formatted as file:line_number:text.
@@ -379,76 +558,98 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
 
         results: list[str] = []
         total_bytes = 0
-
-        if resolved.is_file():
-            files = [resolved]
-        else:
-            files = sorted(resolved.rglob('*'))
-
         real_root = Path(os.path.realpath(self._root))
-        for file_path in files:
-            if not file_path.is_file():
-                continue
-            try:
-                rel_parts = file_path.relative_to(real_root).parts
-            except ValueError:  # pragma: no cover
-                continue
-            if any(part.startswith('.') for part in rel_parts):
-                continue
-            rel_str = str(file_path.relative_to(real_root))
-            # Apply the same allow/deny/protected filtering used for direct
-            # access so a recursive search can't read patterns the agent
-            # couldn't otherwise read.
-            if not self._is_accessible(rel_str, write=True):
-                continue
-            if include_glob and not fnmatch.fnmatch(rel_str, include_glob):
-                continue
-            # Guard 1: skip oversized files (e.g. memory journals / paf
-            # snapshots are huge single-line JSON). A content search rarely
-            # wants a multi-MB blob; read_file is the tool for that. Reading
-            # every giant file in a walked tree is what turned a simple search
-            # into a minutes-long, megabyte-result stall (PAF-UI issue).
-            size = file_path.stat().st_size
-            if size > self._max_search_file_bytes:
-                continue
-            try:
-                raw = file_path.read_bytes()
-            except OSError:  # pragma: no cover
-                continue
-            if _is_binary(raw):
-                continue
-            text = raw.decode('utf-8', errors='replace')
-            for line_num, line in enumerate(text.splitlines(), start=1):
-                if not compiled.search(line):
-                    continue
-                # Guard 2: excerpt the matching line rather than returning the
-                # whole (possibly 300KB) single-line record.
-                excerpt = line[: self._search_excerpt_chars]
-                if len(line) > self._search_excerpt_chars:
-                    excerpt += '...'
-                entry = f'{rel_str}:{line_num}:{excerpt}'
-                # Guard 3: hard byte cap on the whole result string so a walk
-                # over many small matches can't balloon the tool return either.
-                total_bytes += len(entry)
-                results.append(entry)
-                if total_bytes >= self._max_search_total_bytes:
-                    results.append(
-                        f'[... truncated at {self._max_search_total_bytes} bytes]'
-                    )
-                    return '\n'.join(results)
-            if len(results) >= self._max_search_results:
-                results.append(f'[... truncated at {self._max_search_results} matches]')
-                break
+        report = _WalkReport()
+        budget = self._walk_visit_budget
+
+        stop_reason: str | None = None
+        try:
+            async with asyncio.timeout(timeout if timeout is not None else float('inf')):
+                files_aiter = (
+                    _aiter_single(resolved, real_root)
+                    if resolved.is_file()
+                    else _aiter_files(resolved, real_root, budget, report)
+                )
+                async for file_path, rel_str in files_aiter:
+                    if not file_path.is_file():
+                        continue
+                    try:
+                        rel_parts = file_path.relative_to(real_root).parts
+                    except ValueError:  # pragma: no cover
+                        continue
+                    if any(part.startswith('.') for part in rel_parts):
+                        continue
+                    # Apply the same allow/deny/protected filtering used for direct
+                    # access so a recursive search can't read patterns the agent
+                    # couldn't otherwise read.
+                    if not self._is_accessible(rel_str, write=True):
+                        continue
+                    if include_glob and not fnmatch.fnmatch(rel_str, include_glob):
+                        continue
+                    # Guard 1: skip oversized files (e.g. memory journals / paf
+                    # snapshots are huge single-line JSON). A content search rarely
+                    # wants a multi-MB blob; read_file is the tool for that. Reading
+                    # every giant file in a walked tree is what turned a simple search
+                    # into a minutes-long, megabyte-result stall (PAF-UI issue).
+                    try:
+                        size = file_path.stat().st_size
+                    except OSError:  # pragma: no cover
+                        continue
+                    if size > self._max_search_file_bytes:
+                        continue
+                    try:
+                        raw = file_path.read_bytes()
+                    except OSError:  # pragma: no cover
+                        continue
+                    if _is_binary(raw):
+                        continue
+                    text = raw.decode('utf-8', errors='replace')
+                    for line_num, line in enumerate(text.splitlines(), start=1):
+                        if not compiled.search(line):
+                            continue
+                        # Guard 2: excerpt the matching line rather than returning the
+                        # whole (possibly 300KB) single-line record.
+                        excerpt = line[: self._search_excerpt_chars]
+                        if len(line) > self._search_excerpt_chars:
+                            excerpt += '...'
+                        entry = f'{rel_str}:{line_num}:{excerpt}'
+                        # Guard 3: hard byte cap on the whole result string so a walk
+                        # over many small matches can't balloon the tool return either.
+                        total_bytes += len(entry)
+                        results.append(entry)
+                        if total_bytes >= self._max_search_total_bytes:
+                            results.append(
+                                f'[... truncated at {self._max_search_total_bytes} bytes]'
+                            )
+                            return '\n'.join(results)
+                    if len(results) >= self._max_search_results:
+                        results.append(f'[... truncated at {self._max_search_results} matches]')
+        except TimeoutError:
+            report.timed_out = True
+            stop_reason = f'timed out after {timeout}s'
+        else:
+            if report.hit_budget:
+                stop_reason = 'stopped at the file-walk budget'
+
+        if (report.hit_budget or report.timed_out) and not results:
+            results.append(_truncation_marker(report, stop_reason or 'walk stopped'))
 
         return '\n'.join(results) if results else 'No matches found.'
 
     @_recoverable
-    async def find_files(self, pattern: str, *, path: str = '.') -> str:
+    async def find_files(self, pattern: str, *, path: str = '.',
+                         timeout: float | None = _WALK_TIMEOUT_S) -> str:
         """Find files by glob pattern (name matching, not content search).
 
         Args:
             pattern: Glob pattern to match (e.g. '*.py', '**/*.json').
             path: Directory to search in, relative to the root directory.
+            timeout: Wall-clock budget (seconds) for the glob walk. Previously
+                the ``sorted(glob(pattern))`` eagerly materialized every match
+                in the tree before any cap ran, so a broad ``**`` pattern over
+                a huge tree (paf's `data/` is ~1.8M files) could spin for
+                minutes. The glob is now consumed lazily and cancelled on
+                timeout.
 
         Returns:
             Newline-separated list of matching file paths relative to root.
@@ -461,24 +662,39 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
 
         matches: list[str] = []
         real_root = Path(os.path.realpath(self._root))
-        for match in sorted(resolved.glob(pattern)):
-            try:
-                rel_parts = match.relative_to(real_root).parts
-            except ValueError:  # pragma: no cover
-                continue
-            if any(part.startswith('.') for part in rel_parts):
-                continue
-            rel = str(match.relative_to(real_root))
-            # Apply the same allow/deny/protected filtering used for direct
-            # access so a glob find can't surface patterns the agent
-            # couldn't otherwise see.
-            if not self._is_accessible(rel, write=True):
-                continue
-            suffix = '/' if match.is_dir() else ''
-            matches.append(f'{rel}{suffix}')
-            if len(matches) >= self._max_find_results:
-                matches.append(f'[... truncated at {self._max_find_results} matches]')
-                break
+        it = iter(resolved.glob(pattern))  # lazy generator; consumed via to_thread
+        stop_reason: str | None = None
+        try:
+            async with asyncio.timeout(timeout if timeout is not None else float('inf')):
+                while True:
+                    m = await asyncio.to_thread(_sync_next, it)
+                    if m is _SENTINEL:
+                        break
+                    match = m
+                    try:
+                        rel_parts = match.relative_to(real_root).parts
+                    except ValueError:  # pragma: no cover
+                        continue
+                    if any(part.startswith('.') for part in rel_parts):
+                        continue
+                    rel = str(match.relative_to(real_root))
+                    # Apply the same allow/deny/protected filtering used for direct
+                    # access so a glob find can't surface patterns the agent
+                    # couldn't otherwise see.
+                    if not self._is_accessible(rel, write=True):
+                        continue
+                    suffix = '/' if match.is_dir() else ''
+                    matches.append(f'{rel}{suffix}')
+                    if len(matches) >= self._max_find_results:
+                        matches.append(f'[... truncated at {self._max_find_results} matches]')
+                        break
+        except TimeoutError:
+            stop_reason = f'timed out after {timeout}s on a broad glob'
+            if not matches:
+                matches.append(
+                    f'[... {stop_reason}; narrow the search with the "path" argument '
+                    'or a more specific glob]'
+                )
 
         return '\n'.join(matches) if matches else 'No matches found.'
 
