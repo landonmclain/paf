@@ -140,6 +140,26 @@ class CodebaseMapToolset(FunctionToolset):
         self.add_function(self.get_repo_map, name="get_repo_map")
         self.add_function(self.run_codebase_map, name="run_codebase_map")
 
+    # -- index freshness -----------------------------------------------------
+
+    def _ensure_fresh(self) -> None:
+        """Lazy auto-index: rescan ONLY if the on-disk corpus changed.
+
+        Runs before every read tool. ``sync_changed`` is a cheap stat + sha256
+        pass over in-scope files (millisecond-scale on a repo paf's size); if it
+        reports any changed/new file, we do a FULL ``scan_and_write`` rescan so
+        the overview / lookup / search read a current index instead of a stale
+        snapshot. When nothing changed the whole read path is untouched (no
+        rescan cost). Mirrors the vault capability's lazy-sync pattern; this is
+        the ``run_codebase_map`` tool's automatic counterpart — the manual
+        force-reindex tool is kept as an escape hatch.
+        """
+        changed = self._storage.sync_changed(self._scan_root)
+        if changed:
+            from ._scan import scan_and_write
+
+            scan_and_write(self._scan_root, self._storage)
+
     # -- presentation helpers -------------------------------------------------
 
     def _head_rows_by_path(self) -> dict[str, dict]:
@@ -185,6 +205,7 @@ class CodebaseMapToolset(FunctionToolset):
         is immune to the word-collision inflation that a raw name-occurrence count
         suffers (the latter is NOT used here).
         """
+        self._ensure_fresh()
         overview = load_overview(self._storage, self._scan_root)
         if overview is None:
             # Not indexed yet — derive the tree on demand from the same walker.
@@ -355,6 +376,7 @@ class CodebaseMapToolset(FunctionToolset):
         This is a *jump* to a known location — prefer ``get_overview`` to discover
         where things are. For the actual source, follow up with ``read_block``.
         """
+        self._ensure_fresh()
         heads = self._head_rows_by_path()
         head = heads.get(path)
         if head is None:
@@ -382,6 +404,7 @@ class CodebaseMapToolset(FunctionToolset):
 
         Returns ``None`` if the file does not exist.
         """
+        self._ensure_fresh()
         file_part, _, line_part = block_ref.partition(":")
         span: Span = Span()
         if line_part:
@@ -433,6 +456,7 @@ class CodebaseMapToolset(FunctionToolset):
             query: The words to search for (identifiers, docstring terms, etc.).
             limit: Max hits to return (default 20).
         """
+        self._ensure_fresh()
         hits = self._retrieval.search(query, limit=max(1, limit))
         if not hits:
             return f"No results for {query!r}."
@@ -488,6 +512,7 @@ class CodebaseMapToolset(FunctionToolset):
         ``focus=capabilities/memory`` (a repo-relative path prefix) to orient to just
         that subtree.
         """
+        self._ensure_fresh()
         budget = int(map_tokens) if map_tokens is not None else 1000
         if budget < 1:
             budget = 1

@@ -399,12 +399,13 @@ def test_search_exposed_tools_are_the_six_live_ladder(scanned: tuple[Path, Codeb
 
 def test_run_codebase_map_reindexes(scanned: tuple[Path, CodebaseMapToolset]) -> None:
     root, t = scanned
-    # A file added AFTER the initial scan won't be in the index yet.
+    # Reads are lazy-fresh: a file added AFTER the initial scan is indexed on
+    # the next read (auto sync), no manual `run_codebase_map` needed.
     _seed(root, "src/late.py", "def late_fn():\n    return 42\n")
-    assert t.lookup_file("src/late.py") is None  # not indexed yet
+    assert t.lookup_file("src/late.py") is not None  # auto-indexed
+    # The manual force-reindex tool still works as an escape hatch.
     out = t.run_codebase_map()
     assert "src/" in out or "files extracted" in out
-    # After re-index, the new file is surfaced.
     assert t.lookup_file("src/late.py") is not None
 
 
