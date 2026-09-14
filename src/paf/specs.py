@@ -423,15 +423,23 @@ def resolve_memory_config(
     never drift from the ``Memory`` capability's ``consolidate_every`` — Memory
     stays the owner, this is just a non-invasive read of the resolved value.
 
-    Returns ``{"consolidate_every": int, "review_every": int}`` (always present,
-    defaults applied, both in MINUTES). ``review_every`` defaults to
-    ``DEFAULT_REVIEW_EVERY`` (the reviewer runs on its own, less-frequent
-    cadence than the owner unless a spec overrides it).
+    Returns ``{"consolidate_every": int, "review_every": int, "consolidate_turns":
+    int, "review_turns": int}`` (always present, defaults applied). The minute
+    cadences remain for explicitness/back-compat; the TURN-count values are the
+    active gate (DECIDED 2026-09-14, see Designs/Turn-Based-Background-Cadence).
+    ``review_turns`` defaults to ``DEFAULT_REVIEW_TURNS``.
     """
-    from paf.capabilities.build import DEFAULT_CONSOLIDATE_EVERY, DEFAULT_REVIEW_EVERY
+    from paf.capabilities.build import (
+        DEFAULT_CONSOLIDATE_EVERY,
+        DEFAULT_CONSOLIDATE_TURNS,
+        DEFAULT_REVIEW_EVERY,
+        DEFAULT_REVIEW_TURNS,
+    )
 
     every = DEFAULT_CONSOLIDATE_EVERY
     review_every = DEFAULT_REVIEW_EVERY  # reviewer runs less often than the owner
+    turns = DEFAULT_CONSOLIDATE_TURNS
+    review_turns = DEFAULT_REVIEW_TURNS
     try:
         cfg = _spec_memory_config(get_spec_path(agent_name, spec_directory))
     except Exception:  # noqa: BLE001 - spec read is best-effort sugar
@@ -447,7 +455,22 @@ def resolve_memory_config(
             and review_candidate > 0
         ):
             review_every = review_candidate
-    return {"consolidate_every": every, "review_every": review_every}
+        turns_c = cfg.get("consolidate_turns")
+        if isinstance(turns_c, int) and not isinstance(turns_c, bool) and turns_c > 0:
+            turns = turns_c
+        review_turns_c = cfg.get("review_turns")
+        if (
+            isinstance(review_turns_c, int)
+            and not isinstance(review_turns_c, bool)
+            and review_turns_c > 0
+        ):
+            review_turns = review_turns_c
+    return {
+        "consolidate_every": every,
+        "review_every": review_every,
+        "consolidate_turns": turns,
+        "review_turns": review_turns,
+    }
 
 
 def resolve_memory_tier_caps(

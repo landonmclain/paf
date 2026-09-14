@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC
 
 from paf.background import BackgroundQueueService, QueueState, QueueStatus
 
@@ -339,3 +340,58 @@ def test_job_status_summary_degrades_when_store_fails() -> None:
     assert len(rows) == 3
     assert all(r.status == "idle" for r in rows)
     assert all("unavailable" in r.detail for r in rows)
+
+
+def test_reconcile_keeps_active_task_running_past_hold() -> None:
+    """An in-flight (running) task must never decay to idle on the heartbeat.
+
+    Regression for issue #3: the consolidation worker's fold takes minutes, but
+    BackgroundTask.updated_at is only stamped once (at enqueue). The SSE idle
+    heartbeat re-emits job_status_summary every 30s, and the old code decayed
+    any task older than the 60s hold window to plain "idle" — so a long-running
+    fold visibly flipped RUNNING -> IDLE while still working, then later DONE.
+
+    _reconcile_status is the coalescing guard: an ACTIVE task (queued/running)
+    must surface as running regardless of how old its last publish is. Only
+    TERMINAL outcomes obey the hold window.
+    """
+    from datetime import datetime, timedelta
+    from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import (
+        PROCESSING,
+        BackgroundCoordinator,
+        BackgroundTask,
+        JobIdleStatus,
+    )
+    from paf.capabilities import PROFILES
+
+    bg = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name="demo_assistant",
+        profile=PROFILES.get("demo"),
+        memory_directory="/nonexistent-memory-dir",
+    )
+
+    # The task was handed to the worker minutes ago and is STILL running (a long
+    # LLM fold). updated_at is stamped once at enqueue -> long past the hold.
+    task = BackgroundTask(id="consolidation.cid123.1", label="Consolidating memory")
+    task.status = PROCESSING
+    task.detail = "folding"
+    task.updated_at = (
+        datetime.now(UTC) - timedelta(minutes=5)
+    ).isoformat()
+    bg._background_tasks[task.id] = task
+
+    idle_row = JobIdleStatus(
+        id="consolidation.cid123",
+        label="Consolidating memory",
+        detail="idle · next ~3 min",
+    )
+    out = bg._reconcile_status(idle_row, "consolidation", "cid123")
+
+    # Must carry the live running state + detail, NOT decay to idle.
+    assert out.status == PROCESSING
+    assert out.detail == "folding"

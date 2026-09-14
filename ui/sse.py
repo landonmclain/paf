@@ -634,22 +634,32 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
 
         await _publish_idle()
 
-        heartbeat: asyncio.Task | None = None
-        if bg is not None:
-
-            async def _heartbeat() -> None:
-                while True:
-                    await asyncio.sleep(30)
-                    await _publish_idle()
-
-            heartbeat = asyncio.create_task(_heartbeat())
+        # No wall-clock heartbeat: every background job is TURN-gated, so task
+        # events (SKIPPED/PROCESSING) already fire on every ``after_turn`` and
+        # the subscriber below refreshes the panel live. The only residue a timer
+        # previously covered was returning a *completed* run's row back to idle;
+        # that is handled explicitly when a task reaches a terminal state.
 
         # 2. Subscribe for live events. subscribe_tasks replays already-active
         #    (queued|running) tasks synchronously *and* fans out live transitions;
-        #    both funnel through the same queue, so ordering is preserved.
+        #    both funnel through the same queue, so ordering is preserved. When a
+        #    task reaches a TERMINAL state we also re-publish the idle snapshot so
+        #    its stable row returns to idle (a completed fold no longer shows as
+        #    running).
         sub = None
         if bg is not None:
-            sub = bg.subscribe_tasks(lambda ev: _publish(_task_frame(ev)))
+
+            def _on_task(ev) -> None:
+                _publish(_task_frame(ev))
+                if getattr(ev, "status", None) in ("done", "error", "skipped"):
+                    task = asyncio.create_task(_publish_idle())
+                    task.add_done_callback(
+                        lambda t: t.exception()
+                        if not t.cancelled() and t.exception()
+                        else None
+                    )
+
+            sub = bg.subscribe_tasks(_on_task)
 
         try:
             while True:
@@ -659,8 +669,6 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
                 yield _frame(*frame)
         finally:
             closed["v"] = True
-            if heartbeat is not None:
-                heartbeat.cancel()
             if sub is not None:
                 try:
                     bg.unsubscribe_tasks(sub)  # type: ignore[union-attr]

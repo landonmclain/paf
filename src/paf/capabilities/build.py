@@ -76,6 +76,14 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 DEFAULT_CONSOLIDATE_EVERY = 30  # minutes; owner fires at least this often with new material
 DEFAULT_REVIEW_EVERY = 60  # minutes; reviewer fires at most this often
 
+# Turn-count cadence (supersedes the minute-based defaults; DECIDED 2026-09-14).
+# Memory consolidation is cheap extract+append (5 turns), the reviewer is slow
+# archive/merge (~10 min) and batches ~2 consolidation folds (10 turns), and the
+# thread summarizer keeps its narrative block (10 turns, thread_summarizer
+# _background.py). These are the defaults when a spec does not override.
+DEFAULT_CONSOLIDATE_TURNS = 5
+DEFAULT_REVIEW_TURNS = 10
+
 # Default bounds for the assistant's Memory capability. `max_memory_size`
 # remains the per-read char cap JournalViewStore truncates MEMORY.md to (a
 # hard safety net, independent of tier counts). Per-tier COUNT caps

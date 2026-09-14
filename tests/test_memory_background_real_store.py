@@ -306,6 +306,87 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
     assert (memdir / "MEMORY.md").exists()
 
 
+def test_turn_gate_fires_at_review_turns_threshold(tmp_path: Path) -> None:
+    """The trigger fires once ENOUGH COMPLETE turns have accrued (turn gate).
+
+    Regression for the DECIDED 2026-09-14 cadence change (see
+    Designs/Turn-Based-Background-Cadence): consolidation should fire once at
+    least ``consolidate_turns`` (default 5, spec-configurable) *settled* turns
+    have accrued since the last fold — NOT on a minute timer. The reviewer has
+    its own slower threshold (``review_turns``, default 10). This test pins the
+    turn-count boundary and the spec configurability.
+    """
+    from paf.background import SKIPPED, BackgroundCoordinator
+
+    # 7 user turns (indices 0..6): watermark consumed turn 0, the tip turn 6 is
+    # in-flight, so the span is complete turns 1..5 = FIVE -> fires at 5.
+    msgs: list[ModelMessage] = []
+    for i in range(7):
+        msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
+    store = _store(tmp_path, {"run-a": msgs})
+    memdir = tmp_path / "mem"
+    memdir.mkdir(exist_ok=True)
+    JournalStore(str(memdir))
+    MemoryWatermark(run_id="run-a", turn_id=0).save(str(memdir))
+
+    bg = BackgroundCoordinator(
+        store=store,
+        agent_name="assistant",
+        memory_directory=str(memdir),
+        consolidate_turns=5,  # explicit override, not the spec default
+    )
+    fired: list[str] = []
+    bg.subscribe_tasks(lambda ev: fired.append(ev.status))
+
+    async def scenario():
+        await bg._maybe_trigger_consolidation("c1")
+
+    asyncio.run(scenario())
+
+    # The queue must have been constructed and a job enqueued (PROCESSING).
+    assert bg.memory_queue is not None, "consolidate_turns reached -> queue built"
+    assert fired and fired[-1] != SKIPPED
+
+
+def test_turn_gate_skips_below_threshold_and_spec_is_readable(tmp_path: Path) -> None:
+    """One complete turn short of the gate -> skip; spec vars resolve to 5/10."""
+    from paf.background import SKIPPED, BackgroundCoordinator
+    from paf.specs import resolve_memory_config
+
+    # The live spec (specs/demo_assistant.yaml) declares the acting defaults.
+    cfg = resolve_memory_config("demo_assistant")
+    assert cfg["consolidate_turns"] == 5
+    assert cfg["review_turns"] == 10
+
+    # 5 complete turns -> span is 4 (tip excluded) -> ONE short of 5 -> skip.
+    msgs: list[ModelMessage] = []
+    for i in range(5):
+        msgs.extend(_msg(user=f"t{i}", assistant=f"a{i}"))
+    store = _store(tmp_path, {"run-a": msgs})
+    memdir = tmp_path / "mem"
+    memdir.mkdir(exist_ok=True)
+    JournalStore(str(memdir))
+    MemoryWatermark(run_id="run-a", turn_id=0).save(str(memdir))
+
+    bg = BackgroundCoordinator(
+        store=store,
+        agent_name="assistant",
+        memory_directory=str(memdir),
+        consolidate_turns=5,
+    )
+    fired: list[str] = []
+    bg.subscribe_tasks(lambda ev: fired.append(ev.status))
+
+    async def scenario():
+        await bg._maybe_trigger_consolidation("c1")
+
+    asyncio.run(scenario())
+
+    # Below the gate -> SKIPPED and the queue is never even constructed.
+    assert fired and fired[-1] == SKIPPED
+    assert bg.memory_queue is None
+
+
 def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
     """Below the cadence threshold the hook enqueues nothing."""
     msgs: list[ModelMessage] = []
@@ -315,8 +396,8 @@ def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
     memdir = tmp_path / "mem"
     memdir.mkdir(exist_ok=True)
     JournalStore(str(memdir))
-    # Watermark consumed "just now"; only ~5 turns/seconds later the tip is well
-    # UNDER the 30-minute cadence, so the hook must not fire.
+    # 5 user turns -> resolve_unseen_span yields 4 COMPLETE turns (the tip is
+    # in-flight) -> one short of the consolidate_turns=5 default -> no fire.
     MemoryWatermark(run_id="run-a", consumed_ts=datetime.now(UTC)).save(str(memdir))
 
     from paf.background import BackgroundCoordinator

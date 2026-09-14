@@ -43,7 +43,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 log = logging.getLogger(__name__)
@@ -294,6 +294,8 @@ class BackgroundCoordinator:
         consolidate_span=None,
         consolidate_every: int | None = None,
         review_every: int | None = None,
+        consolidate_turns: int | None = None,
+        review_turns: int | None = None,
         thread_summarize_block=None,
         thread_summarize_span=None,
     ) -> None:
@@ -303,18 +305,18 @@ class BackgroundCoordinator:
         self.agent_name = agent_name
         self.profile = profile
 
-        # Cadence (minutes), resolved from the spec's `memory:` block; defaults
-        # to the owner's cadence when only consolidate_every is available.
+        # Turn-count cadence (the active gate; DECIDED 2026-09-14, see
+        # Designs/Turn-Based-Background-Cadence). Resolved from the spec's
+        # `memory:` block; falls back to the same block's minute values reading
+        # as counts when an old spec only set `consolidate_every`/`review_every`.
         from paf.specs import resolve_memory_config
 
         _mem_cfg = resolve_memory_config(agent_name)
-        self.consolidate_every = (
-            consolidate_every if consolidate_every is not None else _mem_cfg["consolidate_every"]
+        self.consolidate_turns = (
+            consolidate_turns if consolidate_turns is not None else _mem_cfg["consolidate_turns"]
         )
-        self.review_every = (
-            review_every
-            if review_every is not None
-            else _mem_cfg.get("review_every", self.consolidate_every)
+        self.review_turns = (
+            review_turns if review_turns is not None else _mem_cfg["review_turns"]
         )
 
         # Per-agent scope dirs (same derivations the old Session used).
@@ -462,7 +464,7 @@ class BackgroundCoordinator:
             if (
                 task.id.startswith(f"{prefix}.")
                 and needle in task.id
-                and task.status in (DONE, SKIPPED, PROCESSING)
+                and task.status in (QUEUED, PROCESSING, DONE, SKIPPED, ERROR)
             ):
                 if recent is None or task.updated_at > recent.updated_at:
                     recent = task
@@ -472,7 +474,16 @@ class BackgroundCoordinator:
             updated = datetime.fromisoformat(recent.updated_at)
         except (TypeError, ValueError):
             return row
-        if (datetime.now(UTC) - updated).total_seconds() > _PROCESS_STATUS_HOLD_S:
+        # An ACTIVE task (queued/running) is live: its last publish timestamp
+        # only records when the job was handed off, not its progress, so a long
+        # fold (minutes on an LLM) must NEVER decay to "idle" just because the
+        # heartbeat lands past the hold window. Surface it as running regardless
+        # of age. Only TERMINAL outcomes obey the hold window, so a finished
+        # run still reverts its row to idle once the outcome is stale.
+        is_active = recent.status in (QUEUED, PROCESSING)
+        if not is_active and (
+            datetime.now(UTC) - updated
+        ).total_seconds() > _PROCESS_STATUS_HOLD_S:
             return row
         return JobIdleStatus(
             id=row.id,
@@ -508,7 +519,6 @@ class BackgroundCoordinator:
         source = None
         tip_run = None
         tip_turn = 0
-        now = datetime.now(UTC)
 
         try:
             source = build_history_source(self._store)
@@ -554,30 +564,23 @@ class BackgroundCoordinator:
                 return 0
             return len(distinct_user_turn_texts(span.messages))
 
-        # 1. Memory consolidation (agent-scoped, time cadence).
+        # 1. Memory consolidation (agent-scoped, TURN-count cadence).
+        #    Display mirrors the thread-summarizer gate: n accrued turns vs the
+        #    block threshold, never a wall-clock countdown.
         try:
             wm = MemoryWatermark.load(self._memory_directory)
             n = await _span_count(wm)
-            mins = None
-            if wm.consumed_ts is not None:
-                mins = max(
-                    0, self.consolidate_every
-                    - (now - wm.consumed_ts).total_seconds() / 60
-                )
+            reason = (
+                f"{n}/{self.consolidate_turns} turns to a fold"
+                if n < self.consolidate_turns
+                else "due for a fold"
+            )
             rows.append(
                 self._reconcile_status(
                     JobIdleStatus(
                         id=f"consolidation.{conversation_id}",
                         label="Consolidating memory",
-                        detail=(
-                            "idle · due now"
-                            if (n or mins is not None) and (mins or 0) <= 0
-                            else (
-                                f"idle · next ~{int(mins)} min"
-                                if n or mins is not None
-                                else "idle · awaiting first turn"
-                            )
-                        ),
+                        detail=f"idle · {reason}",
                     ),
                     "consolidation",
                     conversation_id,
@@ -592,32 +595,23 @@ class BackgroundCoordinator:
                 )
             )
 
-        # 2. Memory review (agent-scoped, time cadence).
+        # 2. Memory review (agent-scoped, TURN-count cadence, slower block).
         try:
             wm = MemoryWatermark.load(
                 self._memory_directory, filename="memory-review-watermark.json"
             )
             n = await _span_count(wm)
-            mins = None
-            if wm.consumed_ts is not None:
-                mins = max(
-                    0, self.review_every
-                    - (now - wm.consumed_ts).total_seconds() / 60
-                )
+            reason = (
+                f"{n}/{self.review_turns} turns to a review"
+                if n < self.review_turns
+                else "due for a review"
+            )
             rows.append(
                 self._reconcile_status(
                     JobIdleStatus(
                         id=f"review.{conversation_id}",
                         label="Reviewing memory",
-                        detail=(
-                            "idle · due now"
-                            if (n or mins is not None) and (mins or 0) <= 0
-                            else (
-                                f"idle · next ~{int(mins)} min"
-                                if n or mins is not None
-                                else "idle · awaiting first turn"
-                            )
-                        ),
+                        detail=f"idle · {reason}",
                     ),
                     "review",
                     conversation_id,
@@ -954,13 +948,14 @@ class BackgroundCoordinator:
         """
         if cid is None:
             return
-        from paf.capabilities._turns import user_anchor_indices
-        from paf.capabilities.memory._background import ReviewJob
-        from paf.capabilities.memory._watermark import (
-            MemoryWatermark,
-            should_fire,
+        from paf.capabilities._turns import (
+            distinct_user_turn_texts,
+            user_anchor_indices,
         )
+        from paf.capabilities.memory._background import ReviewJob, resolve_unseen_span
+        from paf.capabilities.memory._watermark import MemoryWatermark
         from paf.capabilities.persistence import build_history_source
+        source = build_history_source(self._store)
 
         self._review_seq += 1
         task_id = f"review.{cid}.{self._review_seq}"
@@ -987,11 +982,23 @@ class BackgroundCoordinator:
                 run_id=tip_run,
                 filename="memory-review-watermark.json",
             )
-            if not should_fire(
-                wm, tip_ts=runs[-1].started_at, every=timedelta(minutes=self.review_every)
-            ):
+            # TURN-COUNT gate (DECIDED 2026-09-14): fire review only once >=
+            # `review_turns` complete turns have accrued since the last review,
+            # mirroring the summarizer's block gate. The reviewer is SLOW (~10
+            # min archive/merge); 10 turns batches ~2 consolidation folds, and
+            # review never mid-races consolidation.
+            span = await resolve_unseen_span(
+                source,
+                wm,
+                tip_run=tip_run,
+                tip_turn=tip_turn,
+            )
+            span_turns = (
+                len(distinct_user_turn_texts(span.messages)) if span.messages else 0
+            )
+            if span_turns < self.review_turns:
                 task.status = SKIPPED
-                task.detail = "review cadence not reached"
+                task.detail = f"only {span_turns} unsettled turn(s); need >= {self.review_turns}"
                 self._publish_task(task)
                 return
             # Mirror the owner's worker-owns-watermark contract: the trigger
@@ -1038,13 +1045,17 @@ class BackgroundCoordinator:
         """
         if cid is None:
             return
-        from paf.capabilities._turns import user_anchor_indices
+        from paf.capabilities._turns import (
+            distinct_user_turn_texts,
+            user_anchor_indices,
+        )
         from paf.capabilities.memory._background import (
             ConsolidationJob,
             resolve_unseen_span,
         )
-        from paf.capabilities.memory._watermark import MemoryWatermark, should_fire
+        from paf.capabilities.memory._watermark import MemoryWatermark
         from paf.capabilities.persistence import build_history_source
+        source = build_history_source(self._store)
 
         self._consolidation_seq += 1
         task_id = f"consolidation.{cid}.{self._consolidation_seq}"
@@ -1067,13 +1078,29 @@ class BackgroundCoordinator:
                 return
             tip_turn = len(anchors) - 1
             wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
-            if not should_fire(
-                wm,
-                tip_ts=runs[-1].started_at,
-                every=timedelta(minutes=self.consolidate_every),
-            ):
+            # Resolve the unseen span NOW and hand it to the worker as
+            # precomputed material so it folds exactly what was scheduled
+            # (re-resolving inside the worker against the not-yet-advanced
+            # watermark would otherwise see a moving cursor race). The trigger
+            # SCHEDULES only -- it does NOT advance the watermark here. The
+            # worker is the sole owner-watermark writer and advances only on a
+            # completed (non-error) fold; a failed fold leaves the watermark
+            # behind so this span is retried next cadence, never skipped.
+            span = await resolve_unseen_span(
+                source, wm,
+                tip_run=tip_run, tip_turn=tip_turn,
+            )
+            # TURN-COUNT gate (DECIDED 2026-09-14, see
+            # Designs/Turn-Based-Background-Cadence): fire consolidation only
+            # once >= `consolidate_turns` complete turns have accrued since the
+            # last fold. Memory is cheap extract+append, so 5 turns keeps it
+            # warm without a per-turn model call.
+            span_turns = (
+                len(distinct_user_turn_texts(span.messages)) if span.messages else 0
+            )
+            if span_turns < self.consolidate_turns:
                 task.status = SKIPPED
-                task.detail = "not past the consolidation cadence"
+                task.detail = f"only {span_turns} unsettled turn(s); need >= {self.consolidate_turns}"
                 self._publish_task(task)
                 return
             # Single-flight: skip if a consolidation is already queued or running
@@ -1085,18 +1112,6 @@ class BackgroundCoordinator:
                 task.detail = "consolidation already in flight"
                 self._publish_task(task)
                 return
-            # Resolve the unseen span NOW and hand it to the worker as
-            # precomputed material so it folds exactly what was scheduled
-            # (re-resolving inside the worker against the not-yet-advanced
-            # watermark would otherwise see a moving cursor race). The trigger
-            # SCHEDULES only -- it does NOT advance the watermark here. The
-            # worker is the sole owner-watermark writer and advances only on a
-            # completed (non-error) fold; a failed fold leaves the watermark
-            # behind so this span is retried next cadence, never skipped.
-            span = await resolve_unseen_span(
-                build_history_source(self._store), wm,
-                tip_run=tip_run, tip_turn=tip_turn,
-            )
             mq.enqueue(
                 self.agent_name,
                 ConsolidationJob(
