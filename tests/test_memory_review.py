@@ -545,7 +545,7 @@ def test_session_review_span_publishes_task_done(tmp_path):
 
     # Publish the queued task row (what _maybe_trigger_review now does).
     task = _bgmod.BackgroundTask(
-        id="memory-review.demo:x.1", label="Reviewing memory (demo:x)"
+        id="review.demo:x.1", label="Reviewing memory (demo:x)"
     )
     s._publish_task(task)
 

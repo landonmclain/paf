@@ -267,6 +267,10 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
         def __init__(self, coord) -> None:
             self.background = coord
 
+        def _scoped_cid(self, cid):
+            # bare session (no profile) => identity; mirrors Session._scoped_cid
+            return cid
+
     class _Hist:
         def __init__(self, tid, status) -> None:
             self.id = tid

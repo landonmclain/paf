@@ -191,6 +191,12 @@ SKIPPED = "skipped"
 
 StepStatus = Literal["running", "done", "error", "queued", "skipped"]
 
+# How long a finished background job's last-run outcome (done/skipped) stays
+# visible in the Processes panel before the row reverts to plain idle. Chosen to
+# be comfortably larger than the SSE idle heartbeat so the carry-forward is
+# re-published at least once, then naturally expires.
+_PROCESS_STATUS_HOLD_S = 60
+
 
 @dataclass
 class BackgroundTask:
@@ -250,7 +256,7 @@ class JobIdleStatus:
 
     id: str
     label: str
-    status: Literal["idle"] = "idle"
+    status: Literal["idle", "done", "skipped", "running", "queued"] = "idle"
     progress: float | None = None
     detail: str = ""
 
@@ -433,6 +439,49 @@ class BackgroundCoordinator:
         rows.sort(key=lambda t: t.updated_at, reverse=True)
         return rows
 
+    def _reconcile_status(
+        self, row: JobIdleStatus, prefix: str, conversation_id: str
+    ) -> JobIdleStatus:
+        """Merge the most-recent last-run outcome into an idle row.
+
+        The Processes panel wants the background jobs to LOOK alive: when a job
+        just finished (done/skipped) within the hold window, carry its status +
+        detail ("N records folded", "only 6 unsettled turns; need >= 10")
+        instead of a bland "idle". After ``_PROCESS_STATUS_HOLD_S`` passes, the
+        row reverts to the freshly-computed idle state (the caller rebuilds it
+        every heartbeat anyway), so a stale outcome never lingers.
+
+        ``prefix`` is the task-id namespace (``consolidation``, ``review``,
+        ``thread_summarize``); we only match tasks scoped to THIS conversation
+        via the ``.{cid}.`` segment so one agent's run never leaks onto another.
+        Read-only: never enqueues, mutates the registry, or advances state.
+        """
+        needle = f".{conversation_id}."
+        recent: BackgroundTask | None = None
+        for task in self._background_tasks.values():
+            if (
+                task.id.startswith(f"{prefix}.")
+                and needle in task.id
+                and task.status in (DONE, SKIPPED, PROCESSING)
+            ):
+                if recent is None or task.updated_at > recent.updated_at:
+                    recent = task
+        if recent is None:
+            return row
+        try:
+            updated = datetime.fromisoformat(recent.updated_at)
+        except (TypeError, ValueError):
+            return row
+        if (datetime.now(UTC) - updated).total_seconds() > _PROCESS_STATUS_HOLD_S:
+            return row
+        return JobIdleStatus(
+            id=row.id,
+            label=row.label,
+            status=recent.status,  # type: ignore[arg-type]
+            progress=recent.progress,
+            detail=recent.detail or row.detail,
+        )
+
     async def job_status_summary(self, conversation_id: str) -> list[JobIdleStatus]:
         """READ-ONLY idle status for the 3 background processes (Processes panel).
 
@@ -485,9 +534,16 @@ class BackgroundCoordinator:
             return rows
 
         async def _span_count(wm: MemoryWatermark) -> int:
-            """Number of complete turns newer than the watermark (0 if none)."""
-            if wm.is_empty():
-                return 0
+            """Number of distinct complete user turns newer than the watermark.
+
+            Mirrors the summarizer trigger's own gate (``distinct_user_turn_texts``),
+            so the idle ``n/BLOCK_TURNS`` displayed always means the same thing the
+            trigger tests. A fresh/empty watermark resolves the whole completed
+            history (``resolve_unseen_span`` handles it), so it reports the real
+            accumulated count instead of short-circuiting to 0 forever.
+            """
+            from paf.capabilities._turns import distinct_user_turn_texts
+
             try:
                 span = await resolve_unseen_span(
                     source, wm, tip_run=tip_run or "", tip_turn=tip_turn,
@@ -495,7 +551,9 @@ class BackgroundCoordinator:
                 )
             except Exception:
                 return 0
-            return len(span.messages)
+            if not span.messages:
+                return 0
+            return len(distinct_user_turn_texts(span.messages))
 
         # 1. Memory consolidation (agent-scoped, time cadence).
         try:
@@ -508,15 +566,22 @@ class BackgroundCoordinator:
                     - (now - wm.consumed_ts).total_seconds() / 60
                 )
             rows.append(
-                JobIdleStatus(
-                    id=f"consolidation.{conversation_id}",
-                    label="Consolidating memory",
-                    detail=(
-                        f"idle · {n} unsettled turn(s) · "
-                        + ("due now" if (mins or 0) <= 0 else f"next ~{int(mins)} min")
-                        if n or mins is not None
-                        else "idle · awaiting first turn"
+                self._reconcile_status(
+                    JobIdleStatus(
+                        id=f"consolidation.{conversation_id}",
+                        label="Consolidating memory",
+                        detail=(
+                            "idle · due now"
+                            if (n or mins is not None) and (mins or 0) <= 0
+                            else (
+                                f"idle · next ~{int(mins)} min"
+                                if n or mins is not None
+                                else "idle · awaiting first turn"
+                            )
+                        ),
                     ),
+                    "consolidation",
+                    conversation_id,
                 )
             )
         except Exception:
@@ -541,15 +606,22 @@ class BackgroundCoordinator:
                     - (now - wm.consumed_ts).total_seconds() / 60
                 )
             rows.append(
-                JobIdleStatus(
-                    id=f"review.{conversation_id}",
-                    label="Reviewing memory",
-                    detail=(
-                        f"idle · {n} unsettled turn(s) · "
-                        + ("due now" if (mins or 0) <= 0 else f"next ~{int(mins)} min")
-                        if n or mins is not None
-                        else "idle · awaiting first turn"
+                self._reconcile_status(
+                    JobIdleStatus(
+                        id=f"review.{conversation_id}",
+                        label="Reviewing memory",
+                        detail=(
+                            "idle · due now"
+                            if (n or mins is not None) and (mins or 0) <= 0
+                            else (
+                                f"idle · next ~{int(mins)} min"
+                                if n or mins is not None
+                                else "idle · awaiting first turn"
+                            )
+                        ),
                     ),
+                    "review",
+                    conversation_id,
                 )
             )
         except Exception:
@@ -576,10 +648,14 @@ class BackgroundCoordinator:
                     else "due for a summary"
                 )
                 rows.append(
-                    JobIdleStatus(
-                        id=f"thread_summarize.{conversation_id}",
-                        label="Summarizing thread",
-                        detail=f"idle · {reason}",
+                    self._reconcile_status(
+                        JobIdleStatus(
+                            id=f"thread_summarize.{conversation_id}",
+                            label="Summarizing thread",
+                            detail=f"idle · {reason}",
+                        ),
+                        "thread_summarize",
+                        conversation_id,
                     )
                 )
             except Exception:
@@ -681,7 +757,7 @@ class BackgroundCoordinator:
 
             def _complete(kind: StepStatus, detail: str = "") -> None:
                 for task_id, task in list(self._background_tasks.items()):
-                    if task_id.startswith("memory-review.") and task.status in (
+                    if task_id.startswith("review.") and task.status in (
                         QUEUED,
                         PROCESSING,
                     ):
@@ -884,7 +960,7 @@ class BackgroundCoordinator:
         from paf.capabilities.persistence import build_history_source
 
         self._review_seq += 1
-        task_id = f"memory-review.{cid}.{self._review_seq}"
+        task_id = f"review.{cid}.{self._review_seq}"
         task = BackgroundTask(id=task_id, label=f"Reviewing memory ({cid})")
         self._publish_task(task)  # queued
         try:

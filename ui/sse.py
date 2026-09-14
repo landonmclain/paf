@@ -514,7 +514,8 @@ async def conversation_tasks(
     """
     session = await _get_session(conversation_id, agent)
     bg = session.background
-    tasks = bg.task_history(conversation_id) if bg is not None else []
+    scoped_cid = session._scoped_cid(conversation_id) or conversation_id
+    tasks = bg.task_history(scoped_cid) if bg is not None else []
     return {
         "conversation_id": conversation_id,
         "agent": agent,
@@ -576,6 +577,7 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
 
     async def _inner() -> AsyncIterator[str]:
         bg = session.background
+        scoped_cid = session._scoped_cid(conversation_id) or conversation_id
 
         q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
         closed = {"v": False}
@@ -588,7 +590,7 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
         # 1. Restore terminal + active history first (so a late-joining tab sees
         #    the full current state, not just live deltas).
         if bg is not None:
-            for task in bg.task_history(conversation_id):
+            for task in bg.task_history(scoped_cid):
                 _publish(
                     (
                         "task",
@@ -613,7 +615,7 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
             if bg is None:
                 return
             try:
-                idle = await bg.job_status_summary(conversation_id)
+                idle = await bg.job_status_summary(scoped_cid)
                 for st in idle:
                     _publish(
                         (
