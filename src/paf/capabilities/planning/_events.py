@@ -1,17 +1,26 @@
-"""paf-owned plan event system (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned plan event system, now specialized over the generic EventEmitter.
 
-PlanEventEmitter plus PlanEvent types so applications (e.g. the paf web sidebar)
-react to plan mutations.
+From pydantic-ai-harness (MIT), but the pub/sub dispatch has been extracted
+into the shared ``GenericEventEmitter`` (``src/paf/events.py``) and this module
+is now a thin domain specialization: the plan-specific event types + payload,
+with ``PlanEventEmitter`` as a ``GenericEventEmitter[PlanEventType, PlanEvent]``
+so applications (e.g. the paf web sidebar) react to plan mutations.
+
+The public surface is unchanged from the standalone class: ``on``/``off``/
+``emit`` plus the ``on_created``/``on_completed``/... convenience decorators.
+``emit`` accepts a single ``PlanEvent`` and derives the key from
+``event.event_type`` (the generic only needs the explicit-key variant for
+non-payload-keyed events, which planning does not use).
 """
+
 from __future__ import annotations
 
-import inspect
-from collections.abc import Awaitable, Callable
 from enum import Enum
 
 from pydantic import BaseModel
 
 from paf.capabilities.planning._types import PlanItem
+from paf.events import GenericEventEmitter, Listener
 
 
 class PlanEventType(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps event_type JSON-serializable (matches harness design)
@@ -46,12 +55,15 @@ class PlanEvent(BaseModel):
     previous_state: PlanItem | None = None
 
 
-EventCallback = Callable[[PlanEvent], None | Awaitable[None]]
+EventCallback = Listener[PlanEvent]
 """A sync or async listener invoked with each emitted `PlanEvent`."""
 
 
-class PlanEventEmitter:
+class PlanEventEmitter(GenericEventEmitter[PlanEventType, PlanEvent]):
     """Register listeners and dispatch `PlanEvent`s to them.
+
+    Specializes the generic ``GenericEventEmitter`` with plan event types and
+    payloads. Example:
 
     ```python
     from paf.capabilities.planning import PlanEventEmitter
@@ -64,28 +76,14 @@ class PlanEventEmitter:
     ```
     """
 
-    def __init__(self) -> None:
-        self._listeners: dict[PlanEventType, list[EventCallback]] = {kind: [] for kind in PlanEventType}
-
-    def on(self, event_type: PlanEventType, callback: EventCallback) -> EventCallback:
-        """Register `callback` for `event_type` and return it (usable as a decorator)."""
-        self._listeners[event_type].append(callback)
-        return callback
-
-    def off(self, event_type: PlanEventType, callback: EventCallback) -> bool:
-        """Remove `callback` from `event_type`; return whether it was registered."""
-        try:
-            self._listeners[event_type].remove(callback)
-        except ValueError:
-            return False
-        return True
-
     async def emit(self, event: PlanEvent) -> None:
-        """Invoke every listener registered for `event.event_type`, awaiting async ones."""
-        for callback in self._listeners[event.event_type]:
-            result = callback(event)
-            if inspect.isawaitable(result):
-                await result
+        """Invoke every listener for ``event.event_type``, awaiting async ones.
+
+        The key is derived from the event itself (unlike the generic's
+        explicit-key ``emit(event, event_type)``); this keeps the store's
+        ``emitter.emit(PlanEvent(...))`` call sites unchanged.
+        """
+        await super().emit(event, event.event_type)
 
     def on_created(self, callback: EventCallback) -> EventCallback:
         """Register a listener for `created` events."""
