@@ -503,7 +503,6 @@ class BackgroundCoordinator:
         from paf.capabilities.persistence import build_history_source
         from paf.capabilities.thread_summarizer._background import BLOCK_TURNS
         from paf.capabilities.thread_summarizer._store import THREAD_WATERMARK_FILENAME
-        from pathlib import Path
 
         rows: list[JobIdleStatus] = []
         source = None
@@ -636,11 +635,15 @@ class BackgroundCoordinator:
         # 3. Thread summarizer (per-conversation, turn-count cadence).
         if self._thread_summarizer_enabled:
             try:
-                dir = (
-                    Path(self._thread_capture_root)
-                    / "conversations" / conversation_id
+                from paf.capabilities.thread_summarizer._store import ThreadSummaryStore
+
+                # Derive the SAME conversation-scoped dir + run-anchored watermark
+                # the trigger/worker use (conversation_key hashed dir, run_id), or
+                # the displayed n/BLOCK_TURNS diverges from the real gate.
+                store = ThreadSummaryStore(self._thread_capture_root, conversation_id)
+                wm = MemoryWatermark.load(
+                    store.directory, run_id=tip_run or "", filename=THREAD_WATERMARK_FILENAME
                 )
-                wm = MemoryWatermark.load(dir, filename=THREAD_WATERMARK_FILENAME)
                 n = await _span_count(wm)
                 reason = (
                     f"{n}/{BLOCK_TURNS} turns to a summary"

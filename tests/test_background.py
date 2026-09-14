@@ -232,10 +232,12 @@ def test_job_status_summary_returns_idle_rows_when_idle() -> None:
     must still yield consolidation / review / thread summarizer idle rows with
     the stable ids the frontend coalesces transitions against — never raise.
     """
-    from paf.capabilities import PROFILES
-    from paf.background import BackgroundCoordinator
-    from pydantic_ai_harness.step_persistence import FileStepStore
     from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import BackgroundCoordinator
+    from paf.capabilities import PROFILES
 
     bg = BackgroundCoordinator(
         FileStepStore(directory=mkdtemp()),  # real store, no runs yet
@@ -257,13 +259,70 @@ def test_job_status_summary_returns_idle_rows_when_idle() -> None:
         assert r.detail  # a human reason is always present
 
 
+def test_job_status_summary_thread_row_reads_hashed_watermark_dir(monkeypatch) -> None:
+    """The thread idle row must load the SAME hashed watermark the worker uses.
+
+    Bug (2026-09-14, PAF-UI issue): the idle block built the capture dir from the
+    raw ``conversation_id`` (``conversations/<cid>/``), which never exists --
+    the worker writes under ``conversations/<sha256(cid)[:24]>/`` via
+    ``ThreadSummaryStore``. So the idle watermark was always fresh -> every
+    completed turn counted -> n >= BLOCK_TURNS -> 'due for a summary' forever,
+    while a SKIPPED row showed the real count (why skipped rendered correctly).
+    Pin the fix: job_status_summary must load the thread watermark from
+    ThreadSummaryStore(...).directory AND with run_id anchoring.
+    """
+    from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import BackgroundCoordinator
+    from paf.capabilities import PROFILES
+    from paf.capabilities.memory._watermark import MemoryWatermark
+    from paf.capabilities.thread_summarizer._store import (
+        THREAD_WATERMARK_FILENAME,
+        ThreadSummaryStore,
+    )
+
+    calls: dict = {}
+
+    def _spy_load(cls, directory, *, run_id="", filename=THREAD_WATERMARK_FILENAME):
+        calls[(str(directory), run_id)] = True
+        return MemoryWatermark()  # fresh -> n=0; we only assert WHERE it loads from
+
+    monkeypatch.setattr(MemoryWatermark, "load", classmethod(_spy_load))
+
+    # Temp thread capture root so we never touch real data/summaries.
+    import tempfile
+    temp_root = tempfile.mkdtemp(prefix="paf-summaries-")
+    bg = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name="demo_assistant",
+        profile=PROFILES.get("demo"),
+        memory_directory="/nonexistent-memory-dir",
+    )
+    bg._thread_capture_root = temp_root
+
+    asyncio.run(bg.job_status_summary("cid123"))
+
+    # The correct dir is ThreadSummaryStore(temp_root, cid).directory (hashed).
+    correct = ThreadSummaryStore(temp_root, "cid123").directory
+    wrong = f"{temp_root}/conversations/cid123"
+    assert str(correct) in {d for (d, _) in calls}, (
+        f"thread idle row did not load from ThreadSummaryStore dir {correct}; "
+        f"loaded dirs: {sorted(d for (d,_) in calls)}"
+    )
+    assert not any(wrong in d for (d, _) in calls), (
+        f"thread idle row still loads raw-cid dir {wrong!r}"
+    )
+
+
 def test_job_status_summary_degrades_when_store_fails() -> None:
     """A broken store must degrade to 'unavailable' idle rows, not raise.
 
     The feed calls this on connect; a failure must never tear the SSE socket.
     """
-    from paf.capabilities import PROFILES
     from paf.background import BackgroundCoordinator
+    from paf.capabilities import PROFILES
 
     class _BrokenStore(_NoRunsStore):
         async def list_runs(self, conversation_id=None):
