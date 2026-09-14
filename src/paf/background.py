@@ -216,6 +216,11 @@ class BackgroundTask:
     progress: float | None = None
     detail: str = ""
     updated_at: str = ""
+    # Monotonic per-coordinator publish revision, stamped by _publish_task. A
+    # strictly-increasing counter, so "which publish is newest" is unambiguous
+    # even when two publishes carry identical microsecond-stripped timestamps
+    # (see _reconcile_status). Not serialized to subscribers via as_event.
+    publish_seq: int = 0
 
     def as_event(self) -> BackgroundEvent:
         """The additive event form subscribers receive on each transition."""
