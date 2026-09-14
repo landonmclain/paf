@@ -450,3 +450,61 @@ def test_reconcile_running_task_never_shows_idle_cadence_detail() -> None:
     assert out.status == PROCESSING
     assert out.detail == ""
     assert "turns to a fold" not in out.detail
+
+
+def test_reconcile_prefers_newer_seq_over_stale_skip_on_timestamp_tie() -> None:
+    """A running fold (higher seq) beats a stale skipped row even at EQUAL ts.
+
+    Regression found live (2026-09-14): the panel showed ``running`` +
+    ``only 4 unsettled turn(s); need >= 5`` — the stale SKIPPED detail from
+    the trigger that gated below threshold. _publish_task stamps ``updated_at``
+    at microsecond resolution, so the skip and the fold that follows it within
+    moments often share the SAME timestamp. The old selector compared only
+    ``updated_at`` and on a tie kept the FIRST dict-iteration task — which was
+    the stale skipped one. ``_reconcile_status`` must treat a later ``.seq``
+    (monotonic per conversation) as authoritative.
+    """
+    from datetime import datetime
+    from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import (
+        PROCESSING,
+        SKIPPED,
+        BackgroundCoordinator,
+        BackgroundTask,
+        JobIdleStatus,
+    )
+    from paf.capabilities import PROFILES
+
+    bg = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name="demo_assistant",
+        profile=PROFILES.get("demo"),
+        memory_directory="/nonexistent-memory-dir",
+    )
+    now = datetime.now(UTC).replace(microsecond=0).isoformat()
+
+    # seq 1: gated below 5 -> SKIPPED with the familiar message.
+    skipped = BackgroundTask(id="consolidation.cid123.1", label="Consolidating memory")
+    skipped.status = SKIPPED
+    skipped.detail = "only 4 unsettled turn(s); need >= 5"
+    # seq 2: threshold reached -> fold now running, no progress detail yet.
+    run = BackgroundTask(id="consolidation.cid123.2", label="Consolidating memory")
+    run.status = PROCESSING
+    run.detail = ""
+    # Force the EXACT tie that bit us: both published in the same second.
+    skipped.updated_at = run.updated_at = now
+    # Deliberately iterate the stale one first to prove selection is seq-based,
+    # not dict order.
+    bg._background_tasks = {skipped.id: skipped, run.id: run}
+
+    idle_row = JobIdleStatus(
+        id="consolidation.cid123", label="Consolidating memory", status="idle"
+    )
+    out = bg._reconcile_status(idle_row, "consolidation", "cid123")
+
+    # Higher seq wins the tie: running, no stale skip text.
+    assert out.status == PROCESSING
+    assert out.detail == ""

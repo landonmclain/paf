@@ -460,13 +460,30 @@ class BackgroundCoordinator:
         """
         needle = f".{conversation_id}."
         recent: BackgroundTask | None = None
+        # Select the *authoritative* task row. Task ids end in ``.{seq}``, a
+        # per-(kind,conversation) monotonic counter, so a HIGHER seq is always
+        # the newer trigger — even when two publishes land in the same
+        # microsecond-stripped second (the norm: a skip and the fold that
+        # follows it fire within moments, and _publish_task stamps both with
+        # the same `now`). Comparing only `updated_at` then picks the FIRST
+        # dict-iteration task on a tie — which can resurrect a STALE skipped
+        # row ("only 4 unsettled turn(s); need >= 5") over the genuinely newer
+        # running fold. Compare (seq, updated_at): a newer seq wins; fall back
+        # to timestamp only within the same seq.
+        def _key(t: BackgroundTask) -> tuple[int, str]:
+            seg = t.id.rsplit(".", 1)[-1]
+            try:
+                return (int(seg), t.updated_at)
+            except ValueError:
+                return (-1, t.updated_at)  # unparsable -> oldest bucket
+
         for task in self._background_tasks.values():
             if (
                 task.id.startswith(f"{prefix}.")
                 and needle in task.id
                 and task.status in (QUEUED, PROCESSING, DONE, SKIPPED, ERROR)
             ):
-                if recent is None or task.updated_at > recent.updated_at:
+                if recent is None or _key(task) > _key(recent):
                     recent = task
         if recent is None:
             return row
