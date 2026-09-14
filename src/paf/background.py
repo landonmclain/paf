@@ -485,6 +485,21 @@ class BackgroundCoordinator:
             datetime.now(UTC) - updated
         ).total_seconds() > _PROCESS_STATUS_HOLD_S:
             return row
+        if is_active:
+            # An in-flight fold carries NO idle cadence text: the
+            # "n/N turns to a fold/review" countdown describes how far the
+            # NEXT cadence has progressed since the last done watermark — it is
+            # unrelated to the job currently running and would mislead under a
+            # `running` status. Use the task's own detail (empty while the
+            # worker hasn't reported progress); never fall back to the idle
+            # row's detail.
+            return JobIdleStatus(
+                id=row.id,
+                label=row.label,
+                status=recent.status,  # type: ignore[arg-type]
+                progress=recent.progress,
+                detail=recent.detail,
+            )
         return JobIdleStatus(
             id=row.id,
             label=row.label,

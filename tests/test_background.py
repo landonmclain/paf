@@ -395,3 +395,58 @@ def test_reconcile_keeps_active_task_running_past_hold() -> None:
     # Must carry the live running state + detail, NOT decay to idle.
     assert out.status == PROCESSING
     assert out.detail == "folding"
+
+
+def test_reconcile_running_task_never_shows_idle_cadence_detail() -> None:
+    """A running fold's row must NOT leak the idle turn-countdown as its detail.
+
+    Regression found live (2026-09-14): mid-fold, the Processes panel showed
+    ``running`` alongside ``idle · 3/5 turns to a fold``. The 3/5 countdown
+    describes how far the NEXT cadence has progressed since the last fold
+    watermark — it is unrelated to the fold currently running. The old
+    ``detail = recent.detail or row.detail`` fallback let the empty detail of an
+    in-flight task (worker hasn't reported progress yet) inherit the idle
+    row's cadence text. An ACTIVE task must surface its OWN detail (may be
+    empty) and never the idle cadence line.
+    """
+    from datetime import datetime
+    from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import (
+        PROCESSING,
+        BackgroundCoordinator,
+        BackgroundTask,
+        JobIdleStatus,
+    )
+    from paf.capabilities import PROFILES
+
+    bg = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name="demo_assistant",
+        profile=PROFILES.get("demo"),
+        memory_directory="/nonexistent-memory-dir",
+    )
+
+    # A fold is running mid-work; the worker has NOT reported progress, so the
+    # task carries NO detail of its own yet.
+    task = BackgroundTask(id="consolidation.cid123.3", label="Consolidating memory")
+    task.status = PROCESSING
+    task.detail = ""
+    task.updated_at = datetime.now(UTC).isoformat()
+    bg._background_tasks[task.id] = task
+
+    idle_row = JobIdleStatus(
+        id="consolidation.cid123",
+        label="Consolidating memory",
+        status="idle",
+        detail="idle · 3/5 turns to a fold",
+    )
+    out = bg._reconcile_status(idle_row, "consolidation", "cid123")
+
+    # Status stays running; detail is the task's own (empty), NEVER the idle
+    # cadence countdown.
+    assert out.status == PROCESSING
+    assert out.detail == ""
+    assert "turns to a fold" not in out.detail
