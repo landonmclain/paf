@@ -25,7 +25,6 @@ from pydantic_ai_harness.compaction import (
     SlidingWindowCompaction,
     TieredCompaction,
 )
-from pydantic_ai_harness.planning import Planning
 from pydantic_ai_harness.step_persistence import StepPersistence
 from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
@@ -37,6 +36,7 @@ from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
 from paf.capabilities.memory import Memory
+from paf.capabilities.planning import Planning
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
@@ -164,13 +164,13 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # returns None), so it is ALWAYS built in Python (build.py `_build_subagents`) by
     # passing explicit child `SubAgent` entries; it can never resolve from a YAML spec.
     "Subagents": SubAgents,
-    # Model-owned task plan for long turns (BUILTIN, not a paf port). A structured,
+    # Model-owned task plan for long turns (paf-owned port). A structured,
     # self-updating deadline/todo list surfaced back to the model every request as a
     # cache-safe tail reminder (never invalidates the prompt cache). Tools:
     # write_plan / read_plan / add_task / update_task_status / remove_task (+ subtask +
-    # dependency tools with enable_subtasks=True). Spec-serializable, so it can resolve
-    # from YAML, but paf wires it via the Python seam (build.py `_build_planning`) like
-    # the other BUILTIN harness caps so the profile gate controls it.
+    # dependency tools with enable_subtasks=True, off by default). Spec-serializable, so
+    # it can resolve from YAML, but paf wires it via the Python seam (build.py
+    # `_build_planning`) like the other caps so the profile gate controls it.
     "Planning": Planning,
     # Structural prompt-injection defense (BUILTIN, not a paf port) — screens
     # tool results and withholds high-risk content before the model sees it.

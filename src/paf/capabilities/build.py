@@ -28,7 +28,6 @@ import os
 from pathlib import Path
 
 from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
-from pydantic_ai_harness.planning import Planning
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
@@ -38,10 +37,14 @@ from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
-from paf.capabilities.guardrails.secret_handles import secret_handle_guard, secret_result_guard
+from paf.capabilities.guardrails.secret_handles import (
+    secret_handle_guard,
+    secret_result_guard,
+)
 from paf.capabilities.guardrails.tool_gating import tool_gating_guard
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
+from paf.capabilities.planning import Planning
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
@@ -510,7 +513,7 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
 
 
 def _build_planning(store) -> Planning:
-    """Model-owned task plan for long turns (BUILTIN, not a paf port).
+    """Model-owned task plan for long turns (paf-owned port).
 
     Gives the agent a structured, self-updating todo/plan it can create and edit
     (``write_plan`` / ``read_plan`` / ``add_task`` / ``update_task_status`` /
@@ -519,29 +522,38 @@ def _build_planning(store) -> Planning:
     run, and plan edits don't invalidate the prompt cache (the reminder rides
     behind a ``CachePoint`` breakpoint).
 
-    Store: a shared ``InMemoryPlanStore`` (not the persistence store). The plan
-    persists across turns/runs within this process via the single shared store
-    instance, which is what the demo needs to actually exercise long-turn
-    tracking. It is deliberately NOT wired to the flat-file ``FileStepStore``
-    (that's run-history JSONL, not a plan store) and NOT to Sqlite/Postgres for
-    now — durable cross-session plans are a future option
-    (``SqlitePlanStore('plan.db', session=...)``) if the demo proves out.
+    Store: a per-conversation ``FilePlanStore`` (flat-file JSON under
+    ``PROJECT_ROOT / "data/plans/<conversation_id>/plan.json"``). Plans persist
+    across turns, runs, and process restarts — inspectable/diffable JSON (paf's
+    flat-file-first principle) resolved per conversation via ``store_resolver``
+    (falls back to a default-scope file when no ``conversation_id`` is set).
+    This replaced the ephemeral ``InMemoryPlanStore`` (Task 3) so plans are
+    durable and the web sidebar can render them on reload/restart. It is a thin
+    wrapper over the shared ``StorageService`` seam — backend-swappable, never
+    a bespoke path.
 
     `store` is accepted for a uniform builder signature but unused — the plan
-    lives in the capability's own in-memory store, not the persistence store.
-    Consumed as a pydantic-ai AbstractCapability from the harness, same drop-in
-    pattern as ToolOutputLimits / WarnOnCacheBusts / Subagents per Landon.
+    lives in the capability's per-conversation file store, resolved from the
+    run context.
     """
-    from pydantic_ai_harness.planning import InMemoryPlanStore
+    from paf.capabilities.planning import FilePlanStore, Planning
 
-    # Thin guidance: the write_plan/read_plan/add_task/... tool schemas already
-    # document themselves, so just cue the model to plan multi-step work rather
-    # than repeat the harness's longer usage blurb in the instruction channel.
+    _PLAN_ROOT = PROJECT_ROOT / "data" / "plans"
+
+    def _resolve_plan_store(ctx) -> FilePlanStore:
+        cid = getattr(ctx, "conversation_id", None) or "default"
+        return FilePlanStore(root=_PLAN_ROOT, conversation_id=cid)
+
+    # Thin guidance: point out that write_plan returns the ids the model must
+    # pass to a follow-up update_task_status(_es) — no read_plan round-trip
+    # needed (Task 2). The tool schemas document themselves beyond that.
     return Planning(
-        store=InMemoryPlanStore(),
+        store_resolver=_resolve_plan_store,
         guidance=(
             "For multi-step work, lay out the steps up front with `write_plan` and "
-            "keep it current as you go."
+            "keep it current as you go. `write_plan` returns each step's [id] — "
+            "use those ids directly in `update_task_status`/`update_task_statuses`; "
+            "you do not need `read_plan` first."
         ),
     )
 
@@ -786,7 +798,7 @@ def build_runtime_capabilities(
         "WarnOnCacheBusts": _build_warn_on_cache_busts,
         # Sub-agent delegation (BUILTIN, not a paf port) — explicit child leaf agents.
         "Subagents": _build_subagents,
-        # Model-owned task plan for long turns (BUILTIN, not a paf port).
+        # Model-owned task plan for long turns (paf-owned port).
         "Planning": _build_planning,
         # Structural prompt-injection defense (BUILTIN, not a paf port) —
         # screens tool results and withholds high-risk content before the model
