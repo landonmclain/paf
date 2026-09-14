@@ -33,6 +33,13 @@ _P = ParamSpec('_P')
 # converts these so the agent can correct itself and continue.
 _RECOVERABLE_ERRORS = (PermissionError, FileNotFoundError, NotADirectoryError, IsADirectoryError, ValueError)
 
+# ModelRetry budget for the fs tools. They all raise `ModelRetry` (via
+# `_recoverable`) on recoverable fs errors, and pydantic-ai defaults an
+# un-declared tool to `ToolManager.default_max_retries` (1) — too low for the
+# mid-turn parallel-call case, where a transient read/stat failure would abort
+# the whole run. Matching the search toolset's `_SEARCH_TOOL_RETRIES` convention.
+_FS_TOOL_RETRIES = 5
+
 # How many files a single recursive content/glob walk may visit before it bails
 # with a truncation marker. This is the hard backstop against walking an
 # enormous tree (e.g. `data/benchmarks/` with ~1.8M files / the paf repo at
@@ -290,14 +297,14 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         self._max_search_total_bytes = max_search_total_bytes
         self._walk_visit_budget = walk_visit_budget
 
-        self.add_function(self.read_file, name='read_file')
-        self.add_function(self.write_file, name='write_file')
-        self.add_function(self.edit_file, name='edit_file')
-        self.add_function(self.list_directory, name='list_directory')
-        self.add_function(self.search_files, name='search_files')
-        self.add_function(self.find_files, name='find_files')
-        self.add_function(self.create_directory, name='create_directory')
-        self.add_function(self.file_info, name='file_info')
+        self.add_function(self.read_file, name='read_file', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.write_file, name='write_file', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.edit_file, name='edit_file', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.list_directory, name='list_directory', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.search_files, name='search_files', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.find_files, name='find_files', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.create_directory, name='create_directory', retries=_FS_TOOL_RETRIES)
+        self.add_function(self.file_info, name='file_info', retries=_FS_TOOL_RETRIES)
 
     def _matches(self, path: str, pattern: str) -> bool:
         """Glob-match a relative path, treating a leading `**/` as 'any directory, including the root'.
