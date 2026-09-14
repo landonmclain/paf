@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
 from pydantic_ai_harness.planning import Planning
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
@@ -37,6 +38,7 @@ from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
+from paf.capabilities.guardrails.tool_gating import tool_gating_guard
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.profiles import AgentProfile
@@ -543,6 +545,55 @@ def _build_planning(store) -> Planning:
     )
 
 
+def _build_guardrails(store) -> PromptInjectionDefender:
+    """Structural prompt-injection defense (BUILTIN, not a paf port).
+
+    Adopts the harness's ``PromptInjectionDefender`` (Option A from the guardrails
+    plan) rather than building a paf-owned wrapper: it is a ready-made
+    ``AbstractCapability`` that screens tool results before the model sees them
+    and withholds high-risk content. This is the structural detector paf's
+    locked principle demands — a deterministic system decision by meaning, not
+    regex shape-matching.
+
+    ``semantic_detection=True`` enables Tier 2 (the local MiniLM classifier via
+    ``stackone-defender`` + ``onnxruntime``), which catches injections under
+    unrecognized fields that Tier 1 pattern detection alone lets through (see
+    tests/test_guardrails_spike.py). ``block_high_risk=True`` withholds flagged
+    results. Loaded eagerly (no ``defer_loading``): the defender screens every
+    tool result, so there is nothing to put off — and deferring a builtin that
+    has no stable explicit ``id`` makes pydantic-ai reject it at build time.
+
+    `store` is accepted for a uniform builder signature but unused — the
+    defender is stateless per call.
+    """
+    return PromptInjectionDefender(
+        block_high_risk=True,
+        semantic_detection=True,
+    )
+
+
+def _build_tool_gating(store) -> ToolGuardrail:
+    """Per-call execution-time tool gate (BUILTIN shell, paf-owned policy).
+
+    The harness ``ToolGuardrail`` is the shell; the policy is paf's own
+    ``tool_gating_guard`` callable (see ``guardrails/tool_gating.py``), which
+    refuses the highest-risk tools before they execute. The profile is the
+    gatekeeper: this builder only runs when the profile allowlists
+    ``ToolGating``.
+
+    `store` is accepted for a uniform builder signature but unused — the
+    policy is stateless per call.
+    """
+    return ToolGuardrail(
+        guard=tool_gating_guard,
+        id="tool_gating",
+        description=(
+            "Refuses calls to the highest-risk tools (shell, git, filesystem "
+            "writes) before they execute."
+        ),
+    )
+
+
 # Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
 # variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
 # across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism (see
@@ -711,6 +762,14 @@ def build_runtime_capabilities(
         "Subagents": _build_subagents,
         # Model-owned task plan for long turns (BUILTIN, not a paf port).
         "Planning": _build_planning,
+        # Structural prompt-injection defense (BUILTIN, not a paf port) —
+        # screens tool results and withholds high-risk content before the model
+        # sees it. Option A from the guardrails plan: adopt the builtin.
+        "Guardrails": _build_guardrails,
+        # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
+        # refuses the highest-risk tools before they execute. The profile is
+        # only a build-time tool allowlist; this is the missing per-call gate.
+        "ToolGating": _build_tool_gating,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder: when ``Memory`` is

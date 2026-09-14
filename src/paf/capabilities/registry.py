@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
@@ -171,4 +172,13 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # from YAML, but paf wires it via the Python seam (build.py `_build_planning`) like
     # the other BUILTIN harness caps so the profile gate controls it.
     "Planning": Planning,
+    # Structural prompt-injection defense (BUILTIN, not a paf port) — screens
+    # tool results and withholds high-risk content before the model sees it.
+    # Option A from the guardrails plan: adopt the builtin. Built in Python
+    # (build.py `_build_guardrails`) so the profile gate controls it.
+    "Guardrails": PromptInjectionDefender,
+    # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
+    # refuses the highest-risk tools before they execute. Built in Python
+    # (build.py `_build_tool_gating`) so the profile gate controls it.
+    "ToolGating": ToolGuardrail,
 }
