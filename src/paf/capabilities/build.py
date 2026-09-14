@@ -38,6 +38,7 @@ from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
+from paf.capabilities.guardrails.secret_handles import secret_handle_guard, secret_result_guard
 from paf.capabilities.guardrails.tool_gating import tool_gating_guard
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
@@ -594,6 +595,31 @@ def _build_tool_gating(store) -> ToolGuardrail:
     )
 
 
+def _build_secrets(store) -> ToolGuardrail:
+    """Secret-handle resolution + result redaction (BUILTIN shell, paf-owned policy).
+
+    The harness ``ToolGuardrail`` is the shell; the policy is paf's own
+    ``secret_handle_guard`` / ``secret_result_guard`` callables (see
+    ``guardrails/secret_handles.py``). ``guard=`` resolves ``$SECRET:key``
+    handles in tool args at execution time, so the real value never enters the
+    window; ``result_guard=`` redacts any raw secret that leaks into a tool
+    result. The profile is the gatekeeper: this builder only runs when the
+    profile allowlists ``Secrets``.
+
+    `store` is accepted for a uniform builder signature but unused — the
+    policy is stateless per call.
+    """
+    return ToolGuardrail(
+        guard=secret_handle_guard,
+        result_guard=secret_result_guard,
+        id="secrets",
+        description=(
+            "Resolves $SECRET:key handles in tool arguments at execution time "
+            "and redacts raw secrets from tool results."
+        ),
+    )
+
+
 # Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
 # variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
 # across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism (see
@@ -770,6 +796,10 @@ def build_runtime_capabilities(
         # refuses the highest-risk tools before they execute. The profile is
         # only a build-time tool allowlist; this is the missing per-call gate.
         "ToolGating": _build_tool_gating,
+        # Secret-handle resolution + result redaction (BUILTIN shell, paf-owned
+        # policy) — the model proposes $SECRET:key, the runtime resolves it at
+        # execution time so the real value never enters the window.
+        "Secrets": _build_secrets,
     }
     store = _build_store()
     # Exactly ONE capability owns the composite recall ladder: when ``Memory`` is

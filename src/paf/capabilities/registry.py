@@ -181,4 +181,9 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # refuses the highest-risk tools before they execute. Built in Python
     # (build.py `_build_tool_gating`) so the profile gate controls it.
     "ToolGating": ToolGuardrail,
+    # Secret-handle resolution + result redaction (BUILTIN shell, paf-owned
+    # policy) — the model proposes $SECRET:key, the runtime resolves it at
+    # execution time so the real value never enters the window. Built in Python
+    # (build.py `_build_secrets`) so the profile gate controls it.
+    "Secrets": ToolGuardrail,
 }

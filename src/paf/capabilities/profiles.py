@@ -191,12 +191,16 @@ DEMO_PROFILE = AgentProfile(
         # tool results and withholds high-risk content before the model sees it.
         # Option A from the guardrails plan: adopt the builtin PromptInjectionDefender
         # (semantic_detection=True, Tier 2 MiniLM classifier).
-        "Guardrails",
+        # "Guardrails",
         # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
         # refuses the highest-risk tools (shell, git, filesystem writes) before
         # they execute. The profile is only a build-time tool allowlist; this is
         # the missing per-call gate.
-        "ToolGating",
+        # "ToolGating",
+        # Secret-handle resolution + result redaction (BUILTIN shell, paf-owned
+        # policy) — the model proposes $SECRET:key, the runtime resolves it at
+        # execution time so the real value never enters the window.
+        "Secrets",
     ),
 )
 

@@ -11,6 +11,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness import ToolGuardrail
 from pydantic_ai_harness.guardrails import ToolCallInfo
 
+import paf.capabilities.guardrails.tool_gating as tool_gating
 from paf.capabilities.build import _build_tool_gating
 from paf.capabilities.guardrails.tool_gating import (
     DEFAULT_GATED_TOOLS,
@@ -24,8 +25,16 @@ def _info(name: str) -> ToolCallInfo:
     return ToolCallInfo(name=name, args={}, tool_call_id="1")
 
 
-def test_gated_tool_is_blocked():
-    """A call to a gated tool is refused before it executes."""
+def test_gated_tool_is_blocked(monkeypatch):
+    """A call to a gated tool is refused before it executes.
+
+    The production gate is currently empty (the hard-coded gates were removed
+    so they don't block normal operations, pending the approval-path design), so
+    this pins the block path deterministically by gating one tool for the test.
+    """
+    monkeypatch.setattr(
+        tool_gating, "DEFAULT_GATED_TOOLS", frozenset({"run_command"})
+    )
 
     async def run_command(cmd: str) -> str:
         return "EXECUTED: " + cmd
@@ -62,9 +71,13 @@ def test_guard_policy_allowlist():
     assert tool_gating_guard(_info("read_file")).action == "allow"
 
 
-def test_wired_into_demo_profile():
-    """ToolGating is registered and allowlisted on the demo profile."""
-    assert "ToolGating" in DEMO_PROFILE.capability_names
+def test_wired_but_not_allowlisted():
+    """ToolGating is registered and buildable, but currently OFF on the demo profile.
+
+    The capability is fully wired (builder + registry) but not allowlisted while
+    the gate policy is empty and the approval path is undecided.
+    """
+    assert "ToolGating" not in DEMO_PROFILE.capability_names
     assert CAPABILITY_TYPES["ToolGating"] is ToolGuardrail
     cap = _build_tool_gating(store=None)
     assert isinstance(cap, ToolGuardrail)
