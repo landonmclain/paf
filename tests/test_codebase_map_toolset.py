@@ -103,6 +103,53 @@ def test_get_overview_path_scopes_subtree(scanned: tuple[Path, CodebaseMapToolse
     assert "top.py" not in out  # sibling outside the subtree is absent
 
 
+def test_get_overview_accepts_absolute_path_inside_scan_root(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
+    """An ABSOLUTE path pointing inside the scan root is rebased to repo-relative.
+
+    Regression for a live failure (2026-09-14): an agent passed the full
+    absolute path (``/home/.../project/src``); the old code stripped only the
+    leading ``/`` and looked up ``home/.../project/src`` as a repo-relative
+    anchor, found nothing, and returned a misleading "no such directory" — the
+    agent concluded the tool was broken. `path` is documented repo-relative,
+    but an absolute path that resolves under the scan root should be
+    normalized to the equivalent relative anchor so the model gets the subtree
+    it actually asked for.
+    """
+    root, t = scanned  # root is the (resolvable) scan root; fixture seeds src/
+    abs_src = str((root / "src").resolve())
+    out = t.get_overview(path=abs_src)
+    # Normalized to repo-relative "src": anchored subtree, siblings absent.
+    assert "anchored at: src/" in out
+    assert "src/  (2 files)" in out
+    assert "  a.py  (" in out
+    assert "top.py" not in out
+    # Abs path exactly the scan root -> equivalent to get_overview() (no path).
+    root_out = t.get_overview(path=str(root.resolve()))
+    assert "anchored at:" not in root_out  # root anchor is blank
+    assert "src/  (2 files)" in root_out
+
+
+def test_get_overview_absolute_path_outside_scan_root_teaches_rule(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
+    """An absolute path OUTSIDE the scan root returns a self-correcting message.
+
+    It can't be rebased to repo-relative (it isn't under the root), so the tool
+    must TELL the model paths are repo-relative rather than returning a bare
+    "no such directory" that reads as a broken tool.
+    """
+    root, t = scanned
+    outside = str(root / ".." / "other-place")
+    out = t.get_overview(path=outside)
+    assert "No directory named" in out
+    assert "REPO-RELATIVE" in out
+    assert "`src/ui`" in out
+    assert "get_overview() with no path" in out
+
+
+
 def test_get_overview_path_depth_relative(scanned: tuple[Path, CodebaseMapToolset]) -> None:
     """depth under a path is relative to that path (not the repo root)."""
     root, _ = scanned

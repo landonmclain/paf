@@ -214,7 +214,33 @@ class CodebaseMapToolset(FunctionToolset):
         imp = self._importance_by_path()
         dir_imp = _dir_importance(tree, imp)
 
-        anchor = (path or "").strip().strip("/")
+        # `path` is REPO-RELATIVE to the scan root. Tolerate an ABSOLUTE path
+        # that points inside the scan root: rebase it to repo-relative so an
+        # agent that passes e.g. `/home/.../repo/src` gets the same anchor as
+        # `src` instead of a confusing "no such directory". `self._scan_root`
+        # is the scan-time root of the persisted tree (``overview.json``);
+        # repo-relative = path minus that root prefix (and minus a leading
+        # `/` that `.strip("/")` would otherwise leave behind).
+        raw = (path or "").strip()
+        input_was_absolute = bool(raw and Path(raw).is_absolute())
+        scan_root = Path(self._scan_root)
+        anchor = raw.strip("/")
+        if input_was_absolute:
+            try:
+                abs_p = Path(raw).resolve()
+            except OSError:
+                abs_p = Path(raw)
+            try:
+                rel = abs_p.relative_to(scan_root)
+            except ValueError:
+                # Absolute but OUTSIDE the scan root (or not a real prefix):
+                # fall through with whatever a bare strip leaves, so the
+                # existing lookup runs and the error below explains the rule.
+                rel = None
+            if rel is not None:
+                rel = rel.as_posix()
+                # A pathspec treats the root itself as "" — mirror that.
+                anchor = "" if rel == "." else rel
         if depth is not None and depth < 0:
             raise ValueError("depth must be >= 0 (or None to open fully)")
         # Scope to the anchored subtree: drop entries not under `path`, and rebase
@@ -231,6 +257,20 @@ class CodebaseMapToolset(FunctionToolset):
                 None,
             )
             if anchor_depth is None:
+                # Invalid anchor. `anchor` here may be a repo-relative path that
+                # legitimately doesn't exist, or (more commonly) an agent passed
+                # a WRONG FORM: an absolute path OUTSIDE the scan root (which
+                # still leaves a full `/home/...`-style anchor). Spell the rule
+                # out so the model can self-correct instead of concluding the
+                # tool is broken.
+                if input_was_absolute:
+                    return (
+                        f"No directory named {anchor!r} under "
+                        f"{overview.get('scan_root', self._scan_root)}. "
+                        "Paths are REPO-RELATIVE to the scan root — pass e.g. "
+                        f"`src/ui`, NOT an absolute path like `{raw}`. If you "
+                        "meant the root itself, call get_overview() with no path."
+                    )
                 return f"No directory named {anchor!r} under {overview.get('scan_root', self._scan_root)}."
             ancestors = {
                 "/".join(anchor.split("/")[:i]) for i in range(1, len(anchor.split("/")))
