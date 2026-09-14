@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING
 
+from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -41,13 +42,15 @@ write_plan when you only need to add a single step.\
 UPDATE_TASK_STATUS_DESCRIPTION = """\
 Update one step's status by id. Set `in_progress` when you START a step and \
 `completed` when it is fully done -- never mark work complete while tests fail \
-or the implementation is partial.\
+or the implementation is partial. If the id is wrong, the tool returns an error \
+that echoes the current plan -- use the real bracketed [id]s from it. \
 """
 
 UPDATE_TASK_STATUSES_DESCRIPTION = """\
 Update several steps' statuses in one call -- ideal for handing off from a \
 finished step to the next one. The whole batch is validated first: if any entry \
-is invalid nothing is applied and the errors are returned. Entries apply in \
+is invalid nothing is applied and the error echoes the current plan (use the \
+real bracketed [id]s from it). Entries apply in \
 order, so when a batch both completes a prerequisite and starts its dependent, \
 list the prerequisite's completion first.\
 """
@@ -507,7 +510,11 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         items = await store.get_items()
         item = find_item(items, task_id)
         if item is None:
-            return f"Step with id '{task_id}' not found."
+            raise ModelRetry(
+                f"Step with id '{task_id}' not found. Current plan:\n"
+                f"{render_flat(items, subtasks=False)}\n\n"
+                f"Use the bracketed [id] values above with update_task_status — do NOT guess ids."
+            )
         if self._subtasks and status is TaskStatus.in_progress and is_blocked(items, item):
             return f"Cannot start '{item.content}': it has incomplete dependencies."
         if refusal := self._refuse_inert_block(items, item, status):
@@ -552,7 +559,14 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
             item.status = update.status
             resolved.append((item, update.status))
         if errors:
-            return 'No changes applied. Errors:\n' + '\n'.join(f'- {error}' for error in errors)
+            raise ModelRetry(
+                'No changes applied. Errors:\n'
+                + '\n'.join(f'- {error}' for error in errors)
+                + '\n\nCurrent plan:\n'
+                + f'{render_flat(projected, subtasks=False)}\n\n'
+                + 'Use the bracketed [id] values above with update_task_status or '
+                'update_task_statuses — do NOT guess ids.'
+            )
         for item, status in resolved:
             await store.update_item(item.id, status=status)
         await self._sync_dependency_blocks(store)

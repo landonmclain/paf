@@ -15,6 +15,7 @@ import asyncio
 import inspect
 import re
 
+import pytest
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import RunContext
@@ -125,16 +126,67 @@ def test_write_plan_id_echo_prevents_not_found() -> None:
             assert "not found" not in up, f"update failed: {up!r}"
             assert echoed[0] in up
 
-            # And a wrong guess must still be caught loudly (the old failure surfaced)
-            bad = await toolset.update_task_statuses(
-                ctx,
-                [PlanStatusUpdate(task_id="1", status=TaskStatus.completed)],
-            )
-            assert "not found" in bad
+            # And a wrong guess must still be caught loudly -- as a ModelRetry whose
+            # message echoes the current plan so the model self-corrects in one step
+            # (no separate read_plan round-trip needed).
+            import pydantic_ai.exceptions as _paie
+
+            with pytest.raises(_paie.ModelRetry) as exc:
+                await toolset.update_task_statuses(
+                    ctx,
+                    [PlanStatusUpdate(task_id="1", status=TaskStatus.completed)],
+                )
+            msg = str(exc.value)
+            assert "not found" in msg
+            assert "Current plan:" in msg
+            assert echoed[0] in msg  # the real id is echoed for recovery
 
             # Store reflects the completed step under its real id
             got = await store.get_item(echoed[0])
             assert got is not None and got.status is TaskStatus.completed
+
+        asyncio.run(body())
+
+    scenario()
+
+
+def test_update_task_status_wrong_id_raises_model_retry_with_plan() -> None:
+    """Wrong-id updates raise a ModelRetry (non-fatal) whose message echoes the plan.
+
+    A guessed/mismatched id must not abort the run silently or round-trip a
+    needless read_plan: pydantic-ai feeds ModelRetry back to the model to retry,
+    and echoing the current plan (with the real bracketed [id]s) lets it
+    self-correct in the same step.
+    """
+
+    captured: list[RunContext] = []
+
+    async def grab_ctx(ctx: RunContext) -> str:
+        captured.append(ctx)
+        return "ok"
+
+    agent = Agent(TestModel(call_tools=["grab_ctx"]), tools=[grab_ctx])
+    agent.run_sync("go")
+
+    def scenario():
+        ctx = captured[0]
+        cap = Planning(store=InMemoryPlanStore())
+        toolset = PlanningToolset(cap)
+
+        async def body():
+            await toolset.write_plan(ctx, [PlanItem(content="first")])
+            items = await cap.resolve_store(ctx).get_items()
+            real_id = items[0].id
+
+            # singular update_task_status := bad id -> ModelRetry + plan echo
+            import pydantic_ai.exceptions as _paie
+
+            with pytest.raises(_paie.ModelRetry) as exc:
+                await toolset.update_task_status(ctx, task_id="nope", status=TaskStatus.completed)
+            msg = str(exc.value)
+            assert "not found" in msg
+            assert "Current plan:" in msg
+            assert real_id in msg
 
         asyncio.run(body())
 
