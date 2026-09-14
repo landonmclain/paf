@@ -8,6 +8,8 @@ the handle resolves, a missing secret retries, a leaked secret is redacted,
 and the capability is wired into the demo profile.
 """
 
+from pydantic_ai import Agent
+from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness import ToolGuardrail
 from pydantic_ai_harness.guardrails import ToolCallInfo, ToolResultInfo
 
@@ -77,3 +79,43 @@ def test_wired_into_demo_profile():
     assert CAPABILITY_TYPES["Secrets"] is ToolGuardrail
     cap = _build_secrets(store=None)
     assert isinstance(cap, ToolGuardrail)
+
+
+class _SecretProposingModel(TestModel):
+    """TestModel that proposes the handle as the api_key arg."""
+
+    def gen_tool_args(self, tool_def):
+        return {"api_key": "$SECRET:stripe_key"}
+
+
+def test_integration_tool_gets_real_value_window_never_sees_it(monkeypatch):
+    """End-to-end: the tool executes with the real value; the window never sees it.
+
+    The model proposes ``$SECRET:stripe_key``; the runtime resolves it to the
+    real value at execution time. The tool receives the real value, and the real
+    value never appears anywhere in the run's messages.
+    """
+    monkeypatch.setenv("stripe_key", REAL)
+    seen = {}
+
+    async def call_api(api_key: str) -> str:
+        seen["api_key"] = api_key
+        return "ok"
+
+    agent = Agent(
+        _SecretProposingModel(call_tools=["call_api"]),
+        capabilities=[
+            ToolGuardrail(
+                guard=secret_handle_guard, result_guard=secret_result_guard
+            )
+        ],
+        tools=[call_api],
+    )
+    result = agent.run_sync("call the api")
+
+    # The tool executed with the real value, not the handle.
+    assert seen["api_key"] == REAL
+    # The model proposed the handle, not the real value.
+    assert "$SECRET:stripe_key" in str(result.all_messages())
+    # The real value never entered the window.
+    assert REAL not in str(result.all_messages())
