@@ -248,7 +248,7 @@ skills:
 #   `memory.consolidate_every`. Eviction is pure context management — it never
 #   calls memory, and it can never evict the active user turn.
 compact:
-  target_tokens: 50000
+  target_tokens: 75000
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
