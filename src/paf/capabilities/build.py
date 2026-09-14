@@ -37,6 +37,9 @@ from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
+from paf.capabilities.guardrails.prompt_injection import (
+    prompt_injection_on_detection,
+)
 from paf.capabilities.guardrails.secret_handles import (
     secret_handle_guard,
     secret_result_guard,
@@ -572,9 +575,13 @@ def _build_guardrails(store) -> PromptInjectionDefender:
     ``stackone-defender`` + ``onnxruntime``), which catches injections under
     unrecognized fields that Tier 1 pattern detection alone lets through (see
     tests/test_guardrails_spike.py). ``block_high_risk=True`` withholds flagged
-    results. Loaded eagerly (no ``defer_loading``): the defender screens every
-    tool result, so there is nothing to put off — and deferring a builtin that
-    has no stable explicit ``id`` makes pydantic-ai reject it at build time.
+    results. ``on_detection`` is paf's own handler (see
+    ``guardrails/prompt_injection.py``): it emits a ``paf.guardrail.
+    prompt_injection`` span so a withheld result is observable in Langfuse
+    instead of silently dropped. Loaded eagerly (no ``defer_loading``): the
+    defender screens every tool result, so there is nothing to put off — and
+    deferring a builtin that has no stable explicit ``id`` makes pydantic-ai
+    reject it at build time.
 
     `store` is accepted for a uniform builder signature but unused — the
     defender is stateless per call.
@@ -582,6 +589,7 @@ def _build_guardrails(store) -> PromptInjectionDefender:
     return PromptInjectionDefender(
         block_high_risk=True,
         semantic_detection=True,
+        on_detection=prompt_injection_on_detection,
     )
 
 

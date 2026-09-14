@@ -192,8 +192,9 @@ DEMO_PROFILE = AgentProfile(
         # Structural prompt-injection defense (BUILTIN, not a paf port) — screens
         # tool results and withholds high-risk content before the model sees it.
         # Option A from the guardrails plan: adopt the builtin PromptInjectionDefender
-        # (semantic_detection=True, Tier 2 MiniLM classifier).
-        # "Guardrails",
+        # (semantic_detection=True, Tier 2 MiniLM classifier). paf's own
+        # on_detection handler (guardrails/prompt_injection.py) traces each hit.
+        "Guardrails",
         # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
         # refuses the highest-risk tools (shell, git, filesystem writes) before
         # they execute. The profile is only a build-time tool allowlist; this is
