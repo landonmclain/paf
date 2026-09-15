@@ -32,4 +32,9 @@ fi
 # Default port 8090 (keeps clear of Gradio's :8080; overridable via $1).
 PORT="${1:-8090}"
 
-exec "$PYTHON" -m uvicorn ui.sse:app --host 0.0.0.0 --port "$PORT" --log-level info
+# Bound uvicorn's graceful-shutdown wait. Without this, an open SSE connection
+# from a live paf-ui tab keeps a restart pinned until systemd's TimeoutStopSec
+# (90s) SIGKILLs the process — uvicorn waits indefinitely for the connection to
+# close. 10s gives the lifespan teardown (session cancel, observability flush)
+# room to finish cleanly while ensuring a restart never exceeds the bound.
+exec "$PYTHON" -m uvicorn ui.sse:app --host 0.0.0.0 --port "$PORT" --timeout-graceful-shutdown 10 --log-level info
