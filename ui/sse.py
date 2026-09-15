@@ -50,6 +50,10 @@ from pydantic_ai.messages import (
 )
 
 from paf.capabilities import PROFILES
+from paf.capabilities.planning._events import PlanEventType
+from paf.capabilities.planning._registry import get_plan_emitter
+from paf.capabilities.planning._store import FilePlanStore
+from paf.config import PROJECT_ROOT
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
 
 if TYPE_CHECKING:
@@ -282,6 +286,33 @@ async def health() -> dict[str, bool]:
     return {"ok": True}
 
 
+def _serialize_plan_items(items: list[Any]) -> list[dict[str, Any]]:
+    """Serialize plan items to the UI shape ({id, content, status, ...})."""
+    return [
+        {
+            "id": getattr(i, "id", ""),
+            "content": getattr(i, "content", ""),
+            "status": getattr(i, "status", "pending"),
+            "active_form": getattr(i, "active_form", "") or "",
+            "parent_id": getattr(i, "parent_id", None),
+            "depends_on": list(getattr(i, "depends_on", []) or []),
+        }
+        for i in items
+    ]
+
+
+async def _plan_snapshot(scoped_cid: str) -> list[dict[str, Any]]:
+    """Read the authoritative plan for a scoped conversation id.
+
+    Uses the SAME FilePlanStore seam as the agent's producer (same root +
+    scoped cid + shared emitter key), so this endpoint and the agent's writes
+    can never point at different files. Returns empty list when no plan exists.
+    """
+    store = FilePlanStore(root=PROJECT_ROOT / "data" / "plans", conversation_id=scoped_cid)
+    items = await store.get_items()
+    return _serialize_plan_items(items)
+
+
 def _serialize_history(msgs: list[Any]) -> list[dict[str, Any]]:
     """Flatten restored pydantic-ai messages into UI-shaped history entries.
 
@@ -354,6 +385,29 @@ def _serialize_history(msgs: list[Any]) -> list[dict[str, Any]]:
             if log:
                 out.append({"role": "assistant", "log": log})
     return out
+
+
+@app.get("/api/conversations/{conversation_id}/plan")
+async def conversation_plan(conversation_id: str, agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+    """Authoritative plan snapshot for a conversation (source of truth).
+
+    Reads the per-conversation ``FilePlanStore`` via the same seam the agent's
+    own producer uses (same root + scoped cid + shared emitter key), so this
+    endpoint and the agent's writes can never drift apart. The sidebar loads
+    this on conversation switch / turn-settle / page refresh; live mid-turn
+    ticks ride the ``plan`` SSE frames on ``/api/chat`` instead.
+
+    Returns real ids/statuses; ``items: []`` when the conversation has no plan.
+    """
+    session = await _get_session(conversation_id, agent)
+    scoped = session._scoped_cid(conversation_id) or conversation_id
+    items = await _plan_snapshot(scoped)
+    return {
+        "conversation_id": conversation_id,
+        "agent": agent,
+        "items": items,
+        "item_count": len(items),
+    }
 
 
 @app.get("/api/conversations/{conversation_id}/history")
@@ -690,6 +744,28 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
 
     async def _inner() -> AsyncIterator[str]:
         turn_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        _scoped = getattr(session, "_scoped_cid", None)
+        scoped_cid = (_scoped(conversation_id) if _scoped is not None else None) or conversation_id
+
+        async def _on_plan(_ev: Any) -> None:
+            # Full-snapshot per mutation (Plan-Live-Sidebar-Spec): read the
+            # authoritative store and push the whole items array. Idempotent
+            # against dropped/out-of-order frames; the panel is always a direct
+            # mirror of server truth with zero client merge logic.
+            try:
+                items = await _plan_snapshot(scoped_cid)
+            except Exception:  # noqa: BLE001 - a subscriber must never break the turn
+                log.warning("plan snapshot for %s failed", scoped_cid, exc_info=True)
+                return
+            turn_q.put_nowait(("plan", {"items": items}))
+
+        # Observe the conversation's shared plan emitter (the SAME emitter the
+        # agent's FilePlanStore writes through, via _registry). Any plan
+        # mutation → a snapshot frame lands on the turn stream, mid-turn.
+        emitter = get_plan_emitter(scoped_cid)
+        plan_registrations: list[tuple[PlanEventType, Any]] = [
+            (t, emitter.on(t, _on_plan)) for t in PlanEventType
+        ]
 
         async def _pump_turn() -> None:
             try:
@@ -716,6 +792,8 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
             # Cooperative teardown: cancel the session's CancellationToken, NOT
             # the turn task directly (see commit 24cd3aa for the OTel span/context
             # rationale). Then drain the turn task so it settles before teardown.
+            for evt_type, cb in plan_registrations:
+                emitter.off(evt_type, cb)
             try:
                 await session.cancel()
             except Exception:  # noqa: BLE001 - best-effort; never mask teardown

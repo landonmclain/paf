@@ -548,12 +548,21 @@ def _build_planning(store) -> Planning:
     run context.
     """
     from paf.capabilities.planning import FilePlanStore, Planning
+    from paf.capabilities.planning._registry import get_plan_emitter
 
     _PLAN_ROOT = PROJECT_ROOT / "data" / "plans"
 
     def _resolve_plan_store(ctx) -> FilePlanStore:
         cid = getattr(ctx, "conversation_id", None) or "default"
-        return FilePlanStore(root=_PLAN_ROOT, conversation_id=cid)
+        # Attach the conversation's shared PlanEventEmitter so every store the
+        # live agent writes to emits plan events. The SSE layer (ui/sse.py)
+        # subscribes to the SAME emitter via the same scoped cid, bridging the
+        # store <-> browser gap with zero client re-derivation.
+        return FilePlanStore(
+            root=_PLAN_ROOT,
+            conversation_id=cid,
+            event_emitter=get_plan_emitter(cid),
+        )
 
     # Thin guidance: point out that write_plan returns the ids the model must
     # pass to a follow-up update_task_status(_es) — no read_plan round-trip
