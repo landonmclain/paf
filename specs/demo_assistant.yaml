@@ -173,6 +173,19 @@ filesystem:
   root_dir: ~/
 shell:
   cwd: ~/
+  # Execution backend for shell commands. This is the sandbox toggle.
+  #   backend: local  -> run on the host, no sandbox (default)
+  #   backend: docker -> run inside a locked-down Docker container (no network,
+  #                      read-only root, non-root user, resource limits)
+  # The model cannot change this at runtime; it is fixed at build time.
+  # If backend: docker is set but the Docker daemon is down, the agent
+  # hard-fails at build time (it will NOT silently fall back to local).
+  executor:
+    backend: local
+    # Docker-only options (ignored when backend: local):
+    #   mode: exec -> one long-lived container, state persists between commands (~60ms)
+    #   mode: run  -> fresh container per command, strongest isolation (~250ms)
+    #   image: python:3.12-slim -> the container image to run commands in
 git:
   # root: ~/projects/Personal/landonmclain-site
   root: ~/projects/Personal/pydantic-agent-framework/
