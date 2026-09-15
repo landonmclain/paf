@@ -410,8 +410,8 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         resolved = self._safe_resolve(path)
         if not resolved.is_file():
             if resolved.is_dir():
-                raise FileNotFoundError(f"'{path}' is a directory, not a file.")
-            raise FileNotFoundError(f'File not found: {path}')
+                raise FileNotFoundError(f"'{path}' is a directory, not a file (current root: '{self._root}').")
+            raise FileNotFoundError(f'File not found: {path} (current root: \'{self._root}\')')
 
         raw = resolved.read_bytes()
         if _is_binary(raw):
@@ -452,7 +452,10 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
 
         if not resolved.parent.exists():
             parent_rel = str(resolved.parent.relative_to(self._root))
-            raise FileNotFoundError(f"Parent directory '{parent_rel}' does not exist. Use create_directory first.")
+            raise FileNotFoundError(
+                f"Parent directory '{parent_rel}' does not exist (current root: '{self._root}'). "
+                "Use create_directory first."
+            )
         write_atomic(resolved, content)
         new_hash = _content_hash(content)
         lines = len(content.splitlines())
@@ -480,7 +483,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         """
         resolved = self._safe_resolve(path, write=True)
         if not resolved.is_file():
-            raise FileNotFoundError(f'File not found: {path}')
+            raise FileNotFoundError(f'File not found: {path} (current root: \'{self._root}\')')
 
         result = apply_edits(
             resolved,
@@ -506,7 +509,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         # Entries are filtered per-entry against allowed_patterns below.
         resolved = self._safe_resolve(path, check_allowed=False)
         if not resolved.is_dir():
-            raise NotADirectoryError(f'Not a directory: {path}')
+            raise NotADirectoryError(f'Not a directory: {path} (current root: \'{self._root}\')')
 
         entries: list[str] = []
         for entry in sorted(resolved.iterdir()):
@@ -665,7 +668,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         # matched entries are filtered per-entry below.
         resolved = self._safe_resolve(path, check_allowed=False)
         if not resolved.is_dir():
-            raise NotADirectoryError(f'Not a directory: {path}')
+            raise NotADirectoryError(f'Not a directory: {path} (current root: \'{self._root}\')')
 
         matches: list[str] = []
         real_root = Path(os.path.realpath(self._root))
@@ -731,7 +734,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         """
         resolved = self._safe_resolve(path)
         if not resolved.exists():
-            raise FileNotFoundError(f'Path not found: {path}')
+            raise FileNotFoundError(f'Path not found: {path} (current root: \'{self._root}\')')
 
         # Check if the original (pre-resolve) path is a symlink
         original = self._root / path
