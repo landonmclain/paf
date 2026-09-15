@@ -35,6 +35,10 @@ from paf.capabilities._storage._atomic import write_atomic as _write_atomic
 
 from ._corpus import HintCorpus, SkillDoc
 
+# Recovery-prone write/edit tools get real retry budget (not pydantic-ai's
+# default of 1). Mirrors fs `_FS_TOOL_RETRIES` and vault `_VAULT_TOOL_RETRIES`.
+_SKILL_TOOL_RETRIES = 5
+
 _MAX_DESCRIPTION_CHARS = 240  # keep list_skills output tight
 _READ_MAX_CHARS = 16_000  # read_skill_file content bound (spill beyond this)
 
@@ -80,8 +84,8 @@ class SkillToolset(FunctionToolset[object]):
         self.add_function(self.load_skill, name="load_skill")
         self.add_function(self.list_skill_files, name="list_skill_files")
         self.add_function(self.read_skill_file, name="read_skill_file")
-        self.add_function(self.create_skill, name="create_skill")
-        self.add_function(self.edit_skill, name="edit_skill")
+        self.add_function(self.create_skill, name="create_skill", retries=_SKILL_TOOL_RETRIES)
+        self.add_function(self.edit_skill, name="edit_skill", retries=_SKILL_TOOL_RETRIES)
 
     # -- helpers -----------------------------------------------------------
 

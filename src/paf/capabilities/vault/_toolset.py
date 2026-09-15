@@ -42,6 +42,11 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from paf.capabilities._edit import apply_edits
 
+# Recovery-prone write/edit tools get real retry budget (not pydantic-ai's
+# default of 1), so transient CAS/parse/conflict ModelRetry failures feed back to
+# the model to correct instead of killing the run. Mirrors fs `_FS_TOOL_RETRIES`.
+_VAULT_TOOL_RETRIES = 5
+
 from ._markdown import rename_note_title, resolve_note, rewrite_wikilink_target
 from ._store import (
     FlatFileVaultStorage,
@@ -111,9 +116,9 @@ class VaultToolset(FunctionToolset):
         self.add_function(self.note_search, name="note_search")
         self.add_function(self.note_links, name="note_links")
         self.add_function(self.note_backlinks, name="note_backlinks")
-        self.add_function(self.note_create, name="note_create")
-        self.add_function(self.note_rename, name="note_rename")
-        self.add_function(self.note_edit, name="note_edit")
+        self.add_function(self.note_create, name="note_create", retries=_VAULT_TOOL_RETRIES)
+        self.add_function(self.note_rename, name="note_rename", retries=_VAULT_TOOL_RETRIES)
+        self.add_function(self.note_edit, name="note_edit", retries=_VAULT_TOOL_RETRIES)
 
     # -- index freshness -----------------------------------------------------
 
