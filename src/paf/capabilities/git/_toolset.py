@@ -39,6 +39,11 @@ MAX_DIFF_CHUNK_LINES = 1200
 # for diff chunking (git_diff needs clean diff text).
 _DEFAULT_TIMEOUT = 60.0
 
+# Recovery-prone git tools get a real retry budget (not pydantic-ai's default of
+# 1), so transient/model-correctable ModelRetry failures feed back to the model
+# to fix instead of killing the run. Mirrors _FS_TOOL_RETRIES in fs.
+_GIT_TOOL_RETRIES = 5
+
 
 def _recoverable(  # noqa: UP047  # matches fs/shell `_recoverable` convention
     fn: Callable[Concatenate[GitToolset, _P], Awaitable[str]],
@@ -95,11 +100,11 @@ class GitToolset(FunctionToolset):
         self._root = root.resolve()
         self._timeout = timeout
 
-        self.add_function(self.git_status, name='git_status')
-        self.add_function(self.git_changed_files, name='git_changed_files')
-        self.add_function(self.git_diff, name='git_diff')
-        self.add_function(self.git_checkpoint, name='git_checkpoint')
-        self.add_function(self.git_restore_paths, name='git_restore_paths')
+        self.add_function(self.git_status, name='git_status', retries=_GIT_TOOL_RETRIES)
+        self.add_function(self.git_changed_files, name='git_changed_files', retries=_GIT_TOOL_RETRIES)
+        self.add_function(self.git_diff, name='git_diff', retries=_GIT_TOOL_RETRIES)
+        self.add_function(self.git_checkpoint, name='git_checkpoint', retries=_GIT_TOOL_RETRIES)
+        self.add_function(self.git_restore_paths, name='git_restore_paths', retries=_GIT_TOOL_RETRIES)
 
     async def for_run(self, ctx: RunContext) -> AbstractToolset:
         """Return a fresh instance per run (stateless here, but keep isolation)."""
