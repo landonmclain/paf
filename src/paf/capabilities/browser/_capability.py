@@ -104,16 +104,6 @@ class Browser(AbstractCapability[AgentDepsT]):
     at agent construction.
     """
 
-    # Deferred loading: the eighteen browser tools stay hidden from the model's
-    # front window until the agent calls `load_capability("browser")`. This keeps
-    # them out of every prompt's tool schema (cache-friendly), trading one
-    # cache-bust on first browser use for a permanent reduction in always-on
-    # tool tokens. The stable `id` is required by pydantic-ai for a deferred
-    # capability (it anchors the `load_capability` reference across `for_run`
-    # fresh instances).
-    id: str = "browser"
-    defer_loading: bool = True
-
     headless: bool = True
     """Run Chromium without a visible window. `True` suits servers and CI."""
 
