@@ -14,6 +14,7 @@ Background processes map to detached containers; ``check`` / ``stop`` become
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -26,6 +27,28 @@ from paf.capabilities._sandbox._protocol import (
     BackgroundStatus,
     ExecResult,
 )
+
+
+def docker_available() -> bool:
+    """Whether the Docker CLI and daemon are reachable on this host.
+
+    Used at build time to hard-fail when a spec configures the ``docker``
+    backend but Docker is not actually available, rather than silently
+    falling back to an unsandboxed local process.
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        subprocess.run(
+            ["docker", "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=10,
+        )
+        return True
+    except (subprocess.SubprocessError, OSError):
+        return False
 
 
 @dataclass

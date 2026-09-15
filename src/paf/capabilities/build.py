@@ -32,6 +32,12 @@ from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.capabilities._sandbox import (
+    DockerExecutor,
+    LocalProcessExecutor,
+    SandboxedExecutor,
+    docker_available,
+)
 from paf.capabilities.browser import Browser as _Browser
 from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
@@ -222,6 +228,39 @@ def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSyst
     return _FileSystem(root_dir=root_dir)
 
 
+def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
+    """Resolve the spec's ``shell.executor`` block into a backend instance.
+
+    ``None`` or ``backend: local`` -> :class:`LocalProcessExecutor` (host, no
+    sandbox). ``backend: docker`` -> :class:`DockerExecutor` with the block's
+    ``mode`` / ``image`` (defaults ``exec`` / ``python:3.12-slim``).
+
+    Docker is the security boundary, so a spec that *asks* for it but runs on a
+    host without Docker hard-fails at build time rather than silently falling
+    back to an unsandboxed local process (the model cannot weaken its own
+    sandbox).
+    """
+    if not isinstance(executor_config, dict):
+        return LocalProcessExecutor()
+    backend = executor_config.get("backend", "local")
+    if backend == "local":
+        return LocalProcessExecutor()
+    if backend == "docker":
+        if not docker_available():
+            raise RuntimeError(
+                "shell.executor.backend is 'docker' but Docker is not available "
+                "on this host; refusing to fall back to an unsandboxed local "
+                "process. Install/start Docker or set backend: local."
+            )
+        return DockerExecutor(
+            mode=executor_config.get("mode", "exec"),
+            image=executor_config.get("image", "python:3.12-slim"),
+        )
+    raise ValueError(
+        f"shell.executor.backend must be 'local' or 'docker', got {backend!r}"
+    )
+
+
 def _build_shell(store, shell_config: dict | None = None) -> _Shell:
     """Shell command execution rooted at the project root (paf-owned copy).
 
@@ -234,14 +273,19 @@ def _build_shell(store, shell_config: dict | None = None) -> _Shell:
     opts into `denied_env_patterns=LLM_API_KEY_ENV_PATTERNS`.
 
     `shell_config` is the spec's top-level ``shell:`` block (see
-    ``specs._spec_shell_config``): ``cwd`` overrides the default ``PROJECT_ROOT``.
-    Absent/``None`` -> ``PROJECT_ROOT``. The built-in deny-list and
-    interactive-command block always apply; this knob only moves the cwd.
+    ``specs._spec_shell_config``): ``cwd`` overrides the default ``PROJECT_ROOT``
+    and ``executor`` selects the execution backend (local default, docker for
+    the sandbox). Absent/``None`` -> ``PROJECT_ROOT`` + local executor. The
+    built-in deny-list and interactive-command block always apply; these knobs
+    only move the cwd and the backend.
     """
     cwd = PROJECT_ROOT
     if isinstance(shell_config, dict) and isinstance(shell_config.get("cwd"), str) and shell_config.get("cwd"):
         cwd = Path(os.path.expanduser(shell_config["cwd"]))
-    return _Shell(cwd=cwd)
+    executor = None
+    if isinstance(shell_config, dict):
+        executor = _resolve_shell_executor(shell_config.get("executor"))
+    return _Shell(cwd=cwd, executor=executor)
 
 
 def _build_git(store, git_config: dict | None = None) -> _Git:

@@ -595,8 +595,52 @@ def _spec_filesystem_config(spec_path: Path) -> dict | None:
 
 
 def _spec_shell_config(spec_path: Path) -> dict | None:
-    """Read the spec's top-level ``shell:`` block (cwd)."""
-    return _spec_rooted_config(spec_path, "shell", "cwd")
+    """Read the spec's top-level ``shell:`` block (cwd + executor).
+
+    Returns a dict with optional ``cwd`` and ``executor`` keys, or ``None``
+    when the block is absent / unreadable. The ``executor`` block selects the
+    execution backend:
+
+        shell:
+          cwd: ~/projects/Personal/landonmclain-site
+          executor:
+            backend: docker   # local (default) | docker
+            mode: exec        # exec (default) | run
+            image: python:3.12-slim
+
+    ``backend`` defaults to ``local`` when the executor block is absent or
+    names no backend. Unknown keys inside the block are ignored so the schema
+    can grow without breaking older spec files.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("shell")
+    if not isinstance(block, dict):
+        return None
+    config: dict = {}
+    cwd = block.get("cwd")
+    if isinstance(cwd, str) and cwd.strip():
+        config["cwd"] = cwd
+    executor = block.get("executor")
+    if isinstance(executor, dict):
+        resolved: dict = {}
+        backend = executor.get("backend")
+        if isinstance(backend, str) and backend.strip():
+            resolved["backend"] = backend
+        mode = executor.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            resolved["mode"] = mode
+        image = executor.get("image")
+        if isinstance(image, str) and image.strip():
+            resolved["image"] = image
+        if resolved:
+            config["executor"] = resolved
+    return config or None
 
 
 def _spec_git_config(spec_path: Path) -> dict | None:
