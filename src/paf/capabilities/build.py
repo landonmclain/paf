@@ -573,7 +573,8 @@ def _build_planning(store) -> Planning:
             "For multi-step work, lay out the steps up front with `write_plan` and "
             "keep it current as you go. `write_plan` returns each step's [id] — "
             "use those ids directly in `update_task_status`/`update_task_statuses`; "
-            "you do not need `read_plan` first."
+            "you do not need `read_plan` first. "
+            "To clear the plan, call `write_plan` with `items: []`."
         ),
     )
 
