@@ -33,7 +33,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -589,7 +589,9 @@ async def conversation_tasks(
 
 
 @app.get("/api/processes/stream")
-async def processes_stream(conversation_id: str, agent: str = DEFAULT_AGENT) -> StreamingResponse:
+async def processes_stream(
+    request: Request, conversation_id: str, agent: str = DEFAULT_AGENT
+) -> StreamingResponse:
     """Long-lived, turn-independent SSE feed of background processes/lifecycle.
 
     Decoupled from ``/api/chat`` (see the Unified-Background-Process-Feed-Spec,
@@ -603,25 +605,26 @@ async def processes_stream(conversation_id: str, agent: str = DEFAULT_AGENT) -> 
     current task history (terminal rows, e.g. a finished/failed summarizer),
     then subscribe for live transitions (queued -> running -> done|error|skipped).
     """
-    return _process_response(_process_feed, conversation_id, agent)
+    return _process_response(_process_feed, conversation_id, agent, request)
 
 
 def _process_response(
-    feed: Callable[[Session, str], AsyncIterator[str]],
+    feed: Callable[[Session, str, Request], AsyncIterator[str]],
     conversation_id: str,
     agent: str,
+    request: Request,
 ) -> StreamingResponse:
     """Adapter from a session-scoped feed generator to an SSE StreamingResponse."""
 
     async def gen() -> AsyncIterator[str]:
         session = await _get_session(conversation_id, agent)
-        async for frame in feed(session, conversation_id):
+        async for frame in feed(session, conversation_id, request):
             yield frame
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
+def _process_feed(session: Session, conversation_id: str, request: Request) -> AsyncIterator[str]:
     """Stream background-process frames for one lane, never tying to a turn.
 
     On connect: restore the conversation's current task history (terminal +
@@ -715,6 +718,25 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
 
             sub = bg.subscribe_tasks(_on_task)
 
+        # Watch for the client disconnecting. This feed is intentionally
+        # never-ending ("no turn-end sentinel"), so without a disconnect signal
+        # it pins the SSE socket open forever — and uvicorn's graceful shutdown
+        # waits on open connections until systemd's TimeoutStopSec SIGKILLs the
+        # process (the ~90s restart stalls). When the client goes away, publish
+        # the None sentinel so the loop ends via the same path as a natural stop.
+        async def _watch_disconnect() -> None:
+            try:
+                while not await request.is_disconnected():
+                    await asyncio.sleep(0.5)
+            except Exception:  # noqa: BLE001 - a broken watch must not panic
+                pass
+            # Put the None sentinel DIRECTLY on the queue — NOT via _publish,
+            # which deliberately swallows `None` (its guard is `frame is None ->
+            # return`, meant to stop stray end-signals, but ours is the real one).
+            q.put_nowait(None)
+
+        disconnect_watcher = asyncio.create_task(_watch_disconnect())
+
         try:
             while True:
                 frame = await q.get()
@@ -722,6 +744,7 @@ def _process_feed(session: Session, conversation_id: str) -> AsyncIterator[str]:
                     break
                 yield _frame(*frame)
         finally:
+            disconnect_watcher.cancel()
             closed["v"] = True
             if sub is not None:
                 try:

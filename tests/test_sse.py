@@ -283,7 +283,13 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
     coord = _Coordinator([_Hist("consolidation.conv-1.1", "DONE")])
     s = _Session(coord)
 
-    feed = sse._process_feed(s, "conv-1")  # type: ignore[attr-defined]
+    class _Req:
+        async def is_disconnected(self) -> bool:
+            # Stay connected for the whole test — the disconnect watcher must
+            # not fire and cut this feed short.
+            return False
+
+    feed = sse._process_feed(s, "conv-1", _Req())  # type: ignore[attr-defined]
 
     async def _drive():
         out = []
@@ -334,9 +340,52 @@ def test_process_feed_bare_session_streams_nothing_and_stays_alive() -> None:
     class _Session:
         background = None
 
-    feed = sse._process_feed(_Session(), "conv-1")  # type: ignore[attr-defined]
+    class _Req:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    feed = sse._process_feed(_Session(), "conv-1", _Req())  # type: ignore[attr-defined]
 
     async def _drive():
         await feed.aclose()  # type: ignore[attr-defined] - must not raise on a bare session
+
+    asyncio.run(_drive())
+
+
+def test_process_feed_terminates_on_client_disconnect() -> None:
+    """The never-ending processes feed must end when the client disconnects.
+
+    Without disconnect handling the generator pins its SSE socket open forever,
+    so uvicorn's graceful shutdown waits on it until systemd's TimeoutStopSec
+    SIGKILLs the process (~90s restart stalls). is_disconnected() flips True a
+    few polls in; the feed must terminate (not hang) within a bounded time.
+    """
+
+    class _Session:
+        background = None
+
+        def _scoped_cid(self, conversation_id: str) -> str:
+            return conversation_id
+
+    class _Req:
+        def __init__(self) -> None:
+            self.n = 0
+
+        async def is_disconnected(self) -> bool:
+            # First two polls say connected, then the client goes away.
+            self.n += 1
+            return self.n >= 3
+
+    feed = sse._process_feed(_Session(), "conv-1", _Req())  # type: ignore[attr-defined]
+
+    async def _drive():
+        out = []
+        # Must settle on its own once the disconnect watcher fires — no aclose,
+        # no manual cancel. Bounded wait proves it doesn't hang forever.
+        async def _collect():
+            async for f in feed:  # type: ignore[attr-defined]
+                out.append(f)
+
+        await asyncio.wait_for(_collect(), timeout=5)
 
     asyncio.run(_drive())
