@@ -233,7 +233,9 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
 
     ``None`` or ``backend: local`` -> :class:`LocalProcessExecutor` (host, no
     sandbox). ``backend: docker`` -> :class:`DockerExecutor` with the block's
-    ``mode`` / ``image`` (defaults ``exec`` / ``python:3.12-slim``).
+    options (``mode`` / ``image`` / ``network`` / ``user`` / ``read_only`` /
+    ``memory`` / ``cpus`` / ``pids_limit`` / ``workspace`` / ``container_name``),
+    each defaulting to the executor's secure default when omitted.
 
     Docker is the security boundary, so a spec that *asks* for it but runs on a
     host without Docker hard-fails at build time rather than silently falling
@@ -255,6 +257,14 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
         return DockerExecutor(
             mode=executor_config.get("mode", "exec"),
             image=executor_config.get("image", "python:3.12-slim"),
+            network=executor_config.get("network", "none"),
+            user=executor_config.get("user", "1000:1000"),
+            read_only=executor_config.get("read_only", True),
+            memory=executor_config.get("memory", "1g"),
+            cpus=executor_config.get("cpus", "1.0"),
+            pids_limit=executor_config.get("pids_limit", 256),
+            workspace=executor_config.get("workspace", "/workspace"),
+            container_name=executor_config.get("container_name"),
         )
     raise ValueError(
         f"shell.executor.backend must be 'local' or 'docker', got {backend!r}"

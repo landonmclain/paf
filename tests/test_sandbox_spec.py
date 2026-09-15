@@ -53,6 +53,52 @@ def test_resolve_docker_custom_mode_image():
     assert ex._image == "python:3.11-slim"
 
 
+def test_resolve_docker_full_option_pass_through():
+    if not docker_available():
+        pytest.skip("Docker not available")
+    ex = _resolve_shell_executor(
+        {
+            "backend": "docker",
+            "mode": "run",
+            "image": "python:3.11-slim",
+            "network": "bridge",
+            "user": "1234:1234",
+            "read_only": False,
+            "memory": "2g",
+            "cpus": "2.0",
+            "pids_limit": 512,
+            "workspace": "/app",
+            "container_name": "paf-test",
+        }
+    )
+    assert isinstance(ex, DockerExecutor)
+    assert ex._mode == "run"
+    assert ex._image == "python:3.11-slim"
+    assert ex._network == "bridge"
+    assert ex._user == "1234:1234"
+    assert ex._read_only is False
+    assert ex._memory == "2g"
+    assert ex._cpus == "2.0"
+    assert ex._pids_limit == 512
+    assert ex._workspace == "/app"
+    assert ex._container_name == "paf-test"
+
+
+def test_resolve_docker_defaults_when_unspecified():
+    if not docker_available():
+        pytest.skip("Docker not available")
+    ex = _resolve_shell_executor({"backend": "docker"})
+    assert isinstance(ex, DockerExecutor)
+    assert ex._network == "none"
+    assert ex._user == "1000:1000"
+    assert ex._read_only is True
+    assert ex._memory == "1g"
+    assert ex._cpus == "1.0"
+    assert ex._pids_limit == 256
+    assert ex._workspace == "/workspace"
+    assert ex._container_name is None
+
+
 def test_build_shell_no_config_executor_none():
     # No shell_config -> executor stays None; the toolset defaults to local.
     assert _build_shell(store=None).executor is None
