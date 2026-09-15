@@ -12,6 +12,8 @@ from pathlib import Path
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.tools import AgentDepsT
 
+from paf.capabilities._sandbox import SandboxedExecutor
+
 from ._toolset import ShellToolset
 
 _DEFAULT_DENIED_COMMANDS: tuple[str, ...] = (
@@ -103,6 +105,15 @@ class Shell(AbstractCapability[AgentDepsT]):
     `LLM_API_KEY_ENV_PATTERNS` for a ready-made provider-credential denylist.
     """
 
+    executor: SandboxedExecutor | None = None
+    """The execution backend for spawned commands.
+
+    When `None` (default) a `LocalProcessExecutor` runs commands directly on the
+    host (no sandbox). Set this to a `DockerExecutor` to run commands inside a
+    locked-down container. The model cannot change this at runtime; it is fixed
+    at construction, per 'the model proposes, the runtime executes'.
+    """
+
     def __post_init__(self) -> None:
         """Resolve the built-in denylist according to the selected policy."""
         if self.denied_commands is _DEFAULT_DENIED_COMMANDS:
@@ -121,4 +132,5 @@ class Shell(AbstractCapability[AgentDepsT]):
             allow_interactive=self.allow_interactive,
             env=self.env,
             denied_env_patterns=self.denied_env_patterns,
+            executor=self.executor,
         )

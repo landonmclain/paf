@@ -78,4 +78,12 @@ class SandboxedExecutor(Protocol):
 
     async def check(self, handle: BackgroundHandle) -> BackgroundStatus: ...
 
-    async def stop(self, handle: BackgroundHandle) -> None: ...
+    async def stop(self, handle: BackgroundHandle) -> BackgroundStatus:
+        """Terminate the process and return its final status.
+
+        ``stop`` both forces termination and reports the final output/exit code,
+        so a caller (e.g. the shell toolset's ``stop_command``) can surface the
+        process's last state in one call instead of racing ``check`` against the
+        cleanup.
+        """
+        ...

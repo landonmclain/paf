@@ -198,7 +198,18 @@ class DockerExecutor:
             status=status, stdout=logs_out, stderr=logs_err, exit_code=exit_code
         )
 
-    async def stop(self, handle: BackgroundHandle) -> None:
+    async def stop(self, handle: BackgroundHandle) -> BackgroundStatus:
         state: _DockerBackgroundState = handle.state
         await self._docker(['docker', 'stop', state.container_id])
+        _, logs_out, logs_err = await self._docker(['docker', 'logs', state.container_id])
+        _, code_out, _ = await self._docker(
+            ['docker', 'inspect', '-f', '{{.State.ExitCode}}', state.container_id]
+        )
         await self._docker(['docker', 'rm', state.container_id])
+        try:
+            exit_code = int(code_out.strip())
+        except ValueError:
+            exit_code = None
+        return BackgroundStatus(
+            status='finished', stdout=logs_out, stderr=logs_err, exit_code=exit_code
+        )

@@ -140,7 +140,7 @@ class LocalProcessExecutor:
             status=status, stdout=stdout, stderr=stderr, exit_code=state.exit_code
         )
 
-    async def stop(self, handle: BackgroundHandle) -> None:
+    async def stop(self, handle: BackgroundHandle) -> BackgroundStatus:
         state: _LocalBackgroundState = handle.state
         if not state.finished:
             await self._kill_process_group(state.proc)
@@ -148,8 +148,12 @@ class LocalProcessExecutor:
                 await state.proc.wait()
             state.exit_code = state.proc.returncode
             state.finished = True
+        stdout, stderr = self._read_bg_output(state)
         self._cleanup_bg_files(state)
         await state.proc.aclose()
+        return BackgroundStatus(
+            status='finished', stdout=stdout, stderr=stderr, exit_code=state.exit_code
+        )
 
     async def _kill_process_group(self, proc: anyio.abc.Process) -> None:
         """SIGTERM the process group, escalating to SIGKILL after the grace period."""
