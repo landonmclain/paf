@@ -1,49 +1,15 @@
-"""Next-generation paf ``Session`` — ``agent.iter()`` control loop, additive events.
+"""The paf ``Session`` runtime — ``agent.iter()`` control loop + additive events.
 
-The promoted, production ``runtime`` module (renamed from ``runtime2``). It is
-the single runtime: developed as a self-contained sibling to the old runtime,
-then promoted here once the old file was archived. Design, decisions, and
-the verified pydantic-ai 2.33 API live in the vault spec:
+:class:`Session` is a single self-contained class: profile-scoped conversation
+identity (``{profile}:{cid}`` at the store boundary), resume/restore, the
+streaming loop, and per-turn steering (``cancel``/``enqueue``). Background
+machinery (memory consolidation/review, thread summarization) lives in
+:class:`paf.background.BackgroundCoordinator`, attached by the app/CLI via
+:meth:`attach_background` — a bare Session (``background is None``) is turn-only.
 
-    Hermes/Projects/Personal/Portfolio-GitHub/Designs/paf-runtime2-Session.md
-
-This module is **fully self-contained**: :class:`Session` is a single concrete
-class (no subclass of anything). All behavior the old base ``Session`` owned is
-absorbed here (init, resume, memory queue, run/run_sync, close, properties),
-ported verbatim so the public contract (``stream()``/``run()``/``run_sync()``/
-``restore``/``refresh``/``close()``, ``history``, ``last_result``) keeps its
-shape and promotion from consumers is a one-line import swap.
-
-Locked decisions (do not revisit without reopening the workstream):
-- Promoted from ``src/paf/runtime2.py``; the old ``runtime.py`` + legacy CLIs
-  are archived under ``archive/runtime-legacy/``.
-- GO BIG: switching bar = ``coding_agent`` event parity
-  (ActionStep running|done|error, MaintenanceStep, TurnUpdate).
-- Reuse shared core via imports (store/build_agent/resume/memory-queue).
-- Profile IS a namespace on conversation identity: store keys, resume, and
-  the agent run are scoped by ``{profile.name}:{cid}`` (see ``_scoped_cid``),
-  so two profiles using the SAME plain ``conversation_id`` never cross-talk.
-  The session holds the plain id; the profile scope is applied at the boundary.
-- Single-tenant, NO users. Users = a later prefix layer, not a rework.
-- Same public ``Session`` contract; new event kinds are **additive**.
-
-PHASE 0 (done): compile-clean stub. Additive event dataclasses forward-declared.
-PHASE 1 (done, commit c91e147): ``stream()`` switched from ``run_stream_events()``
-to ``agent.iter()`` node walk, reusing the existing per-event dispatch verbatim
-(byte-identical 4-kind contract for text/thinking/tool_call/tool_result).
-``cancel()`` wired to the Session-held CancellationToken.
-PHASE 2 (done, commit 61df477): the forward-declared kinds are now WIRED.
-(1) The loop emits ``ToolRunning`` at tool-call start and ``ToolError`` on a
-failed/retried result, keyed by the part's ``tool_call_id`` (stable ``step_id``).
-(2) The background-task registry + ``subscribe_tasks()`` replay lands consumer
-#1: memory consolidation publishes queued/running/done via ``BackgroundEvent``.
-``enqueue()`` (Phase 3, commit 228c568) is real: the active AgentRun handle is
-kept on ``self._run`` and ``enqueue`` forwards to it.
-PHASE 4 (this revision): the class becomes **fully self-contained** — no
-subclass, no ``paf.runtime`` imports — and conversation identity gets a
-**profile namespace** layer (``_scoped_cid``: ``{profile}:{cid}`` at the store
-boundary). ``runtime.py``'s entire ``Session`` body is absorbed here, ported
-as-is.
+The public contract: ``stream()``/``run()``/``run_sync()``/``restore``/
+``refresh``/``close()``, plus ``history`` and ``last_result``. The session holds
+the plain conversation id; the profile scope is applied at the store boundary.
 """
 
 from __future__ import annotations
@@ -123,7 +89,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# StreamEvent — the existing 4-kind event (previously defined in ``paf.runtime``)
+# StreamEvent — the 4-kind renderable event
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class StreamEvent:
@@ -149,23 +115,16 @@ class StreamEvent:
 
 
 # ---------------------------------------------------------------------------
-# Forward-declared additive event kinds (Phase 0: declared, Phases 1-3 wired).
-# Mapping to coding_agent parity (chat_runner.py):
-#   ActionStep        -> ToolRunning + ToolError (status running|done|error)
-#   MaintenanceStep   -> MaintenanceEvent (status done|queued|skipped|error)
-#   TurnUpdate/result -> BackgroundEvent (paf owns transport; richer event)
+# Additive event kinds that ride the turn stream, alongside StreamEvent.
 # ---------------------------------------------------------------------------
 
-# Step lifecycle statuses (PROCESSING/DONE/ERROR/QUEUED/SKIPPED) and the
-# BackgroundTask/BackgroundEvent types now live in ``paf.background`` (moved
-# with the coordinator) and are re-exported at module top. ``StepStatus`` stays
-# here for the turn-side ``MaintenanceEvent``.
+# Step lifecycle status for the turn-side ``MaintenanceEvent``.
 StepStatus = Literal["running", "done", "error", "queued", "skipped"]
 
 
 @dataclass(frozen=True)
 class ToolRunning:
-    """Emitted when a tool call starts (coding_agent ActionStep ``running``).
+    """Emitted when a tool call starts.
 
     ``step_id`` correlates with the ``ToolError``/``ToolResult`` that finishes
     this step, letting the UI flip ``running -> done|error`` by id.
@@ -177,7 +136,7 @@ class ToolRunning:
 
 @dataclass(frozen=True)
 class ToolError:
-    """Emitted when a tool call fails (coding_agent ActionStep ``error``)."""
+    """Emitted when a tool call fails."""
 
     step_id: str
     error: str
@@ -187,31 +146,30 @@ class ToolError:
 class MaintenanceEvent:
     """Post-turn maintenance reporting — memory schedule, turn-log, etc.
 
-    coding_agent's ``MaintenanceStep`` (done|queued|skipped|error). Fired after
-    a turn completes, never on the turn's hot path.
+    Fired after a turn completes, never on the turn's hot path.
     """
 
     label: str
     status: StepStatus
 
 
-#: The per-tool lifecycle events that ride the turn ``stream()`` (in addition
-#: to the inherited :class:`StreamEvent` kinds). Background/Maintenance are NOT
-#: here — they live on their own ``subscribe_tasks`` timeline, never the turn.
+#: The per-tool lifecycle events that ride the turn ``stream()``, in addition
+#: to the :class:`StreamEvent` kinds. Background/Maintenance events live on
+#: their own ``subscribe_tasks`` timeline, never the turn.
 TurnStreamEvent = StreamEvent | ToolRunning | ToolError
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers (absorbed from ``paf.runtime``, plus this module's sinks)
+# Module-level helpers
 # ---------------------------------------------------------------------------
 
 
 def _part_leading_text(part: Any) -> str:
     """Pull the initial text out of a stream part's ``.content`` field.
 
-    Mirrors cli_demo's ``_stream_part_content``: the first chunk of a part sits
-    in ``.content`` (a ``str`` or list of ``str``), later chunks arrive as
-    ``TextPartDelta.content_delta``. Non-text parts return ``""``.
+    The first chunk of a part sits in ``.content`` (a ``str`` or list of
+    ``str``); later chunks arrive as ``TextPartDelta.content_delta``. Non-text
+    parts return ``""``.
     """
     content = getattr(part, "content", None)
     if content is None:
@@ -262,13 +220,12 @@ def _is_turn_start(msg: Any) -> bool:
 def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
     """Map ONE pydantic-ai stream node event to the turn ``StreamEvent``(s).
 
-    The exact dispatch the old ``run_stream_events()`` loop used (PartStart
-    leading text, PartDelta text/thinking, FunctionToolCall -> tool_call,
-    FunctionToolResult -> tool_result) PLUS the Phase 2 additive kinds:
-    ``ToolRunning`` is emitted right after each ``tool_call`` (tool-call START),
-    and ``ToolError`` when a tool result came back failed/retried. Extracted to
-    a pure function so the Phase 1+2 event contract is unit-testable offline
-    with synthetic events — no model, no live tool invocation required.
+    PartStart leading text, PartDelta text/thinking, FunctionToolCall ->
+    tool_call, FunctionToolResult -> tool_result. ``ToolRunning`` is emitted
+    right after each ``tool_call`` (tool-call START), and ``ToolError`` when a
+    tool result came back failed/retried. A pure function so the event contract
+    is unit-testable offline with synthetic events — no model, no live tool
+    invocation required.
     """
     out: list[TurnStreamEvent] = []
     if isinstance(event, PartStartEvent):
@@ -298,8 +255,8 @@ def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
                 ),
             )
         )
-        # Phase 2: tool-call START (coding_agent ActionStep running). step_id
-        # = the stable tool_call_id, so the UI flips ONE row running->done|error.
+        # Tool-call START. step_id = the stable tool_call_id, so the UI flips
+        # ONE row running->done|error.
         out.append(ToolRunning(tool_name=tool_name, step_id=step_id))
     elif isinstance(event, FunctionToolResultEvent):
         part = event.part
@@ -317,9 +274,9 @@ def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
                 ),
             )
         )
-        # Phase 2: tool ERROR. A real tool failure comes back as a
-        # ToolReturnPart with outcome != success; a RetryPromptPart means the
-        # model was told to retry because the tool errored. Both -> ToolError.
+        # Tool ERROR. A real tool failure comes back as a ToolReturnPart with
+        # outcome != success; a RetryPromptPart means the model was told to
+        # retry because the tool errored. Both -> ToolError.
         is_error = isinstance(part, RetryPromptPart) or (
             isinstance(part, ToolReturnPart) and part.outcome != "success"
         )
@@ -362,7 +319,7 @@ def _profile_name(profile: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# The single self-contained Session (no subclass — absorbed from paf.runtime)
+# The single self-contained Session
 # ---------------------------------------------------------------------------
 class Session:
     """The turn runtime—``agent.iter()`` control loop + additive events.
@@ -394,9 +351,7 @@ class Session:
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how the CLIs pick the default profile
-        # (`resolve_profile_name` -> PROFILES[name]). This is what makes
-        # `Session(agent_name="runtime2_test")` build the LEAN Shell-only
-        # toolset instead of silently falling back to ASSISTANT_PROFILE.
+        # (`resolve_profile_name` -> PROFILES[name]).
         if profile is None:
             profile_name = resolve_profile_name(agent_name)
             if profile_name and profile_name in PROFILES:
@@ -423,9 +378,9 @@ class Session:
         # ``contextbench``) stays ``None`` so it carries no scaffolding.
         self.background: BackgroundCoordinator | None = None
         # Session-held CancellationToken -> stop (created here so cancel()
-        # works and iter() has a token from day one).
+        # works and iter() has a token from the start).
         self._token = CancellationToken()
-        # Phase 3 wiring: self._run (AgentRun handle) for steer/enqueue.
+        # Live AgentRun handle for steer/enqueue.
         self._run: Any = None
 
     # -- introspection ---------------------------------------------------------
@@ -449,15 +404,11 @@ class Session:
     def _scoped_cid(self, cid: str | None) -> str | None:
         """Scope a conversation id by the session's profile: ``{profile}:{cid}``.
 
-        The namespace seam: the machine holds the plain id (whatever the caller
-        passed), but the store/resume/agent-run access run under the
-        profile-scoped id, so two profiles using the SAME plain
-        ``conversation_id`` never cross-talk. This is what makes profile a real
-        isolation layer on conversation identity — users later = a further
-        prefix, not a rework. Applied ONCE at the boundary (``stream()`` selects
-        the plain cid, then passes the SCOPED one downstream to
-        iter/resume/consolidation), so the whole turn (and its persisted runs)
-        live under one namespace identity.
+        The store/resume/agent-run access run under the profile-scoped id, so
+        two profiles using the SAME plain ``conversation_id`` never cross-talk.
+        Applied once at the boundary (``stream()`` selects the plain cid, then
+        passes the scoped one downstream), so the whole turn (and its persisted
+        runs) live under one namespace identity.
         """
         pname = _profile_name(self.profile)
         if not pname or cid is None:
@@ -621,15 +572,12 @@ class Session:
     ) -> AsyncIterator[TurnStreamEvent]:
         """Run one turn, yielding renderable :class:`StreamEvent` objects.
 
-        PHASE 1: driven by ``agent.iter()`` — the docs-endorsed control+injection
-        surface — instead of ``run_stream_events()``. Walks graph nodes, consumes
-        each streamable node's ``AgentStreamEvent`` iterator, and reuses the
-        exact per-event dispatch the old flat loop used (PartStart leading text,
-        PartDelta text/thinking, FunctionToolCall -> tool_call,
-        FunctionToolResult -> tool_result). This keeps the emitted stream
-        byte-identical to the current runtime for the existing 4 kinds.
+        Driven by ``agent.iter()``: walks graph nodes, consumes each streamable
+        node's ``AgentStreamEvent`` iterator, and dispatches each event
+        (PartStart leading text, PartDelta text/thinking, FunctionToolCall ->
+        tool_call, FunctionToolResult -> tool_result).
 
-        Parities preserved from :meth:`paf.runtime.Session.stream`:
+        Behavior:
         - ``[date: ...]`` UTC stamp on every user prompt (born_on provenance).
         - ONE root span per turn with ``langfuse.observation.input`` (set up
           front) and ``langfuse.observation.output`` (set once the settled
@@ -653,9 +601,8 @@ class Session:
         self._token = CancellationToken()
         await self._ensure_resumed(scoped)
 
-        # Stamp the current UTC timestamp onto the start of EVERY user message
-        # (same ``[date: ...]`` convention the benchmark harness prepends), so
-        # the model always has an explicit date+time anchor and the
+        # Stamp the current UTC timestamp onto the start of EVERY user message,
+        # so the model always has an explicit date+time anchor and the
         # consolidation owner can derive a real ``born_on`` instead of
         # inventing one. Second precision, ``+00:00`` suffix.
         now = datetime.now(UTC).replace(microsecond=0)
@@ -666,9 +613,6 @@ class Session:
         # mid-stream model failure (see `except (ModelHTTPError, ...)` below).
         # Declared before the run so it's bound even if iter() itself raises.
         _active_run: AgentRun[Any, Any] | None = None
-        # TEMP-DIAG: track how much text actually streamed vs what the settled
-        # result persisted, to pin the "final message missing" truncation.
-        _diag: dict = {"text": "", "thinking": 0, "kinds": [], "last_kind": None}
         with root_span(
             f"paf.run.{scoped or 'default'}",
             **({"langfuse.observation.input": _run_input(prompt, scoped)}),
@@ -688,14 +632,6 @@ class Session:
                                 async with node.stream(run.ctx) as stream:
                                     async for event in stream:
                                         for ev in _dispatch_stream_event(event):
-                                            if getattr(ev, "kind", None) in ("text", "thinking"):
-                                                _diag["kind"] = getattr(ev, "kind", None)
-                                                _diag["kinds"].append(getattr(ev, "kind", None))
-                                                if getattr(ev, "kind", None) == "text":
-                                                    _diag["text"] += getattr(ev, "text", "") or ""
-                                                else:
-                                                    _diag["thinking"] += len(getattr(ev, "text", "") or "")
-                                                _diag["last_kind"] = getattr(ev, "kind", None)
                                             yield ev
                             elif isinstance(node, End):
                                 break
@@ -742,49 +678,6 @@ class Session:
             )
         self.last_result = result
         self.history = [*self.history, *result.new_messages()]
-        # TEMP-DIAG: measure streamed-vs-persisted divergence, and backfill the
-        # missing tail of the final answer when pydantic-ai's node-stream ended
-        # early (intermittent bug: the persisted run is complete but the stream
-        # stopped before the final text was emitted).
-        try:
-            # Target the LAST assistant text part (the message being streamed).
-            settled_final = ""
-            for m_ in reversed(self.history):
-                parts = getattr(m_, "parts", []) or []
-                if any(getattr(p_, "part_kind", None) in ("text", "final") for p_ in parts):
-                    for p_ in parts:
-                        if getattr(p_, "part_kind", None) == "text":
-                            c = getattr(p_, "content", None)
-                            if isinstance(c, str):
-                                settled_final += c
-                    break
-            streamed = _diag["text"]
-            tail = ""
-            if streamed and settled_final.startswith(streamed) and len(streamed) < len(settled_final):
-                tail = settled_final[len(streamed):]
-            elif streamed and settled_final.find(streamed) >= 0:
-                tail = settled_final[settled_final.rfind(streamed) + len(streamed):]
-            if tail:
-                yield StreamEvent(kind="text", text=tail)
-                _diag["text"] += tail
-            print(f"[STREAM-DIAG] streamed text={len(_diag['text'])} thinking={_diag['thinking']} "
-                  f"last_kind={_diag['last_kind']} | settled final={len(settled_final)} "
-                  f"backfilled={len(tail)}", flush=True)
-            # RAW CAPTURE: dump both sides around the first divergence so we can
-            # see byte-for-byte how stream differs from the settled result.
-            _s = _diag["text"]
-            _f = settled_final
-            print(f"[STREAM-RAW-BEGIN len_s={len(_s)} len_f={len(_f)}]", flush=True)
-            import difflib
-            _smatcher = difflib.SequenceMatcher(None, _s, _f)
-            _opcodes = _smatcher.get_opcodes()
-            print(f"[STREAM-RAW] opcodes(first 8)={_opcodes[:8]}", flush=True)
-            # print the streamed text and settled text (first 600 + last 300 chars)
-            print("[STREAM-RAW streamed::] " + repr(_s[:600]) + " ...[::] " + repr(_s[-300:]), flush=True)
-            print("[STREAM-RAW settled::]  " + repr(_f[:600]) + " ...[::] " + repr(_f[-300:]), flush=True)
-            print("[STREAM-RAW-END]", flush=True)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[STREAM-DIAG] backfill/diag error: {exc!r}", flush=True)
         # Post-turn background work (consolidation/review/thread-summarize) is
         # scheduled by the attached coordinator. Bare sessions (no coordinator,
         # e.g. a memory-less profile) skip straight past — the turn core never
@@ -833,12 +726,11 @@ class Session:
     async def enqueue(self, content: str, *, priority: str = "asap") -> str | None:
         """Steer the running agent at the next node boundary (AgentRun.enqueue).
 
-        Phase 3: enqueue injects ``content`` as a pending message that the
-        active ``AgentRun`` picks up at its next natural boundary (not
-        mid-generation). Requires a run to be live (``self._run`` set by the
-        Phase 1/3 iter() walk); returns the ``enqueue_id`` on success or
-        ``None`` if nothing is running. ``cancel()`` (not enqueue) is the way
-        to interrupt mid-generation.
+        Injects ``content`` as a pending message that the active ``AgentRun``
+        picks up at its next natural boundary (not mid-generation). Requires a
+        run to be live (``self._run``); returns the ``enqueue_id`` on success
+        or ``None`` if nothing is running. ``cancel()`` (not enqueue) is the
+        way to interrupt mid-generation.
         """
         run = self._run
         if run is None:
