@@ -1,25 +1,23 @@
 """Runtime capability builders — the ``capabilities=`` seam for Agent.from_spec.
 
 Spec files (`specs/*.yaml`) go through pydantic-ai's ``AgentSpec``/``Agent.from_spec``,
-which resolves each top-level ``capabilities:`` entry via that class's ``from_spec()`` and
-— crucially — only ONE level deep (see ``_capabilities_from_spec`` in pydantic-ai's
-``agent/__init__.py``). Capabilities that can't be expressed that way — because a class
-doesn't override ``from_spec`` or needs real objects as arguments — are assembled here and
-injected via the ``capabilities=`` kwarg, which ``Agent.from_spec`` MERGES with any
-spec-declared capabilities.
+which resolves each top-level ``capabilities:`` entry via that class's ``from_spec()``
+and — crucially — only ONE level deep. Capabilities that can't be expressed that way —
+because a class doesn't override ``from_spec`` or needs real objects as arguments — are
+assembled here and injected via the ``capabilities=`` kwarg, which ``Agent.from_spec``
+MERGES with any spec-declared capabilities.
 
 **The profile is the gatekeeper.** ``build_runtime_capabilities(profile)`` builds exactly
 the capabilities the profile's ``capability_names`` allowlists, over one shared store.
-We no longer declare capabilities in YAML, so this Python ``capabilities=`` seam is the
-ONLY thing that reaches the agent — which means the profile's allowlist is what decides
-"what this agent gets." No hardcoded list here; it is the resolution of the profile.
+This Python ``capabilities=`` seam is the ONLY thing that reaches the agent, so the
+profile's allowlist is what decides "what this agent gets."
 
-Persistent capabilities (StepPersistence, ConversationSearch) select their
-builders from :data:`paf.capabilities.persistence.PERSISTENCE_BUILDERS`. Context
-compaction builds via ``build_compaction()`` **iff the profile allowlists ``Compaction``**
-— the ladder WITHOUT the summarizing tier (the LLM rewrite is mutually exclusive with the
-recall-ladder injection; see ``compaction.py``). A profile simply omits a name from
-its ``capability_names`` and that agent won't get it.
+Persistent capabilities (StepPersistence, ConversationSearch) select their builders from
+:data:`paf.capabilities.persistence.PERSISTENCE_BUILDERS`. Context compaction builds via
+``build_compaction()`` **iff the profile allowlists ``Compaction``** — the ladder WITHOUT
+the summarizing tier (the LLM rewrite is mutually exclusive with the recall-ladder
+injection; see ``compaction.py``). A profile simply omits a name from its
+``capability_names`` and that agent won't get it.
 """
 
 from __future__ import annotations
@@ -79,11 +77,13 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 # runs MORE often than the reviewer (owner 30m, reviewer 60m) so durable turns
 # never stall waiting on the slower reviewer. Memory owns this value; the
 # spec's `memory: {consolidate_every: N}` (minutes) overrides it per agent.
-DEFAULT_CONSOLIDATE_EVERY = 30  # minutes; owner fires at least this often with new material
+DEFAULT_CONSOLIDATE_EVERY = (
+    30  # minutes; owner fires at least this often with new material
+)
 DEFAULT_REVIEW_EVERY = 60  # minutes; reviewer fires at most this often
 
-# Turn-count cadence (supersedes the minute-based defaults; DECIDED 2026-09-14).
-# Memory consolidation is cheap extract+append (5 turns), the reviewer is slow
+# Turn-count cadence (supersedes the minute-based defaults). Memory
+# consolidation is cheap extract+append (5 turns), the reviewer is slow
 # archive/merge (~10 min) and batches ~2 consolidation folds (10 turns), and the
 # thread summarizer keeps its narrative block (10 turns, thread_summarizer
 # _background.py). These are the defaults when a spec does not override.
@@ -98,6 +98,9 @@ DEFAULT_REVIEW_TURNS = 10
 # Memory owns every memory config variable; the spec overrides per agent.
 DEFAULT_MEMORY_MAX_SIZE = 65_536
 
+# Where the Planning capability writes its per-conversation plan files.
+_PLAN_ROOT = PROJECT_ROOT / "data" / "plans"
+
 
 def _read_positive_int(memory_config: dict, key: str, default: int) -> int:
     """Read a positive-int knob from the spec's ``memory:`` block."""
@@ -110,33 +113,21 @@ def _read_positive_int(memory_config: dict, key: str, default: int) -> int:
 def _build_memory(
     store, memory_config: dict | None = None, agent_name: str | None = None
 ) -> Memory:
-    """M2 journal-view durable memory, INJECT-ONLY for the assistant.
+    """Journal-view durable memory, INJECT-ONLY for the assistant.
 
-    Mirrors the benchmark assembly in `tests/framework.py`: the model carries
-    the rendered journal (MEMORY.md) injected into every request via
-    before_model_request, and is exposed ZERO memory tools (expose_tools=False)
-    -- not even read/search -- because a separate consolidation owner sub-agent
-    is the sole writer. This converges prod's memory surface on the M2 contract
-    (JournalViewStore, read-only, inject-only), the same shape the LongMemEval
-    harness measures.
+    The model carries the rendered journal (MEMORY.md) injected into every
+    request via before_model_request, and is exposed ZERO memory tools
+    (expose_tools=False) -- not even read/search -- because a separate
+    consolidation owner sub-agent is the sole writer.
 
-    `store` (the shared persistence store) is accepted for a uniform builder
-    signature but unused. inject_memory=True, writable=False, and an empty
-    guidance string mirror _build_agent; only `max_memory_size` (a hard,
-    non-evicting per-read char cap on the injected journal) is set here, and
-    is overridable per agent from the spec's ``memory:`` block.
-
+    `store` is accepted for a uniform builder signature but unused.
     `memory_config` is the spec's top-level ``memory:`` block (see
-    ``specs._spec_memory_config``). **Memory owns every memory config
-    variable** — ``consolidate_every`` (background-consolidation cadence) plus
-    the injection bound ``max_memory_size``. Per-tier COUNT caps
-    (``memory: tier_caps``) are owned by the render (`_render._resolve_tier_caps`),
-    which reads them from the agent's spec directly — neither the runtime
-    Session nor the background queue carries ``tier_caps`` anywhere. The
-    background consolidation queue (a framework-level service, NOT a
-    capability) is never handed the config to read itself; it only forwards
-    its own ``agent_name`` to ``write_render`` so the owner re-render resolves
-    the same spec caps.
+    ``specs._spec_memory_config``): ``consolidate_every`` (background-
+    consolidation cadence) and ``max_memory_size`` (a hard, non-evicting
+    per-read char cap on the injected journal) are read here and overridable
+    per agent. Per-tier COUNT caps (``memory: tier_caps``) are owned by the
+    render (`_render._resolve_tier_caps`), which reads them from the agent's
+    spec directly.
     """
     from paf.capabilities.memory._overrides import OverrideStore
     from paf.capabilities.memory._view import JournalViewStore
@@ -173,7 +164,7 @@ def _build_memory(
 def _build_thread_summarizer(
     store, thread_config: dict | None = None, agent_name: str | None = None
 ) -> ThreadSummarizer:
-    """Build the ThreadSummarizer capability (re-architecture 2026-09-08).
+    """Build the ThreadSummarizer capability.
 
     The capability is a pure on/off surface: it learns the active conversation
     from ``ctx.conversation_id`` and exposes the per-agent capture directory.
@@ -221,9 +212,11 @@ def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSyst
     gates always apply, whichever root is in effect.
     """
     root_dir = PROJECT_ROOT
-    if isinstance(filesystem_config, dict) and isinstance(
-        filesystem_config.get("root_dir"), str
-    ) and filesystem_config.get("root_dir"):
+    if (
+        isinstance(filesystem_config, dict)
+        and isinstance(filesystem_config.get("root_dir"), str)
+        and filesystem_config.get("root_dir")
+    ):
         root_dir = Path(os.path.expanduser(filesystem_config["root_dir"]))
     return _FileSystem(root_dir=root_dir)
 
@@ -234,10 +227,10 @@ def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSyst
 # reach it anyway); it is listed for completeness when the workspace is the home
 # dir.
 DEFAULT_EXCLUDE: tuple[str, ...] = (
-    '.env',
-    '.env.*',
-    '.git-credentials',
-    '.git',
+    ".env",
+    ".env.*",
+    ".git-credentials",
+    ".git",
 )
 
 
@@ -283,9 +276,7 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
             container_name=executor_config.get("container_name"),
             exclude=executor_config.get("exclude", DEFAULT_EXCLUDE),
         )
-    raise ValueError(
-        f"executor.backend must be 'local' or 'docker', got {backend!r}"
-    )
+    raise ValueError(f"executor.backend must be 'local' or 'docker', got {backend!r}")
 
 
 def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
@@ -312,7 +303,11 @@ def _build_shell(store, shell_config: dict | None = None) -> _Shell:
     only move the cwd and the backend.
     """
     cwd = PROJECT_ROOT
-    if isinstance(shell_config, dict) and isinstance(shell_config.get("cwd"), str) and shell_config.get("cwd"):
+    if (
+        isinstance(shell_config, dict)
+        and isinstance(shell_config.get("cwd"), str)
+        and shell_config.get("cwd")
+    ):
         cwd = Path(os.path.expanduser(shell_config["cwd"]))
     executor = None
     if isinstance(shell_config, dict):
@@ -336,7 +331,11 @@ def _build_git(store, git_config: dict | None = None) -> _Git:
     weakens it.
     """
     root = PROJECT_ROOT
-    if isinstance(git_config, dict) and isinstance(git_config.get("root"), str) and git_config.get("root"):
+    if (
+        isinstance(git_config, dict)
+        and isinstance(git_config.get("root"), str)
+        and git_config.get("root")
+    ):
         root = Path(os.path.expanduser(git_config["root"]))
     return _Git(root=root)
 
@@ -358,9 +357,11 @@ def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _Code
     land under ``.agent-codeindex/`` inside whichever root is in effect.
     """
     scan_root = PROJECT_ROOT
-    if isinstance(codebase_map_config, dict) and isinstance(
-        codebase_map_config.get("scan_root"), str
-    ) and codebase_map_config.get("scan_root"):
+    if (
+        isinstance(codebase_map_config, dict)
+        and isinstance(codebase_map_config.get("scan_root"), str)
+        and codebase_map_config.get("scan_root")
+    ):
         scan_root = Path(os.path.expanduser(codebase_map_config["scan_root"]))
     return _CodebaseMap(scan_root=scan_root)
 
@@ -404,10 +405,22 @@ def _build_vault(store, vault_config: dict | None = None) -> _Vault:
     """
     is_dict = isinstance(vault_config, dict)
     root: Path | str = _DEFAULT_VAULT_ROOT
-    if is_dict and isinstance(vault_config.get("root"), str) and vault_config.get("root"):
+    if (
+        is_dict
+        and isinstance(vault_config.get("root"), str)
+        and vault_config.get("root")
+    ):
         root = vault_config["root"]
-    allow = [str(p) for p in vault_config.get("allow", [])] if is_dict and vault_config.get("allow") else []
-    deny = [str(p) for p in vault_config.get("deny", [])] if is_dict and vault_config.get("deny") else []
+    allow = (
+        [str(p) for p in vault_config.get("allow", [])]
+        if is_dict and vault_config.get("allow")
+        else []
+    )
+    deny = (
+        [str(p) for p in vault_config.get("deny", [])]
+        if is_dict and vault_config.get("deny")
+        else []
+    )
     return _Vault(vault_root=root, allow=allow, deny=deny)
 
 
@@ -427,8 +440,8 @@ def _build_visual(store) -> _Visual:
       text stubs so the text-only model never crashes on BinaryContent. When
       `VISION_MODEL` is unset the hook passes images through untouched.
 
-    A contained image-in/text-out side-call, deliberately NOT a sub-agent (per
-    Landon): no child run, no delegation, no inherited tools.
+    A contained image-in/text-out side-call, deliberately NOT a sub-agent: no
+    child run, no delegation, no inherited tools.
     """
     return _Visual()
 
@@ -438,16 +451,12 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
 
     `store` is accepted for a uniform builder signature but unused — browser
     state lives in the BrowserSession, not the persistence store. A paf-owned
-    full copy of the harness `PlaywrightBrowser` (same copy-and-own pattern as
-    Memory / FileSystem / Shell), modified so the context is **mobile by default**
-    and a `set_viewport` tool switches profiles mid-run. Defaults keep egress
-    locked down for a demo agent: headless, private-address blocked (SSRF
-    defense), an egress **allowlist** of local dev hosts so the browser can reach
-    sites being built on this machine, and no auto-install (the browser must be
-    present via `playwright install chromium`). `headless` stays True so a
-    chat-spawned CLI never pops a window; `auto_install_chromium` stays False so
-    a missing browser raises a clear `playwright install chromium` hint instead
-    of silently fetching a ~150MB binary mid-session.
+    full copy of the harness `PlaywrightBrowser`, modified so the context is
+    **mobile by default** (viewport 390×844, retina scale 3, real iPhone
+    user-agent) and a `set_viewport` tool switches profiles mid-run. Defaults
+    keep egress locked down: headless, private-address blocked (SSRF defense),
+    an egress **allowlist** of local dev hosts, and no auto-install (the
+    browser must be present via `playwright install chromium`).
 
     `browser_config` is the spec's top-level ``browser:`` block (see
     ``_spec_browser_config``). Two independent trust decisions, neither of
@@ -467,35 +476,17 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
 
     `chromium_sandbox` is deliberately False: Chromium's sandbox is fatal at
     launch on Ubuntu 23.10+ hosts where AppArmor restricts unprivileged user
-    namespaces (`kernel.apparmor_restrict_unprivileged_userns=1`, the default).
-    The proper fix is enabling userns (sysctl + reboot) so sandbox can be held
-    ON; until this host is configured that way, sandbox-off is required for the
-    browser to launch at all. This is an environment-dependent escape hatch, not
-    a recommendation to weaken isolation — revisit when userns is enabled.
-
-    `block_private_addresses=True` (the default) STAYS on: the hosts in the
-    resolved allowlist are the ONLY addresses reachable. The cloud-metadata
-    endpoint and LAN RFC-1918 ranges remain refused, so SSRF defense is
-    preserved while still browsing the allowlisted local/staging sites.
-
-    Mobile is the default (viewport 390×844, `mobile=True`, retina scale 3, a
-    real iPhone user-agent so responsive sites serve their mobile layout) —
-    mobile is the only layout that matters — and is configurable on the
-    capability: flip `mobile=False` for desktop or change `viewport` for a
-    tablet, and the agent can switch these at runtime via the `set_viewport`
-    tool.
+    namespaces. The proper fix is enabling userns (sysctl + reboot) so sandbox
+    can be held ON; until this host is configured that way, sandbox-off is
+    required for the browser to launch at all. This is an environment-dependent
+    escape hatch, not a recommendation to weaken isolation — revisit when userns
+    is enabled.
     """
-    allowed_domains = (
-        browser_config.get("allowed_domains")
-        if browser_config
-        else None
-    )
+    allowed_domains = browser_config.get("allowed_domains") if browser_config else None
     # Secure by default: the private/loopback/link-local SSRF guard stays ON
     # unless the spec explicitly opts out (block_private_addresses: false).
     block_private = (
-        browser_config.get("block_private_addresses")
-        if browser_config
-        else None
+        browser_config.get("block_private_addresses") if browser_config else None
     )
     if block_private is None:
         block_private = True
@@ -530,7 +521,7 @@ def _build_skills(store, skills_config: dict | None = None) -> _Skills:
     stays thin, bodies pulled on demand) and `point_skills` pre-arms which
     skill a message needs via zero-LLM BM25 over the declared frontmatter vocab
     (the skill-note-hint pointer engine re-homed into paf). One paf-native
-    capability for all skill functionality (Landon 2026-08-19).
+    capability for all skill functionality.
 
     `skills_config` is the spec's top-level ``skills:`` block (see
     ``specs._spec_skills_config``): ``libraries`` (one or more FULL absolute
@@ -560,10 +551,10 @@ def _build_tool_output_limits(store) -> ToolOutputLimits:
     payload is offloaded to the flat-file store instead of being retained in
     history, then paged back on demand via the builtin `read_tool_result`.
 
-    Config (per Landon: "plug-and-play with some configuration"): by default,
-    returns over `_DEFAULT_THRESHOLD` (10_000 chars) are LOSS LESSLY SPILLED to a
-    `LocalFileStore` with a bounded truncation fallback — zero LLM cost, no silent
-    drop. `read_tool_result` is registered by the capability's own toolset.
+    By default, returns over `_DEFAULT_THRESHOLD` (10_000 chars) are LOSS LESSLY
+    SPILLED to a `LocalFileStore` with a bounded truncation fallback — zero LLM
+    cost, no silent drop. `read_tool_result` is registered by the capability's
+    own toolset.
 
     `store` (the shared persistence store) is accepted for a uniform builder
     signature but unused — ToolOutputLimits uses its own `LocalFileStore` spill
@@ -588,7 +579,7 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     prefix fires, so ordinary rounding or partial misses don't warn. Silent when
     caching is off or unreported (cache_read_tokens stays 0), so it never fires
     spuriously in runs that don't cache. Same drop-in pattern as ToolOutputLimits
-    — consumed as a pydantic-ai AbstractCapability, per Landon.
+    — consumed as a pydantic-ai AbstractCapability.
 
     To surface busts in Langfuse traces, route stdlib warnings into logging once at
     startup: ``logging.captureWarnings(True)`` (Logfire bridges logging, not warnings;
@@ -613,8 +604,8 @@ def _build_planning(store) -> Planning:
     across turns, runs, and process restarts — inspectable/diffable JSON (paf's
     flat-file-first principle) resolved per conversation via ``store_resolver``
     (falls back to a default-scope file when no ``conversation_id`` is set).
-    This replaced the ephemeral ``InMemoryPlanStore`` (Task 3) so plans are
-    durable and the web sidebar can render them on reload/restart. It is a thin
+    This replaced the ephemeral ``InMemoryPlanStore`` so plans are durable
+    and the web sidebar can render them on reload/restart. It is a thin
     wrapper over the shared ``StorageService`` seam — backend-swappable, never
     a bespoke path.
 
@@ -624,8 +615,6 @@ def _build_planning(store) -> Planning:
     """
     from paf.capabilities.planning import FilePlanStore, Planning
     from paf.capabilities.planning._registry import get_plan_emitter
-
-    _PLAN_ROOT = PROJECT_ROOT / "data" / "plans"
 
     def _resolve_plan_store(ctx) -> FilePlanStore:
         cid = getattr(ctx, "conversation_id", None) or "default"
@@ -641,7 +630,7 @@ def _build_planning(store) -> Planning:
 
     # Thin guidance: point out that write_plan returns the ids the model must
     # pass to a follow-up update_task_status(_es) — no read_plan round-trip
-    # needed (Task 2). The tool schemas document themselves beyond that.
+    # needed. The tool schemas document themselves beyond that.
     return Planning(
         store_resolver=_resolve_plan_store,
         guidance=(
@@ -657,8 +646,8 @@ def _build_planning(store) -> Planning:
 def _build_guardrails(store) -> PromptInjectionDefender:
     """Structural prompt-injection defense (BUILTIN, not a paf port).
 
-    Adopts the harness's ``PromptInjectionDefender`` (Option A from the guardrails
-    plan) rather than building a paf-owned wrapper: it is a ready-made
+    Adopts the harness's ``PromptInjectionDefender`` rather than building a
+    paf-owned wrapper: it is a ready-made
     ``AbstractCapability`` that screens tool results before the model sees them
     and withholds high-risk content. This is the structural detector paf's
     locked principle demands — a deterministic system decision by meaning, not
@@ -666,8 +655,8 @@ def _build_guardrails(store) -> PromptInjectionDefender:
 
     ``semantic_detection=True`` enables Tier 2 (the local MiniLM classifier via
     ``stackone-defender`` + ``onnxruntime``), which catches injections under
-    unrecognized fields that Tier 1 pattern detection alone lets through (see
-    tests/test_guardrails_spike.py). ``block_high_risk=True`` withholds flagged
+    unrecognized fields that Tier 1 pattern detection alone lets through.
+    ``block_high_risk=True`` withholds flagged
     results. ``on_detection`` is paf's own handler (see
     ``guardrails/prompt_injection.py``): it emits a ``paf.guardrail.
     prompt_injection`` span so a withheld result is observable in Langfuse
@@ -771,8 +760,8 @@ def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     capability-owned toolsets can't be inherited anyway — see harness
     `_inherited_toolsets`).
 
-    This is a pydantic-ai AbstractCapability consumed from the harness per Landon
-    (same drop-in pattern as ToolOutputLimits / WarnOnCacheBusts). It is NOT
+    This is a pydantic-ai AbstractCapability consumed from the harness (same
+    drop-in pattern as ToolOutputLimits / WarnOnCacheBusts). It is NOT
     spec-serializable (holds live `Agent` instances; get_serialization_name ->
     None), so it is built ONLY here in Python by passing explicit `SubAgent`
     entries — it can never resolve from a YAML spec. `agent_folders=None` disables
@@ -867,11 +856,10 @@ def build_runtime_capabilities(
         **PERSISTENCE_BUILDERS,
         # Memory is its own journal-backed store (JournalViewStore), not the shared
         # run store, so its builder ignores the arg — but keeping it here means the
-        # profile's `Memory` allowlist entry actually gets built (un-gated, live-test beat).
+        # profile's `Memory` allowlist entry actually gets built.
         "Memory": _build_memory,
-        # Per-conversation background thread summarizer (Phase 0 shell; capture/
-        # worker/injection land in later phases). OFF by default — only built
-        # when the profile allowlists it.
+        # Per-conversation background thread summarizer. OFF by default — only
+        # built when the profile allowlists it.
         "ThreadSummarizer": _build_thread_summarizer,
         # Scoped filesystem (paf-owned harness copy) rooted at the project root.
         "FileSystem": _build_filesystem,
@@ -903,7 +891,7 @@ def build_runtime_capabilities(
         "Planning": _build_planning,
         # Structural prompt-injection defense (BUILTIN, not a paf port) —
         # screens tool results and withholds high-risk content before the model
-        # sees it. Option A from the guardrails plan: adopt the builtin.
+        # sees it.
         "Guardrails": _build_guardrails,
         # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
         # refuses the highest-risk tools before they execute. The profile is
@@ -952,9 +940,9 @@ def build_runtime_capabilities(
             # framework-level service the Memory capability hands values down to.
             capabilities.append(_build_memory(store, memory_config, agent_name))
         elif name == "ThreadSummarizer":
-            # Phase 0 shell; keeps the (agent_name, future thread_config) wiring
-            # seam ready for the Phase-1 capture hook. Gated by the allowlist
-            # via the loop's `name not in capability_names` continue above.
+            # Keeps the (agent_name, future thread_config) wiring seam ready for
+            # a capture hook. Gated by the allowlist via the loop's `name not in
+            # capability_names` continue above.
             capabilities.append(_build_thread_summarizer(store, None, agent_name))
         elif name == "Subagents":
             # The writer sub-agent gets the SAME scoped FileSystem capability as
@@ -967,8 +955,8 @@ def build_runtime_capabilities(
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
         capabilities.append(build_compaction(compaction_config))
-    # NOTE (2026-09-08 rework): the ThreadSummarizer no longer captures
-    # evictions — the capture-WAL wiring (attach_to_window) was removed. The
+    # NOTE: the ThreadSummarizer no longer captures evictions — the
+    # capture-WAL wiring (attach_to_window) was removed. The
     # runtime trigger resolves the unsummarized span directly from the step
     # store via resolve_unseen_span(conversation_id=...); nothing binds the
     # summarizer to the compaction window anymore, so eviction and
