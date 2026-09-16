@@ -4,131 +4,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
-from openai import AsyncOpenAI
-from openai import Timeout as OpenAITimeout
 from pydantic_ai import Agent, AgentSpec
-from pydantic_ai.models.openrouter import OpenRouterModel
-from pydantic_ai.providers.openrouter import OpenRouterProvider
-from pydantic_ai.settings import ModelSettings
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
 from paf.config import SPECS_DIR
+from paf.providers.openrouter import model_with_client
 
 DEFAULT_SPEC_DIRECTORY = SPECS_DIR
-
-
-# ---------------------------------------------------------------------------
-# OpenRouter determinism pin — fallback defaults for specs that don't declare
-# their own `model_settings.extra_body.provider`. Specs are the source of truth;
-# this is used only when a spec's `model_settings` block omits routing. The
-# contract: temp 0, top_p 1.0, a fixed sampler seed, and a pinned provider chain
-# with hard quantization filter. Without the pin, `:nitro`-style throughput
-# routing silently bounces across upstream providers that serve the same
-# checkpoint at different quantizations (fp8 vs fp4) -> real nondeterminism at
-# temp 0. Defaults are the DeepSeek subject chain; all env-overridable (empty
-# string disables the pin). See vault OpenRouter-Provider-Quantization-Nondeterminism.md.
-# ---------------------------------------------------------------------------
-SUBJECT_PROVIDER_ORDER = [
-    p for p in os.environ.get(
-        "SUBJECT_PROVIDER_ORDER", "deepinfra,parasail,coreweave"
-    ).split(",") if p
-]
-SUBJECT_PROVIDER_QUANTIZATIONS = [
-    q for q in os.environ.get(
-        "SUBJECT_PROVIDER_QUANTIZATIONS", "fp8"
-    ).split(",") if q
-]
-SAMPLER_SEED = int(os.environ.get("SAMPLER_SEED", "20260815"))
-
-
-def _openrouter_model_settings(
-    provider_order: list[str] | None = SUBJECT_PROVIDER_ORDER,
-    quantizations: list[str] | None = SUBJECT_PROVIDER_QUANTIZATIONS,
-    seed: int | None = SAMPLER_SEED,
-) -> ModelSettings:
-    """Build `model_settings` that pin OpenRouter routing + sampler determinism.
-
-    Returns a dict combining sampling determinism (`temperature: 0`, `top_p: 1.0`,
-    fixed seed) with the OpenRouter `provider` object passed via `extra_body`.
-    When `provider_order` is empty/None, no routing pin is applied (plain request).
-    pydantic-ai's `openai_chat` passes `extra_body` verbatim to the HTTP body.
-    This is a FALLBACK for specs that don't declare their own `model_settings.extra_body.provider`;
-    a spec that declares one is the source of truth and wins (see `build_agent`).
-    """
-    out: dict = {"temperature": 0}
-    out["top_p"] = 1.0
-    if seed is not None:
-        out["seed"] = seed
-    pinned_quantizations = [q for q in (quantizations or []) if q]
-    if provider_order:
-        provider: dict = {"order": list(provider_order)}
-        if pinned_quantizations:
-            provider["quantizations"] = pinned_quantizations
-        extra_body: dict = dict(out.get("extra_body") or {})
-        extra_body["provider"] = provider
-        out["extra_body"] = extra_body
-    return cast(ModelSettings, out)
-
-
-# ---------------------------------------------------------------------------
-# Bounded-timeout OpenRouter client — fix for the "stuck turn" hang.
-#
-# pydantic-ai resolves an ``openrouter:`` model string via the default provider,
-# which builds an openai ``AsyncOpenAI`` client with SDK defaults: 600s read
-# timeout and ``max_retries=2``. Against OpenRouter that is a trap: traffic is
-# pinned to a provider chain (``extra_body.provider.order``, e.g. deepinfra
-# first), and a provider that goes *slow-but-alive* (rather than erroring)
-# makes OpenRouter hold the request indefinitely — its ``allow_fallbacks`` only
-# fires on provider errors, not hangs. The SDK's 2 blind retries then route
-# right back to the SAME stalled provider, so the effective worst case is
-# ~600s x several attempts (observed 13m26s before a user cancelled).
-#
-# This builds an OpenRouterModel whose provider wraps a custom AsyncOpenAI
-# client with a bounded read timeout and ``max_retries=0``: the stall now
-# surfaces as a clean ModelAPIError after ~120s instead of a 10+ min freeze,
-# and *we* own retry policy (currently: none at the SDK layer) rather than the
-# SDK's same-provider blind retries.
-# ---------------------------------------------------------------------------
-OPENROUTER_CLIENT_TIMEOUT_S = 120.0
-OPENROUTER_CLIENT_CONNECT_S = 5.0
-
-
-def _openrouter_model_with_client(model_name: str) -> OpenRouterModel | None:
-    """Build an ``OpenRouterModel`` wrapping a bounded-timeout, no-retry client.
-
-    ``model_name`` is the bare OpenRouter model slug (without the
-    ``openrouter:`` prefix, e.g. ``deepseek/deepseek-v4-flash-0731``). The
-    returned model's provider reuses an ``AsyncOpenAI`` client pointed at
-    OpenRouter with ``max_retries=0`` and a ~120s read timeout, so a pinned
-    provider that goes slow-but-alive fails fast instead of freezing the turn.
-
-    The OpenRouter routing pin (``extra_body.provider.order`` + quantizations)
-    is NOT touched here — it continues to live in ``model_settings`` (see
-    ``_openrouter_model_settings``) and flows through each request verbatim.
-
-    If ``OPENROUTER_API_KEY`` is missing, this returns ``None`` so callers can
-    fall back to the plain string path (whose own missing-key UserError then
-    applies) rather than constructing a key-less AsyncOpenAI up front.
-    """
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
-        return None
-    client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-        timeout=OpenAITimeout(
-            OPENROUTER_CLIENT_TIMEOUT_S, connect=OPENROUTER_CLIENT_CONNECT_S
-        ),
-        max_retries=0,
-    )
-    return OpenRouterModel(
-        model_name, provider=OpenRouterProvider(openai_client=client)
-    )
 
 
 def _spec_compaction_config(spec_path: Path) -> CompactionConfig:
@@ -446,7 +333,11 @@ def resolve_memory_config(
         cfg = None
     if isinstance(cfg, dict):
         candidate = cfg.get("consolidate_every")
-        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+        if (
+            isinstance(candidate, int)
+            and not isinstance(candidate, bool)
+            and candidate > 0
+        ):
             every = candidate
         review_candidate = cfg.get("review_every")
         if (
@@ -493,7 +384,9 @@ def resolve_memory_tier_caps(
     tiers keep the code default — not a surprise unbounded.
     """
     try:
-        with get_spec_path(agent_name, spec_directory).open("r", encoding="utf-8") as fh:
+        with get_spec_path(agent_name, spec_directory).open(
+            "r", encoding="utf-8"
+        ) as fh:
             data = yaml.safe_load(fh)
     except Exception:  # noqa: BLE001 - spec read is best-effort sugar
         return None
@@ -537,7 +430,9 @@ def resolve_profile_name(
     their own default (specs without a declaration keep working today's way).
     """
     try:
-        with get_spec_path(agent_name, spec_directory).open("r", encoding="utf-8") as fh:
+        with get_spec_path(agent_name, spec_directory).open(
+            "r", encoding="utf-8"
+        ) as fh:
             data = yaml.safe_load(fh)
     except (OSError, yaml.YAMLError):
         return None
@@ -723,9 +618,8 @@ def build_agent(
     Overrides are passed as kwargs to ``Agent.from_spec``. Supported:
     ``model``, ``instructions``, ``model_settings``, ``name``, ``output_type``.
     Tools and spec-declarable capabilities must be declared in the spec YAML.
-    If ``model_settings`` is not among the overrides, the OpenRouter determinism
-    pin (``_openrouter_model_settings``) is applied by default and shallow-merged
-    over the spec YAML's ``model_settings`` by ``Agent.from_spec``.
+    ``model_settings`` is the spec's to declare; when a spec omits it, the
+    model runs on pydantic-ai's plain defaults.
     """
     profile = profile or ASSISTANT_PROFILE
     spec = load_agent_spec(agent_name, spec_directory)
@@ -768,31 +662,18 @@ def build_agent(
     shell_config = _spec_shell_config(spec_path)
     git_config = _spec_git_config(spec_path)
     codebase_map_config = _spec_codebase_map_config(spec_path)
-    # The spec is the source of truth for `model_settings`: if the spec YAML
-    # declares its own `model_settings` (spec.model_settings), it is passed
-    # through untouched and the caller's/injected pin is never applied over it.
-    # We only inject the OpenRouter determinism pin (temp 0, top_p 1.0, seed,
-    # pinned provider chain) when neither the spec nor the caller supplies a
-    # `model_settings` override. Agent.from_spec still shallow-merges a caller
-    # override over the spec's YAML settings (caller wins), but the *default*
-    # pin no longer clobbers a spec-declared `model_settings`.
-    if spec.model_settings is None and "model_settings" not in overrides:
-        overrides.setdefault("model_settings", _openrouter_model_settings())
-    # Bounded-timeout OpenRouter client (stuck-turn fix): when the spec's model
-    # is an `openrouter:` string and the caller didn't supply their own model,
-    # swap in an OpenRouterModel that wraps a client with a ~120s read timeout
-    # and ``max_retries=0``. This is the only way to bound the SDK's
-    # same-provider blind retries (``max_retries`` is not a ModelSettings
-    # field), turning a 10+ min pinned-provider freeze into a clean
-    # ModelAPIError after ~120s. The routing pin keeps living in
-    # ``model_settings`` untouched. Falls back to the plain string (no change)
-    # when ``OPENROUTER_API_KEY`` is absent or a custom ``model`` was passed.
+    # Bounded-timeout OpenRouter client: when the spec's model is an
+    # `openrouter:` string and the caller didn't supply their own model, swap in
+    # an OpenRouterModel that wraps a client with a ~120s read timeout and
+    # ``max_retries=0`` (see providers/openrouter.py). Falls back to the plain
+    # string (no change) when ``OPENROUTER_API_KEY`` is absent or a custom
+    # ``model`` was passed.
     if (
         "model" not in overrides
         and isinstance(spec.model, str)
         and spec.model.startswith("openrouter:")
     ):
-        custom_model = _openrouter_model_with_client(spec.model.split(":", 1)[1])
+        custom_model = model_with_client(spec.model.split(":", 1)[1])
         if custom_model is not None:
             overrides["model"] = custom_model
     return Agent.from_spec(

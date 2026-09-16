@@ -735,8 +735,8 @@ def _build_secrets(store) -> ToolGuardrail:
 
 # Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
 # variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
-# across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism (see
-# specs.py `_openrouter_model_settings`). Override via SUBAGENT_MODEL / .env.
+# across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism.
+# Override via SUBAGENT_MODEL / .env.
 _SUBAGENT_MODEL = os.environ.get(
     "SUBAGENT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
 )
