@@ -579,11 +579,14 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     prefix fires, so ordinary rounding or partial misses don't warn. Silent when
     caching is off or unreported (cache_read_tokens stays 0), so it never fires
     spuriously in runs that don't cache. Same drop-in pattern as ToolOutputLimits
-    — consumed as a pydantic-ai AbstractCapability.
+    — consumed as a pydantic-ai AbstractCapability, per Landon.
 
-    To surface busts in Langfuse traces, route stdlib warnings into logging once at
-    startup: ``logging.captureWarnings(True)`` (Logfire bridges logging, not warnings;
-    they reach the trace via the ``py.warnings`` logger).
+    BUSTS SURFACE AS LANGFUSE ERRORS (wired 2026-09-16, observability/instrumentation.py):
+    a ``CacheBustWarning`` is a ``UserWarning`` (suppressed by default), so on its
+    own it reaches neither stderr nor a trace. ``paf.observability._install_cache_bust_error_hook``
+    installs a ``warnings.showwarning`` hook (at ``setup_observability()``, reached by
+    both CLI + SSE) that flips the active model-request OTel span to ERROR and records
+    the bust — it appears as a red error observation in Langfuse, and never aborts the turn.
     """
 
     return WarnOnCacheBusts()

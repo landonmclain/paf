@@ -23,6 +23,75 @@ from paf.config import settings
 _setup_active: bool = False
 _setup_refs: int = 0
 
+# Cache-bust → Langfuse-error routing. ``WarnOnCacheBusts`` (a BUILTIN) fires
+# ``CacheBustWarning`` (a ``UserWarning``) via stdlib ``warnings`` when a
+# previously-established prompt-cache prefix collapses mid-run (moved prefix or
+# provider-side expiry → re-charged tokens = billing spike). By default the
+# runtime suppresses UserWarning and nothing reaches Langfuse. We install a
+# ``warnings.showwarning`` hook that detects that SPECIFIC category and flips
+# the active OTel span to ERROR (+ records it), so a bust shows up as a red
+# error observation on the model-request span — while never aborting the turn.
+_cache_bust_hook_installed: bool = False
+
+
+def _install_cache_bust_error_hook() -> None:
+    """Route a ``CacheBustWarning`` to an ERROR on the current OTel span.
+
+    Idempotent / safe: wraps ``warnings.showwarning`` once, chains to the
+    original handler (so the warning is still printed/logged via
+    ``logging.captureWarnings(True)`` if that's on), and only touches the span
+    for the ``CacheBustWarning`` category. Does NOT raise — the turn continues;
+    this is an observe-and-flag signal, not a failure.
+    """
+    global _cache_bust_hook_installed
+    if _cache_bust_hook_installed:
+        return
+    try:
+        from pydantic_ai_harness.warn_on_cache_busts import CacheBustWarning
+    except ImportError:  # pragma: no cover - harness not installed
+        return
+
+    import warnings as _warnings
+
+    _orig = _warnings.showwarning
+
+    def _hook(
+        message: Any,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: Any = None,
+        line: Any = None,
+    ) -> None:
+        if issubclass(category, CacheBustWarning):
+            _flag_current_span_error(message, filename, lineno)
+        # Always chain: the warning is still surfaced the normal way
+        # (stderr / logging if captureWarnings(True) is on).
+        _orig(message, category, filename, lineno, file, line)
+
+    _warnings.showwarning = _hook
+    _cache_bust_hook_installed = True
+
+
+def _flag_current_span_error(message: Any, filename: str, lineno: int) -> None:
+    """Mark the active OTel span ERROR + record the bust, best-effort."""
+    try:
+        from opentelemetry import trace
+        from opentelemetry.trace import Status, StatusCode
+
+        span = trace.get_current_span()
+        if span is None or not span.is_recording():
+            return
+        text = str(message)
+        span.set_status(Status(StatusCode.ERROR, f"prompt cache bust: {text}"))
+        # record_exception attaches the stack + message; the exception object
+        # is just a vehicle — pass a plain constructed UserWarning so we don't
+        # need the real instance (the warnings layer already consumed it).
+        exc = UserWarning(f"CACHE_BUST {text.strip()} [{filename}:{lineno}]")
+        span.record_exception(exc)
+    except Exception:  # noqa: BLE001 - observability must never break the run
+        pass
+
 
 @contextmanager
 def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterator[Any]:
@@ -142,6 +211,11 @@ def setup_observability() -> bool:
     from pydantic_ai import Agent
 
     Agent.instrument_all()
+
+    # Route CacheBustWarning → ERROR on the active model-request span so a
+    # prompt-cache collapse shows up as a red error observation in Langfuse
+    # (it's suppressed by default otherwise). Idempotent; never aborts a turn.
+    _install_cache_bust_error_hook()
     _setup_active = True
     _setup_refs += 1
     return True

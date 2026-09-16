@@ -96,6 +96,52 @@ def test_warn_on_cache_busts_cataloged_and_wired() -> None:
     assert monitor.cache_ttl_seconds == 300.0
 
 
+def test_cache_bust_warning_flips_active_span_to_error() -> None:
+    """A CacheBustWarning must surface as an ERROR on the active OTel span.
+
+    ``WarnOnCacheBusts`` emits ``CacheBustWarning`` (a UserWarning) via stdlib
+    ``warnings``, which the runtime suppresses by default. ``_install_cache_bust_error_hook``
+    wraps ``warnings.showwarning`` so a bust flips the current span to ERROR +
+    records it — so Langfuse shows it red — and never aborts the turn.
+    """
+    import warnings
+
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+    from pydantic_ai_harness.warn_on_cache_busts import CacheBustWarning
+
+    from paf.observability import instrumentation as inst
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+
+    # Fresh process guard: the hook is idempotent, but force-reinstall so the
+    # test is self-contained regardless of call order.
+    inst._cache_bust_hook_installed = False
+    inst._install_cache_bust_error_hook()
+
+    tracer = trace.get_tracer("test")
+    with tracer.start_as_current_span("model-req") as _:
+        warnings.warn(  # noqa: B028 - deliberate: firing the signal under test
+            "cache hit collapsed at model request 3", CacheBustWarning
+        )
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].status.status_code.name == "ERROR", (
+        spans[0].status
+    )
+    events = [e for e in spans[0].events]
+    assert any(e.name == "exception" for e in events)
+    # The turn continues: the `with` block above completed without raising.
+
+
 def test_subagents_cataloged_and_wired() -> None:
     """Subagents is a cataloged BUILTIN and resolves on the demo profile with child agents.
 
