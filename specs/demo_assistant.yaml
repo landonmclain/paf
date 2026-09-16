@@ -122,8 +122,8 @@ web:
 # `allowed_domains` bounds which hosts (and their subdomains) the browser may
 # navigate to and which request kinds that move data (fetch, XHR, EventSource,
 # WebSocket, sendBeacon) may reach. A non-empty list here WINS (overrides the
-# env-driven PLAYWRIGHT_ALLOWED_DOMAINS default); absent/null/empty -> the env
-# default.
+# capability's loopback-only default); absent/null/empty -> the capability's
+# own default.
 #
 # `block_private_addresses` controls the MECHANICAL SSRF guard that refuses
 # loopback / RFC-1918 LAN / link-local / cloud-metadata addresses. It defaults
@@ -189,9 +189,11 @@ shell:
 git:
   # root: ~/projects/Personal/landonmclain-site
   root: ~/projects/Personal/pydantic-agent-framework/
+  # root: ~/Development/local/futures_stats
 codebase_map:
   # scan_root: ~/projects/Personal/landonmclain-site
   scan_root: ~/projects/Personal/pydantic-agent-framework/
+  # scan_root: ~/Development/local/futures_stats
 # Vault: the real Obsidian vault. `~` expands via os.path.expanduser. Deliberate
 # departure from the other four roots (which point at the site repo) — the vault
 # cap is a separate navigation-first note ladder over markdown, rooted here.
