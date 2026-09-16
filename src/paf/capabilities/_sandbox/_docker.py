@@ -14,13 +14,21 @@ Background processes map to detached containers; ``check`` / ``stop`` become
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import tempfile
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
+
+# The host Docker daemon socket. A sandboxed ``docker`` command must never reach
+# the host daemon, so this path is never mounted into the container (see
+# ``_overlay_mounts``).
+_HOST_DOCKER_SOCKET = '/var/run/docker.sock'
 
 from paf.capabilities._sandbox._protocol import (
     BackgroundHandle,
@@ -74,6 +82,7 @@ class DockerExecutor:
         pids_limit: int = 256,
         workspace: str = '/workspace',
         container_name: str | None = None,
+        exclude: Sequence[str] = (),
     ) -> None:
         if mode not in ('exec', 'run'):
             raise ValueError("mode must be 'exec' or 'run'")
@@ -87,7 +96,46 @@ class DockerExecutor:
         self._pids_limit = pids_limit
         self._workspace = workspace
         self._container_name = container_name
+        self._exclude = list(exclude)
         self._container_id: str | None = None
+
+    def _overlay_mounts(self, cwd: Path) -> list[str]:
+        """Build ``-v`` args that shadow each excluded path with an empty file/dir.
+
+        Each pattern in ``exclude`` is glob-expanded against the workspace
+        (``cwd``) to explicit paths — Docker overlays cannot glob, so the config
+        may use globs but the overlay is always per-path. Each matched path is
+        shadowed by an empty file (or empty dir, for directories like ``.git``)
+        mounted over its container path. The real host file is never touched:
+        reads inside the container see the empty overlay, writes land on the
+        overlay, and the host file stays intact.
+
+        The host Docker socket is never mounted, even if a pattern somehow
+        resolves to it — a sandboxed ``docker`` command must not reach the host
+        daemon.
+        """
+        if not self._exclude:
+            return []
+        # Resolve the socket once: on many systems /var/run is a symlink to /run,
+        # so a realpath comparison must be against the resolved socket path.
+        host_socket = os.path.realpath(_HOST_DOCKER_SOCKET)
+        overlay_root = Path(tempfile.mkdtemp(prefix='paf-overlay-'))
+        mounts: list[str] = []
+        for pattern in self._exclude:
+            for host_path in sorted(cwd.glob(pattern)):
+                if os.path.realpath(host_path) == host_socket:
+                    raise RuntimeError(
+                        'Refusing to mount the host Docker socket into the sandbox.'
+                    )
+                rel = host_path.relative_to(cwd)
+                overlay_path = overlay_root / rel
+                if host_path.is_dir():
+                    overlay_path.mkdir(parents=True, exist_ok=True)
+                else:
+                    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+                    overlay_path.touch()
+                mounts.extend(['-v', f'{overlay_path}:{self._workspace}/{rel}'])
+        return mounts
 
     def _base_run_args(self) -> list[str]:
         args = [
@@ -146,6 +194,7 @@ class DockerExecutor:
             'docker', 'run', '-d', '--name', name,
             *self._base_run_args(),
             '-v', f'{cwd}:{self._workspace}', '-w', self._workspace,
+            *self._overlay_mounts(cwd),
             self._image, 'sleep', 'infinity',
         ]
         code, out, err = await self._docker(args)
@@ -172,6 +221,7 @@ class DockerExecutor:
                 'docker', 'run', '--rm',
                 *self._base_run_args(),
                 '-v', f'{cwd}:{self._workspace}', '-w', self._workspace,
+                *self._overlay_mounts(cwd),
                 self._image, 'sh', '-c', command,
             ]
         code, out, err = await self._docker(args, timeout=timeout)
@@ -190,6 +240,7 @@ class DockerExecutor:
             'docker', 'run', '-d', '--name', name,
             *self._base_run_args(),
             '-v', f'{cwd}:{self._workspace}', '-w', self._workspace,
+            *self._overlay_mounts(cwd),
             self._image, 'sh', '-c', command,
         ]
         code, out, err = await self._docker(args)

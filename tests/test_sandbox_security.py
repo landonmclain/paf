@@ -114,3 +114,52 @@ def test_docker_malicious_command_contained(tmp_path):
         assert "still-alive" in res2.stdout
 
     _run(scenario())
+
+
+def test_docker_exclude_overlays_env(tmp_path):
+    """An excluded .env is empty inside the container; the host file is untouched."""
+    (tmp_path / ".env").write_text("SECRET=super-secret-value\n")
+
+    async def scenario() -> None:
+        ex = DockerExecutor(mode="run", exclude=[".env"])
+        res = await ex.run("cat /workspace/.env", cwd=tmp_path, env=None, timeout=30.0)
+        assert res.exit_code == 0
+        assert "super-secret-value" not in res.stdout, "secret leaked into the sandbox"
+        assert res.stdout.strip() == "", "excluded .env should be empty in the container"
+
+    _run(scenario())
+    # The real host file is never touched by the overlay.
+    assert (tmp_path / ".env").read_text() == "SECRET=super-secret-value\n"
+
+
+def test_docker_exclude_write_hits_overlay(tmp_path):
+    """A write to /workspace/.env lands on the overlay, not the host file."""
+    (tmp_path / ".env").write_text("SECRET=original\n")
+
+    async def scenario() -> None:
+        ex = DockerExecutor(mode="run", exclude=[".env"])
+        res = await ex.run(
+            "echo 'SECRET=compromised' > /workspace/.env",
+            cwd=tmp_path,
+            env=None,
+            timeout=30.0,
+        )
+        assert res.exit_code == 0
+
+    _run(scenario())
+    assert (tmp_path / ".env").read_text() == "SECRET=original\n", "host .env was modified"
+
+
+def test_docker_exclude_overlays_git_dir(tmp_path):
+    """A .git directory is shadowed by an empty dir inside the container."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+
+    async def scenario() -> None:
+        ex = DockerExecutor(mode="run", exclude=[".git"])
+        res = await ex.run("ls -A /workspace/.git", cwd=tmp_path, env=None, timeout=30.0)
+        assert res.exit_code == 0
+        assert res.stdout.strip() == "", "excluded .git should be empty in the container"
+
+    _run(scenario())
+    assert (tmp_path / ".git" / "HEAD").read_text() == "ref: refs/heads/main\n"

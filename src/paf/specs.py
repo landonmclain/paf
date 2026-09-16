@@ -589,6 +589,31 @@ def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict
     return {root_key: root}
 
 
+def _spec_executor_block(executor: dict) -> dict:
+    """Extract the known keys from a spec ``executor:`` block (shared by shell/fs).
+
+    Returns only the keys that are present and well-typed (``backend`` /
+    ``mode`` / ``image`` / ``exclude``). Unknown keys are ignored so the schema
+    can grow without breaking older spec files.
+    """
+    resolved: dict = {}
+    backend = executor.get("backend")
+    if isinstance(backend, str) and backend.strip():
+        resolved["backend"] = backend
+    mode = executor.get("mode")
+    if isinstance(mode, str) and mode.strip():
+        resolved["mode"] = mode
+    image = executor.get("image")
+    if isinstance(image, str) and image.strip():
+        resolved["image"] = image
+    exclude = executor.get("exclude")
+    if isinstance(exclude, list):
+        cleaned = [e for e in exclude if isinstance(e, str) and e.strip()]
+        if cleaned:
+            resolved["exclude"] = cleaned
+    return resolved
+
+
 def _spec_filesystem_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``filesystem:`` block (root_dir)."""
     return _spec_rooted_config(spec_path, "filesystem", "root_dir")
@@ -607,6 +632,7 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
             backend: docker   # local (default) | docker
             mode: exec        # exec (default) | run
             image: python:3.12-slim
+            exclude: [.env, .env.*, .git-credentials, .git]
 
     ``backend`` defaults to ``local`` when the executor block is absent or
     names no backend. Unknown keys inside the block are ignored so the schema
@@ -628,16 +654,7 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
         config["cwd"] = cwd
     executor = block.get("executor")
     if isinstance(executor, dict):
-        resolved: dict = {}
-        backend = executor.get("backend")
-        if isinstance(backend, str) and backend.strip():
-            resolved["backend"] = backend
-        mode = executor.get("mode")
-        if isinstance(mode, str) and mode.strip():
-            resolved["mode"] = mode
-        image = executor.get("image")
-        if isinstance(image, str) and image.strip():
-            resolved["image"] = image
+        resolved = _spec_executor_block(executor)
         if resolved:
             config["executor"] = resolved
     return config or None

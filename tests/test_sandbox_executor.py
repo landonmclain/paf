@@ -126,6 +126,24 @@ def test_local_executor_conforms_to_sandboxed_executor():
         assert callable(getattr(ex, attr, None)), attr
 
 
+# --- Overlay socket guard (pure unit test, no Docker needed) -------------------
+def test_docker_overlay_refuses_host_socket(tmp_path):
+    """The overlay must never mount the host Docker socket into the sandbox.
+
+    A sandboxed ``docker`` command must not reach the host daemon, so even if an
+    exclude pattern resolves to the socket (e.g. via a symlink in the workspace)
+    the overlay refuses to build the mount.
+    """
+    sock = tmp_path / "dockersock"
+    try:
+        sock.symlink_to("/var/run/docker.sock")
+    except OSError:
+        pytest.skip("cannot create symlink")
+    ex = DockerExecutor(exclude=["dockersock"])
+    with pytest.raises(RuntimeError, match="Docker socket"):
+        ex._overlay_mounts(tmp_path)
+
+
 # --- DockerExecutor (skipped when Docker is unavailable) -----------------------
 def _docker_available() -> bool:
     if shutil.which("docker") is None:

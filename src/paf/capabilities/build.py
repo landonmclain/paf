@@ -228,14 +228,30 @@ def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSyst
     return _FileSystem(root_dir=root_dir)
 
 
-def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
-    """Resolve the spec's ``shell.executor`` block into a backend instance.
+# Workspace-relative paths (globs allowed) that the Docker backend overlays with
+# empty files so the sandbox never sees the real secret files. ``~/.ssh`` is a
+# host path outside the repo workspace and is not overlaid (the container cannot
+# reach it anyway); it is listed for completeness when the workspace is the home
+# dir.
+DEFAULT_EXCLUDE: tuple[str, ...] = (
+    '.env',
+    '.env.*',
+    '.git-credentials',
+    '.git',
+)
 
-    ``None`` or ``backend: local`` -> :class:`LocalProcessExecutor` (host, no
-    sandbox). ``backend: docker`` -> :class:`DockerExecutor` with the block's
-    options (``mode`` / ``image`` / ``network`` / ``user`` / ``read_only`` /
-    ``memory`` / ``cpus`` / ``pids_limit`` / ``workspace`` / ``container_name``),
-    each defaulting to the executor's secure default when omitted.
+
+def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
+    """Resolve a spec ``executor`` block into a backend instance.
+
+    Shared by shell and fs. ``None`` or ``backend: local`` ->
+    :class:`LocalProcessExecutor` (host, no sandbox). ``backend: docker`` ->
+    :class:`DockerExecutor` with the block's options (``mode`` / ``image`` /
+    ``network`` / ``user`` / ``read_only`` / ``memory`` / ``cpus`` /
+    ``pids_limit`` / ``workspace`` / ``container_name`` / ``exclude``), each
+    defaulting to the executor's secure default when omitted. ``exclude`` names
+    workspace-relative paths (globs allowed) that the Docker backend overlays
+    with empty files; it defaults to :data:`DEFAULT_EXCLUDE`.
 
     Docker is the security boundary, so a spec that *asks* for it but runs on a
     host without Docker hard-fails at build time rather than silently falling
@@ -250,7 +266,7 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
     if backend == "docker":
         if not docker_available():
             raise RuntimeError(
-                "shell.executor.backend is 'docker' but Docker is not available "
+                "executor.backend is 'docker' but Docker is not available "
                 "on this host; refusing to fall back to an unsandboxed local "
                 "process. Install/start Docker or set backend: local."
             )
@@ -265,10 +281,16 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
             pids_limit=executor_config.get("pids_limit", 256),
             workspace=executor_config.get("workspace", "/workspace"),
             container_name=executor_config.get("container_name"),
+            exclude=executor_config.get("exclude", DEFAULT_EXCLUDE),
         )
     raise ValueError(
-        f"shell.executor.backend must be 'local' or 'docker', got {backend!r}"
+        f"executor.backend must be 'local' or 'docker', got {backend!r}"
     )
+
+
+def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
+    """Resolve the spec's ``shell.executor`` block (see ``_resolve_executor``)."""
+    return _resolve_executor(executor_config)
 
 
 def _build_shell(store, shell_config: dict | None = None) -> _Shell:
