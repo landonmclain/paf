@@ -15,12 +15,10 @@ This module owns that assembly. ``build_compaction()`` builds the ``TieredCompac
 ladder **minus the summarizing tier**: the LLM rewrite (``SummarizingCompaction``) is
 deliberately excluded — long-term recall in paf is the **store-backed memory system**
 (owner → organizer → curated index, via ``ConversationSearch`` / ``read_turn``), not a
-compacted summary. (Historical note: the summary tier was once scoped as mutually
-exclusive with the now-retired turn-index one-liner block; turn-index was archived and we
-no longer summarize at all.) The non-summary tiers (clamp, clear-tool-results, sliding
-window) are pure context management and stay; they only ever *shrink* the live context
-without producing a competing summary. ``build_runtime_capabilities()``
-(in ``build.py``) selects the compaction builder iff the agent's profile allowlists it.
+compacted summary. The non-summary tiers (clamp, clear-tool-results, sliding window) are
+pure context management and stay; they only ever *shrink* the live context without
+producing a competing summary. ``build_runtime_capabilities()`` (in ``build.py``)
+selects the compaction builder iff the agent's profile allowlists it.
 """
 
 from __future__ import annotations
@@ -37,12 +35,12 @@ from pydantic_ai_harness.compaction import (
 # Compaction tuning — spec-file driven (per-agent), with benchmark-default fallback.
 #
 # Prod compaction dials live in the agent's spec YAML under a top-level
-# `compact:` block (option B — diffable, per-agent, reviewable). `build_agent`
-# reads that block with `CompactionConfig.model_validate(...)`, then threads it
-# through `build_runtime_capabilities(profile, compaction_config=...)` ->
+# `compact:` block (diffable, per-agent, reviewable). `build_agent` reads that
+# block with `CompactionConfig.model_validate(...)`, then threads it through
+# `build_runtime_capabilities(profile, compaction_config=...)` ->
 # `build_compaction(config=...)`. When NO config is supplied (None), the builder
-# falls back to the historical benchmark-tuned defaults so existing call sites,
-# tests, and the harness all keep byte-identical behavior.
+# falls back to the benchmark-tuned defaults so existing call sites, tests, and
+# the harness all keep byte-identical behavior.
 # ---------------------------------------------------------------------------
 
 
@@ -107,35 +105,39 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
        user message) — trim-only, never evicts the active turn.
 
     ``config`` (optional, from the agent spec's ``compact:`` block) overrides the
-    historical defaults. When ``None``, the historical defaults are used verbatim
-    (benchmark-tuned: ``target_tokens=4000``, window 10/5, ClearToolResults 500/4,
-    clamp 50_000/2000) so existing call sites and tests keep byte-identical
-    behavior. When ``config`` supplies values, they replace only the fields set.
+    historical defaults. When ``None``, the benchmark-tuned defaults are used
+    verbatim (``target_tokens=4000``, window 10/5, ClearToolResults 500/4, clamp
+    50_000/2000) so existing call sites and tests keep byte-identical behavior.
+    When ``config`` supplies values, they replace only the fields set.
 
-    The single sliding-window tier is always
+    The sliding-window tier is always
     :class:`~paf.capabilities._window.TurnBoundSlidingWindow` — turn-bounded
-    (never evicts the active user prompt) and **trim-only** (does no memory work).
-    There is no ``consolidate`` flag: durable-fact capture is owned solely by the
-    background watermark worker, never by eviction (retired 2026-09-02).
+    (never evicts the active user prompt) and **trim-only** (does no memory work);
+    durable-fact capture is owned solely by the background watermark worker, never
+    by eviction.
 
-    The LLM rewrite (4. ``SummarizingCompaction``) is intentionally absent — paf's
+    The LLM rewrite (``SummarizingCompaction``) is intentionally absent — paf's
     long-term recall is the store-backed memory system (owner → organizer → curated
-    index), not a compacted summary, and we no longer summarize at all (the old
-    turn-index summary layer that once made it mutually exclusive is retired/archived).
-    Context is bounded here by pruning; long-term recall is the store-backed
-    ``ConversationSearch`` / ``read_turn`` instead of a compacted summary.
+    index), not a compacted summary. Context is bounded here by pruning; long-term
+    recall is the store-backed ``ConversationSearch`` / ``read_turn`` instead.
 
-    Historical default values target ~4000 tokens of live history; a spec
-    ``compact:`` block overrides for live (e.g. the assistant spec uses
-    ``target_tokens`` ~ 1/3 of the 300k context so compaction only fires on
-    genuinely long conversations, plus a wide window).
+    Historical defaults target ~4000 tokens of live history; a spec ``compact:``
+    block overrides for live (e.g. the assistant spec uses ``target_tokens`` ~ 1/3
+    of the 300k context so compaction only fires on genuinely long conversations,
+    plus a wide window).
     """
     cfg = config or CompactionConfig()
 
     target = cfg.target_tokens if cfg.target_tokens is not None else 4000
-    clear_max = cfg.clear_tool_max_tokens if cfg.clear_tool_max_tokens is not None else 500
-    clear_keep = cfg.clear_tool_keep_pairs if cfg.clear_tool_keep_pairs is not None else 4
-    clamp_max = cfg.clamp_max_part_tokens if cfg.clamp_max_part_tokens is not None else 50_000
+    clear_max = (
+        cfg.clear_tool_max_tokens if cfg.clear_tool_max_tokens is not None else 500
+    )
+    clear_keep = (
+        cfg.clear_tool_keep_pairs if cfg.clear_tool_keep_pairs is not None else 4
+    )
+    clamp_max = (
+        cfg.clamp_max_part_tokens if cfg.clamp_max_part_tokens is not None else 50_000
+    )
     clamp_head = cfg.clamp_head_chars if cfg.clamp_head_chars is not None else 2_000
     clamp_tail = cfg.clamp_tail_chars if cfg.clamp_tail_chars is not None else 2_000
     win_max = cfg.window_max_messages if cfg.window_max_messages is not None else 10
