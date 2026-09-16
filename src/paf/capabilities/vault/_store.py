@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from paf.capabilities._storage._atomic import read_json, write_atomic, write_json_atomic
-from paf.config import PROJECT_ROOT, settings
+from paf.config import PROJECT_ROOT
 
 from ._markdown import extract_wikilinks, parse_frontmatter
 
@@ -45,6 +45,10 @@ from ._markdown import extract_wikilinks, parse_frontmatter
 _write_atomic = write_atomic
 
 _VERSION = 1
+
+# Repo-owned index root (relative to PROJECT_ROOT), keyed per vault root by hash.
+# Lives at the capability level, not in global Settings — see the module docstring.
+_DEFAULT_VAULT_INDEX_DIR = "data/.paf-vault-index"
 
 
 @dataclass
@@ -117,7 +121,7 @@ def index_dir_for_root(root: str | Path) -> Path:
     ``FlatFileVaultStorage(index_root=...)`` overrides this default.
     """
     h = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:12]
-    return Path(PROJECT_ROOT) / Path(settings.vault_index_dir) / h
+    return Path(PROJECT_ROOT) / Path(_DEFAULT_VAULT_INDEX_DIR) / h
 
 
 class FlatFileVaultStorage:

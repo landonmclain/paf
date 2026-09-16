@@ -69,8 +69,9 @@ class Browser(AbstractCapability[AgentDepsT]):
     playwright install chromium
     ```
 
-    Egress: `allowed_domains=None` (the default) places no domain restriction on
-    the URLs the agent can reach; pass `allowed_domains=[...]` to bound navigation
+    Egress: `allowed_domains` defaults to a loopback-only allowlist (`localhost`,
+    `127.0.0.1`, `::1`); pass `allowed_domains=[...]` to bound navigation to other
+    hosts, or `None` for open egress. The allowlist bounds navigation
     and the request kinds that move data (`fetch`, XHR, EventSource, WebSocket,
     `sendBeacon`) in any frame, leaving passive subresources and sub-frame
     documents unbounded so a permitted page keeps its assets and its
@@ -107,8 +108,10 @@ class Browser(AbstractCapability[AgentDepsT]):
     headless: bool = True
     """Run Chromium without a visible window. `True` suits servers and CI."""
 
-    allowed_domains: list[str] | None = None
-    """Egress allowlist. `None` (default) allows every public host -- see the egress note above.
+    allowed_domains: list[str] | None = field(
+        default_factory=lambda: ["localhost", "127.0.0.1", "::1"]
+    )
+    """Egress allowlist. Defaults to loopback-only (`localhost`, `127.0.0.1`, `::1`); `None` allows every public host -- see the egress note above.
 
     Each entry matches its exact host and any subdomain, so `example.com` reaches
     `api.example.com`. It bounds top-level navigation and the requests a page's

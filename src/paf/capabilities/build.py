@@ -454,9 +454,8 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
     which silently weakens the other:
 
     - ``allowed_domains`` — a non-empty list **wins** (overrides the
-      env-driven ``settings.playwright_allowed_domains`` /
-      PLAYWRIGHT_ALLOWED_DOMAINS default); absent/``None``/empty -> the env
-      default.
+      capability's loopback-only default); absent/``None``/empty -> the
+      capability's own default.
     - ``block_private_addresses`` — the **mechanical** SSRF guard (loopback /
       RFC-1918 / link-local / cloud-metadata). **Stays ``True`` (secure
       default) unless the spec explicitly declares ``false``.** Listing a
@@ -491,8 +490,6 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
         if browser_config
         else None
     )
-    if not allowed_domains:
-        allowed_domains = settings.playwright_allowed_domains
     # Secure by default: the private/loopback/link-local SSRF guard stays ON
     # unless the spec explicitly opts out (block_private_addresses: false).
     block_private = (
@@ -502,10 +499,9 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
     )
     if block_private is None:
         block_private = True
-    return _Browser(
+    browser_kwargs = dict(
         headless=True,
         block_private_addresses=bool(block_private),
-        allowed_domains=allowed_domains,
         auto_install_chromium=False,
         chromium_sandbox=False,
         viewport=(390, 844),
@@ -519,6 +515,9 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
             "Mobile/15E148 Safari/604.1"
         ),
     )
+    if allowed_domains:
+        browser_kwargs["allowed_domains"] = allowed_domains
+    return _Browser(**browser_kwargs)
 
 
 def _build_skills(store, skills_config: dict | None = None) -> _Skills:

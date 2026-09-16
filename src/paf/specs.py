@@ -741,7 +741,7 @@ def build_agent(
     # PREFERRED_DOC_DOMAINS default (see _spec_web_config). Open search is open.
     web_config = _spec_web_config(spec_path)
     # Per-assistant browser egress allowlist: the spec's top-level `browser:`
-    # block overrides the env-driven PLAYWRIGHT_ALLOWED_DOMAINS default when it
+    # block overrides the capability's loopback-only default when it
     # declares a non-empty `allowed_domains` (see _spec_browser_config).
     browser_config = _spec_browser_config(spec_path)
     # Per-assistant vault config: the spec's top-level `vault:` block names the

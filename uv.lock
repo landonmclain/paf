@@ -1962,6 +1962,7 @@ source = { editable = "." }
 dependencies = [
     { name = "gradio" },
     { name = "pydantic-ai" },
+    { name = "pydantic-graph" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1984,6 +1985,7 @@ dev = [
 requires-dist = [
     { name = "gradio", specifier = ">=6,<7" },
     { name = "pydantic-ai" },
+    { name = "pydantic-graph" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },

@@ -195,17 +195,17 @@ def test_browser_cataloged_and_wired() -> None:
     assert browser._session._viewport == (390, 844)
 
 
-def test_browser_spec_config_wins_over_env_default() -> None:
-    """A spec `browser.allowed_domains` overrides the env-driven default.
+def test_browser_spec_config_wins_over_capability_default() -> None:
+    """A spec `browser.allowed_domains` overrides the capability's default.
 
     Verifies the `browser:` block plumbing: `build_runtime_capabilities` reads
     the spec's browser_config dict and `_build_browser` honors its
-    `allowed_domains` (spec wins). Without a config the env
-    `settings.playwright_allowed_domains` default is used.
+    `allowed_domains` (spec wins). Without a config the capability's own
+    loopback-only default is used.
     """
     from paf.capabilities.build import build_runtime_capabilities
 
-    # Spec wins: a declared list replaces the env default entirely.
+    # Spec wins: a declared list replaces the capability default entirely.
     built = build_runtime_capabilities(
         DEMO_PROFILE, None, None, {"allowed_domains": ["example.com"]}
     )
@@ -213,7 +213,7 @@ def test_browser_spec_config_wins_over_env_default() -> None:
     assert browser is not None
     assert browser.allowed_domains == ["example.com"]
 
-    # No browser_config -> env-driven default (fall through unchanged).
+    # No browser_config -> the capability's loopback-only default.
     built_default = build_runtime_capabilities(DEMO_PROFILE)
     browser_default = next(
         (c for c in built_default if isinstance(c, Browser)), None
@@ -223,7 +223,6 @@ def test_browser_spec_config_wins_over_env_default() -> None:
         "localhost",
         "127.0.0.1",
         "::1",
-        "staging.example.com",
     ]
 
 
