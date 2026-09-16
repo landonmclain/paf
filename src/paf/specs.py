@@ -45,9 +45,8 @@ def _spec_compaction_config(spec_path: Path) -> CompactionConfig:
 def _spec_web_config(spec_path: Path) -> list[str] | None:
     """Read the spec's top-level ``web:`` block into an extract domain list.
 
-    Mirrors ``_spec_compaction_config``: pydantic-ai's ``AgentSpec`` drops
-    unknown top-level keys, so `build_agent` reads the raw YAML separately for
-    the per-agent web trust boundary. The block shape:
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. The block shape:
 
         web:
           search_domains:
@@ -55,13 +54,9 @@ def _spec_web_config(spec_path: Path) -> list[str] | None:
             - github.com
 
     ``search_domains`` is the **extract** allowlist for ``fetch_web_page``
-    (which domains may be pulled into context). Open web *search* is never
-    restricted by it.
-
-    Absent/unreadable block or empty list -> None, which makes
-    ``build_runtime_capabilities`` -> ``_build_web`` fall back to the
-    ``PREFERRED_DOC_DOMAINS`` default. Unknown keys inside ``web:`` are ignored
-    so the schema can grow without breaking older spec files.
+    (which domains may be pulled into context); open web *search* is never
+    restricted by it. Absent/unreadable block or empty list -> None, which
+    makes ``_build_web`` fall back to the ``PREFERRED_DOC_DOMAINS`` default.
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -82,9 +77,8 @@ def _spec_web_config(spec_path: Path) -> list[str] | None:
 def _spec_browser_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``browser:`` block into a Browser config dict.
 
-    Mirrors ``_spec_compaction_config`` / ``_spec_web_config``: pydantic-ai's
-    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
-    YAML separately for per-agent browser egress policy. The block shape:
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. The block shape:
 
         browser:
           allowed_domains:
@@ -95,28 +89,15 @@ def _spec_browser_config(spec_path: Path) -> dict | None:
     ``allowed_domains`` is the Browser capability's egress allowlist — hosts
     (and their subdomains) the browser may reach. ``block_private_addresses``
     is the **mechanical** SSRF guard (refuses loopback/RFC-1918/link-local and
-    cloud-metadata addresses whether or not an allowlist names them). It
-    defaults to ``True`` — secure by default; only an explicit ``false`` here
-    loosens it so an allowlisted *private* host (local dev boxes, staging LAN
-    hosts) actually becomes reachable.
+    cloud-metadata addresses whether or not an allowlist names them); it
+    defaults to ``True``, and only an explicit ``false`` here loosens it so an
+    allowlisted *private* host becomes reachable. The two are independent:
+    listing a host in ``allowed_domains`` does **not** release the
+    private-address guard on its own. ``cloud-metadata`` (``169.254.169.254``)
+    is **never** released by this flag; see ``EgressPolicy``.
 
-    These are two independent trust decisions and are deliberately **not**
-    conflated: listing ``localhost`` in ``allowed_domains`` does **not**
-    release the private-address guard on its own (the guard outranks the
-    allowlist). To reach a local host the operator must BOTH name it in
-    ``allowed_domains`` AND set ``block_private_addresses: false``. This keeps
-    the secure default for every agent that merely inherits a ``browser:``
-    block, and makes "reach my own internal network" a conscious, explicit
-    choice.
-
-    ``cloud-metadata`` (``169.254.169.254`` — the IAM-credential theft vector
-    on cloud hosts) is **never** released by this flag and stays refused; see
-    ``EgressPolicy``. Unknown keys inside ``browser:`` are ignored so the
-    schema can grow without breaking older spec files.
-
-    Returns a dict (or ``None`` if the block is absent or unreadable). The
-    dict carries whatever was declared; absent members fall back to their
-    code-level defaults in `_build_browser`.
+    Returns a dict (or ``None`` if the block is absent or unreadable); absent
+    members fall back to their code-level defaults in `_build_browser`.
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -143,9 +124,8 @@ def _spec_browser_config(spec_path: Path) -> dict | None:
 def _spec_vault_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``vault:`` block into a Vault config dict.
 
-    Mirrors ``_spec_browser_config`` / ``_spec_web_config``: pydantic-ai's
-    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
-    YAML separately for per-agent vault config. The block shape:
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. The block shape:
 
         vault:
           root: ~/Documents/notes   # `~` expands via os.path.expanduser
@@ -156,13 +136,10 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
 
     ``root`` is the vault directory the capability confines itself to; ``allow``
     /``deny`` are optional glob subtree patterns expressing a workspace-vs-personal
-    boundary inside that root. Unknown keys inside ``vault:`` are ignored so the
-    schema can grow without breaking older spec files.
-
-    Returns a dict (or ``None`` when the block is absent/unreadable). Absent
-    members fall back to their code-level defaults in ``_build_vault`` (whose
-    default root is the paf-owned ``data/vault/`` playground — the real vault is
-    ONLY reached via an explicit ``root`` here).
+    boundary inside that root. Returns a dict (or ``None`` when the block is
+    absent/unreadable); absent members fall back to ``_build_vault`` defaults
+    (whose default root is the paf-owned ``data/vault/`` playground — the real
+    vault is ONLY reached via an explicit ``root`` here).
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -190,9 +167,8 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
 def _spec_skills_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``skills:`` block into a Skills config dict.
 
-    Mirrors ``_spec_vault_config`` / ``_spec_browser_config``: pydantic-ai's
-    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
-    YAML separately for per-agent skill-library config. The block shape:
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. The block shape:
 
         skills:
           libraries:        # one or more full paths (~ expands); absent -> the
@@ -204,13 +180,9 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
     ``os.path.expanduser``); each is a directory scanned for ``SKILL.md`` skills
     (a skill tree: ``<root>/<category>/<skill>/SKILL.md`` or flat). ``top_k`` is
     the default number of ``point_skills`` hint pointers returned per call.
-    Unknown keys inside ``skills:`` are ignored so the schema can grow without
-    breaking older spec files.
-
-    Returns a dict (or ``None`` when the block is absent/unreadable). Absent
-    members fall back to their code-level defaults in ``_build_skills`` (whose
-    default library is the paf-owned ``data/skills/`` — no implicit disk
-    scanning beyond what a spec names explicitly).
+    Returns a dict (or ``None`` when the block is absent/unreadable); absent
+    members fall back to ``_build_skills`` defaults (whose default library is
+    the paf-owned ``data/skills/``).
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -237,9 +209,8 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
 def _spec_memory_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``memory:`` block into a Memory config dict.
 
-    Mirrors ``_spec_vault_config`` / ``_spec_browser_config``: pydantic-ai's
-    ``AgentSpec`` drops unknown top-level keys, so `build_agent` reads the raw
-    YAML separately for per-agent memory tuning. The block shape:
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. The block shape:
 
         memory:
           consolidate_every: 10      # optional; background consolidation cadence
@@ -249,23 +220,10 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
             t2: 25
             t3: 15
 
-    ``consolidate_every`` is the background-consolidation cadence in **minutes**
-    — a time metric (time-anchored watermark; monotonic across runs). It is
-    decoupled from context eviction; the owner simply folds at least this often
-    when new material has accumulated. ``max_memory_size`` bounds how much of
-    the rendered journal is injected per read (see ``JournalViewStore.read``).
-    ``tier_caps`` (a ``{t1/t2/t3: int|None}`` dict) are PER-TIER COUNT caps on
-    the injected index render, owned by the render itself — see
-    ``paf.specs.resolve_memory_tier_caps`` (read here, not in this scalar loop).
-
-    ``consolidate_every`` / ``max_memory_size`` live on **Memory** — the
-    capability owns every memory config variable — and are handed to the
-    background queue (a dumb service) only as injected construction args, never
-    read by the queue itself. The queue's ``write_render`` forwards its own
-    ``agent_name`` so the render resolves ``tier_caps`` from the spec directly.
-
-    Unknown keys inside ``memory:`` are ignored so the schema can grow without
-    breaking older spec files.
+    ``consolidate_every`` is the background-consolidation cadence in **minutes**;
+    ``max_memory_size`` bounds how much of the rendered journal is injected per
+    read; ``tier_caps`` (a ``{t1/t2/t3: int|None}`` dict) are PER-TIER COUNT caps
+    on the injected index render, resolved by ``resolve_memory_tier_caps``.
 
     Returns a dict (or ``None`` when the block is absent/unreadable). Absent
     members fall back to their code-level defaults in ``_build_memory`` / the
@@ -304,17 +262,15 @@ def resolve_memory_config(
     """Resolve the spec's ``memory:`` block into the values a consumer needs.
 
     Public seam the runtime Session uses to reach the background-consolidation
-    cadence WITHOUT poking pydantic-ai's private capability registry. It reads
-    the exact same ``_spec_memory_config`` path ``_build_memory`` uses and
-    applies the same code-level default, so the Session's trigger cadence can
-    never drift from the ``Memory`` capability's ``consolidate_every`` — Memory
-    stays the owner, this is just a non-invasive read of the resolved value.
+    cadence without poking pydantic-ai's private capability registry. It reads
+    the same ``_spec_memory_config`` path ``_build_memory`` uses and applies the
+    same code-level default, so the Session's trigger cadence can never drift
+    from the ``Memory`` capability's ``consolidate_every``.
 
     Returns ``{"consolidate_every": int, "review_every": int, "consolidate_turns":
     int, "review_turns": int}`` (always present, defaults applied). The minute
     cadences remain for explicitness/back-compat; the TURN-count values are the
-    active gate (DECIDED 2026-09-14, see Designs/Turn-Based-Background-Cadence).
-    ``review_turns`` defaults to ``DEFAULT_REVIEW_TURNS``.
+    active gate. ``review_turns`` defaults to ``DEFAULT_REVIEW_TURNS``.
     """
     from paf.capabilities.build import (
         DEFAULT_CONSOLIDATE_EVERY,
@@ -371,17 +327,16 @@ def resolve_memory_tier_caps(
     """Best-effort read of the spec's ``memory: tier_caps`` block.
 
     ``tier_caps`` is a per-tier count bound for the injected index render
-    (``{t1/t2/t3: int | None}``). It is NOT a single int like the cadence
+    (``{t1/t2/t3: int | None}``). It is not a single int like the cadence
     values, so it needs its own reader rather than riding inside
-    :func:`resolve_memory_config`. The render (``_render.py``) owns resolving
-    its own caps and calls this directly — neither the background queue nor
-    the runtime Session carries ``tier_caps`` anywhere.
+    :func:`resolve_memory_config`; the render (``_render.py``) calls this
+    directly.
 
     Returns a **partial** dict of only the per-tier caps the spec declares
     (``None`` meaning unbounded for that tier), or ``None`` when the spec is
     absent/unreadable or declares no usable ``tier_caps`` block. The caller
     merges this over its built-in defaults (``_TIER_CAPS``), so unspecified
-    tiers keep the code default — not a surprise unbounded.
+    tiers keep the code default.
     """
     try:
         with get_spec_path(agent_name, spec_directory).open(
@@ -423,11 +378,10 @@ def resolve_profile_name(
     capability selection stays spec-declared and never depends on a hardcoded
     agent-name mapping in each `ui/*.py`.
 
-    This mirrors ``resolve_memory_config`` — a best-effort raw-YAML read of one
-    top-level key. pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so
-    the value is read off disk directly. Returns ``None`` when the spec is
-    absent, unreadable, or declares no ``profile:`` key — callers fall back to
-    their own default (specs without a declaration keep working today's way).
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so the value is
+    read off disk directly. Returns ``None`` when the spec is absent,
+    unreadable, or declares no ``profile:`` key — callers fall back to their
+    own default.
     """
     try:
         with get_spec_path(agent_name, spec_directory).open(
@@ -446,11 +400,9 @@ def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict
     """Read one per-capability root block from a spec into a config dict.
 
     Shared reader for the root-bearing capabilities (filesystem / shell / git /
-    codebase_map). Mirrors ``_spec_vault_config`` / ``_spec_browser_config`` in
-    shape and intent: pydantic-ai's ``AgentSpec`` drops unknown top-level keys,
-    so `build_agent` reads the raw YAML separately for per-agent scoping.
-
-    The block shape (per capability):
+    codebase_map). pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so
+    `build_agent` reads the raw YAML separately. The block shape (per
+    capability):
 
         filesystem:
           root_dir: ~/projects/Personal/landonmclain-site
@@ -460,8 +412,7 @@ def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict
     ``root_key`` is the member inside the block that carries the path
     (``root_dir`` / ``cwd`` / ``root`` / ``scan_root``). Only that key is
     validated and copied — unknown keys *inside* the block are ignored so the
-    schema can grow (e.g. shell ``allowed_commands`` / ``denied_commands``)
-    without breaking older spec files.
+    schema can grow without breaking older spec files.
 
     Returns a dict (or ``None`` when the block is absent / unreadable / has no
     usable root). Absent members fall back to the builder's `PROJECT_ROOT`
@@ -530,8 +481,7 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
             exclude: [.env, .env.*, .git-credentials, .git]
 
     ``backend`` defaults to ``local`` when the executor block is absent or
-    names no backend. Unknown keys inside the block are ignored so the schema
-    can grow without breaking older spec files.
+    names no backend.
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -607,8 +557,7 @@ def build_agent(
 
     ``profile`` is the capability allowlist for this agent kind — resolved to
     ``custom_capability_types`` so the spec's ``capabilities:`` entries can only
-    come from the allowlisted catalog. Defaults to ``ASSISTANT_PROFILE``, M1's
-    one real agent kind.
+    come from the allowlisted catalog. Defaults to ``ASSISTANT_PROFILE``.
 
     ``build_runtime_capabilities()`` assembles capabilities that cannot resolve
     from YAML (the tiered ``TieredCompaction``, whose nested strategy objects have
@@ -624,50 +573,25 @@ def build_agent(
     profile = profile or ASSISTANT_PROFILE
     spec = load_agent_spec(agent_name, spec_directory)
     spec_path = get_spec_path(agent_name, spec_directory)
-    # Per-agent compaction tuning lives in the spec YAML under a top-level
-    # `compact:` block (option B — diffable, reviewable, per-agent). pydantic-ai's
-    # `AgentSpec` silently drops unknown top-level keys, so we read the raw YAML
-    # off disk to extract `compact:` (lenient: unknown keys inside ignored;
-    # absent block -> CompactionConfig() -> builder's benchmark defaults).
+    # Per-agent compaction tuning from the spec's `compact:` block.
     compaction_config = _spec_compaction_config(spec_path)
-    # Per-assistant web trust boundary: the spec's top-level `web:` block
-    # declares the extract allowlist for `fetch_web_page`; absent -> the
-    # PREFERRED_DOC_DOMAINS default (see _spec_web_config). Open search is open.
+    # Web extract allowlist from the spec's `web:` block.
     web_config = _spec_web_config(spec_path)
-    # Per-assistant browser egress allowlist: the spec's top-level `browser:`
-    # block overrides the capability's loopback-only default when it
-    # declares a non-empty `allowed_domains` (see _spec_browser_config).
+    # Browser egress allowlist from the spec's `browser:` block.
     browser_config = _spec_browser_config(spec_path)
-    # Per-assistant vault config: the spec's top-level `vault:` block names the
-    # vault root (+ optional allow/deny subtree patterns). Absent -> the paf-owned
-    # data/vault/ playground default (see _spec_vault_config / _build_vault).
+    # Vault root + allow/deny from the spec's `vault:` block.
     vault_config = _spec_vault_config(spec_path)
-    # Per-assistant skill library: the spec's top-level `skills:` block names
-    # one or more full-path skill directories (+ optional top_k). Absent -> the
-    # paf-owned data/skills/ default (see _spec_skills_config / _build_skills).
+    # Skill library dirs + top_k from the spec's `skills:` block.
     skills_config = _spec_skills_config(spec_path)
-    # Per-assistant memory config: the spec's top-level `memory:` block tunes
-    # the Memory capability (e.g. `consolidate_every` — the background
-    # consolidation cadence). Absent -> the Memory capability's code-level
-    # default (see _spec_memory_config / _build_memory). All memory variables
-    # live on Memory; anything the background queue needs is handed down as an
-    # injected construction arg.
+    # Memory tuning (e.g. consolidate_every) from the spec's `memory:` block.
     memory_config = _spec_memory_config(spec_path)
-    # Per-assistant root scoping: the spec's top-level `filesystem:`/`shell:`/
-    # `git:`/`codebase_map:` blocks point each root-bearing capability at a
-    # working directory other than PROJECT_ROOT (see _spec_rooted_config).
-    # Absent block -> the builder's PROJECT_ROOT default. Lets a single agent
-    # instance be pointed "at" another repo without touching a global default.
+    # Root scoping for the root-bearing capabilities from their spec blocks.
     filesystem_config = _spec_filesystem_config(spec_path)
     shell_config = _spec_shell_config(spec_path)
     git_config = _spec_git_config(spec_path)
     codebase_map_config = _spec_codebase_map_config(spec_path)
-    # Bounded-timeout OpenRouter client: when the spec's model is an
-    # `openrouter:` string and the caller didn't supply their own model, swap in
-    # an OpenRouterModel that wraps a client with a ~120s read timeout and
-    # ``max_retries=0`` (see providers/openrouter.py). Falls back to the plain
-    # string (no change) when ``OPENROUTER_API_KEY`` is absent or a custom
-    # ``model`` was passed.
+    # Bounded-timeout OpenRouter client for `openrouter:` models (see
+    # providers/openrouter.py); falls back to the plain string when no key.
     if (
         "model" not in overrides
         and isinstance(spec.model, str)
