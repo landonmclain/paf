@@ -6,6 +6,7 @@ at our self-hosted Langfuse and instrument pydantic-ai. Fully local.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from collections.abc import Iterator
@@ -33,7 +34,7 @@ def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterat
     (which Langfuse does NOT map), so without this root span every paf trace shows
     an EMPTY ``Input`` in the trace-list view. This is the documented "trace
     hygiene" fix (option #1, SDK-free): wrap the whole run in one root span that
-    sets both attributes. See Portfolio-GitHub/Turn-Index-Testing#Trace hygiene.
+    sets both attributes.
 
     ``name`` is the span name (convention ``paf.run.<conversation_id>``).
     ``tracer`` lets callers inject a specific tracer (used by tests to capture
@@ -118,11 +119,9 @@ def setup_observability() -> bool:
     headers = {
         "Authorization": (
             "Basic "
-            + __import__("base64")
-            .b64encode(
+            + base64.b64encode(
                 f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
-            )
-            .decode()
+            ).decode()
         )
     }
 
@@ -139,8 +138,7 @@ def setup_observability() -> bool:
 
     # REQUIRED: pydantic-ai does NOT emit spans by default (Agent.instrument is
     # off unless enabled). Without this, no agent/metadata/model spans are ever
-    # created and Langfuse receives nothing. See pydantic docs "OTel without
-    # Logfire" and langfuse.com/docs/integrations/pydantic-ai (Step 3).
+    # created and Langfuse receives nothing.
     from pydantic_ai import Agent
 
     Agent.instrument_all()

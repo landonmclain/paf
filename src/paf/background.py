@@ -9,10 +9,8 @@ lives at the framework level (next to ``config.py`` / ``runtime.py``), not
 under ``capabilities/``, because it is shared infrastructure that multiple
 consumer capabilities call *into*.
 
-Only the engine lives here. coding_agent's consumer job types
-(``WorklogJob`` / ``CompactionMemoryJob``) and their prompts are deliberately
-NOT ported — paf consumers define their own job dataclasses and subclass
-:class:`BackgroundQueueService`, implementing :meth:`process_job`.
+Only the engine lives here. Consumers define their own job dataclasses and
+subclass :class:`BackgroundQueueService`, implementing :meth:`process_job`.
 
 Parallelism model: one :class:`BackgroundQueueService` instance == one queue
 == one worker per session, FIFO. Within a queue jobs are ordered (correct for
@@ -23,16 +21,9 @@ summarization queue) whose workers interleave across the event loop. There is
 no worker pool and no dependency scheduler — "job B waits on job A" is
 expressed as ordered steps inside a single :meth:`process_job`.
 
-Async-first: paf's entry points are async, so the daemon-thread
-``BackgroundServiceManager`` coding_agent used is unnecessary here. A worker
-idle-exits after :attr:`IDLE_TIMEOUT_S` and is transparently re-spawned by the
-next :meth:`enqueue`; callers must NOT assume a warm worker.
-
-Ported from coding_agent ``app/services/background/`` (``base.py`` +
-``queues.py``); kept line-faithful. Two deliberate deltas: ``QueueState``
-carries ``active_jobs`` (the honest ``running`` status) and ``QueueStatus`` is
-included (both were in coding_agent's ``queues.py``), and the sync-thread
-bridge is dropped as unnecessary in an all-async process.
+Async-first: paf's entry points are async, so no daemon-thread bridge is
+needed. A worker idle-exits after :attr:`IDLE_TIMEOUT_S` and is transparently
+re-spawned by the next :meth:`enqueue`; callers must NOT assume a warm worker.
 """
 
 from __future__ import annotations
@@ -47,6 +38,14 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 log = logging.getLogger(__name__)
+
+
+def _log_subscriber_failure(task: asyncio.Task) -> None:
+    """Log an exception raised by a fire-and-forget subscriber coroutine."""
+    try:
+        task.result()
+    except Exception:
+        log.exception("background-task subscriber coroutine failed")
 
 
 @dataclass
@@ -164,25 +163,19 @@ class BackgroundQueueService[JobT](ABC):
 # ---------------------------------------------------------------------------
 # BackgroundCoordinator — the session-level background orchestrator.
 #
-# Extracted from ``paf.runtime`` (was the background section of ``Session``):
-# the task registry + subscriber fan-out, the three background queues (memory
-# consolidation, memory review, thread summarizer), and the post-turn triggers
-# that schedule them. ``runtime.Session`` is now the TURN core only; it holds a
-# ``background`` slot (a ``BackgroundCoordinator | None``) and calls the single
-# ``after_turn()`` seam at the end of ``stream()``.
-#
-# Deliberately split from the queue engine above: ``BackgroundQueueService`` is
-# the *generic* out-of-band worker; this coordinator wires concrete queue types
-# (memory/thread) to a session's cadence + watermark gating and exposes their
+# Wires the concrete queue types (memory consolidation, memory review, thread
+# summarizer) to a session's cadence + watermark gating and exposes their
 # lifecycle as ``BackgroundTask`` rows -- the "what the UI sees" surface.
+# ``runtime.Session`` holds a ``background`` slot (a ``BackgroundCoordinator |
+# None``) and calls the single ``after_turn()`` seam at the end of ``stream()``.
 #
-# The "never break the turn" exception-swallowing semantics moved here
-# byte-for-byte: every trigger method wraps its body in try/except and marks the
-# task row ERROR rather than re-raising, and a failing subscriber callback is
-# logged and skipped -- a background failure never propagates into the turn.
+# "Never break the turn": every trigger method wraps its body in try/except and
+# marks the task row ERROR rather than re-raising, and a failing subscriber
+# callback is logged and skipped -- a background failure never propagates into
+# the turn.
 # ---------------------------------------------------------------------------
 
-# Step lifecycle statuses (coding_agent ActionStep.status / MaintenanceStep.status).
+# Step lifecycle statuses.
 PROCESSING = "running"
 DONE = "done"
 ERROR = "error"
@@ -202,12 +195,12 @@ _PROCESS_STATUS_HOLD_S = 60
 class BackgroundTask:
     """Registry entry for a background task (consumer #1 = memory consolidation).
 
-    Mirrors coding_agent ``MaintenanceStep``: one row per background task with a
-    stable ``id`` the UI can mutate ``queued -> running -> done|error|skipped``
-    by. ``progress`` is 0..1 when known; ``detail`` is branch-specific free text
-    (e.g. ``"5 turns -> 1 summary"``). Lives in the coordinator's task registry
-    and is REPLAYED to late-joining ``subscribe_tasks`` subscribers, so a web tab
-    that connects mid-fold sees ``running`` instead of nothing.
+    One row per background task with a stable ``id`` the UI can mutate
+    ``queued -> running -> done|error|skipped`` by. ``progress`` is 0..1 when
+    known; ``detail`` is branch-specific free text (e.g. ``"5 turns -> 1
+    summary"``). Lives in the coordinator's task registry and is REPLAYED to
+    late-joining ``subscribe_tasks`` subscribers, so a web tab that connects
+    mid-fold sees ``running`` instead of nothing.
     """
 
     id: str
@@ -261,7 +254,7 @@ class JobIdleStatus:
 
     id: str
     label: str
-    status: Literal["idle", "done", "skipped", "running", "queued"] = "idle"
+    status: Literal["idle", "done", "skipped", "running", "queued", "error"] = "idle"
     progress: float | None = None
     detail: str = ""
 
@@ -269,11 +262,11 @@ class JobIdleStatus:
 class BackgroundCoordinator:
     """Owns the session's background machinery: task registry + 3 queues + triggers.
 
-    Extracted from ``runtime.Session`` (which is now the turn core). Constructed
-    by the app/CLI and attached to a session via ``session.background``; a bare
-    ``Session`` (memory-less profile, e.g. ``contextbench``) is ``None`` here.
+    Constructed by the app/CLI and attached to a session via ``session.background``;
+    a bare ``Session`` (memory-less profile, e.g. ``contextbench``) is ``None``
+    here.
 
-    Owns, verbatim from the old Session:
+    Owns:
     - the task registry (``_background_tasks``, ``subscribe_tasks`` replay,
       ``_publish_task``, ``task_history``),
     - the three lazy queues (memory consolidation, memory review, thread
@@ -285,8 +278,7 @@ class BackgroundCoordinator:
 
     All cadence/watermark/identity state is self-contained: the coordinator
     derives its memory dir, thread capture root, and cadences from ``agent_name``
-    / ``profile`` (the same derivations the old Session used), so attaching one
-    is a single call and the Session stays lean.
+    / ``profile``, so attaching one is a single call and the Session stays lean.
     """
 
     def __init__(
@@ -310,21 +302,22 @@ class BackgroundCoordinator:
         self.agent_name = agent_name
         self.profile = profile
 
-        # Turn-count cadence (the active gate; DECIDED 2026-09-14, see
-        # Designs/Turn-Based-Background-Cadence). Resolved from the spec's
+        # Turn-count cadence (the active gate). Resolved from the spec's
         # `memory:` block; falls back to the same block's minute values reading
         # as counts when an old spec only set `consolidate_every`/`review_every`.
         from paf.specs import resolve_memory_config
 
         _mem_cfg = resolve_memory_config(agent_name)
         self.consolidate_turns = (
-            consolidate_turns if consolidate_turns is not None else _mem_cfg["consolidate_turns"]
+            consolidate_turns
+            if consolidate_turns is not None
+            else _mem_cfg["consolidate_turns"]
         )
         self.review_turns = (
             review_turns if review_turns is not None else _mem_cfg["review_turns"]
         )
 
-        # Per-agent scope dirs (same derivations the old Session used).
+        # Per-agent scope dirs.
         self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
 
         from paf.capabilities.thread_summarizer._capability import capture_directory_for
@@ -341,8 +334,7 @@ class BackgroundCoordinator:
         )
 
         # Consolidation seams (injected only by tests; production defaults the
-        # queue's real fold/reviewer). Kept off the constructor to mirror the
-        # old Session's behavior where these were passed-in-or-None.
+        # queue's real fold/reviewer).
         self._consolidate_span = consolidate_span
 
         # Lazily-built queues (one per type) + their rows.
@@ -440,9 +432,7 @@ class BackgroundCoordinator:
         conversation segment (bounds-checked so a cid prefix can't over-match).
         """
         needle = f".{conversation_id}."
-        rows = [
-            t for t in self._background_tasks.values() if needle in f".{t.id}"
-        ]
+        rows = [t for t in self._background_tasks.values() if needle in f".{t.id}"]
         rows.sort(key=lambda t: t.updated_at, reverse=True)
         return rows
 
@@ -465,6 +455,7 @@ class BackgroundCoordinator:
         """
         needle = f".{conversation_id}."
         recent: BackgroundTask | None = None
+
         # Select the *authoritative* task row. Task ids end in ``.{seq}``, a
         # per-(kind,conversation) monotonic counter, so a HIGHER seq is always
         # the newer trigger — even when two publishes land in the same
@@ -503,9 +494,10 @@ class BackgroundCoordinator:
         # of age. Only TERMINAL outcomes obey the hold window, so a finished
         # run still reverts its row to idle once the outcome is stale.
         is_active = recent.status in (QUEUED, PROCESSING)
-        if not is_active and (
-            datetime.now(UTC) - updated
-        ).total_seconds() > _PROCESS_STATUS_HOLD_S:
+        if (
+            not is_active
+            and (datetime.now(UTC) - updated).total_seconds() > _PROCESS_STATUS_HOLD_S
+        ):
             return row
         if is_active:
             # An in-flight fold carries NO idle cadence text: the
@@ -518,14 +510,14 @@ class BackgroundCoordinator:
             return JobIdleStatus(
                 id=row.id,
                 label=row.label,
-                status=recent.status,  # type: ignore[arg-type]
+                status=recent.status,
                 progress=recent.progress,
                 detail=recent.detail,
             )
         return JobIdleStatus(
             id=row.id,
             label=row.label,
-            status=recent.status,  # type: ignore[arg-type]
+            status=recent.status,
             progress=recent.progress,
             detail=recent.detail or row.detail,
         )
@@ -562,9 +554,7 @@ class BackgroundCoordinator:
             # A single pass over persisted runs/history feeds all three counts.
             runs = await self._store.list_runs(conversation_id=conversation_id)
             tip_run = runs[-1].run_id if runs else None
-            tip_history = (
-                await source.run_history(run_id=tip_run) if tip_run else []
-            )
+            tip_history = await source.run_history(run_id=tip_run) if tip_run else []
             anchors = user_anchor_indices(tip_history)
             tip_turn = len(anchors) - 1 if anchors else 0
         except Exception:
@@ -576,7 +566,11 @@ class BackgroundCoordinator:
                 (f"review.{conversation_id}", "Reviewing memory"),
                 (f"thread_summarize.{conversation_id}", "Summarizing thread"),
             ):
-                rows.append(JobIdleStatus(id=_id, label=_label, detail="idle · status unavailable"))
+                rows.append(
+                    JobIdleStatus(
+                        id=_id, label=_label, detail="idle · status unavailable"
+                    )
+                )
             return rows
 
         async def _span_count(wm: MemoryWatermark) -> int:
@@ -592,7 +586,10 @@ class BackgroundCoordinator:
 
             try:
                 span = await resolve_unseen_span(
-                    source, wm, tip_run=tip_run or "", tip_turn=tip_turn,
+                    source,
+                    wm,
+                    tip_run=tip_run or "",
+                    tip_turn=tip_turn,
                     conversation_id=conversation_id,
                 )
             except Exception:
@@ -673,7 +670,9 @@ class BackgroundCoordinator:
                 # the displayed n/BLOCK_TURNS diverges from the real gate.
                 store = ThreadSummaryStore(self._thread_capture_root, conversation_id)
                 wm = MemoryWatermark.load(
-                    store.directory, run_id=tip_run or "", filename=THREAD_WATERMARK_FILENAME
+                    store.directory,
+                    run_id=tip_run or "",
+                    filename=THREAD_WATERMARK_FILENAME,
                 )
                 n = await _span_count(wm)
                 reason = (
@@ -716,7 +715,8 @@ class BackgroundCoordinator:
             try:
                 result = cb(ev)
                 if inspect.isawaitable(result):
-                    asyncio.ensure_future(result)  # fire-and-forget, never block
+                    t = asyncio.ensure_future(result)  # fire-and-forget, never block
+                    t.add_done_callback(_log_subscriber_failure)
             except Exception:  # a subscriber must never break the session
                 log.exception("background-task subscriber failed task=%s", task.id)
 
@@ -761,8 +761,7 @@ class BackgroundCoordinator:
                     else:
                         # Production coordinators pass no `consolidate_span`; fall
                         # back to the queue's real fold so the owner actually
-                        # writes (previously this returned 0 and the worker
-                        # advanced the watermark with nothing folded).
+                        # writes.
                         assert queue_ref is not None
                         n = await queue_ref._default_consolidate_span(
                             messages, directory, watermark
@@ -841,10 +840,9 @@ class BackgroundCoordinator:
     ) -> None:
         """Publish completion for active thread-summarizer task rows."""
         for task in self._background_tasks.values():
-            if (
-                task.id.startswith(f"thread_summarize.{conversation_id}.")
-                and task.status in (QUEUED, PROCESSING)
-            ):
+            if task.id.startswith(
+                f"thread_summarize.{conversation_id}."
+            ) and task.status in (QUEUED, PROCESSING):
                 task.status = DONE if success else ERROR
                 task.detail = detail
                 task.progress = 1.0 if success else None
@@ -900,6 +898,8 @@ class BackgroundCoordinator:
             ThreadSummaryStore,
         )
 
+        source = build_history_source(self._store)
+
         self._thread_summarizer_seq += 1
         task_id = f"thread_summarize.{cid}.{self._thread_summarizer_seq}"
         task = BackgroundTask(id=task_id, label=f"Summarizing thread ({cid})")
@@ -912,7 +912,7 @@ class BackgroundCoordinator:
                 self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
-            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
+            tip_history = await source.run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
                 task.status = SKIPPED
@@ -927,7 +927,7 @@ class BackgroundCoordinator:
             # Resolve the unseen span for THIS conversation now; hand the worker
             # precomputed material so it summarizes exactly what was scheduled.
             span = await resolve_unseen_span(
-                build_history_source(self._store),
+                source,
                 wm,
                 tip_run=tip_run,
                 tip_turn=tip_turn,
@@ -941,7 +941,9 @@ class BackgroundCoordinator:
             )
             if span_turns < BLOCK_TURNS:
                 task.status = SKIPPED
-                task.detail = f"only {span_turns} unsettled turn(s); need >= {BLOCK_TURNS}"
+                task.detail = (
+                    f"only {span_turns} unsettled turn(s); need >= {BLOCK_TURNS}"
+                )
                 self._publish_task(task)
                 return
             # Single-flight: skip if a thread summarize is already queued/running.
@@ -960,10 +962,11 @@ class BackgroundCoordinator:
                     watermark=span.watermark,
                 ),
             )
-            if self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-                self._publish_task(task)
-        except Exception as exc:  # trigger path itself failed (rare); never break the turn
+            task.status = PROCESSING  # job handed to the worker
+            self._publish_task(task)
+        except (
+            Exception
+        ) as exc:  # trigger path itself failed (rare); never break the turn
             task.status = ERROR
             task.detail = str(exc)
             self._publish_task(task)
@@ -992,6 +995,7 @@ class BackgroundCoordinator:
         from paf.capabilities.memory._background import ReviewJob, resolve_unseen_span
         from paf.capabilities.memory._watermark import MemoryWatermark
         from paf.capabilities.persistence import build_history_source
+
         source = build_history_source(self._store)
 
         self._review_seq += 1
@@ -1006,7 +1010,7 @@ class BackgroundCoordinator:
                 self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
-            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
+            tip_history = await source.run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
                 task.status = SKIPPED
@@ -1019,10 +1023,10 @@ class BackgroundCoordinator:
                 run_id=tip_run,
                 filename="memory-review-watermark.json",
             )
-            # TURN-COUNT gate (DECIDED 2026-09-14): fire review only once >=
-            # `review_turns` complete turns have accrued since the last review,
-            # mirroring the summarizer's block gate. The reviewer is SLOW (~10
-            # min archive/merge); 10 turns batches ~2 consolidation folds, and
+            # TURN-COUNT gate: fire review only once >= `review_turns` complete
+            # turns have accrued since the last review, mirroring the
+            # summarizer's block gate. The reviewer is SLOW (~10 min
+            # archive/merge); 10 turns batches ~2 consolidation folds, and
             # review never mid-races consolidation.
             span = await resolve_unseen_span(
                 source,
@@ -1035,7 +1039,9 @@ class BackgroundCoordinator:
             )
             if span_turns < self.review_turns:
                 task.status = SKIPPED
-                task.detail = f"only {span_turns} unsettled turn(s); need >= {self.review_turns}"
+                task.detail = (
+                    f"only {span_turns} unsettled turn(s); need >= {self.review_turns}"
+                )
                 self._publish_task(task)
                 return
             # Mirror the owner's worker-owns-watermark contract: the trigger
@@ -1060,9 +1066,8 @@ class BackgroundCoordinator:
                 self.agent_name,
                 ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
             )
-            if self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-                self._publish_task(task)
+            task.status = PROCESSING  # job handed to the worker
+            self._publish_task(task)
         except Exception as exc:  # the review hook must not break the turn
             task.status = ERROR
             task.detail = str(exc)
@@ -1092,6 +1097,7 @@ class BackgroundCoordinator:
         )
         from paf.capabilities.memory._watermark import MemoryWatermark
         from paf.capabilities.persistence import build_history_source
+
         source = build_history_source(self._store)
 
         self._consolidation_seq += 1
@@ -1106,7 +1112,7 @@ class BackgroundCoordinator:
                 self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
-            tip_history = await build_history_source(self._store).run_history(run_id=tip_run)
+            tip_history = await source.run_history(run_id=tip_run)
             anchors = user_anchor_indices(tip_history)
             if not anchors:
                 task.status = SKIPPED
@@ -1124,14 +1130,15 @@ class BackgroundCoordinator:
             # completed (non-error) fold; a failed fold leaves the watermark
             # behind so this span is retried next cadence, never skipped.
             span = await resolve_unseen_span(
-                source, wm,
-                tip_run=tip_run, tip_turn=tip_turn,
+                source,
+                wm,
+                tip_run=tip_run,
+                tip_turn=tip_turn,
             )
-            # TURN-COUNT gate (DECIDED 2026-09-14, see
-            # Designs/Turn-Based-Background-Cadence): fire consolidation only
-            # once >= `consolidate_turns` complete turns have accrued since the
-            # last fold. Memory is cheap extract+append, so 5 turns keeps it
-            # warm without a per-turn model call.
+            # TURN-COUNT gate: fire consolidation only once >=
+            # `consolidate_turns` complete turns have accrued since the last
+            # fold. Memory is cheap extract+append, so 5 turns keeps it warm
+            # without a per-turn model call.
             span_turns = (
                 len(distinct_user_turn_texts(span.messages)) if span.messages else 0
             )
@@ -1152,13 +1159,14 @@ class BackgroundCoordinator:
             mq.enqueue(
                 self.agent_name,
                 ConsolidationJob(
-                    run_id=tip_run, turn_id=tip_turn, messages=span.messages,
+                    run_id=tip_run,
+                    turn_id=tip_turn,
+                    messages=span.messages,
                     watermark=span.watermark,
                 ),
             )
-            if self._background_tasks.get(task_id) is not None:
-                task.status = PROCESSING  # job handed to the worker
-                self._publish_task(task)
+            task.status = PROCESSING  # job handed to the worker
+            self._publish_task(task)
         except Exception as exc:  # trigger path itself failed (rare)
             task.status = ERROR
             task.detail = str(exc)

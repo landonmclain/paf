@@ -10,8 +10,7 @@ steps, docker-sandboxed shell runs, test runs, subagent progress — can:
 
 Keeping this generic (not plan-specific) means planning, shell, tests, and
 subagents all share ONE dispatch mechanism instead of each carrying a bespoke
-copy. This module is the extraction of the pub/sub primitive that originally
-lived (plan-shaped) in ``capabilities/planning/_events.py``.
+copy.
 
 Design notes:
 
