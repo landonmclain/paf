@@ -31,7 +31,7 @@ from pydantic_ai import (
     PartDeltaEvent,
     PartStartEvent,
 )
-from pydantic_ai._agent_graph import CallToolsNode, End, ModelRequestNode
+from pydantic_ai.agent import CallToolsNode, ModelRequestNode
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     RunCancelled,
@@ -49,6 +49,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai_harness.step_persistence import continue_run
+from pydantic_graph import End
 
 from paf.background import (
     DONE,
@@ -239,7 +240,7 @@ def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
             out.append(StreamEvent(kind="text", text=event.delta.content_delta))
         elif isinstance(event.delta, ThinkingPartDelta):
             out.append(
-                StreamEvent(kind="thinking", text=event.delta.content_delta)
+                StreamEvent(kind="thinking", text=event.delta.content_delta or "")
             )
     elif isinstance(event, FunctionToolCallEvent):
         tool_name = str(event.part.tool_name or "")
@@ -267,11 +268,7 @@ def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
             StreamEvent(
                 kind="tool_result",
                 tool_name=tool_name,
-                text=(
-                    content
-                    if isinstance(content, str)
-                    else str(content or "")
-                ),
+                text=(content if isinstance(content, str) else str(content or "")),
             )
         )
         # Tool ERROR. A real tool failure comes back as a ToolReturnPart with
@@ -456,9 +453,7 @@ class Session:
         await self._ensure_resumed(self._scoped_cid(cid))
         return self.restored_count
 
-    async def _recover_interrupted(
-        self, run_id: str, history: list[Any]
-    ) -> list[Any]:
+    async def _recover_interrupted(self, run_id: str, history: list[Any]) -> list[Any]:
         """Trim a recovered interrupted snapshot to the last RESOLVED boundary.
 
         ``continue_run(..., include_interrupted=True)`` returns the full
@@ -473,9 +468,7 @@ class Session:
         try:
             unresolved = {
                 rec.tool_call_id
-                for rec in await self._store.list_unresolved_tool_effects(
-                    run_id=run_id
-                )
+                for rec in await self._store.list_unresolved_tool_effects(run_id=run_id)
             }
         except Exception:  # noqa: BLE001 - store read is best-effort
             return history
@@ -666,10 +659,12 @@ class Session:
                         self.history = [*self.history, *new_msgs]
                         _span.set_attribute(
                             "langfuse.observation.output",
-                            _json_dumps({
-                                "partial_saved": len(new_msgs),
-                                "error": f"{type(exc).__name__}: {exc}",
-                            }),
+                            _json_dumps(
+                                {
+                                    "partial_saved": len(new_msgs),
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                }
+                            ),
                         )
                 raise
             assert result is not None, "iter() ended before AgentRun.result settled"
@@ -698,7 +693,7 @@ class Session:
         """
         parts: list[str] = []
         async for event in self.stream(prompt, conversation_id=conversation_id):
-            if event.kind == "text":
+            if isinstance(event, StreamEvent) and event.kind == "text":
                 parts.append(event.text)
         return "".join(parts)
 

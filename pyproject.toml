@@ -6,6 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic-ai",
+    # Direct import in runtime.py (End from pydantic_graph). Declared so it
+    # doesn't vanish from the venv if pydantic-ai stops pulling it transitively.
+    "pydantic-graph",
     "pydantic-settings",
     "textual>=8.2.8",
     "tree-sitter>=0.26.0",
