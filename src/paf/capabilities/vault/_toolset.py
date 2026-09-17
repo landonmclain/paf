@@ -39,17 +39,13 @@ from __future__ import annotations
 import hashlib
 import os
 import posixpath
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic_ai import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
 from paf.capabilities._edit import apply_edits
-
-# Recovery-prone write/edit tools get real retry budget (not pydantic-ai's
-# default of 1), so transient CAS/parse/conflict ModelRetry failures feed back to
-# the model to correct instead of killing the run. Mirrors fs `_FS_TOOL_RETRIES`.
-_VAULT_TOOL_RETRIES = 5
 
 from ._markdown import rename_note_title, resolve_note, rewrite_wikilink_target
 from ._store import (
@@ -60,8 +56,14 @@ from ._store import (
     load_index_notes,
 )
 
+# Recovery-prone write/edit tools get real retry budget (not pydantic-ai's
+# default of 1), so transient CAS/parse/conflict ModelRetry failures feed back to
+# the model to correct instead of killing the run. Mirrors fs `_FS_TOOL_RETRIES`.
+_VAULT_TOOL_RETRIES = 5
+
 _MAX_HEAD_LINES = 15   # lines of note body shown in lookup_note at default
 _MAX_SEARCH_HITS = 20  # note_search cap
+_MAX_READ_LINES = 2000  # read_note default block size (mirrors fs _max_read_lines)
 
 _INSERT = "  "  # tree indent
 
@@ -81,6 +83,34 @@ def _content_hash(content: str) -> str:
     model can pass it back as ``expected_version`` to ``note_edit``.
     """
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+
+
+def _format_lines(lines: Sequence[str], offset: int, limit: int) -> str:
+    """Format pre-split lines with line numbers and continuation hint.
+
+    Copied from ``fs._format_lines`` so ``read_note`` mirrors ``read_file``:
+    right-aligned 6-wide line numbers, then a hint when lines remain.
+    """
+    total = len(lines)
+
+    if total == 0:
+        return "(empty note)\n"
+
+    if offset >= total:
+        raise ValueError(f"Offset {offset} exceeds note length ({total} lines).")
+
+    selected = lines[offset : offset + limit]
+    numbered = [f"{i:>6}\t{line}" for i, line in enumerate(selected, start=offset + 1)]
+    result = "".join(numbered)
+    if not result.endswith("\n"):
+        result += "\n"
+
+    remaining = total - (offset + len(selected))
+    if remaining > 0:
+        next_offset = offset + len(selected)
+        result += f"... ({remaining} more lines. Use offset={next_offset} to continue reading.)\n"
+
+    return result
 
 
 class PathRefMiss(Exception):
@@ -269,15 +299,22 @@ class VaultToolset(FunctionToolset):
                 return self._format_head(n, detail=detail)
         return None
 
-    def read_note(self, path: str) -> str | None:
-        """Read the full body of a note.
+    def read_note(self, path: str, *, offset: int = 0, limit: int | None = None) -> str | None:
+        """Read a note's body with line numbers, in blocks.
 
         ``path`` is a vault-relative path, a note title, or a ``[[wikilink]]``
-        target. Returns the entire note contents (frontmatter included),
-        prefixed with a one-line header carrying the note's current content
-        ``version`` — the token to pass back as ``expected_version`` to
-        ``note_edit`` for an optimistic-concurrency write. Returns ``None``
-        for an unknown note or one outside the vault root.
+        target. Returns the note's contents (frontmatter included) with each
+        line numbered, prefixed by a one-line header carrying the note's
+        current content ``version`` — the token to pass back as
+        ``expected_version`` to ``note_edit`` for an optimistic-concurrency
+        write. The version is the hash of the FULL body, so it stays valid
+        even after a partial (paged) read.
+
+        ``offset`` is the zero-based line to start at; ``limit`` caps how many
+        lines are returned (default 2000). A continuation hint reports how many
+        lines remain and the next ``offset`` to continue reading, so large notes
+        are read in blocks instead of spilling. Returns ``None`` for an unknown
+        note or one outside the vault root.
         """
         try:
             rel = self._resolve(path)
@@ -290,7 +327,13 @@ class VaultToolset(FunctionToolset):
             return None
         body = full.read_text(encoding="utf-8", errors="replace")
         version = _content_hash(body)
-        return f"[path: {rel} | version: {version}]\n{body}"
+        lines = body.splitlines(keepends=True)
+        if limit is None:
+            limit = _MAX_READ_LINES
+        return (
+            f"[path: {rel} | {len(lines)} lines | version: {version}]\n"
+            + _format_lines(lines, offset, limit)
+        )
 
     def note_find(
         self, title: str | None = None, tag: str | None = None, folder: str | None = None

@@ -515,7 +515,7 @@ def test_read_note_reports_content_version_header(vault: tuple[Path, VaultToolse
     assert out is not None
     lines = out.splitlines()
     # first line is the version header; the body follows intact
-    assert lines[0].startswith("[path: Grounding.md | version:")
+    assert lines[0].startswith("[path: Grounding.md |")
     assert "version:" in lines[0]
     # body still fully present (substring survives the added header)
     assert "See [[Index]]." in out
@@ -530,6 +530,49 @@ def test_read_note_version_matches_content_hash(vault: tuple[Path, VaultToolset]
     version = out.splitlines()[0].rsplit("version: ", 1)[1].rstrip("]")
     raw = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
     assert version == hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def test_read_note_numbers_lines(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.read_note("Grounding")
+    assert out is not None
+    body = out.splitlines()[1:]  # skip the header
+    # each body line is prefixed with a right-aligned line number + tab
+    assert body[0].startswith("     1\t")
+    assert body[1].startswith("     2\t")
+    assert body[4].startswith("     5\t")
+
+
+def test_read_note_pages_with_offset_and_limit(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.read_note("Grounding", offset=1, limit=2)
+    assert out is not None
+    lines = out.splitlines()
+    # header still carries the full-body version (CAS-safe after a partial read)
+    assert lines[0].startswith("[path: Grounding.md |")
+    assert "version:" in lines[0]
+    # only the requested slice is returned, numbered from offset+1
+    assert lines[1].startswith("     2\t")
+    assert lines[2].startswith("     3\t")
+    assert len(lines) == 4  # header + 2 body lines + continuation hint
+    # continuation hint reports the remaining lines and next offset
+    assert "3 more lines" in out
+    assert "offset=3" in out
+
+
+def test_read_note_default_limit_caps_large_notes(tmp_path: Path) -> None:
+    root = tmp_path / "vault"
+    root.mkdir()
+    big = "\n".join(f"line {i}" for i in range(2500))
+    _seed(root, "Big.md", big)
+    store = FlatFileVaultStorage(index_root=tmp_path / "idx")
+    build_index(root, ScanScope(root), store)
+    toolset = VaultToolset(vault_root=root, storage=store)
+    out = toolset.read_note("Big")
+    assert out is not None
+    # default limit caps at 2000 lines and reports the remainder
+    assert "500 more lines" in out
+    assert "offset=2000" in out
 
 
 # ------------------------------------------------------------------ Tier C: note_edit
