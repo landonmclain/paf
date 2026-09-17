@@ -162,6 +162,7 @@ def _bare_coordinator() -> BackgroundCoordinator:
     c._background_tasks = {}
     c._task_subscribers = []
     c._consolidation_seq = 0
+    c._run_events = None
     return c
 
 

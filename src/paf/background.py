@@ -32,7 +32,7 @@ import asyncio
 import inspect
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -259,6 +259,44 @@ class JobIdleStatus:
     detail: str = ""
 
 
+@dataclass
+class _IdleContext:
+    """Shared history material for idle-row computation (one pass, three rows).
+
+    ``job_status_summary`` resolves the store/history seam ONCE and hands the
+    result to every registered process's ``idle_row``, so the three idle rows
+    share a single pass over persisted runs instead of each re-reading history.
+    """
+
+    source: Any
+    tip_run: str | None
+    tip_turn: int
+
+
+@dataclass
+class ProcessDefinition:
+    """Self-describing definition of one background process.
+
+    The coordinator is a thin host over a registry of these: it dispatches
+    post-turn triggers and idle-row computation to registered definitions
+    instead of hardcoding each job type. Adding a process = registering a
+    definition (id namespace, label, idle policy, enabled gate, trigger, and
+    idle-row computation).
+    """
+
+    id_namespace: str  # task-id prefix, e.g. "consolidation"
+    label: str  # "Consolidating memory"
+    idle_policy: Literal["persistent", "transient"] = "persistent"
+    # Whether this process is active for a given coordinator (profile gating).
+    enabled: Callable[[BackgroundCoordinator], bool] | None = None
+    # Post-turn trigger: schedule the job if its cadence/watermark says due.
+    trigger: Callable[[str | None], Awaitable[None]] | None = None
+    # Idle-row computation for the Processes panel (shared history ctx).
+    idle_row: Callable[[str, _IdleContext], Awaitable[JobIdleStatus | None]] | None = (
+        None
+    )
+
+
 class BackgroundCoordinator:
     """Owns the session's background machinery: task registry + 3 queues + triggers.
 
@@ -288,6 +326,7 @@ class BackgroundCoordinator:
         agent_name: str = "assistant",
         profile=None,
         memory_directory: str | None = None,
+        processes_root: str | None = None,
         consolidate_span=None,
         consolidate_every: int | None = None,
         review_every: int | None = None,
@@ -301,6 +340,17 @@ class BackgroundCoordinator:
         self._store = store
         self.agent_name = agent_name
         self.profile = profile
+
+        # Dumb append-only run-event store (Phase 3): every task status
+        # transition is recorded losslessly, scoped by agent. Root is
+        # injectable so tests point at a tmp dir.
+        from paf.background_processes._store import RunEventStore
+
+        if processes_root is None:
+            from paf.config import PROJECT_ROOT
+
+            processes_root = str(PROJECT_ROOT / "data" / "processes")
+        self._run_events = RunEventStore.open(processes_root, agent_name)
 
         # Turn-count cadence (the active gate). Resolved from the spec's
         # `memory:` block; falls back to the same block's minute values reading
@@ -349,6 +399,46 @@ class BackgroundCoordinator:
         self._review_seq = 0
         self._thread_summarizer_seq = 0
 
+        # Capability names (profile gating for process registration).
+        self._capability_names = tuple(
+            getattr(profile, "capability_names", ()) if profile is not None else ()
+        )
+        # Registry of self-describing background processes (the thin-host seam).
+        self._processes = self._build_processes()
+
+    def _build_processes(self) -> list[ProcessDefinition]:
+        """Register the coordinator's background processes (the thin-host seam).
+
+        Each process is a self-describing :class:`ProcessDefinition`; the
+        coordinator's public entry points (``for_session``, ``after_turn``,
+        ``job_status_summary``) iterate this registry instead of hardcoding job
+        types. Adding a process = registering a definition here.
+        """
+        has_memory = "Memory" in self._capability_names
+        return [
+            ProcessDefinition(
+                id_namespace="consolidation",
+                label="Consolidating memory",
+                enabled=lambda c: has_memory,
+                trigger=self._maybe_trigger_consolidation,
+                idle_row=self._consolidation_idle_row,
+            ),
+            ProcessDefinition(
+                id_namespace="review",
+                label="Reviewing memory",
+                enabled=lambda c: has_memory,
+                trigger=self._maybe_trigger_review,
+                idle_row=self._review_idle_row,
+            ),
+            ProcessDefinition(
+                id_namespace="thread_summarize",
+                label="Summarizing thread",
+                enabled=lambda c: self._thread_summarizer_enabled,
+                trigger=self._maybe_trigger_thread_summarize,
+                idle_row=self._thread_idle_row,
+            ),
+        ]
+
     @classmethod
     def for_session(cls, session) -> BackgroundCoordinator | None:
         """Build (or skip) the coordinator for a session from its own state.
@@ -361,16 +451,17 @@ class BackgroundCoordinator:
         """
         agent_name = session.agent_name
         profile = getattr(session, "profile", None)
-        caps = getattr(profile, "capability_names", ()) if profile is not None else ()
-        has_memory = "Memory" in caps
-        has_thread = "ThreadSummarizer" in caps
-        if not has_memory and not has_thread:
-            return None
-        return cls(
+        coord = cls(
             store=session._store,
             agent_name=agent_name,
             profile=profile,
         )
+        # A profile with no enabled background process (no Memory, no
+        # ThreadSummarizer) needs no coordinator -- e.g. ``contextbench`` runs
+        # truly bare.
+        if not any(p.enabled(coord) for p in coord._processes):
+            return None
+        return coord
 
     # -- task registry / subscriber fan-out -------------------------------
 
@@ -523,7 +614,7 @@ class BackgroundCoordinator:
         )
 
     async def job_status_summary(self, conversation_id: str) -> list[JobIdleStatus]:
-        """READ-ONLY idle status for the 3 background processes (Processes panel).
+        """READ-ONLY idle status for the registered background processes (Processes panel).
 
         Lets a UI render the background jobs as persistent rows — "idle, N
         turns, next ~M min" — even when nothing is running, instead of an
@@ -536,13 +627,13 @@ class BackgroundCoordinator:
         Each row's ``id`` is the STABLE key the real task uses (``consolidation.*``
         etc.), so when that job fires later the live queued/running/done frames
         coalesce OVER the idle row instead of duplicating it.
+
+        The store/history seam is resolved ONCE and shared across every enabled
+        process's ``idle_row`` (a single pass over persisted runs), then each
+        registered process computes its own row.
         """
         from paf.capabilities._turns import user_anchor_indices
-        from paf.capabilities.memory._background import resolve_unseen_span
-        from paf.capabilities.memory._watermark import MemoryWatermark
         from paf.capabilities.persistence import build_history_source
-        from paf.capabilities.thread_summarizer._background import BLOCK_TURNS
-        from paf.capabilities.thread_summarizer._store import THREAD_WATERMARK_FILENAME
 
         rows: list[JobIdleStatus] = []
         source = None
@@ -551,7 +642,7 @@ class BackgroundCoordinator:
 
         try:
             source = build_history_source(self._store)
-            # A single pass over persisted runs/history feeds all three counts.
+            # A single pass over persisted runs/history feeds all idle rows.
             runs = await self._store.list_runs(conversation_id=conversation_id)
             tip_run = runs[-1].run_id if runs else None
             tip_history = await source.run_history(run_id=tip_run) if tip_run else []
@@ -559,148 +650,164 @@ class BackgroundCoordinator:
             tip_turn = len(anchors) - 1 if anchors else 0
         except Exception:
             # The shared store/history seam is down (or this store can't build
-            # a history source): report all 3 jobs as "unavailable" rather than
-            # raising — the feed must never tear the SSE socket on a status read.
-            for _id, _label in (
-                (f"consolidation.{conversation_id}", "Consolidating memory"),
-                (f"review.{conversation_id}", "Reviewing memory"),
-                (f"thread_summarize.{conversation_id}", "Summarizing thread"),
-            ):
-                rows.append(
-                    JobIdleStatus(
-                        id=_id, label=_label, detail="idle · status unavailable"
+            # a history source): report every ENABLED process as "unavailable"
+            # rather than raising — the feed must never tear the SSE socket on a
+            # status read.
+            for p in self._processes:
+                if p.enabled(self):
+                    rows.append(
+                        JobIdleStatus(
+                            id=f"{p.id_namespace}.{conversation_id}",
+                            label=p.label,
+                            detail="idle · status unavailable",
+                        )
                     )
-                )
             return rows
 
-        async def _span_count(wm: MemoryWatermark) -> int:
-            """Number of distinct complete user turns newer than the watermark.
+        ctx = _IdleContext(source=source, tip_run=tip_run, tip_turn=tip_turn)
+        for p in self._processes:
+            if p.enabled(self) and p.idle_row is not None:
+                row = await p.idle_row(conversation_id, ctx)
+                if row is not None:
+                    rows.append(row)
+        return rows
 
-            Mirrors the summarizer trigger's own gate (``distinct_user_turn_texts``),
-            so the idle ``n/BLOCK_TURNS`` displayed always means the same thing the
-            trigger tests. A fresh/empty watermark resolves the whole completed
-            history (``resolve_unseen_span`` handles it), so it reports the real
-            accumulated count instead of short-circuiting to 0 forever.
-            """
-            from paf.capabilities._turns import distinct_user_turn_texts
+    async def _span_count(self, source, wm, tip_run, tip_turn, conversation_id) -> int:
+        """Number of distinct complete user turns newer than the watermark.
 
-            try:
-                span = await resolve_unseen_span(
-                    source,
-                    wm,
-                    tip_run=tip_run or "",
-                    tip_turn=tip_turn,
-                    conversation_id=conversation_id,
-                )
-            except Exception:
-                return 0
-            if not span.messages:
-                return 0
-            return len(distinct_user_turn_texts(span.messages))
+        Mirrors the summarizer trigger's own gate (``distinct_user_turn_texts``),
+        so the idle ``n/BLOCK_TURNS`` displayed always means the same thing the
+        trigger tests. A fresh/empty watermark resolves the whole completed
+        history (``resolve_unseen_span`` handles it), so it reports the real
+        accumulated count instead of short-circuiting to 0 forever.
+        """
+        from paf.capabilities._turns import distinct_user_turn_texts
+        from paf.capabilities.memory._background import resolve_unseen_span
 
-        # 1. Memory consolidation (agent-scoped, TURN-count cadence).
-        #    Display mirrors the thread-summarizer gate: n accrued turns vs the
-        #    block threshold, never a wall-clock countdown.
+        try:
+            span = await resolve_unseen_span(
+                source,
+                wm,
+                tip_run=tip_run or "",
+                tip_turn=tip_turn,
+                conversation_id=conversation_id,
+            )
+        except Exception:
+            return 0
+        if not span.messages:
+            return 0
+        return len(distinct_user_turn_texts(span.messages))
+
+    async def _consolidation_idle_row(
+        self, conversation_id: str, ctx: _IdleContext
+    ) -> JobIdleStatus:
+        """Idle row for memory consolidation (agent-scoped, TURN-count cadence)."""
+        from paf.capabilities.memory._watermark import MemoryWatermark
+
         try:
             wm = MemoryWatermark.load(self._memory_directory)
-            n = await _span_count(wm)
+            n = await self._span_count(
+                ctx.source, wm, ctx.tip_run, ctx.tip_turn, conversation_id
+            )
             reason = (
                 f"{n}/{self.consolidate_turns} turns to a fold"
                 if n < self.consolidate_turns
                 else "due for a fold"
             )
-            rows.append(
-                self._reconcile_status(
-                    JobIdleStatus(
-                        id=f"consolidation.{conversation_id}",
-                        label="Consolidating memory",
-                        detail=f"idle · {reason}",
-                    ),
-                    "consolidation",
-                    conversation_id,
-                )
-            )
-        except Exception:
-            rows.append(
+            return self._reconcile_status(
                 JobIdleStatus(
                     id=f"consolidation.{conversation_id}",
                     label="Consolidating memory",
-                    detail="idle · status unavailable",
-                )
+                    detail=f"idle · {reason}",
+                ),
+                "consolidation",
+                conversation_id,
+            )
+        except Exception:
+            return JobIdleStatus(
+                id=f"consolidation.{conversation_id}",
+                label="Consolidating memory",
+                detail="idle · status unavailable",
             )
 
-        # 2. Memory review (agent-scoped, TURN-count cadence, slower block).
+    async def _review_idle_row(
+        self, conversation_id: str, ctx: _IdleContext
+    ) -> JobIdleStatus:
+        """Idle row for memory review (agent-scoped, TURN-count cadence, slower block)."""
+        from paf.capabilities.memory._watermark import MemoryWatermark
+
         try:
             wm = MemoryWatermark.load(
                 self._memory_directory, filename="memory-review-watermark.json"
             )
-            n = await _span_count(wm)
+            n = await self._span_count(
+                ctx.source, wm, ctx.tip_run, ctx.tip_turn, conversation_id
+            )
             reason = (
                 f"{n}/{self.review_turns} turns to a review"
                 if n < self.review_turns
                 else "due for a review"
             )
-            rows.append(
-                self._reconcile_status(
-                    JobIdleStatus(
-                        id=f"review.{conversation_id}",
-                        label="Reviewing memory",
-                        detail=f"idle · {reason}",
-                    ),
-                    "review",
-                    conversation_id,
-                )
-            )
-        except Exception:
-            rows.append(
+            return self._reconcile_status(
                 JobIdleStatus(
                     id=f"review.{conversation_id}",
                     label="Reviewing memory",
-                    detail="idle · status unavailable",
-                )
+                    detail=f"idle · {reason}",
+                ),
+                "review",
+                conversation_id,
+            )
+        except Exception:
+            return JobIdleStatus(
+                id=f"review.{conversation_id}",
+                label="Reviewing memory",
+                detail="idle · status unavailable",
             )
 
-        # 3. Thread summarizer (per-conversation, turn-count cadence).
-        if self._thread_summarizer_enabled:
-            try:
-                from paf.capabilities.thread_summarizer._store import ThreadSummaryStore
+    async def _thread_idle_row(
+        self, conversation_id: str, ctx: _IdleContext
+    ) -> JobIdleStatus:
+        """Idle row for the thread summarizer (per-conversation, turn-count cadence)."""
+        from paf.capabilities.memory._watermark import MemoryWatermark
+        from paf.capabilities.thread_summarizer._background import BLOCK_TURNS
+        from paf.capabilities.thread_summarizer._store import (
+            THREAD_WATERMARK_FILENAME,
+            ThreadSummaryStore,
+        )
 
-                # Derive the SAME conversation-scoped dir + run-anchored watermark
-                # the trigger/worker use (conversation_key hashed dir, run_id), or
-                # the displayed n/BLOCK_TURNS diverges from the real gate.
-                store = ThreadSummaryStore(self._thread_capture_root, conversation_id)
-                wm = MemoryWatermark.load(
-                    store.directory,
-                    run_id=tip_run or "",
-                    filename=THREAD_WATERMARK_FILENAME,
-                )
-                n = await _span_count(wm)
-                reason = (
-                    f"{n}/{BLOCK_TURNS} turns to a summary"
-                    if n < BLOCK_TURNS
-                    else "due for a summary"
-                )
-                rows.append(
-                    self._reconcile_status(
-                        JobIdleStatus(
-                            id=f"thread_summarize.{conversation_id}",
-                            label="Summarizing thread",
-                            detail=f"idle · {reason}",
-                        ),
-                        "thread_summarize",
-                        conversation_id,
-                    )
-                )
-            except Exception:
-                rows.append(
-                    JobIdleStatus(
-                        id=f"thread_summarize.{conversation_id}",
-                        label="Summarizing thread",
-                        detail="idle · status unavailable",
-                    )
-                )
-
-        return rows
+        try:
+            # Derive the SAME conversation-scoped dir + run-anchored watermark
+            # the trigger/worker use (conversation_key hashed dir, run_id), or
+            # the displayed n/BLOCK_TURNS diverges from the real gate.
+            store = ThreadSummaryStore(self._thread_capture_root, conversation_id)
+            wm = MemoryWatermark.load(
+                store.directory,
+                run_id=ctx.tip_run or "",
+                filename=THREAD_WATERMARK_FILENAME,
+            )
+            n = await self._span_count(
+                ctx.source, wm, ctx.tip_run, ctx.tip_turn, conversation_id
+            )
+            reason = (
+                f"{n}/{BLOCK_TURNS} turns to a summary"
+                if n < BLOCK_TURNS
+                else "due for a summary"
+            )
+            return self._reconcile_status(
+                JobIdleStatus(
+                    id=f"thread_summarize.{conversation_id}",
+                    label="Summarizing thread",
+                    detail=f"idle · {reason}",
+                ),
+                "thread_summarize",
+                conversation_id,
+            )
+        except Exception:
+            return JobIdleStatus(
+                id=f"thread_summarize.{conversation_id}",
+                label="Summarizing thread",
+                detail="idle · status unavailable",
+            )
 
     def _publish_task(self, task: BackgroundTask) -> None:
         """Store a task in the registry and notify all subscribers.
@@ -710,6 +817,8 @@ class BackgroundCoordinator:
         """
         task.updated_at = datetime.now(UTC).replace(microsecond=0).isoformat()
         self._background_tasks[task.id] = task
+        if self._run_events is not None:
+            self._run_events.append(self._journal_event(task))
         ev = task.as_event()
         for cb in self._task_subscribers:
             try:
@@ -719,6 +828,25 @@ class BackgroundCoordinator:
                     t.add_done_callback(_log_subscriber_failure)
             except Exception:  # a subscriber must never break the session
                 log.exception("background-task subscriber failed task=%s", task.id)
+
+    def _journal_event(self, task: BackgroundTask) -> dict:
+        """The lossless event record for one task status transition.
+
+        Storage is dumb: it records whatever status the task has at this
+        publish, with no interpretation. ``run_id`` is the task id (the
+        ``{namespace}.{cid}.{seq}`` key); ``process_id`` is its namespace;
+        ``conversation_id`` is the middle segment (None for a global task).
+        """
+        parts = task.id.split(".")
+        return {
+            "run_id": task.id,
+            "process_id": parts[0],
+            "status": task.status,
+            "detail": task.detail,
+            "agent": self.agent_name,
+            "conversation_id": parts[1] if len(parts) >= 3 else None,
+            "timestamp": task.updated_at,
+        }
 
     # -- queue builders (lazy) ---------------------------------------------
 
@@ -854,13 +982,14 @@ class BackgroundCoordinator:
         """Fire the post-turn background triggers for one conversation.
 
         The single seam ``runtime.Session.stream()`` calls at the end of a turn.
-        Schedules each background job whose cadence/watermark says it's due; the
-        workers are the sole watermark writers. Never raises -- a failure in any
-        trigger is captured on that task's row.
+        Dispatches to every ENABLED registered process's trigger; each schedules
+        its job when its cadence/watermark says it's due. The workers are the
+        sole watermark writers. Never raises -- a failure in any trigger is
+        captured on that task's row.
         """
-        await self._maybe_trigger_consolidation(cid)
-        await self._maybe_trigger_review(cid)
-        await self._maybe_trigger_thread_summarize(cid)
+        for p in self._processes:
+            if p.enabled(self) and p.trigger is not None:
+                await p.trigger(cid)
 
     async def _maybe_trigger_thread_summarize(self, cid: str | None) -> None:
         """Fire conversation-scoped thread summarization on its own cadence.

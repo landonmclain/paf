@@ -135,7 +135,9 @@ def test_turn_frames_does_not_forward_task_frames() -> None:
 
     asyncio.run(_drive())
 
-    assert subscribed["v"] is False, "_turn_frames must not subscribe to background tasks"
+    assert subscribed["v"] is False, (
+        "_turn_frames must not subscribe to background tasks"
+    )
 
 
 def test_turn_frames_teardown_survives_no_active_turn() -> None:
@@ -201,10 +203,15 @@ def test_background_coordinator_task_bytes_identical_via_session_slot() -> None:
 
     # Simulate a background job already in flight (registered + promoted to
     # PROCESSING), exactly as the consolidation trigger would leave it when an
-    # SSE tab joins mid-fold.
-    task = BackgroundTask(id="consolidation.conv-1.3", label="Consolidating memory (conv-1)")
+    # SSE tab joins mid-fold. Seed the registry directly rather than via
+    # _publish_task, which now also appends to the run-event journal (a side
+    # effect this SSE-surface test does not care about).
+    task = BackgroundTask(
+        id="consolidation.conv-1.3", label="Consolidating memory (conv-1)"
+    )
     task.status = PROCESSING
-    coord._publish_task(task)
+    task.updated_at = "2026-09-17T00:00:00+00:00"
+    coord._background_tasks[task.id] = task
 
     # Half 1: replay on subscribe; capture the replayed event(s).
     replayed: list = []
@@ -232,7 +239,9 @@ def test_background_coordinator_task_bytes_identical_via_session_slot() -> None:
     ev2 = task.as_event()
     name2, data2 = sse._task_frame(ev2)
     direct = sse._frame(name2, data2)
-    assert via_coordinator == direct, "coordinator replay frame differs from direct serialization"
+    assert via_coordinator == direct, (
+        "coordinator replay frame differs from direct serialization"
+    )
 
     # Half 3: task_history scopes to the conversation and returns the row
     # (the /api/conversations/{id}/tasks endpoint reads this through session.background).
@@ -293,6 +302,7 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
 
     async def _drive():
         out = []
+
         # Pump frames from the feed as they arrive; drive via subscribe callback.
         async def _pump():
             async for f in feed:
@@ -312,6 +322,7 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
                     self.status = status
                     self.detail = "5 turns -> 1 summary"
                     self.metadata = {"id": "consolidation.conv-1.2", "progress": 1.0}
+
             return _E()
 
         assert coord.cb is not None
@@ -330,7 +341,9 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
     assert "consolidation.conv-1.2" in joined
     assert "Consolidating memory" in joined
     # Teardown (generator exhausted after 3 frames) unsubscribes.
-    assert coord.unsubscribed["v"] is True, "feed teardown must unsubscribe the subscriber"
+    assert coord.unsubscribed["v"] is True, (
+        "feed teardown must unsubscribe the subscriber"
+    )
 
 
 def test_process_feed_bare_session_streams_nothing_and_stays_alive() -> None:
@@ -380,6 +393,7 @@ def test_process_feed_terminates_on_client_disconnect() -> None:
 
     async def _drive():
         out = []
+
         # Must settle on its own once the disconnect watcher fires — no aclose,
         # no manual cancel. Bounded wait proves it doesn't hang forever.
         async def _collect():

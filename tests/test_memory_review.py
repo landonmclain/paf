@@ -530,6 +530,7 @@ def test_session_review_span_publishes_task_done(tmp_path):
     s._review_queue = None
     s._memory_directory = str(tmp_path)
     s.agent_name = "assistant"
+    s._run_events = None
 
     # Deterministic no-LLM review span (the seam references _revmod.review).
     async def noop_review(directory, *, overrides=None, agent_name=None):
