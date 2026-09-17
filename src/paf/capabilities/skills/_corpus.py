@@ -23,9 +23,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from paf.capabilities.search._ranking import bm25_rank, tokenize
+
+if TYPE_CHECKING:
+    from ._store import FlatFileSkillsStorage
 
 __all__ = [
     "SkillDoc",
@@ -118,7 +121,7 @@ def parse_frontmatter(path: Path) -> dict:
             continue
         if line.startswith("- "):
             if current_list_key is not None:
-                list_items.append(line[2:].strip().strip('"\' '))
+                list_items.append(line[2:].strip().strip("\"' "))
             continue
         if ":" not in line:
             _flush_list()
@@ -133,10 +136,10 @@ def parse_frontmatter(path: Path) -> dict:
         # inline list [a, b, c]
         if val.startswith("[") and val.endswith("]"):
             inner = val[1:-1]
-            items = [t.strip().strip('"\' ') for t in inner.split(",") if t.strip()]
+            items = [t.strip().strip("\"' ") for t in inner.split(",") if t.strip()]
             fm[key] = " ".join(items)
             continue
-        fm[key] = val.strip('"\' ')
+        fm[key] = val.strip("\"' ")
 
     _flush_list()
     return fm
@@ -174,20 +177,43 @@ class HintCorpus:
     vault spec).
     """
 
-    def __init__(self, roots: list[str] | str) -> None:
+    def __init__(
+        self,
+        roots: list[str] | str,
+        *,
+        storage: FlatFileSkillsStorage | None = None,
+        index_root: str | Path | None = None,
+    ) -> None:
         if isinstance(roots, str):
             roots = [roots]
         self.roots = [Path(r) for r in roots]
-        self.docs: list[SkillDoc] = []
+        self._storage = storage
+        self._index_root = Path(index_root).resolve() if index_root else None
+        self._docs: list[SkillDoc] = []
         # Canonical id -> doc (unique) and short name -> docs (may be several).
-        self.by_id: dict[str, SkillDoc] = {}
-        self.by_short_name: dict[str, list[SkillDoc]] = {}
+        self._by_id: dict[str, SkillDoc] = {}
+        self._by_short_name: dict[str, list[SkillDoc]] = {}
         self._load()
 
+    @property
+    def docs(self) -> list[SkillDoc]:
+        self._ensure_fresh()
+        return self._docs
+
+    @property
+    def by_id(self) -> dict[str, SkillDoc]:
+        self._ensure_fresh()
+        return self._by_id
+
+    @property
+    def by_short_name(self) -> dict[str, list[SkillDoc]]:
+        self._ensure_fresh()
+        return self._by_short_name
+
     def _load(self) -> None:
-        self.docs.clear()
-        self.by_id.clear()
-        self.by_short_name.clear()
+        self._docs.clear()
+        self._by_id.clear()
+        self._by_short_name.clear()
         # Resolve each library root once so flat-vs-nested category detection is
         # robust regardless of how the spec spelled the path.
         resolved_roots = {r.resolve() for r in self.roots if r.exists()}
@@ -198,11 +224,37 @@ class HintCorpus:
                 doc = self._ingest(root, p, resolved_roots)
                 if doc is None:
                     continue
-                self.docs.append(doc)
-                self.by_id[doc.skill_id] = doc
-                self.by_short_name.setdefault(doc.name, []).append(doc)
+                self._docs.append(doc)
+                self._by_id[doc.skill_id] = doc
+                self._by_short_name.setdefault(doc.name, []).append(doc)
+        self._persist()
 
-    def _ingest(self, root: Path, skill_file: Path, resolved_roots: set[Path]) -> SkillDoc | None:
+    def _persist(self) -> None:
+        """Write the corpus's index + snapshot via the storage seam (if configured)."""
+        if self._storage is None:
+            return
+        from ._store import build_index
+
+        root = self._index_root or self.roots[0]
+        build_index(self._docs, self._storage, root)
+
+    def _ensure_fresh(self) -> None:
+        """Lazy freshness: rebuild when the snapshot detects a change.
+
+        Stat-gate then hash-confirm (mirrors codebase_map's ``sync_changed``).
+        No-op when no storage is configured (the corpus is a pure in-memory scan).
+        """
+        if self._storage is None:
+            return
+        from ._store import sync_changed
+
+        root = self._index_root or self.roots[0]
+        if sync_changed(root, self._storage):
+            self._load()
+
+    def _ingest(
+        self, root: Path, skill_file: Path, resolved_roots: set[Path]
+    ) -> SkillDoc | None:
         skill_root = skill_file.parent
         name = skill_root.name
         # Category: the parent dir of the skill root, when that parent is not a
@@ -240,8 +292,9 @@ class HintCorpus:
         self._load()
 
     def rank(self, query: str, k: int) -> list[tuple[SkillDoc, float]]:
-        texts = [d.text for d in self.docs]
+        self._ensure_fresh()
+        texts = [d.text for d in self._docs]
         if not texts:
             return []
         hits = bm25_rank(query, texts)
-        return [(self.docs[idx], score) for idx, score in hits[:k]]
+        return [(self._docs[idx], score) for idx, score in hits[:k]]

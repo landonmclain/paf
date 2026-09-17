@@ -25,6 +25,23 @@ from paf.specs import _spec_skills_config, get_spec_path
 FIXTURE_SKILLS = str(Path(__file__).resolve().parent / "fixtures" / "skills")
 
 
+@pytest.fixture(autouse=True)
+def _skills_index_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the default skills-index dir to a pytest tmp area.
+
+    The toolset wires a default ``FlatFileSkillsStorage`` (repo-owned
+    ``data/.skills-index/``), so without this every test that builds a toolset
+    would write one hash-keyed folder into the real repo data dir. Pointing the
+    default at tmp keeps the fixture-driven tests hermetic (mirrors the vault
+    index test's monkeypatch of ``_DEFAULT_VAULT_INDEX_DIR``).
+    """
+    from paf.capabilities.skills import _store
+
+    monkeypatch.setattr(
+        _store, "_DEFAULT_SKILLS_INDEX_DIR", str(tmp_path / "skills-index")
+    )
+
+
 def _toolset(top_k: int = 3) -> SkillToolset:
     return Skills(libraries=(FIXTURE_SKILLS,), top_k=top_k).get_toolset()
 
@@ -103,9 +120,10 @@ def test_corpus_indexes_tree_skills_and_resources() -> None:
         "research/tools",
         "vectorized-backtest",
     ]
-    assert {
-        doc.skill_id for doc in corpus.by_short_name["tools"]
-    } == {"mlops/tools", "research/tools"}
+    assert {doc.skill_id for doc in corpus.by_short_name["tools"]} == {
+        "mlops/tools",
+        "research/tools",
+    }
     lean = corpus.by_id["mlops/lean-backtest"]
     assert lean.category == "mlops"
     assert lean.skill_file.name == "SKILL.md"
@@ -225,7 +243,8 @@ def _toolset_at(root: str) -> SkillToolset:
 def test_create_skill_writes_valid_skill_and_indexes(tmp_path: Path) -> None:
     ts = _toolset_at(str(tmp_path))
     out = ts.create_skill(
-        "ops", "deploy",
+        "ops",
+        "deploy",
         description="Deploy the service to the staging cluster.",
         tags="deploy, ops, k8s",
         content="# Skill: deploy\n\nRun the release pipeline.",
@@ -261,10 +280,24 @@ def test_create_skill_at_root_category(tmp_path: Path) -> None:
 
 def test_edit_skill_cas_conflict_and_refuse_blind(tmp_path: Path) -> None:
     ts = _toolset_at(str(tmp_path))
-    ts.create_skill("ops", "deploy", description="Deploy the service.", content="# Skill: deploy\n\nRun the release pipeline.")
+    ts.create_skill(
+        "ops",
+        "deploy",
+        description="Deploy the service.",
+        content="# Skill: deploy\n\nRun the release pipeline.",
+    )
     # load reports a version; edit with that version succeeds + bumps it.
     v1 = ts.load_skill("ops/deploy").split("version: ")[1].split("]")[0]
-    out = ts.edit_skill("ops/deploy", [{"old_text": "Run the release pipeline.", "new_text": "Run pipeline + notify."}], expected_version=v1)
+    out = ts.edit_skill(
+        "ops/deploy",
+        [
+            {
+                "old_text": "Run the release pipeline.",
+                "new_text": "Run pipeline + notify.",
+            }
+        ],
+        expected_version=v1,
+    )
     assert "Edited ops/deploy" in out
     v2 = out.splitlines()[0].split("[version:")[1].rstrip("]")
     assert v2 != v1
@@ -273,7 +306,9 @@ def test_edit_skill_cas_conflict_and_refuse_blind(tmp_path: Path) -> None:
     # Stale version -> conflict, no write (raises, never lies).
     with pytest.raises(ModelRetry, match="Conflict"):
         ts.edit_skill(
-            "ops/deploy", [{"old_text": "Run pipeline + notify.", "new_text": "CHANGED"}], expected_version=v1
+            "ops/deploy",
+            [{"old_text": "Run pipeline + notify.", "new_text": "CHANGED"}],
+            expected_version=v1,
         )
     assert "CHANGED" not in ts.load_skill("ops/deploy")
     # old_text not found -> clean refusal.
@@ -283,11 +318,19 @@ def test_edit_skill_cas_conflict_and_refuse_blind(tmp_path: Path) -> None:
 
 def test_edit_skill_batch_applies_all_pairs(tmp_path: Path) -> None:
     ts = _toolset_at(str(tmp_path))
-    ts.create_skill("ops", "deploy", description="Deploy the service.", content="# Skill: deploy\n\nRun the release pipeline.")
+    ts.create_skill(
+        "ops",
+        "deploy",
+        description="Deploy the service.",
+        content="# Skill: deploy\n\nRun the release pipeline.",
+    )
     out = ts.edit_skill(
         "ops/deploy",
         [
-            {"old_text": "Run the release pipeline.", "new_text": "Run pipeline + notify."},
+            {
+                "old_text": "Run the release pipeline.",
+                "new_text": "Run pipeline + notify.",
+            },
             {"old_text": "Deploy the service.", "new_text": "Deploys the service."},
         ],
     )
@@ -300,7 +343,12 @@ def test_edit_skill_batch_applies_all_pairs(tmp_path: Path) -> None:
 def test_edit_skill_refuses_ambiguous_and_unknown(tmp_path: Path) -> None:
     ts = _toolset_at(str(tmp_path))
     # Duplicate old_text -> refuse (never edit blindly).
-    ts.create_skill("ops", "deploy", description="d", content="# Skill: deploy\n\nstep one\n\nstep two\n")
+    ts.create_skill(
+        "ops",
+        "deploy",
+        description="d",
+        content="# Skill: deploy\n\nstep one\n\nstep two\n",
+    )
     with pytest.raises(ModelRetry, match="found 2 times"):
         ts.edit_skill("ops/deploy", [{"old_text": "step", "new_text": "STEP"}])
     # Unknown skill -> ModelRetry.

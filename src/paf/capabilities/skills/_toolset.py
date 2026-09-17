@@ -34,6 +34,7 @@ from paf.capabilities._edit import apply_edits
 from paf.capabilities._storage._atomic import write_atomic as _write_atomic
 
 from ._corpus import HintCorpus, SkillDoc
+from ._store import FlatFileSkillsStorage
 
 # Recovery-prone write/edit tools get real retry budget (not pydantic-ai's
 # default of 1). Mirrors fs `_FS_TOOL_RETRIES` and vault `_VAULT_TOOL_RETRIES`.
@@ -64,13 +65,20 @@ class SkillToolset(FunctionToolset[object]):
     resource confined to its skill's directory.
     """
 
-    def __init__(self, libraries: list[str] | str, *, top_k: int = 3) -> None:
+    def __init__(
+        self,
+        libraries: list[str] | str,
+        *,
+        top_k: int = 3,
+        storage: FlatFileSkillsStorage | None = None,
+    ) -> None:
         if isinstance(libraries, str):
             libraries = [libraries]
         super().__init__()
         self.libraries = list(libraries)
         self.top_k = top_k
-        self._corpus = HintCorpus(roots=self.libraries)
+        self._storage = storage if storage is not None else FlatFileSkillsStorage()
+        self._corpus = HintCorpus(roots=self.libraries, storage=self._storage)
         self._by_id: dict[str, SkillDoc] = self._corpus.by_id
         self._by_short_name: dict[str, list[SkillDoc]] = self._corpus.by_short_name
 
@@ -84,8 +92,12 @@ class SkillToolset(FunctionToolset[object]):
         self.add_function(self.load_skill, name="load_skill")
         self.add_function(self.list_skill_files, name="list_skill_files")
         self.add_function(self.read_skill_file, name="read_skill_file")
-        self.add_function(self.create_skill, name="create_skill", retries=_SKILL_TOOL_RETRIES)
-        self.add_function(self.edit_skill, name="edit_skill", retries=_SKILL_TOOL_RETRIES)
+        self.add_function(
+            self.create_skill, name="create_skill", retries=_SKILL_TOOL_RETRIES
+        )
+        self.add_function(
+            self.edit_skill, name="edit_skill", retries=_SKILL_TOOL_RETRIES
+        )
 
     # -- helpers -----------------------------------------------------------
 
@@ -105,7 +117,9 @@ class SkillToolset(FunctionToolset[object]):
                 return doc
         # Short-name fallback only when unambiguous.
         matching = [
-            doc for doc in self._corpus.docs if doc.name.replace("_", "-").lower() == norm
+            doc
+            for doc in self._corpus.docs
+            if doc.name.replace("_", "-").lower() == norm
         ]
         if len(matching) == 1:
             return matching[0]
@@ -147,7 +161,7 @@ class SkillToolset(FunctionToolset[object]):
             for doc in sorted(by_cat[cat], key=lambda d: d.name):
                 desc = doc.description.split("\n")[0].strip()
                 if len(desc) > _MAX_DESCRIPTION_CHARS:
-                    desc = desc[:_MAX_DESCRIPTION_CHARS - 1] + "…"
+                    desc = desc[: _MAX_DESCRIPTION_CHARS - 1] + "…"
                 lines.append(f"  - {doc.name}: {desc}")
         return "\n".join(lines)
 
@@ -239,7 +253,10 @@ class SkillToolset(FunctionToolset[object]):
             raise ModelRetry(f"{rel} is not a readable file.")
         content = target.read_text(encoding="utf-8", errors="ignore")
         if len(content) > _READ_MAX_CHARS:
-            content = content[:_READ_MAX_CHARS] + f"\n… [truncated at {_READ_MAX_CHARS} chars]"
+            content = (
+                content[:_READ_MAX_CHARS]
+                + f"\n… [truncated at {_READ_MAX_CHARS} chars]"
+            )
         return f"{rel}\n\n{content}"
 
     def create_skill(
@@ -290,9 +307,13 @@ class SkillToolset(FunctionToolset[object]):
 
         # Write into the FIRST configured library root (the default authoring target).
         library_root = Path(self.libraries[0]).expanduser().resolve()
-        dest = (library_root / category / name if category else library_root / name).resolve()
+        dest = (
+            library_root / category / name if category else library_root / name
+        ).resolve()
         if not dest.is_relative_to(library_root):
-            raise ModelRetry(f"Category/name {category!r}/{name!r} escapes the library root.")
+            raise ModelRetry(
+                f"Category/name {category!r}/{name!r} escapes the library root."
+            )
         target = dest / "SKILL.md"
         if target.exists():
             raise ModelRetry(
