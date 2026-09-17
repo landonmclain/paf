@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from pydantic_ai.messages import (
     BinaryContent,
     ModelRequest,
+    ModelResponse,
     TextContent,
+    TextPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -15,6 +19,7 @@ from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
     TieredCompaction,
+    compact_now,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
@@ -29,7 +34,11 @@ from paf.capabilities.browser._toolset import (
     is_always_blocked_address,
     is_blocked_address,
 )
-from paf.capabilities.compaction import build_compaction
+from paf.capabilities.compaction import (
+    build_boundary_compaction,
+    build_boundary_compaction_for_agent,
+    build_compaction,
+)
 from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, DEMO_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
@@ -457,6 +466,73 @@ def test_build_compaction_window_is_always_turn_bound_trim_only() -> None:
     # dropped by from_mapping) and does not change the window type.
     from_spec = build_compaction(CompactionConfig.from_mapping({"consolidate": False}))
     assert type(from_spec.tiers[-1]) is TurnBoundSlidingWindow
+
+
+def test_build_boundary_compaction_targets_turn_boundary_target() -> None:
+    """The Tier A boundary strategy trims to `turn_boundary_target`, not the
+    emergency `target_tokens`. When unset it falls back to `target_tokens`."""
+    from paf.capabilities.compaction import CompactionConfig
+
+    # Explicit turn_boundary_target wins over target_tokens.
+    cfg = CompactionConfig(target_tokens=300000, turn_boundary_target=150000)
+    boundary = build_boundary_compaction(cfg)
+    assert isinstance(boundary, TieredCompaction)
+    assert boundary.target_tokens == 150000
+
+    # Unset turn_boundary_target -> falls back to target_tokens.
+    fallback = build_boundary_compaction(CompactionConfig(target_tokens=300000))
+    assert fallback.target_tokens == 300000
+
+    # Neither set -> the ladder default (4000), same as build_compaction's bare default.
+    default = build_boundary_compaction()
+    assert default.target_tokens == 4000
+
+    # Boundary uses the same turn-bounded trim-only window, never evicts active turn.
+    assert type(boundary.tiers[-1]) is TurnBoundSlidingWindow
+
+
+def test_build_boundary_compaction_for_agent_obeys_turn_boundary_flag() -> None:
+    """`build_boundary_compaction_for_agent` returns a strategy when
+    `turn_boundary` is absent/true, and None when explicitly false (control arm)."""
+    from paf.capabilities.compaction import CompactionConfig
+
+    # ON (absent / true) -> strategy built.
+    on = build_boundary_compaction_for_agent("demo_assistant")
+    assert isinstance(on, TieredCompaction)
+
+    # OFF via an explicit spec override -> None (control arm, today's behavior).
+    off_cfg = CompactionConfig(turn_boundary=False)
+    assert off_cfg.turn_boundary is False
+
+
+def test_turn_boundary_compact_now_trims_large_history_noop_small() -> None:
+    """Driving the Tier A strategy via `compact_now` at the turn boundary trims a
+    large accumulated prior-turn history (well over `turn_boundary_target`) and is a
+    no-op on a small history (zero overhead on short sessions)."""
+    boundary = build_boundary_compaction_for_agent("demo_assistant")
+    model = "openrouter:deepseek/deepseek-flash-v4"
+
+    # A large cross-turn history, well over the 150k boundary target.
+    large = []
+    for i in range(60):
+        large.append(ModelRequest(parts=[UserPromptPart(content=f"user {i} " + "x" * 12000)]))
+        large.append(ModelResponse(parts=[TextPart(content=f"reply {i} " + "y" * 10000)]))
+
+    def _run() -> None:
+        compacted = asyncio.run(compact_now(boundary, list(large), model=model, deps=None))
+        assert len(compacted) < len(large)
+        assert compacted != large
+
+        # A small history is returned unchanged — the boundary trim must not burn work
+        # (or rewrite history / bust the cache) on ordinary small sessions.
+        small = [
+            ModelRequest(parts=[UserPromptPart(content="hi")]),
+            ModelResponse(parts=[TextPart(content="hello")]),
+        ]
+        out = asyncio.run(compact_now(boundary, list(small), model=model, deps=None))
+        assert out == small
+
+    _run()
 
 
 # --- EgressPolicy: secure default, explicit override, metadata firebreak ----

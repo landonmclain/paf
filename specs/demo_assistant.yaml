@@ -276,7 +276,9 @@ skills:
 #   `memory.consolidate_every`. Eviction is pure context management — it never
 #   calls memory, and it can never evict the active user turn.
 compact:
-  target_tokens: 75000
+  turn_boundary: true          # Tier A: run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (today's single mid-turn behavior).
+  turn_boundary_target: 150000 # Tier A routine budget at the turn boundary — keeps each turn small/stable (well under the 300k emergency). 150k for now; tuneable.
+  target_tokens: 300000        # Tier B emergency: 300k = Landon's reliable context ceiling (mid-turn near-limits). deepseek rates 1M but attention degrades; do NOT use 1M. Only fires when a single turn approaches the ceiling.
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000

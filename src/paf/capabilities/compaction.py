@@ -24,6 +24,7 @@ selects the compaction builder iff the agent's profile allowlists it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
@@ -77,6 +78,15 @@ class CompactionConfig:
         clamp_max_part_tokens: ClampOversizedMessages — any single message part
             larger than this is trimmed to head+tail.
         clamp_head_chars / clamp_tail_chars: head/tail chars kept when clamping.
+        turn_boundary: run the routine window trim at the START of each turn
+            (Tier A) via ``compact_now``, so the first request of a turn is small
+            and the prefix stays stable for the whole turn (no mid-turn bust).
+            True (default) = new behavior; False = fall back to today's
+            single mid-turn ``TieredCompaction`` (control arm).
+        turn_boundary_target: the routine token budget for the Tier A turn-boundary
+            trim (well under the emergency ``target_tokens``; defaults to
+            ``target_tokens`` when unset). Keeps each new turn starting small with
+            headroom, so the model rarely/never trips the mid-turn emergency.
     """
 
     target_tokens: int | None = None
@@ -88,6 +98,8 @@ class CompactionConfig:
     clamp_max_part_tokens: int | None = None
     clamp_head_chars: int | None = None
     clamp_tail_chars: int | None = None
+    turn_boundary: bool | None = None
+    turn_boundary_target: int | None = None
 
     @classmethod
     def from_mapping(cls, data: dict | None) -> CompactionConfig:
@@ -137,6 +149,49 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     cfg = config or CompactionConfig()
 
     target = cfg.target_tokens if cfg.target_tokens is not None else 4000
+    return _build_ladder(cfg, target)
+
+
+def build_boundary_compaction(config: CompactionConfig | None = None) -> TieredCompaction:
+    """Build the Tier A **turn-boundary** compaction strategy (routine trim).
+
+    Same ladder as :func:`build_compaction` (clamp → clear → window), but targeted at
+    ``turn_boundary_target`` (defaults to ``target_tokens`` when unset) — the routine
+    budget that keeps each new turn starting small and the prefix stable for the whole
+    turn (Tier A). This strategy is driven ONLY via ``compact_now`` at the top of
+    ``Session.stream()``; it must NOT be registered as an agent capability, or its
+    ``before_model_request`` hook would fire mid-turn and recreate the cache busts this
+    design removes.
+    """
+    cfg = config or CompactionConfig()
+    target = cfg.turn_boundary_target if cfg.turn_boundary_target is not None else (
+        cfg.target_tokens if cfg.target_tokens is not None else 4000
+    )
+    return _build_ladder(cfg, target)
+
+
+def build_boundary_compaction_for_agent(
+    agent_name: str, spec_directory: Path | None = None
+) -> TieredCompaction | None:
+    """Build the Tier A strategy for a named agent's spec.
+
+    Returns ``None`` when the spec's ``compact.turn_boundary`` is explicitly ``false``
+    (i.e. the control arm — fall back to today's single mid-turn behavior). Absent /
+    ``true`` (the default) builds the boundary strategy from the spec's ``compact:``
+    block. ``Session`` calls this once per session and drives the result via
+    ``compact_now`` at the top of ``stream()``.
+    """
+    from paf.specs import DEFAULT_SPEC_DIRECTORY, _spec_compaction_config, get_spec_path
+
+    spec_directory = spec_directory or DEFAULT_SPEC_DIRECTORY
+    cfg = _spec_compaction_config(get_spec_path(agent_name, spec_directory))
+    if cfg.turn_boundary is False:
+        return None
+    return build_boundary_compaction(cfg)
+
+
+def _build_ladder(cfg: CompactionConfig, target: int) -> TieredCompaction:
+    """Shared clamp→clear→window ladder; ``target`` is the escalation budget."""
     clear_max = (
         cfg.clear_tool_max_tokens if cfg.clear_tool_max_tokens is not None else 500
     )

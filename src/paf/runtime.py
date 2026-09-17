@@ -48,6 +48,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai_harness.compaction import compact_now
 from pydantic_ai_harness.step_persistence import continue_run
 from pydantic_graph import End
 
@@ -62,6 +63,7 @@ from paf.background import (
     BackgroundTask,
 )
 from paf.capabilities import PROFILES
+from paf.capabilities.compaction import build_boundary_compaction_for_agent
 from paf.capabilities.persistence import _build_store
 from paf.observability.instrumentation import (
     _json_dumps,
@@ -367,6 +369,12 @@ class Session:
         if trace:
             setup_observability()
         self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
+        # Tier A turn-boundary compaction strategy (routine trim). Built from the
+        # spec's `compact:` block; None when `compact.turn_boundary` is explicitly
+        # false (control arm). Driven via compact_now at the top of stream(). Must
+        # NOT be added to agent.capabilities or its before_model_request hook would
+        # fire mid-turn and recreate cache busts.
+        self._boundary_compaction = build_boundary_compaction_for_agent(agent_name)
         self.history: list = []
         # Background orchestrator — BARE by default. The app/CLI attaches a
         # :class:`paf.background.BackgroundCoordinator` (via
@@ -593,6 +601,28 @@ class Session:
         # current turn.
         self._token = CancellationToken()
         await self._ensure_resumed(scoped)
+
+        # Tier A — turn-boundary compaction (routine trim). Run the window trim
+        # over the settled prior-turn history BEFORE request #1, so the first
+        # request of the turn is small and the prompt prefix stays stable for
+        # the whole turn (no mid-turn cache bust). `compact_now` drives the
+        # boundary strategy outside an active run (the harness-sanctioned seam
+        # for between-turn compaction). Turn-bound-bounded: `self.history` here
+        # is only PRIOR turns (the current prompt is added inside agent.iter),
+        # so the window never touches the active turn. No-op when disabled
+        # (None) or when there's no history to trim. `getattr` default guards
+        # bare-Session test constructions that bypass __init__.
+        boundary_compaction = getattr(self, "_boundary_compaction", None)
+        if boundary_compaction is not None and self.history:
+            boundary_model = getattr(self._agent, "model", None)
+            compacted = await compact_now(
+                boundary_compaction,
+                list(self.history),
+                model=boundary_model,
+                deps=None,
+            )
+            if compacted != self.history:
+                self.history = compacted
 
         # Stamp the current UTC timestamp onto the start of EVERY user message,
         # so the model always has an explicit date+time anchor and the
