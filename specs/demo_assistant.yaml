@@ -260,6 +260,15 @@ skills:
 #   get cleared mid-turn — the destructive blanking only kicks in on genuinely
 #   long/huge turns. (Was 4 — too aggressive, nuked read_file results the model
 #   still needed, leaving it blind mid-answer.)
+# min_clear_tokens: ClearToolResults CACHE-COST GUARD — do NOT clear a tool
+#   result unless clearing actually reclaims at least this many tokens.
+#   Clearing rewrites message content in place, which busts the provider's
+#   prompt cache from the cleared point onward (the next request re-pays a
+#   cache-write at 1.25x input, then 0.1x reads). A trivial reclamation is a
+#   net LOSS (pay a write to reclaim a few tokens). 2000 = skip clears that
+#   reclaim <2k tokens. Meant to sit well below clear_tool_max_tokens so it
+#   stops only the pointless busts, not the real scavenging. (pydantic-ai-harness
+#   `ClearToolResults(min_clear_tokens=...)`; default None = always clear.)
 # Window tier is TurnBoundSlidingWindow — ALWAYS turn-bounded + trim-only. No
 #   `consolidate` option (retired 2026-09-02): the inline eviction fold is gone.
 #   Durable-fact capture is owned SOLELY by the background watermark worker,
@@ -272,6 +281,7 @@ compact:
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 20
+  min_clear_tokens: 2000
 
 # Per-assistant memory tuning (option B — lives in the spec, not in Python).
 # Read by `build_agent` -> `_spec_memory_config` -> `_build_memory` -> the

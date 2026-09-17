@@ -67,6 +67,13 @@ class CompactionConfig:
             dumps (biggest context saver); high = keep more tool output verbatim.
         clear_tool_keep_pairs: ClearToolResults — how many most-recent
             tool-call/result pairs always survive clearing.
+        min_clear_tokens: ClearToolResults — do NOT clear a tool result unless
+            doing so reclaims at least this many estimated tokens. Guards the
+            provider prompt cache: clearing rewrites message content and busts
+            the cache from the edit point onward, so a trivial reclamation is a
+            net LOSS (pay a cache-write to reclaim a few tokens). ``None``/0 =
+            always clear (harness default); positive = skip clears too small to
+            be worth the bust.
         clamp_max_part_tokens: ClampOversizedMessages — any single message part
             larger than this is trimmed to head+tail.
         clamp_head_chars / clamp_tail_chars: head/tail chars kept when clamping.
@@ -77,6 +84,7 @@ class CompactionConfig:
     window_keep_messages: int | None = None
     clear_tool_max_tokens: int | None = None
     clear_tool_keep_pairs: int | None = None
+    min_clear_tokens: int | None = None
     clamp_max_part_tokens: int | None = None
     clamp_head_chars: int | None = None
     clamp_tail_chars: int | None = None
@@ -135,6 +143,7 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     clear_keep = (
         cfg.clear_tool_keep_pairs if cfg.clear_tool_keep_pairs is not None else 4
     )
+    min_clear = cfg.min_clear_tokens  # None = harness default (always clear)
     clamp_max = (
         cfg.clamp_max_part_tokens if cfg.clamp_max_part_tokens is not None else 50_000
     )
@@ -164,6 +173,7 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
             ClearToolResults(
                 max_tokens=clear_max,
                 keep_pairs=clear_keep,
+                min_clear_tokens=min_clear,
             ),
             # 3. Drop the oldest SETTLED messages (turn-bounded; the active
             #    user turn is never evicted). Trim-only — no memory work here.
