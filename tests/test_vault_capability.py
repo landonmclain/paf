@@ -643,6 +643,66 @@ def test_note_edit_unknown_or_outside_root(vault: tuple[Path, VaultToolset]) -> 
     assert "do NOT prepend" in out3
 
 
+# ------------------------------------------------------------------ Tier C: note_append
+
+
+def test_note_append_adds_block_at_bottom(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    before = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    out = toolset.note_append("Grounding", "New tail block.")
+    assert "Appended" in out
+    assert "[version:" in out
+    after = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    # appended at the very bottom, original content intact
+    assert after.startswith(before)
+    assert after.strip().endswith("New tail block.")
+
+
+def test_note_append_twice_stacks_in_order(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    toolset.note_append("Grounding", "Line one.")
+    toolset.note_append("Grounding", "Line two.")
+    text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    # each append is a fresh block at the bottom, in order, separated by a blank line
+    assert text.rstrip().endswith("Line one.\n\nLine two.")
+    # no-loop guarantee: no old_text anchor is needed (always a fresh line)
+    assert "Line one." in text
+    assert "Line two." in text
+    # appended blocks all follow the original body line, in order
+    assert text.index("See [[Index]].") < text.index("Line one.") < text.index("Line two.")
+
+
+def test_note_append_version_chaining_cas(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    read = toolset.read_note("Grounding")
+    assert read is not None
+    v1 = read.splitlines()[0].rsplit("version: ", 1)[1].rstrip("]")
+    r1 = toolset.note_append("Grounding", "first", expected_version=v1)
+    v2 = r1.splitlines()[0].rsplit("version:", 1)[1].strip("]")
+    # chained append with the freshly returned version succeeds
+    r2 = toolset.note_append("Grounding", "second", expected_version=v2)
+    assert "Appended" in r2
+
+
+def test_note_append_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    before = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
+    with pytest.raises(ModelRetry, match="Conflict"):
+        toolset.note_append("Grounding", "x", expected_version="stale-deadbeef")
+    # nothing was written on a stale version
+    assert (vault[0] / "Grounding.md").read_text(encoding="utf-8") == before
+
+
+def test_note_append_unknown_or_outside_root(vault: tuple[Path, VaultToolset]) -> None:
+    _, toolset = vault
+    out = toolset.note_append("../Index.md", "x")
+    assert "(unknown note" in out or "vault" in out
+    out2 = toolset.note_append("Does Not Exist", "x")
+    assert "unknown" in out2.lower() or "not found" in out2.lower()
+    out3 = toolset.note_append("Projects/Index.md", "x")
+    assert "do NOT prepend" in out3
+
+
 def test_write_atomic_is_thread_safe() -> None:
     """Regression: concurrent writes to the SAME target must not race.
 

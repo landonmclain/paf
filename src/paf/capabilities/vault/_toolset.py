@@ -19,11 +19,15 @@ rather than brute-forcing keyword scans:
 - ``note_edit``       — edit a note by exact string replacement, guarded by an
   optimistic-concurrency ``expected_version`` (CAS against the content hash
   that ``read_note`` reports) — refuses stale writes, never edits blindly.
+- ``note_append``     — append text to the bottom of an existing note. No
+  ``old_text`` anchor (so it can't loop looking for a unique string on a long
+  note); CAS-guarded like ``note_edit``. For ADDING content at the end; the
+  structural/insertion cases stay with ``note_edit`` / the deferred ``note_patch``.
 
-Content writes beyond ``note_edit`` (full-content ``note_write`` / structural
-``note_patch``) stay a later phase — deliberately NOT registered here (YAGNI).
-Tools are agent-facing: every method returns a bounded, readable ``str``, never
-raw dicts.
+Content writes beyond ``note_edit`` / ``note_append`` (full-content
+``note_write`` / structural ``note_patch``) stay a later phase — deliberately
+NOT registered here (YAGNI). Tools are agent-facing: every method returns a
+bounded, readable ``str``, never raw dicts.
 
 Index freshness is lazy: before a read, we ``sync_changed`` against the snapshot
 and rebuild the index rows for any changed/added notes (stat gate, hash confirm),
@@ -119,6 +123,7 @@ class VaultToolset(FunctionToolset):
         self.add_function(self.note_create, name="note_create", retries=_VAULT_TOOL_RETRIES)
         self.add_function(self.note_rename, name="note_rename", retries=_VAULT_TOOL_RETRIES)
         self.add_function(self.note_edit, name="note_edit", retries=_VAULT_TOOL_RETRIES)
+        self.add_function(self.note_append, name="note_append", retries=_VAULT_TOOL_RETRIES)
 
     # -- index freshness -----------------------------------------------------
 
@@ -576,6 +581,11 @@ class VaultToolset(FunctionToolset):
         diff of what landed. On any failure it raises a retryable error (the
         model is told to re-read and retry) — it never reports success for an
         edit that did not persist.
+
+        **Prefer ``note_append`` when you are ADDING content to the end of a
+        note** — it needs no ``old_text`` anchor, so it cannot loop finding a
+        unique string on a long note. Use ``note_edit`` to change/replace text
+        in place; use ``note_append`` to add at the bottom.
         """
         try:
             rel = self._resolve(path)
@@ -601,6 +611,84 @@ class VaultToolset(FunctionToolset):
         build_index(self._root, self._scope, self._storage)
 
         return result.summary(rel)
+
+    def note_append(
+        self,
+        path: str,
+        text: str,
+        *,
+        expected_version: str | None = None,
+    ) -> str:
+        """Append text to the bottom of an existing note.
+
+        Adds ``text`` as a new block at the end of the note — no ``old_text``
+        anchor to find, so this never loops looking for a unique string on a
+        long note. Use this when you are ADDING content; use ``note_edit`` to
+        change/replace text in place, and ``note_create`` for a brand-new note.
+
+        ``path`` is a vault-relative path, a title, or a ``[[wikilink]]``.
+        The appended ``text`` is separated from the note's existing body by a
+        blank line (it starts on its own line regardless of how the note ends),
+        and ends cleanly with a trailing newline. ``expected_version`` is the
+        note's content version reported by ``read_note`` (the ``version:`` in
+        the read header) — pass it to refuse the append if the note changed
+        since you read it (concurrent-edit guard, same as ``note_edit``).
+
+        On success returns a confirmation with the new version. On any failure
+        it raises a retryable error (re-read and retry) — it never reports
+        success for an append that did not persist.
+        """
+        try:
+            rel = self._resolve(path)
+        except PathRefMiss as e:
+            return self._path_miss_hint(str(e))
+        if rel is None:
+            return f"(unknown note: {path})"
+        full = self._abs(rel)
+        if full is None or not full.is_file():
+            return f"(note not found on disk: {rel})"
+        if not text:
+            return f"(nothing to append — text was empty: {rel})"
+
+        # ONE fresh read; everything is validated/written against this snapshot.
+        try:
+            current = full.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:  # pragma: no cover - read failure
+            raise ModelRetry(f"Failed to read {rel}: {e}") from None
+
+        # CAS-at-commit: reject if the caller's version is stale.
+        current_version = _content_hash(current)
+        if (
+            expected_version is not None
+            and current_version != expected_version
+        ):
+            raise ModelRetry(
+                f"Conflict: {rel!r} has changed since you read it "
+                f"(expected version: {expected_version}, got: {current_version}). "
+                "Re-read (read_note) and retry."
+            )
+
+        # Append as a new block: ensure a preceding blank line + trailing newline.
+        head = current.rstrip("\n")
+        block = "" if not head else head + "\n\n"
+        new_content = block + text.rstrip("\n") + "\n"
+
+        self._write_note_atomic(full, new_content)
+
+        # Never-lie: confirm the append actually persisted on disk.
+        persisted = full.read_text(encoding="utf-8", errors="replace")
+        if _content_hash(persisted) != _content_hash(new_content):
+            raise ModelRetry(
+                f"Append to {rel} did not persist as expected; aborting. Re-read and retry."
+            )
+
+        # Refresh the index row + snapshot so reads reflect the new content.
+        self._storage.sync_changed(self._root, self._scope)
+        build_index(self._root, self._scope, self._storage)
+
+        new_version = _content_hash(persisted)
+        appended_len = len(text.rstrip("\n"))
+        return f"Appended {appended_len} bytes to {rel}. [version:{new_version}]"
 
     # -- formatting ----------------------------------------------------------
 

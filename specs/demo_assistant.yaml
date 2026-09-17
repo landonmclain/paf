@@ -190,10 +190,14 @@ git:
   # root: ~/projects/Personal/landonmclain-site
   root: ~/projects/Personal/pydantic-agent-framework/
   # root: ~/Development/local/futures_stats
+  # root: ~/hermes/strategies/kli-backtest
+  # scan: ~/Development/local/ibkr_retrieval
 codebase_map:
   # scan_root: ~/projects/Personal/landonmclain-site
   scan_root: ~/projects/Personal/pydantic-agent-framework/
   # scan_root: ~/Development/local/futures_stats
+  # scan_root: ~/hermes/strategies/kli-backtest
+  # scan_root: ~/Development/local/ibkr_retrieval
 # Vault: the real Obsidian vault. `~` expands via os.path.expanduser. Deliberate
 # departure from the other four roots (which point at the site repo) — the vault
 # cap is a separate navigation-first note ladder over markdown, rooted here.
