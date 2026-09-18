@@ -35,7 +35,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 log = logging.getLogger(__name__)
 
@@ -558,7 +558,13 @@ class BackgroundCoordinator:
             updated = datetime.fromisoformat(rec["timestamp"])
         except (TypeError, ValueError, KeyError):
             return row
-        status = rec.get("status")
+        # The journal always writes a real StepStatus, but a corrupt/older
+        # line could omit it — in that case fall back to plain idle rather
+        # than passing None into JobIdleStatus.
+        raw_status = rec.get("status")
+        if raw_status is None:
+            return row
+        status = cast(StepStatus, raw_status)
         # An ACTIVE task (queued/running) is live: its last publish timestamp
         # only records when the job was handed off, not its progress, so a long
         # fold (minutes on an LLM) must NEVER decay to "idle" just because the
