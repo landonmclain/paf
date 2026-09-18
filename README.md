@@ -2,8 +2,10 @@
 
 A **thin, opinionated agent framework on pydantic-ai V2**. Import name: **`paf`**.
 
-Two live agents ship out of the box: a production `assistant` and an
-`demo_assistant` "everything sandbox" used to build out and tune the full stack.
+The primary agent is `demo_assistant` — an "everything sandbox" that exercises
+the full stack (persistence, recall, durable memory, compaction) plus the demo
+capabilities live. A leaner `assistant` profile ships the production core
+without the demo surface.
 
 ## Principles
 
@@ -25,13 +27,11 @@ Two live agents ship out of the box: a production `assistant` and an
 
 ## Agents
 
-Two named agents resolve from declarative YAML specs (`specs/*.yaml`) via
-`Agent.from_spec`:
-
-| Agent | Profile | Purpose |
-|-------|---------|---------|
-| `assistant` | `assistant` | Production agent: durability + recall + compaction. |
-| `demo_assistant` | `demo` | "Everything sandbox" — tunes the full stack and exercises the demo capabilities live. |
+Agents resolve from declarative YAML specs (`specs/*.yaml`) via `Agent.from_spec`.
+The primary agent is `demo_assistant` — the "everything sandbox" that exercises
+the full stack (persistence, recall, durable memory, compaction) plus the demo
+capabilities live. A leaner `assistant` profile ships the production core
+(durability + recall + compaction) without the demo surface.
 
 Both default to **DeepSeek V4 Flash via OpenRouter** (requires
 `OPENROUTER_API_KEY` in `.env`; bare slug, no `:nitro` suffix).
@@ -62,17 +62,28 @@ The demo additionally allowlists the harness-style capabilities:
 - **Shell** — run/start/check/stop, rooted at a cwd, with allow/deny lists and
   env-masking.
 - **Git** — safe inspection + checkpoint tools (explicit paths only).
+- **CodebaseMap** — navigation-first codebase browser (overview/lookup_file/
+  read_block/search_codebase + re-index).
+- **Vault** — navigation-first note ladder over an Obsidian-style markdown vault.
 - **Web** — Tavily-backed search + page extraction (`search_web_docs`,
   `search_official_docs`, `fetch_web_page`).
+- **Browser** — mobile-first headless Chromium automation (navigate/snapshot/
+  click/type/screenshot + set_viewport), with SSRF defense.
+- **Visual** — vision-model description of captured screenshots.
 - **Skills** — LIST / LOAD on demand plus a deterministic POINTER trigger.
 - **ToolOutputLimits** — framework-level tool-return reduction (spill/summarize/
   truncate oversized results).
 - **WarnOnCacheBusts** — observer that warns when the prompt-cacheable prefix
   collapses mid-run.
 - **Subagents** — `delegate_task` to named child agents in isolated runs.
+- **Planning** — model-owned task plan (write_plan/read_plan/add_task/...).
 - **ThreadSummarizer** — per-conversation episodic background summarizer.
   Phase 1: records each eviction block (per-message `{run_id}:{turn_id}` refs) to
   `data/summaries/demo_assistant/evictions.jsonl`. OFF for the production agent.
+- **Guardrails** — structural prompt-injection defense.
+- **ToolGating** — per-call execution-time tool gate for the highest-risk tools.
+- **Secrets** — secret-handle resolution + result redaction (real values never
+  enter the window).
 
 Native pydantic-ai capabilities (WebSearch, WebFetch, XSearch, Thinking, MCP,
 ToolSearch, ImageGeneration) resolve directly from the `demo_assistant` spec's
@@ -110,19 +121,16 @@ memory-write tool (recording is the owner's job).
 
 All UIs drive the same `Session`/`Runtime` underneath.
 
-- `ui/cli.py` — plain REPL.
-- `ui/cli2.py` / `ui/cli.py` — Rich live render with streaming thinking/tool
-  status.
-- `ui/cli_textual.py` — Textual full-screen.
-- `ui/cli_demo.py` — keyless/deterministic debug path (`MODEL='test'`).
+- `ui/cli.py` — Rich live render with streaming thinking/tool status and a
+  background-process sidebar.
+- `ui/sse.py` — SSE server exposing the background-process feed.
 - `ui/web.py` — **Gradio web UI.** Serves a single-lane conversation for the
   chosen agent; defaults to `demo_assistant`.
 
 ```bash
 # Gradio web UI (default agent demo_assistant on 0.0.0.0:8080)
-# option 1: root venv
-set -a && . ./.env && set +a && .venv/bin/python ui/web.py
-# option 2: uv
+set -a && . ./.env && set +a && python ui/web.py
+# or via uv
 set -a && . ./.env && set +a && uv run --env-file .env python ui/web.py
 # pass an agent name / port explicitly
 python ui/web.py demo_assistant 8080
@@ -136,9 +144,8 @@ surfaced `session=` tags (no token-overlap F1) for retrieval. Oracle split lives
 in `data/benchmarks/lme_oracle.json`; graded records in `tests/results/`.
 
 ```bash
-cd /home/alice/projects/Personal/pydantic-agent-framework
 set -a && . ./.env && set +a && \
-  LME_MAX_QUESTIONS=4 PYTHONPATH= .venv/bin/python -u -m tests.run_lmem
+  LME_MAX_QUESTIONS=4 PYTHONPATH= python -u -m tests.run_lmem
 ```
 
 Benchmark data, seeding, and knobs are documented in
@@ -159,51 +166,38 @@ src/paf/
   specs.py        spec loader (agent name → YAML → Agent)
   config.py       pydantic-settings config + spec/root anchoring
 specs/            declarative agent specs (*.yaml)
-ui/               cli.py (plain), cli.py (Rich), cli_textual.py (Textual),
-                  cli_demo.py (keyless), web.py (Gradio)
+ui/               cli.py (Rich live render), sse.py (background-process feed),
+                  web.py (Gradio)
 tests/            unit tests + benchmark harness (run_lmem, ...)
 ```
 
 ## Run it
 
-Dependencies resolve from a sibling `agent-foundation` package
-(`[tool.uv.sources]` path) — the real workflow uses the local venv + env:
+The real workflow uses the local venv + env:
 
 ```bash
 # one-time
-cp .env.example .env        # OPENAI_API_KEY + optional Langfuse keys
+cp .env.example .env        # OPENROUTER_API_KEY + optional Langfuse keys
 PYTHONPATH= .venv/bin/pip install -e .   # or: uv sync
 
-# interactive REPL — plain assistant
-PYTHONPATH="" .venv/bin/python -m ui.cli
-# or the richer live UIs (same Session/Runtime underneath)
-PYTHONPATH="" .venv/bin/python -m ui.cli2            # Rich live render
-PYTHONPATH="" .venv/bin/python -m ui.cli_textual     # Textual full-screen
-# the "everything sandbox" demo profile (fs/shell/git/web/skills/subagents)
-uv run --env-file .env python ui/cli2.py demo_assistant
+# interactive CLI — defaults to the demo_assistant "everything sandbox"
+python ui/cli.py
+# or the leaner production assistant
+python ui/cli.py assistant
 ```
 
 Prepend `set -a && . ./.env && set +a;` to export secrets for the runner. The
-REPL keeps a durable conversation (`conversation_id "cli-primary"` for
-`ui.cli`, per-agent lanes for `cli2`); run it twice with the same id to see
-persistence + recall — start, quit, restart, then ask for something reachable
-only via `search_conversation_history`.
-
-A keyless/deterministic run path is available in `ui/cli_demo.py`
-(`MODEL='test'`).
+REPL keeps a durable conversation; run it twice with the same conversation id
+to see persistence + recall — start, quit, restart, then ask for something
+reachable only via `search_conversation_history`.
 
 ## Verify
 
 ```bash
-PYTHONPATH="" .venv/bin/ruff check . --fix --output-format=concise
-PYTHONPATH="" .venv/bin/python -m pytest -q          # offline unit + integration
-PYTHONPATH="" .venv/bin/python -m pytest -m live     # opt-in: real model + Langfuse (needs .env)
+.venv/bin/ruff check . --fix --output-format=concise
+python -m pytest -q          # offline unit + integration
+python -m pytest -m live     # opt-in: real model + Langfuse (needs .env)
 ```
-
-> **PYTHONPATH footgun.** Hermes injects a leaked `PYTHONPATH` (3.11
-> site-packages) per terminal call that breaks the project venv's
-> `pydantic_core`. Prefix commands with `PYTHONPATH=""` (or use the compiled
-> binary directly) to bypass it. The same applies to the benchmark commands.
 
 A root `conftest.py` wires `.env` into `os.environ` at import time so bare
 `pytest` and `pytest -m live` both run green.
