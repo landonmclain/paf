@@ -201,7 +201,9 @@ class MemoryIndex:
 
     # -- incremental -------------------------------------------------------
 
-    def fold(self, line_number: int, record: MemoryRecord, directory: str | os.PathLike) -> None:
+    def fold(
+        self, line_number: int, record: MemoryRecord, directory: str | os.PathLike
+    ) -> None:
         """Fold ONE new journal line into the index (O(1)-ish, incremental).
 
         If a surviving winner matches this record's key, the group absorbs it
