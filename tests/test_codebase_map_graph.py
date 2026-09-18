@@ -39,16 +39,12 @@ from pathlib import Path
 
 import pytest
 
-from paf.capabilities.codebase_map._analyze import analyze_file
 from paf.capabilities.codebase_map._graph import build_edges
-from paf.capabilities.codebase_map._schema import FileInfo
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root
 GOLD = ROOT / "tests" / "code_search_eval" / "gold_edges.jsonl"
 GOLD_CALLS = ROOT / "tests" / "code_search_eval" / "gold_calls.jsonl"
 GOLD_NO_CALL = ROOT / "tests" / "code_search_eval" / "gold_no_call.jsonl"
-FIXTURE = ROOT / "tests" / "fixtures" / "paf-src"
-
 _SRC_EXTS = (".py",)
 
 
@@ -76,43 +72,15 @@ def _gold_no_call() -> list[dict]:
     ]
 
 
-def _fixture_present() -> bool:
-    # paf-src snapshot of src/paf/ -> has capabilities/ + runtime.py + config.py
-    return FIXTURE.exists() and (FIXTURE / "capabilities").exists()
-
-
-def _load_infos() -> tuple[list[FileInfo], dict[str, str]]:
-    """Analyze every .py fixture file directly (bypasses git-ignore ScanScope).
-
-    Returns ``(infos, sources)`` — the FileInfo records plus the original source
-    text keyed by repo-relative path (needed for call-site re-parsing in Phase 1.2).
-    """
-    infos: list[FileInfo] = []
-    sources: dict[str, str] = {}
-    for py in sorted(FIXTURE.rglob("*.py")):
-        if "node_modules" in py.parts or ".agent-codeindex" in py.parts:
-            continue
-        fi = analyze_file(py, FIXTURE)
-        if fi is not None:
-            infos.append(fi)
-            sources[fi.path] = py.read_text()
-    return infos, sources
-
-
-def _build() -> list[dict]:
-    """Run build_edges over the fixture with call refinement (source-aware)."""
-    infos, sources = _load_infos()
-    return build_edges(infos, sources)
-
-
 @pytest.fixture(scope="module")
-def edges() -> list[dict]:
+def edges(paf_src_scan) -> list[dict]:
     """The full edge set over the fixture (reference + call refinement)."""
-    if not _fixture_present():
+    if paf_src_scan is None:
         pytest.skip(
             "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
         )
-    return _build()
+    infos, sources = paf_src_scan
+    return build_edges(infos, sources)
 
 
 @pytest.fixture(scope="module")
@@ -127,13 +95,13 @@ def call_map(edges: list[dict]) -> dict[tuple[str, str], dict]:
     return {(e["source"], e["target"]): e for e in edges}
 
 
-def test_build_edges_is_deterministic() -> None:
+def test_build_edges_is_deterministic(paf_src_scan) -> None:
     """Same input -> identical output across runs (no hash-order flakiness)."""
-    if not _fixture_present():
+    if paf_src_scan is None:
         pytest.skip(
             "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
         )
-    infos, sources = _load_infos()
+    infos, sources = paf_src_scan
     assert infos, "fixture produced no FileInfo records"
     e1 = build_edges(infos, sources)
     e2 = build_edges(infos, sources)
@@ -145,9 +113,13 @@ def test_build_edges_is_deterministic() -> None:
     )
 
 
-def test_no_sources_gives_all_reference(edges: list[dict]) -> None:
+def test_no_sources_gives_all_reference(paf_src_scan) -> None:
     """Without sources, build_edges degrades to all-reference (graceful)."""
-    infos, _ = _load_infos()
+    if paf_src_scan is None:
+        pytest.skip(
+            "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
+        )
+    infos, _ = paf_src_scan
     refs = build_edges(infos)
     assert refs and all(e["kind"] == "reference" for e in refs)
     assert all(e["call_symbols"] == [] for e in refs)

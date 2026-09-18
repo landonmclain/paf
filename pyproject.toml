@@ -90,6 +90,7 @@ quote-style = "double"
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-xdist",  # parallel test runs (pytest -n auto)
     # PlaywrightBrowser capability is a BUILTIN import from the harness (same
     # pattern as ToolOutputLimits / Subagents). The [playwright] extra pulls
     # `playwright>=1.61.0` + `idna`; Chromium itself needs a separate

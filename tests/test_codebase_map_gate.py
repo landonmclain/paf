@@ -24,7 +24,10 @@ from paf.capabilities.codebase_map._analyze import analyze_file
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root
 QUERIES = ROOT / "tests" / "code_search_eval" / "queries.jsonl"
-SRC = ROOT / "src" / "paf"
+# Analyze the frozen paf-src fixture (a snapshot of src/paf/) rather than the
+# live tree, so the gate is independent of repo growth and matches the other
+# codebase_map gates. Gitignored; skip if absent.
+SRC = ROOT / "tests" / "fixtures" / "paf-src"
 
 
 def _gold_entries() -> list[dict]:
@@ -37,6 +40,8 @@ def _gold_entries() -> list[dict]:
 
 def test_extraction_completeness_zero_errors() -> None:
     """Every paf python file either extracts cleanly or is a legit no-symbol skip."""
+    if not (SRC / "capabilities").exists():
+        pytest.skip("paf-src fixture not present (gitignored)")
     errors: list[str] = []
     for py in sorted(SRC.rglob("*.py")):
         try:

@@ -151,8 +151,15 @@ def _module_level_private():
 
 def _analyze() -> tuple[FileInfo, dict[str, SymbolInfo]]:
     """Run the real ship path and index searchable_symbols by qualified name."""
-    tmp = Path("/tmp/paf_fixture_unittest.py")
-    tmp.write_text(_FIXTURE, encoding="utf-8")
+    import tempfile
+
+    # Unique temp file per call — a fixed /tmp path would collide across xdist
+    # workers running this module concurrently.
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".py", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(_FIXTURE)
+        tmp = Path(f.name)
     fi = analyze_file(tmp, "/tmp", language="python")
     assert fi is not None, "analyze_file returned None for a valid fixture"
     by_name = {s.qualified: s for s in fi.searchable_symbols if s.qualified}

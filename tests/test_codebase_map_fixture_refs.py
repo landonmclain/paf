@@ -42,7 +42,6 @@ import pytest
 from paf.capabilities.codebase_map._analyze import analyze_file
 
 ROOT = Path(__file__).resolve().parents[1]
-PAF_FIXTURE = ROOT / "tests" / "fixtures" / "paf-src"
 CB_FIXTURE = ROOT / "tests" / "fixtures" / "chatbot"
 
 # Tokens that can ONLY ever be path segments/keywords, never a legit symbol binding.
@@ -73,10 +72,11 @@ def _analyze_dir(root: Path, langs: tuple[str, ...]) -> dict[str, object]:
 
 
 @pytest.fixture(scope="module")
-def paf_infos() -> dict[str, object]:
-    if not PAF_FIXTURE.exists():
+def paf_infos(paf_src_scan) -> dict[str, object]:
+    if paf_src_scan is None:
         pytest.skip("paf-src fixture not present (gitignored)")
-    return _analyze_dir(PAF_FIXTURE, (".py",))
+    infos, _ = paf_src_scan
+    return {fi.path: fi for fi in infos}
 
 
 @pytest.fixture(scope="module")
