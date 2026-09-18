@@ -1,17 +1,15 @@
 """Capability catalog — the master registry of capability types an agent can enable.
 
-A profile is a *named allowlist* over this catalog (see ``profiles.py``). M1 ships
-all harness capabilities we actually attach to an agent; nothing is scaffolded
-ahead of need (YAGNI). Core pydantic-ai capabilities (``WebSearch``, ``Thinking``,
-etc.) do NOT need a catalog entry — they are native to ``Agent.from_spec`` and the
-spec loader resolves them without ``custom_capability_types``. This catalog exists
-only for capabilities the loader cannot resolve by default (harness capabilities
-like ``StepPersistence``), keyed by the CamelCase name used in the spec YAML.
+A profile is a named allowlist over this catalog (see ``profiles.py``). Core
+pydantic-ai capabilities (``WebSearch``, ``Thinking``, etc.) need no catalog entry —
+the spec loader resolves them natively. This catalog exists only for capabilities
+the loader cannot resolve by default (harness capabilities like ``StepPersistence``),
+keyed by the CamelCase name used in the spec YAML.
 
 Compaction is built in Python (see ``compaction.py``): ``TieredCompaction``'s nested
-``tiers`` must be real strategy objects, and no harness compaction class overrides
-``from_spec``, so a YAML ``tiers:`` dict list would crash at run time. The tier types
-are still cataloged so a profile can reference them and the schema stays complete.
+``tiers`` must be real strategy objects, so a YAML ``tiers:`` dict list would crash
+at run time. The tier types are still cataloged so a profile can reference them and
+the schema stays complete.
 """
 
 from __future__ import annotations
@@ -49,141 +47,67 @@ from paf.capabilities.web import Web
 # `capabilities:` entry and the key a profile allowlists against.
 CAPABILITY_TYPES: dict[str, type[Any]] = {
     "StepPersistence": StepPersistence,
-    # "Compaction" gates the Python-built no-summary ladder (see compaction.py);
-    # TieredCompaction is its concrete type for catalog/schema completeness.
+    # Python-built no-summary compaction ladder; tier types cataloged for schema.
     "Compaction": TieredCompaction,
-    # Compaction tier types. TieredCompaction is assembled in Python (compaction.py);
-    # the tier types are cataloged so the profile allowlist + schema stay complete.
     "TieredCompaction": TieredCompaction,
     "ClampOversizedMessages": ClampOversizedMessages,
     "ClearToolResults": ClearToolResults,
     "SlidingWindowCompaction": SlidingWindowCompaction,
-    # Turn-bounded trim-only sliding-window tier for the assistant — never
-    # evicts the active user turn, does NO memory work (consolidation is the
-    # background watermark worker's job). Always on; no consolidate toggle.
+    # Turn-bounded trim-only sliding-window tier — never evicts the active turn.
     "TurnBoundSlidingWindow": TurnBoundSlidingWindow,
-    # Lossless recall over the persistence store. Built in Python (build.py) because
-    # its `source` needs a real SnapshotHistorySource object; cataloged so the
-    # profile allowlist + schema stay complete.
+    # Lossless recall over the persistence store; built in Python (needs a real
+    # SnapshotHistorySource), cataloged so the allowlist + schema stay complete.
     "ConversationSearch": ConversationSearch,
-    # Durable-facts notebook (MEMORY.md + topic files). Near-copy of the harness
-    # Memory capability; paf-owned so its injected block shares the one marker
-    # convention. Built by build.py whenever the profile allowlists it; for the
-    # assistant profile it IS the recall-ladder owner (see profiles.py). Has
-    # `from_spec`, so it ALSO resolves declaratively (`- Memory: {...}`).
+    # Durable-facts notebook (MEMORY.md + topic files). Has `from_spec`, so it
+    # resolves declaratively AND via build.py.
     "Memory": Memory,
-    # Per-conversation background thread summarizer (eviction-blocks beats) —
-    # INTRA-conversation chronological, distinct from Memory's cross-conversation
-    # semantic facts. Phase 0 shell: registration + spec serializability only;
-    # capture/worker/injection land in later phases. OFF by default (not in the
-    # assistant profile) — the profile allowlist is the ON/OFF switch.
+    # Per-conversation background thread summarizer. OFF by default — the profile
+    # allowlist is the ON/OFF switch.
     "ThreadSummarizer": ThreadSummarizer,
-    # Scoped filesystem access (read/write/edit/list/search/find) rooted at a
-    # directory, copied verbatim from the harness. Has `get_toolset`/`from_spec`
-    # so it resolves declaratively from a spec (`- FileSystem: {root_dir: ...}`)
-    # AND can be built in Python (build.py) with a paf-anchored root_dir.
+    # Scoped filesystem access rooted at a directory. `from_spec` + `get_toolset`.
     "FileSystem": FileSystem,
-    # Shell command execution (run/start/check/stop) rooted at a cwd, copied
-    # verbatim from the harness. `from_spec` + `get_toolset` so it resolves
-    # declaratively AND via build.py with paf-anchored settings.
+    # Shell command execution rooted at a cwd. `from_spec` + `get_toolset`.
     "Shell": Shell,
-    # Safe git inspection + checkpoint tools (status/changed/diff/checkpoint/
-    # restore) rooted at a workspace dir. Adapted from coding_agent git_tools;
-    # `get_toolset` so it resolves via build.py (and declaratively when rooted).
+    # Safe git inspection + checkpoint tools rooted at a workspace dir.
     "Git": Git,
-    # Codebase-map: navigation-first codebase browser (overview/lookup_file/
-    # read_block/search_codebase + run_codebase_map re-index). paf-owned
-    # icon-capability (AbstractCapability wrapping a FunctionToolset, same shape as
-    # Git/FileSystem/Shell). Needs a real scan_root + storage at build time
-    # (build.py `_build_codebase_map` roots it at PROJECT_ROOT), so it's built in
-    # Python, not spec-serialized.
+    # Navigation-first codebase browser. Built in Python (needs a real scan_root
+    # + storage), not spec-serialized.
     "CodebaseMap": CodebaseMap,
-    # Navigation-first note ladder over an Obsidian-style markdown vault
-    # (vault_overview/lookup_note/read_note + note_find/note_search). paf-owned
-    # icon-capability (AbstractCapability wrapping a FunctionToolset), same shape
-    # as CodebaseMap/FileSystem/Shell. Needs a real vault_root + allow/deny at
-    # build time (build.py `_build_vault` reads the spec `vault:` block, defaulting
-    # to the paf-owned playground), so it's built in Python, not spec-serialized.
+    # Navigation-first note ladder over a markdown vault. Built in Python (needs
+    # a real vault_root + allow/deny), not spec-serialized.
     "Vault": Vault,
-    # Tavily-backed web search + page extraction (search_web / fetch_web_page).
-    # Adapted from coding_agent web_search_tools. Reads TAVILY_API_KEY from the
-    # env at call time. fetch_web_page is domain-gated (per-spec trust boundary).
+    # Tavily-backed web search + page extraction. Reads TAVILY_API_KEY at call
+    # time; fetch_web_page is domain-gated.
     "Web": Web,
-    # Vision-model description of captured screenshots (describe_screenshot).
-    # paf-native icon-capability (AbstractCapability + FunctionToolset, same
-    # shape as Web/FileSystem/Shell/Git). A single tool that sends base64 PNG
-    # image(s) + a prompt to a vision model and returns its text description —
-    # a contained side-call (NOT a sub-agent). Reads VISION_MODEL from the env
-    # at call time (default openrouter:xiaomi/mimo-v2.5). Built via build.py.
+    # Vision-model description of captured screenshots. Reads VISION_MODEL at
+    # call time. Built via build.py.
     "Visual": Visual,
-    # Mobile-first Chromium browser automation (navigate/snapshot/click/type/
-    # screenshot + set_viewport) over a headless Chromium. A paf-owned full copy
-    # of the harness PlaywrightBrowser (same copy-and-own pattern as Memory /
-    # FileSystem / Shell), modified so the context defaults to a 390×844 touch
-    # viewport with a mobile UA, and a `set_viewport` tool switches the
-    # viewport/mobile profile mid-run by recreating the context. Ships native
-    # SSRF defense (allowed_domains + block_private_addresses), chromium_sandbox,
-    # `from_spec` AND `get_toolset`, so it resolves declaratively from a spec AND
-    # is built in Python (build.py). Requires the `pydantic-ai-harness[playwright]`
-    # extra + `playwright install chromium`.
+    # Mobile-first Chromium browser automation over a headless Chromium.
+    # `from_spec` AND `get_toolset`. Requires the harness[playwright] extra +
+    # `playwright install chromium`.
     "Browser": Browser,
-    # Framework-level tool-return reduction (truncate/summarize/spill oversized
-    # tool results via after_tool_execute + a `read_tool_result` read-back tool).
-    # A pydantic-ai AbstractCapability from the harness (NOT a paf icon-capability
-    # / FunctionToolset bundle) — built in Python (build.py) so the profile gate
-    # controls it and real Band/Spill config objects are passed; cataloged so the
-    # profile allowlist + schema resolve. Kept as a BUILTIN per Landon (plug-and-play
-    # with config, not ported into paf.capabilities).
+    # Framework-level tool-return reduction (spill/truncate oversized results).
+    # Built in Python so the profile gate controls it.
     "ToolOutputLimits": ToolOutputLimits,
-    # Observational prompt-cache-collapse monitor (BUILTIN, not a paf port). Reads
-    # `usage.cache_read_tokens` after each model request and warns (CacheBustWarning,
-    # stdlib `warnings`) when the established cacheable prefix collapses mid-run —
-    # a moved prefix or a provider-side expiry spikes billing. Consumed as a
-    # pydantic-ai AbstractCapability; adds no tools/instructions/model-settings so it
-    # composes with anything. Silent when caching is off/unreported. Cataloged so the
-    # profile allowlist + schema resolve; built in Python (build.py) so profile gate
-    # controls it and real config objects are passed. Kept as a BUILTIN per Landon —
-    # same drop-in pattern as ToolOutputLimits, NOT ported into paf.capabilities.
+    # Observational prompt-cache-collapse monitor. Silent when caching is off.
+    # Built in Python so the profile gate controls it.
     "WarnOnCacheBusts": WarnOnCacheBusts,
     # Skill library — LIST / LOAD on demand + a deterministic POINTER trigger.
-    # One paf-native capability for all skill functionality (Landon 2026-08-19):
-    # loads the load-on-demand idea from the harness Skills / pydantic-ai
-    # deferred-capability catalog (list_skills/load_skill keep the prompt thin)
-    # AND re-homes the skill-note-hint pointer engine (point_skills pre-arms
-    # which skill a message needs via zero-LLM BM25 over frontmatter vocab).
-    # paf icon-capability (FunctionToolset wrapped in AbstractCapability), same
-    # shape as FileSystem/Shell/Git/Web — NOT the deferred-Capability bundle.
-    # Has `get_toolset` so it resolves via build.py (and declaratively with a
-    # libraries path).
+    # `get_toolset` so it resolves via build.py (and declaratively with a path).
     "Skills": Skills,
-    # Sub-agent delegation: expose a single `delegate_task(agent_name, task)` tool so
-    # the agent can hand a self-contained task to a named child agent that runs in its
-    # own fresh, isolated run (never sees this conversation). Consumed as a pydantic-ai
-    # AbstractCapability from the harness (NOT a paf icon-capability port) per Landon.
-    # NOT spec-serializable — it holds live `Agent` instances (get_serialization_name
-    # returns None), so it is ALWAYS built in Python (build.py `_build_subagents`) by
-    # passing explicit child `SubAgent` entries; it can never resolve from a YAML spec.
+    # Sub-agent delegation — a single `delegate_task` tool. NOT spec-serializable
+    # (holds live Agent instances), so always built in Python.
     "Subagents": SubAgents,
-    # Model-owned task plan for long turns (paf-owned port). A structured,
-    # self-updating deadline/todo list surfaced back to the model every request as a
-    # cache-safe tail reminder (never invalidates the prompt cache). Tools:
-    # write_plan / read_plan / add_task / update_task_status / remove_task (+ subtask +
-    # dependency tools with enable_subtasks=True, off by default). Spec-serializable, so
-    # it can resolve from YAML, but paf wires it via the Python seam (build.py
-    # `_build_planning`) like the other caps so the profile gate controls it.
+    # Model-owned task plan for long turns. Spec-serializable, but wired via the
+    # Python seam so the profile gate controls it.
     "Planning": Planning,
-    # Structural prompt-injection defense (BUILTIN, not a paf port) — screens
-    # tool results and withholds high-risk content before the model sees it.
-    # Option A from the guardrails plan: adopt the builtin. Built in Python
-    # (build.py `_build_guardrails`) so the profile gate controls it.
+    # Structural prompt-injection defense. Built in Python so the profile gate
+    # controls it.
     "Guardrails": PromptInjectionDefender,
-    # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
-    # refuses the highest-risk tools before they execute. Built in Python
-    # (build.py `_build_tool_gating`) so the profile gate controls it.
+    # Per-call execution-time tool gate. Built in Python so the profile gate
+    # controls it.
     "ToolGating": ToolGuardrail,
-    # Secret-handle resolution + result redaction (BUILTIN shell, paf-owned
-    # policy) — the model proposes $SECRET:key, the runtime resolves it at
-    # execution time so the real value never enters the window. Built in Python
-    # (build.py `_build_secrets`) so the profile gate controls it.
+    # Secret-handle resolution + result redaction. Built in Python so the profile
+    # gate controls it.
     "Secrets": ToolGuardrail,
 }
