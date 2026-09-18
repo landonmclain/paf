@@ -57,9 +57,9 @@ class Browser(AbstractCapability[AgentDepsT]):
 
     ```python
     from pydantic_ai import Agent
-    from pydantic_ai_harness.playwright import PlaywrightBrowser
+    from paf.capabilities.browser import Browser
 
-    agent = Agent('anthropic:claude-sonnet-4-6', capabilities=[PlaywrightBrowser()])
+    agent = Agent('anthropic:claude-sonnet-4-6', capabilities=[Browser()])
     ```
 
     Requires the `playwright` optional extra and the Chromium binary:

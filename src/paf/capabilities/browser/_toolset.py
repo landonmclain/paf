@@ -123,8 +123,8 @@ from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 
 try:
-    # Import-time gate (mirrors `pydantic_ai_harness.exa._toolset`): importing the
-    # capability fails fast with an install hint when the optional dep is absent.
+    # Import-time gate: importing the capability fails fast with an install hint
+    # when the optional dep is absent.
     # `TargetClosedError` is not re-exported from `playwright.async_api`; the
     # `playwright._impl._errors` module documents its own classes as stable public
     # API, and a driver-raised instance only carries `.name` (so isinstance is the
