@@ -1,12 +1,5 @@
 """Codebase-map capability: extract a codebase map, then search it.
 
-Status: **Phase 2 lite + the five-tool ladder shipped 2026-08-23**. Extraction
-(python DONE), the lean ``index`` head, ``manifest`` detail, and the ``tokens``
-search backend are all landed; the navigation-first ``overview`` + the five-tool
-read-model (`get_overview`, `lookup_file`, `read_block`, `search_codebase`,
-`get_repo_map`) are built. Phases continue: graph+refs (build_edges) → search tuning
-→ Phase 4 `get_repo_map`.
-
 Public surface: the storage records (`Span`, `BlockRef`, `SymbolInfo`, `FileInfo`,
 `SearchHit`, `DistilledEntry`), the storage seam (`ArtifactKind`, `StorageService`,
 `FlatFileStorage`, `ScanScope`, `index_dir_for_scan_root`), the pointer reader
@@ -81,13 +74,13 @@ __all__ = [
     # overview (navigation start)
     "build_overview",
     "load_overview",
-    # references (Phase 2)
+    # references
     "reference_counts",
     "apply_references",
     # token search backend (the search_codebase scorer, locked read-model)
     "build_tokens",
     "tokens_rank",
-    # BM25 first-pass search (Phase 2)
+    # BM25 first-pass search
     "rank",
     "rank_fused",
     "LexicalRetrieval",
