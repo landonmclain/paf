@@ -2,9 +2,7 @@
 
 The one canonical implementation of "apply N edits to a text document safely."
 Every capability that edits a text artifact (vault ``note_edit``, skills
-``edit_skill``, fs ``edit_file``) delegates here with its own read/write seam —
-see ``paf.capabilities._edit``. Design (see vault note
-*Vault-and-Skills-Batched-Edit-and-Shared-Storage*):
+``edit_skill``, fs ``edit_file``) delegates here with its own read/write seam.
 
 - **Batch** — N ``(old_text, new_text)`` pairs in ONE read -> ONE write. A
   single atomic write means there is no concurrent-read-modify-write race for
