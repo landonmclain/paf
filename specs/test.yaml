@@ -14,10 +14,12 @@
 
 name: test
 
-# Provider-qualified model string. Never called by the offline tests; present
-# so build_agent can construct the agent. Requires OPENROUTER_API_KEY only if
-# a test actually runs a model turn (none do).
-model: openrouter:deepseek/deepseek-v4-flash-0731
+# Provider-qualified model string. `test` resolves to pydantic-ai's TestModel,
+# which needs no API key and is never called by the offline tests (they inject
+# their own fold/span seams and stores). Using a real provider here would force
+# build_agent to construct a keyed client at Session-construction time, which
+# fails in CI where OPENROUTER_API_KEY is absent.
+model: test
 
 instructions: |
   You are a minimal test agent. Hold a normal conversational back-and-forth and
