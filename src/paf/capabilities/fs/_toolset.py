@@ -16,7 +16,7 @@ import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Concatenate, ParamSpec
+from typing import Concatenate, ParamSpec, TypeVar
 
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import AgentDepsT
@@ -26,6 +26,7 @@ from paf.capabilities._edit import apply_edits
 from paf.capabilities._storage._atomic import write_atomic
 
 _P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 # Errors that mean "the model asked for something the tool couldn't do" -- a
 # missing file, a denied path, a stale edit. pyai only feeds `ModelRetry` back
@@ -144,11 +145,12 @@ def _truncation_marker(report: _WalkReport, reason: str) -> str:
 
 def _human_size(num: int) -> str:
     """Format a byte count for the directory listing scale indicator."""
+    size = float(num)
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if num < 1024 or unit == "TB":
-            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
-        num /= 1024.0
-    return f"{num:.1f} TB"
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} TB"
 
 
 def _dir_scale(p: Path, cap: int = 5_000) -> tuple[int, int, bool]:
@@ -204,7 +206,7 @@ class _Sentinel:
 _SENTINEL = _Sentinel()
 
 
-def _sync_next(it: Iterator[object]) -> object | _Sentinel:
+def _sync_next(it: Iterator[_T]) -> _T | _Sentinel:
     """``next(it)`` that returns a sentinel on exhaustion instead of raising.
 
     ``StopIteration`` cannot cross an ``asyncio.to_thread`` boundary (asyncio
@@ -757,20 +759,19 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
                     m = await asyncio.to_thread(_sync_next, it)
                     if m is _SENTINEL:
                         break
-                    match = m
                     try:
-                        rel_parts = match.relative_to(real_root).parts
+                        rel_parts = m.relative_to(real_root).parts
                     except ValueError:  # pragma: no cover
                         continue
                     if any(part.startswith(".") for part in rel_parts):
                         continue
-                    rel = str(match.relative_to(real_root))
+                    rel = str(m.relative_to(real_root))
                     # Apply the same allow/deny/protected filtering used for direct
                     # access so a glob find can't surface patterns the agent
                     # couldn't otherwise see.
                     if not self._is_accessible(rel, write=True):
                         continue
-                    suffix = "/" if match.is_dir() else ""
+                    suffix = "/" if m.is_dir() else ""
                     matches.append(f"{rel}{suffix}")
                     if len(matches) >= self._max_find_results:
                         matches.append(

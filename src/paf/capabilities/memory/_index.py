@@ -201,7 +201,7 @@ class MemoryIndex:
 
     # -- incremental -------------------------------------------------------
 
-    def fold(self, line_number: int, record: MemoryRecord, directory: str) -> None:
+    def fold(self, line_number: int, record: MemoryRecord, directory: str | os.PathLike) -> None:
         """Fold ONE new journal line into the index (O(1)-ish, incremental).
 
         If a surviving winner matches this record's key, the group absorbs it
@@ -226,7 +226,7 @@ class MemoryIndex:
             record.tier,
             record.born_on,
             int(winner["current_line"]),
-            winner.get("tier"),
+            winner["tier"],
             winner.get("born_on"),
         ):
             # the new record wins -> old winner becomes a deduped predecessor
@@ -347,7 +347,7 @@ def _collapse_fuzzy_from_records(
             e
             for e in idx.entries
             if not any(
-                ln != winner_ln and int(e.get("current_line")) == ln for ln, _ in lines
+                ln != winner_ln and int(e["current_line"]) == ln for ln, _ in lines
             )
         ]
     idx._rebuild_key_index()
@@ -359,7 +359,7 @@ def _tier_rank(rec: MemoryRecord) -> int:
 
 def _find_entry_by_line(idx: MemoryIndex, line: int) -> dict | None:
     for e in idx.entries:
-        if int(e.get("current_line")) == line:
+        if int(e["current_line"]) == line:
             return e
     return None
 

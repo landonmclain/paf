@@ -459,7 +459,9 @@ class BackgroundCoordinator:
         # A profile with no enabled background process (no Memory, no
         # ThreadSummarizer) needs no coordinator -- e.g. ``contextbench`` runs
         # truly bare.
-        if not any(p.enabled(coord) for p in coord._processes):
+        if not any(
+            p.enabled is not None and p.enabled(coord) for p in coord._processes
+        ):
             return None
         return coord
 
@@ -654,7 +656,7 @@ class BackgroundCoordinator:
             # rather than raising — the feed must never tear the SSE socket on a
             # status read.
             for p in self._processes:
-                if p.enabled(self):
+                if p.enabled is not None and p.enabled(self):
                     rows.append(
                         JobIdleStatus(
                             id=f"{p.id_namespace}.{conversation_id}",
@@ -666,7 +668,7 @@ class BackgroundCoordinator:
 
         ctx = _IdleContext(source=source, tip_run=tip_run, tip_turn=tip_turn)
         for p in self._processes:
-            if p.enabled(self) and p.idle_row is not None:
+            if p.enabled is not None and p.enabled(self) and p.idle_row is not None:
                 row = await p.idle_row(conversation_id, ctx)
                 if row is not None:
                     rows.append(row)
@@ -988,7 +990,7 @@ class BackgroundCoordinator:
         captured on that task's row.
         """
         for p in self._processes:
-            if p.enabled(self) and p.trigger is not None:
+            if p.enabled is not None and p.enabled(self) and p.trigger is not None:
                 await p.trigger(cid)
 
     async def _maybe_trigger_thread_summarize(self, cid: str | None) -> None:

@@ -155,7 +155,7 @@ def should_fire(
     watermark: MemoryWatermark,
     *,
     tip_ts: datetime,
-    every: datetime.timedelta,
+    every: timedelta,
 ) -> bool:
     """The metric trigger: have we accumulated enough new material to run a job?
 

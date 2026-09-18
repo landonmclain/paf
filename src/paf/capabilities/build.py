@@ -495,7 +495,27 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
     )
     if block_private is None:
         block_private = True
-    browser_kwargs = dict(
+    # Pass explicit kwargs (not a **-unpacked dict) so each field keeps its own
+    # type — a heterogeneous dict makes pyright type every value as the union.
+    if allowed_domains:
+        return _Browser(
+            headless=True,
+            block_private_addresses=bool(block_private),
+            auto_install_chromium=False,
+            chromium_sandbox=False,
+            viewport=(390, 844),
+            mobile=True,
+            is_mobile=True,
+            has_touch=True,
+            device_scale_factor=3,
+            user_agent=(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                "Mobile/15E148 Safari/604.1"
+            ),
+            allowed_domains=allowed_domains,
+        )
+    return _Browser(
         headless=True,
         block_private_addresses=bool(block_private),
         auto_install_chromium=False,
@@ -511,9 +531,6 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
             "Mobile/15E148 Safari/604.1"
         ),
     )
-    if allowed_domains:
-        browser_kwargs["allowed_domains"] = allowed_domains
-    return _Browser(**browser_kwargs)
 
 
 def _build_skills(store, skills_config: dict | None = None) -> _Skills:

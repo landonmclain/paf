@@ -25,7 +25,7 @@ a no-op, so a window costs nothing on turns where it would not trim.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.messages import (
     ModelMessage,
@@ -137,9 +137,9 @@ class TurnBoundSlidingWindow(SlidingWindowCompaction):
 
     def __init__(
         self,
-        *args: object,
+        *args: Any,
         capture_hook: Callable[[list[dict], int], None] | None = None,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> None:
         """Pass through to ``SlidingWindowCompaction`` + an optional capture hook.
 
