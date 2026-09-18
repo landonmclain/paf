@@ -17,7 +17,6 @@ from paf.capabilities.guardrails.tool_gating import (
     DEFAULT_GATED_TOOLS,
     tool_gating_guard,
 )
-from paf.capabilities.profiles import DEMO_PROFILE
 from paf.capabilities.registry import CAPABILITY_TYPES
 
 
@@ -70,12 +69,15 @@ def test_guard_policy_allowlist():
 
 
 def test_wired_but_not_allowlisted():
-    """ToolGating is registered and buildable, but currently OFF on the demo profile.
+    """ToolGating is registered and buildable, but OFF unless a profile allowlists it.
 
     The capability is fully wired (builder + registry) but not allowlisted while
     the gate policy is empty and the approval path is undecided.
     """
-    assert "ToolGating" not in DEMO_PROFILE.capability_names
+    from paf.capabilities import AgentProfile
+
+    off = AgentProfile(name="gating-off", capability_names=("StepPersistence",))
+    assert "ToolGating" not in off.capability_names
     assert CAPABILITY_TYPES["ToolGating"] is ToolGuardrail
     cap = _build_tool_gating(store=None)
     assert isinstance(cap, ToolGuardrail)

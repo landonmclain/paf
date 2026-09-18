@@ -83,15 +83,16 @@ def test_capability_validates_top_k() -> None:
 
 @pytest.mark.live
 def test_skills_cataloged_and_wired() -> None:
-    """Skills is a cataloged paf icon-capability and resolves on the demo profile."""
+    """Skills is a cataloged paf icon-capability and builds when allowlisted."""
     from paf.capabilities.registry import CAPABILITY_TYPES
 
     assert CAPABILITY_TYPES["Skills"] is Skills
 
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
-    from paf.capabilities.profiles import DEMO_PROFILE
 
-    built = build_runtime_capabilities(DEMO_PROFILE)
+    profile = AgentProfile(name="skills-on", capability_names=("Skills",))
+    built = build_runtime_capabilities(profile)
     caps = [type(c).__name__ for c in built]
     assert "Skills" in caps
     sk = next(c for c in built if type(c).__name__ == "Skills")

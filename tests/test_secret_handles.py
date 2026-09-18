@@ -18,7 +18,6 @@ from paf.capabilities.guardrails.secret_handles import (
     secret_handle_guard,
     secret_result_guard,
 )
-from paf.capabilities.profiles import DEMO_PROFILE
 from paf.capabilities.registry import CAPABILITY_TYPES
 
 REAL = "sk_live_1234567890abcdef"
@@ -73,9 +72,12 @@ def test_result_short_values_not_redacted(monkeypatch):
     assert verdict.action == "allow"
 
 
-def test_wired_into_demo_profile():
-    """Secrets is registered and allowlisted on the demo profile."""
-    assert "Secrets" in DEMO_PROFILE.capability_names
+def test_wired_when_allowlisted():
+    """Secrets is registered and builds when a profile allowlists it."""
+    from paf.capabilities import AgentProfile
+
+    on = AgentProfile(name="secrets-on", capability_names=("Secrets",))
+    assert "Secrets" in on.capability_names
     assert CAPABILITY_TYPES["Secrets"] is ToolGuardrail
     cap = _build_secrets(store=None)
     assert isinstance(cap, ToolGuardrail)

@@ -1,15 +1,14 @@
 """Tests for the ThreadSummarizer capability shell (Phase 0).
 
 Verifies the capability registers in the catalog with a serialization name, can
-be built via ``from_spec``, and is OFF by default for the assistant profile
-(the profile allowlist is the ON/OFF switch — see OFF-switch correctness).
+be built via ``from_spec``, and is gated by the profile allowlist (the ON/OFF
+switch — see OFF-switch correctness).
 """
 
 from __future__ import annotations
 
 from pydantic_ai.capabilities import AbstractCapability
 
-from paf.capabilities import ASSISTANT_PROFILE
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.thread_summarizer import ThreadSummarizer
 
@@ -36,13 +35,15 @@ def test_thread_summarizer_passes_capability_registry_validation() -> None:
     hand-written ``__init__`` (which wires the capture hook) intact.
     """
     assert "__dataclass_fields__" in ThreadSummarizer.__dict__
-    # The full registry build (what Agent.from_spec runs for the demo profile)
-    # must not raise — this is the path that broke before the @dataclass fix.
+    # The full registry build (what Agent.from_spec runs for a profile that
+    # allowlists ThreadSummarizer) must not raise — this is the path that broke
+    # before the @dataclass fix.
     from pydantic_ai.agent.spec import get_capability_registry
 
-    from paf.capabilities.profiles import DEMO_PROFILE
+    from paf.capabilities import AgentProfile
 
-    registry = get_capability_registry(DEMO_PROFILE.capability_types())
+    profile = AgentProfile(name="thread-reg", capability_names=("ThreadSummarizer",))
+    registry = get_capability_registry(profile.capability_types())
     assert "ThreadSummarizer" in registry
     # The hand-written init still works after @dataclass(init=False).
     cap = ThreadSummarizer()
@@ -61,19 +62,30 @@ def test_thread_summarizer_is_abstract_capability() -> None:
     assert issubclass(ThreadSummarizer, AbstractCapability)
 
 
-def test_off_by_default_for_assistant_profile() -> None:
-    """ThreadSummarizer is NOT allowlisted by default — the OFF switch.
+def test_off_profile_omits_it() -> None:
+    """A profile that omits ThreadSummarizer never builds it — the OFF switch.
 
-    A profile that omits it simply never builds it (build_runtime_capabilities
-    skips any name not in capability_names).
+    build_runtime_capabilities skips any name not in capability_names.
     """
-    assert "ThreadSummarizer" not in ASSISTANT_PROFILE.capability_names
+    from paf.capabilities import AgentProfile
+
+    off = AgentProfile(
+        name="thread-off",
+        capability_names=("StepPersistence", "ConversationSearch", "Memory"),
+    )
+    assert "ThreadSummarizer" not in off.capability_names
 
 
 def test_not_required_by_profile_resolution() -> None:
-    """Resolving the assistant profile's types succeeds and excludes it."""
+    """Resolving a profile's types succeeds and excludes it when not allowlisted."""
+    from paf.capabilities import AgentProfile
+
     # Should not raise KeyError (no dead refs) and not include ThreadSummarizer.
-    resolved = ASSISTANT_PROFILE.capability_types()
+    off = AgentProfile(
+        name="thread-off",
+        capability_names=("StepPersistence", "ConversationSearch", "Memory"),
+    )
+    resolved = off.capability_types()
     names = {t.get_serialization_name() for t in resolved}
     assert "ThreadSummarizer" not in names
 
@@ -99,7 +111,12 @@ def test_built_when_profile_allowlists_it() -> None:
 
 def test_off_profile_never_builds_it() -> None:
     """OFF is total at build time: a profile omitting it yields no instance."""
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
 
-    caps = build_runtime_capabilities(ASSISTANT_PROFILE)
+    off = AgentProfile(
+        name="thread-off",
+        capability_names=("StepPersistence", "ConversationSearch", "Memory"),
+    )
+    caps = build_runtime_capabilities(off)
     assert all(type(c).__name__ != "ThreadSummarizer" for c in caps)

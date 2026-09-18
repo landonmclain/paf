@@ -39,7 +39,7 @@ from paf.capabilities.compaction import (
     build_boundary_compaction_for_agent,
     build_compaction,
 )
-from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, DEMO_PROFILE, PROFILES
+from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
 
@@ -93,9 +93,11 @@ def test_warn_on_cache_busts_cataloged_and_wired() -> None:
     """
     assert CAPABILITY_TYPES["WarnOnCacheBusts"] is WarnOnCacheBusts
 
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
 
-    built = build_runtime_capabilities(DEMO_PROFILE)
+    profile = AgentProfile(name="warn-on", capability_names=("WarnOnCacheBusts",))
+    built = build_runtime_capabilities(profile)
     monitor = next((c for c in built if type(c).__name__ == "WarnOnCacheBusts"), None)
     assert monitor is not None
     assert isinstance(monitor, WarnOnCacheBusts)
@@ -160,9 +162,11 @@ def test_subagents_cataloged_and_wired() -> None:
     """
     assert CAPABILITY_TYPES["Subagents"] is SubAgents
 
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
 
-    built = build_runtime_capabilities(DEMO_PROFILE)
+    profile = AgentProfile(name="subagents-on", capability_names=("Subagents",))
+    built = build_runtime_capabilities(profile)
     subagents = next((c for c in built if type(c).__name__ == "SubAgents"), None)
     assert subagents is not None
     assert isinstance(subagents, SubAgents)
@@ -176,11 +180,10 @@ def test_subagents_cataloged_and_wired() -> None:
 
 @pytest.mark.live
 def test_visual_cataloged_and_wired() -> None:
-    """Visual is a cataloged paf-native capability wired on the demo profile only.
+    """Visual is a cataloged paf-native capability and builds when allowlisted.
 
     Same icon-capability shape as Web/FileSystem/Shell/Git: cataloged (so the
-    allowlist + schema resolve) and built in Python (`_build_visual`) on the
-    demo profile, deliberately ABSENT from the clean assistant profile. It is a
+    allowlist + schema resolve) and built in Python (`_build_visual`). It is a
     contained image-in/text-out side-call, NOT a sub-agent -- a single
     `describe_screenshot` tool (ask the vision model a targeted question about
     a captured screenshot ref), no child Agent, no delegation, no inherited
@@ -188,12 +191,12 @@ def test_visual_cataloged_and_wired() -> None:
     the run).
     """
     assert CAPABILITY_TYPES["Visual"] is Visual
-    assert "Visual" in DEMO_PROFILE.capability_names
-    assert "Visual" not in ASSISTANT_PROFILE.capability_names
 
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
 
-    built = build_runtime_capabilities(DEMO_PROFILE)
+    profile = AgentProfile(name="visual-on", capability_names=("Visual",))
+    built = build_runtime_capabilities(profile)
     vis = next((c for c in built if isinstance(c, Visual)), None)
     assert vis is not None
 
@@ -214,22 +217,22 @@ def test_visual_cataloged_and_wired() -> None:
 
 @pytest.mark.live
 def test_browser_cataloged_and_wired() -> None:
-    """Browser is a cataloged paf-owned capability on the demo profile only, mobile by default.
+    """Browser is a cataloged paf-owned capability, mobile by default.
 
-    It replaces the harness `PlaywrightBrowser` on the demo agent (mobile is the
-    only layout that matters). Verify the catalog + profile wiring, that
+    It replaces the harness `PlaywrightBrowser` (mobile is the only layout that
+    matters). Verify the catalog + profile wiring, that
     `build_runtime_capabilities` constructs a real `Browser`, that its toolset
     exposes the new `set_viewport` tool alongside the 18 standard browser tools,
     and that the default session is a 390×844 touch mobile profile.
     """
     assert CAPABILITY_TYPES["Browser"] is Browser
-    assert "Browser" in DEMO_PROFILE.capability_names
-    assert "Browser" not in ASSISTANT_PROFILE.capability_names
     assert "PlaywrightBrowser" not in CAPABILITY_TYPES
 
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
 
-    built = build_runtime_capabilities(DEMO_PROFILE)
+    profile = AgentProfile(name="browser-on", capability_names=("Browser",))
+    built = build_runtime_capabilities(profile)
     browser = next((c for c in built if isinstance(c, Browser)), None)
     assert browser is not None
 
@@ -259,18 +262,21 @@ def test_browser_spec_config_wins_over_capability_default() -> None:
     `allowed_domains` (spec wins). Without a config the capability's own
     loopback-only default is used.
     """
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
+
+    profile = AgentProfile(name="browser-on", capability_names=("Browser",))
 
     # Spec wins: a declared list replaces the capability default entirely.
     built = build_runtime_capabilities(
-        DEMO_PROFILE, None, None, {"allowed_domains": ["example.com"]}
+        profile, None, None, {"allowed_domains": ["example.com"]}
     )
     browser = next((c for c in built if isinstance(c, Browser)), None)
     assert browser is not None
     assert browser.allowed_domains == ["example.com"]
 
     # No browser_config -> the capability's loopback-only default.
-    built_default = build_runtime_capabilities(DEMO_PROFILE)
+    built_default = build_runtime_capabilities(profile)
     browser_default = next((c for c in built_default if isinstance(c, Browser)), None)
     assert browser_default is not None
     assert browser_default.allowed_domains == [
@@ -289,11 +295,14 @@ def test_browser_private_guard_default_and_override() -> None:
     EgressPolicy tests below; here we only assert the capability is wired to
     the right flag.
     """
+    from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
+
+    profile = AgentProfile(name="browser-on", capability_names=("Browser",))
 
     # Secure default: no browser_config -> guard stays ON.
     b_default = next(
-        c for c in build_runtime_capabilities(DEMO_PROFILE) if isinstance(c, Browser)
+        c for c in build_runtime_capabilities(profile) if isinstance(c, Browser)
     )
     assert b_default.block_private_addresses is True
 
@@ -301,7 +310,7 @@ def test_browser_private_guard_default_and_override() -> None:
     b_open = next(
         c
         for c in build_runtime_capabilities(
-            DEMO_PROFILE, None, None, {"block_private_addresses": False}
+            profile, None, None, {"block_private_addresses": False}
         )
         if isinstance(c, Browser)
     )
@@ -311,7 +320,7 @@ def test_browser_private_guard_default_and_override() -> None:
     b_strict = next(
         c
         for c in build_runtime_capabilities(
-            DEMO_PROFILE, None, None, {"block_private_addresses": True}
+            profile, None, None, {"block_private_addresses": True}
         )
         if isinstance(c, Browser)
     )

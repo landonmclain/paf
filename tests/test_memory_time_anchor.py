@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
-import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -23,6 +22,7 @@ from pydantic_ai.messages import (
 
 from paf.capabilities.memory._background import resolve_unseen_span
 from paf.capabilities.memory._watermark import MemoryWatermark
+from tests.framework import TEST_PROFILE
 from tests.test_memory_background_real_store import _store
 
 
@@ -230,7 +230,6 @@ def test_process_job_advances_watermark_on_real_fold(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.live
 def test_owner_trigger_does_not_advance_watermark_before_fold(tmp_path) -> None:
     """THE WATERMARK CONTRACT: a fold that FAILS must NOT advance the owner
     watermark. The worker is the sole owner-watermark writer, advancing only on
@@ -260,7 +259,8 @@ def test_owner_trigger_does_not_advance_watermark_before_fold(tmp_path) -> None:
         raise RuntimeError("simulated owner failure (context overflow)")
 
     with Session(
-        "assistant",
+        "test",
+        profile=TEST_PROFILE,
         trace=False,
         resume=False,
         store=store,
@@ -334,7 +334,6 @@ def test_consolidate_always_runs_owner_without_durable_text(monkeypatch) -> None
     assert calls, "owner must be invoked even with no durable text (gate removed)"
 
 
-@pytest.mark.live
 def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
     """THE WATERMARK CONTRACT (worker owns it): triggered + drained with a
     fold that finishes successfully (returns N records, incl. a no-op 0), the
@@ -396,7 +395,8 @@ def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
     from paf.background import BackgroundCoordinator
 
     with Session(
-        "assistant",
+        "test",
+        profile=TEST_PROFILE,
         trace=False,
         resume=False,
         store=store,
@@ -432,7 +432,6 @@ def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
     assert len(journal.read_all()) == 2, "the fold's records must have landed"
 
 
-@pytest.mark.live
 def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
     """THE WATERMARK CONTRACT, the key distinction: a fold that COMPLETES but
     writes no records ("found nothing durable") STILL advances the watermark —
@@ -476,7 +475,8 @@ def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
         return 0  # successful no-op: nothing durable found
 
     with Session(
-        "assistant",
+        "test",
+        profile=TEST_PROFILE,
         trace=False,
         resume=False,
         store=store,

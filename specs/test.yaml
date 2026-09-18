@@ -1,0 +1,29 @@
+# test — the shared TEST_PROFILE agent for the offline test suite.
+#
+# Purpose: a minimal, deterministic agent the test suite constructs via
+# Session("test", profile=TEST_PROFILE) instead of a production profile, so
+# tests never depend on the production allowlist (assistant/demo/contextbench),
+# which changes as capabilities are promoted. Tests inject their own fold/span
+# seams and stores, so the model is never called here.
+#
+# The `test` profile (TEST_PROFILE in tests/framework.py) allowlists a small,
+# deterministic capability set: StepPersistence (the store), Memory and
+# ThreadSummarizer (the background machinery the integration tests exercise),
+# and Shell. No Browser/Visual/Subagents/Web — nothing that needs external
+# infra (Chromium, Docker, API keys) at construction.
+
+name: test
+
+# Provider-qualified model string. Never called by the offline tests; present
+# so build_agent can construct the agent. Requires OPENROUTER_API_KEY only if
+# a test actually runs a model turn (none do).
+model: openrouter:deepseek/deepseek-v4-flash-0731
+
+instructions: |
+  You are a minimal test agent. Hold a normal conversational back-and-forth and
+  answer questions directly. Only reach for tools when a task actually requires
+  them. Keep replies brief and helpful.
+
+model_settings:
+  temperature: 0
+  seed: 0

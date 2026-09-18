@@ -26,7 +26,6 @@ from pydantic_ai_harness.compaction import TieredCompaction
 from pydantic_ai_harness.step_persistence import StepPersistence
 
 from paf.capabilities.memory import Memory
-from paf.capabilities.profiles import ASSISTANT_PROFILE
 from paf.capabilities.search import ConversationSearch
 from paf.specs import build_agent
 
@@ -120,9 +119,20 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     used to hardcode a fixed set and ignore the profile — so every agent got
     everything regardless of its allowlist. Now it is the resolution of the profile.
     """
-    # The real assistant profile: persistence + recall + memory + compaction
-    # (the no-summary ladder). Everything the profile lists is present.
-    assistant = _runtime_capabilities_for(ASSISTANT_PROFILE.capability_names)
+    # A profile allowlisting persistence + recall + memory + compaction gets
+    # exactly those (the no-summary ladder). Everything the profile lists is present.
+    from paf.capabilities import AgentProfile
+
+    profile = AgentProfile(
+        name="merge-on",
+        capability_names=(
+            "StepPersistence",
+            "ConversationSearch",
+            "Memory",
+            "Compaction",
+        ),
+    )
+    assistant = _runtime_capabilities_for(profile.capability_names)
     types = {type(c) for c in assistant}
     assert StepPersistence in types
     assert ConversationSearch in types

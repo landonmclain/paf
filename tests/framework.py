@@ -21,10 +21,27 @@ from pydantic_ai_harness.compaction import (
 )
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
+from paf.capabilities import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
+)
+
+# ---------------------------------------------------------------------------
+# Test profile
+# ---------------------------------------------------------------------------
+
+# The shared profile for the offline test suite. Tests construct
+# Session("test", profile=TEST_PROFILE) instead of a production profile, so
+# they never depend on the production allowlist (assistant/demo/contextbench),
+# which changes as capabilities are promoted. Minimal + deterministic: the
+# store, the background machinery the integration tests exercise, and Shell.
+# No Browser/Visual/Subagents/Web — nothing that needs external infra
+# (Chromium, Docker, API keys) at construction.
+TEST_PROFILE = AgentProfile(
+    name="test",
+    capability_names=("StepPersistence", "Memory", "ThreadSummarizer", "Shell"),
 )
 
 # ---------------------------------------------------------------------------
