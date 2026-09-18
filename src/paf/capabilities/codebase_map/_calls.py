@@ -1,12 +1,12 @@
-"""Call-site extraction + conservative call-edge resolution (Phase 1.2).
+"""Call-site extraction + conservative call-edge resolution.
 
 Upgrades ``build_edges`` from the honest-but-coarse *reference* level ("file A
 *mentions* a symbol B defines") to true *call* edges ("A *invokes* symbol ``s``
 defined in B") — but only where the callee resolves **unambiguously** to a
-single defining symbol. See the B1 scope decision (Landon, 2026-08-29): resolve
-calls whose callee maps through a *module import* to a defining symbol; leave
-instance/param/self-method calls and unresolved/ambiguous names as
-``kind: "reference"`` (never downgrade certainty, never guess a call).
+single defining symbol. Resolve calls whose callee maps through a *module
+import* to a defining symbol; leave instance/param/self-method calls and
+unresolved/ambiguous names as ``kind: "reference"`` (never downgrade certainty,
+never guess a call).
 
 Package-root note: paf scans with ``src/paf`` as ``scan_root``, so the dotted
 module ``paf.capabilities.memory._watermark`` is the code under ``capabilities/
@@ -48,7 +48,7 @@ _CONSTRUCT_QUERIES = {
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # Language ids we can run call extraction for. Languages without a grammar entry
-# here (php/go/rust/java/c) are reference-only for v1 — honest, no guessing.
+# here (php/go/rust/java/c) are reference-only — honest, no guessing.
 _CALL_LANGS = set(_CALL_QUERIES)
 
 
