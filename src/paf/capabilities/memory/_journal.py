@@ -250,7 +250,9 @@ class JournalStore:
         source_ref: str,
     ) -> MemoryRecord:
         """Append one record; returns it. Its id is the new line number."""
-        record = MemoryRecord(type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref)
+        record = MemoryRecord(
+            type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref
+        )
         with self._lock:
             line = json.dumps(record.to_row(), ensure_ascii=False)
             _append_block_atomic(self._path, [line + "\n"])

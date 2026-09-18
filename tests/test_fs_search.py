@@ -8,6 +8,7 @@ hard files-visited budget and a wall-clock timeout acting as backstops, and
 `list_directory` surfaces a subdirectory's scale so the agent can see a big
 tree *before* searching it.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,8 +40,12 @@ def _run(coro):
 def _scatter(root: Path, n: int) -> None:
     """Create `n` small files across a nested tree (each under 1KB)."""
     for i in range(n):
-        (root / f"dir{i % 5}" / f"f{i:04d}.py").parent.mkdir(parents=True, exist_ok=True)
-        (root / f"dir{i % 5}" / f"f{i:04d}.py").write_text(f"x = {i}\n", encoding="utf-8")
+        (root / f"dir{i % 5}" / f"f{i:04d}.py").parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        (root / f"dir{i % 5}" / f"f{i:04d}.py").write_text(
+            f"x = {i}\n", encoding="utf-8"
+        )
 
 
 def test_search_files_finds_without_hanging(tmp_path: Path) -> None:

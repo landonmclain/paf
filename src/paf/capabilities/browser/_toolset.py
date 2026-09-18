@@ -137,9 +137,9 @@ try:
     PlaywrightError = _PlaywrightError
 except ImportError as _import_error:  # pragma: no cover
     raise ImportError(
-        'playwright is required for PlaywrightBrowser. '
+        "playwright is required for PlaywrightBrowser. "
         'Install it with: pip install "pydantic-ai-harness[playwright]"\n'
-        'Then run: playwright install chromium'
+        "Then run: playwright install chromium"
     ) from _import_error
 
 if TYPE_CHECKING:
@@ -155,7 +155,7 @@ if TYPE_CHECKING:
     from playwright.async_api import StorageState
     from playwright.async_api import WebSocketRoute as PlaywrightWebSocketRoute
 
-_T = TypeVar('_T')
+_T = TypeVar("_T")
 
 DEFAULT_MAX_CONTENT_TOKENS: int = 4000
 """Default token budget for textual tool results injected into the agent context."""
@@ -182,12 +182,14 @@ was collected before the budget runs out is kept.
 _CHARS_PER_TOKEN = 4
 """Characters-per-token estimate used to turn a token budget into a character cap."""
 
-_PRIVATE_ADDRESS_REASON = 'blocked private or link-local address'
-_UNRESOLVED_REASON = 'host that did not resolve, so the private-address block could not clear it'
+_PRIVATE_ADDRESS_REASON = "blocked private or link-local address"
+_UNRESOLVED_REASON = (
+    "host that did not resolve, so the private-address block could not clear it"
+)
 """Why the private-address block refused a URL, shared by the pre-check and the route guard."""
 
-_BLANK_PAGE = 'about:blank'
-_ERROR_PAGE_SCHEME = 'chrome-error://'
+_BLANK_PAGE = "about:blank"
+_ERROR_PAGE_SCHEME = "chrome-error://"
 """The blank page a context starts on, and where a disallowed navigation is sent."""
 
 _MAX_TABS = 8
@@ -211,7 +213,7 @@ request and abort the run.
 """
 
 
-_WaitState = Literal['attached', 'detached', 'hidden', 'visible']
+_WaitState = Literal["attached", "detached", "hidden", "visible"]
 """The `wait_for_selector` states the toolset asks for."""
 
 
@@ -230,7 +232,9 @@ class _Dialog(Protocol):
     def type(self) -> str: ...  # pragma: no cover
     @property
     def message(self) -> str: ...  # pragma: no cover
-    async def accept(self, prompt_text: str | None = None) -> None: ...  # pragma: no cover
+    async def accept(
+        self, prompt_text: str | None = None
+    ) -> None: ...  # pragma: no cover
     async def dismiss(self) -> None: ...  # pragma: no cover
 
 
@@ -239,7 +243,9 @@ class _Mouse(Protocol):
 
     async def click(self, x: float, y: float) -> None: ...  # pragma: no cover
     async def move(self, x: float, y: float) -> None: ...  # pragma: no cover
-    async def wheel(self, delta_x: float, delta_y: float) -> None: ...  # pragma: no cover
+    async def wheel(
+        self, delta_x: float, delta_y: float
+    ) -> None: ...  # pragma: no cover
 
 
 class _Keyboard(Protocol):
@@ -258,9 +264,15 @@ class _Frame(Protocol):
 
     @property
     def url(self) -> str: ...  # pragma: no cover
-    async def inner_text(self, selector: str, *, timeout: float | None = None) -> str: ...  # pragma: no cover
+    async def inner_text(
+        self, selector: str, *, timeout: float | None = None
+    ) -> str: ...  # pragma: no cover
     async def wait_for_selector(
-        self, selector: str, *, timeout: float | None = None, state: _WaitState | None = None
+        self,
+        selector: str,
+        *,
+        timeout: float | None = None,
+        state: _WaitState | None = None,
     ) -> object: ...  # pragma: no cover
 
 
@@ -281,31 +293,54 @@ class _Page(Protocol):
     def keyboard(self) -> _Keyboard: ...  # pragma: no cover
     @property
     def frames(self) -> Sequence[_Frame]: ...  # pragma: no cover
-    async def goto(self, url: str, *, timeout: float | None = None) -> object: ...  # pragma: no cover
+    async def goto(
+        self, url: str, *, timeout: float | None = None
+    ) -> object: ...  # pragma: no cover
     async def wait_for_load_state(
-        self, state: Literal['domcontentloaded'], *, timeout: float | None = None
+        self, state: Literal["domcontentloaded"], *, timeout: float | None = None
     ) -> None: ...  # pragma: no cover
     async def title(self) -> str: ...  # pragma: no cover
-    async def inner_text(self, selector: str, *, timeout: float | None = None) -> str: ...  # pragma: no cover
-    async def click(self, selector: str, *, timeout: float | None = None) -> None: ...  # pragma: no cover
-    async def fill(self, selector: str, value: str, *, timeout: float | None = None) -> None: ...  # pragma: no cover
+    async def inner_text(
+        self, selector: str, *, timeout: float | None = None
+    ) -> str: ...  # pragma: no cover
+    async def click(
+        self, selector: str, *, timeout: float | None = None
+    ) -> None: ...  # pragma: no cover
+    async def fill(
+        self, selector: str, value: str, *, timeout: float | None = None
+    ) -> None: ...  # pragma: no cover
     async def screenshot(
         self, *, full_page: bool = False, timeout: float | None = None
     ) -> bytes: ...  # pragma: no cover
     async def evaluate(self, expression: str) -> object: ...  # pragma: no cover
-    async def go_back(self, *, timeout: float | None = None) -> object: ...  # pragma: no cover
-    async def go_forward(self, *, timeout: float | None = None) -> object: ...  # pragma: no cover
+    async def go_back(
+        self, *, timeout: float | None = None
+    ) -> object: ...  # pragma: no cover
+    async def go_forward(
+        self, *, timeout: float | None = None
+    ) -> object: ...  # pragma: no cover
     async def wait_for_selector(
-        self, selector: str, *, timeout: float | None = None, state: _WaitState | None = None
+        self,
+        selector: str,
+        *,
+        timeout: float | None = None,
+        state: _WaitState | None = None,
     ) -> object: ...  # pragma: no cover
     def locator(self, selector: str) -> _Locator: ...  # pragma: no cover
     async def bring_to_front(self) -> None: ...  # pragma: no cover
     async def close(self) -> None: ...  # pragma: no cover
     async def aria_snapshot(
-        self, *, mode: Literal['ai', 'default'] = 'default', timeout: float | None = None
+        self,
+        *,
+        mode: Literal["ai", "default"] = "default",
+        timeout: float | None = None,
     ) -> str: ...  # pragma: no cover
-    async def hover(self, selector: str, *, timeout: float | None = None) -> None: ...  # pragma: no cover
-    async def press(self, selector: str, key: str, *, timeout: float | None = None) -> None: ...  # pragma: no cover
+    async def hover(
+        self, selector: str, *, timeout: float | None = None
+    ) -> None: ...  # pragma: no cover
+    async def press(
+        self, selector: str, key: str, *, timeout: float | None = None
+    ) -> None: ...  # pragma: no cover
     async def select_option(
         self, selector: str, value: Sequence[str], *, timeout: float | None = None
     ) -> list[str]: ...  # pragma: no cover
@@ -378,9 +413,9 @@ def _to_idna(host: str) -> str:
     than a label, and encoding rejects the empty label it produces, which would
     otherwise deny `example.com.` against an `example.com` allowlist entry.
     """
-    host = host.rstrip('.')
+    host = host.rstrip(".")
     try:
-        return idna.encode(host, uts46=True, transitional=False).decode('ascii')
+        return idna.encode(host, uts46=True, transitional=False).decode("ascii")
     except (idna.IDNAError, UnicodeError):
         return host
 
@@ -393,7 +428,7 @@ def _url_host(url: str) -> str | None:
     host the browser never connects to. A malformed URL that `urlparse` rejects
     is also treated as hostless, so it fails closed instead of crashing the caller.
     """
-    if '\\' in url:
+    if "\\" in url:
         return None
     try:
         return urlparse(url).hostname
@@ -417,8 +452,8 @@ def is_blocked_address(host: str) -> bool:
     address. The named category flags are checked alongside `is_global` because
     older stdlib versions classify some of these ranges as global.
     """
-    host = host.lower().rstrip('.')
-    if host == 'localhost' or host.endswith('.localhost'):
+    host = host.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
         return True
     try:
         ip = ipaddress.ip_address(host)
@@ -426,7 +461,14 @@ def is_blocked_address(host: str) -> bool:
         return False
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return not ip.is_global or ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+    return (
+        not ip.is_global
+        or ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+    )
 
 
 def is_always_blocked_address(host: str) -> bool:
@@ -444,18 +486,18 @@ def is_always_blocked_address(host: str) -> bool:
     link-local so ordinary loopback and RFC-1918 remain governed by the
     override as the operator intended.
     """
-    host = host.lower().rstrip('.')
-    if host == 'localhost' or host.endswith('.localhost'):
+    host = host.lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
         return False  # loopback is the operator's to release via the override
     # Well-known cloud-metadata hostname aliases: caught here (no DNS needed)
     # so the override can never reach them, matching the literal-IP firebreak.
     # GCP and Azure both advertise metadata under a fixed RFC-6762-style name
     # that resolves to 169.254.169.254 (AWS uses the numeral directly).
     if host in (
-        'metadata.google.internal',
-        'metadata.azure.internal',
-        'metadata',
-        'metadata.ec2.internal',
+        "metadata.google.internal",
+        "metadata.azure.internal",
+        "metadata",
+        "metadata.ec2.internal",
     ):
         return True
     try:
@@ -470,7 +512,7 @@ def is_always_blocked_address(host: str) -> bool:
 def _is_ip_literal(host: str) -> bool:
     """Whether `host` is already an address, so no name resolution is needed."""
     try:
-        ipaddress.ip_address(host.rstrip('.'))
+        ipaddress.ip_address(host.rstrip("."))
     except ValueError:
         return False
     return True
@@ -511,7 +553,9 @@ async def _resolve_host(host: str) -> tuple[str, ...] | None:
     if cached is not None and cached[0] > now:
         return cached[1]
     try:
-        addresses = await asyncio.wait_for(_getaddrinfo(host), _RESOLUTION_TIMEOUT_SECONDS)
+        addresses = await asyncio.wait_for(
+            _getaddrinfo(host), _RESOLUTION_TIMEOUT_SECONDS
+        )
     except (TimeoutError, OSError, UnicodeError):
         return None
     if len(_resolution_cache) >= _RESOLUTION_CACHE_MAX:
@@ -527,14 +571,18 @@ async def _getaddrinfo(host: str) -> tuple[str, ...]:  # pragma: no cover
     test suite replaces so that no test depends on a resolver. What it does is
     checked against live DNS in `scripts/playwright_smoke.py::_check_private_name_block`.
     """
-    infos = await asyncio.get_running_loop().getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    infos = await asyncio.get_running_loop().getaddrinfo(
+        host, None, type=socket.SOCK_STREAM
+    )
     return tuple(sorted({str(info[4][0]) for info in infos}))
 
 
 def _scroll_script(move: str) -> str:
     """Wrap a scroll expression so the page reports where it ended up."""
     return (
-        '(() => { const before = window.scrollY; ' + move + '; return [before, window.scrollY, '
+        "(() => { const before = window.scrollY; "
+        + move
+        + "; return [before, window.scrollY, "
         'Math.max(0, document.documentElement.scrollHeight - window.innerHeight)].join("|"); })()'
     )
 
@@ -547,23 +595,23 @@ def _scroll_position(reported: object) -> str:
     has no way to tell that repeating it is pointless.
     """
     if not isinstance(reported, str):
-        return ''  # pragma: no cover -- `evaluate` returns what the expression built
-    parts = reported.split('|')
-    if len(parts) != 3 or not all(part.lstrip('-').isdigit() for part in parts):
-        return ''  # pragma: no cover -- same
+        return ""  # pragma: no cover -- `evaluate` returns what the expression built
+    parts = reported.split("|")
+    if len(parts) != 3 or not all(part.lstrip("-").isdigit() for part in parts):
+        return ""  # pragma: no cover -- same
     before, after, furthest = (int(part) for part in parts)
     if furthest == 0:
-        return 'The page has nothing to scroll.'
+        return "The page has nothing to scroll."
     if after >= furthest:
-        return 'At the bottom of the page.'
+        return "At the bottom of the page."
     if after == 0:
-        return 'At the top of the page.'
+        return "At the top of the page."
     if after == before:
-        return f'Position unchanged, {after} of {furthest} px down.'
-    return f'{after} of {furthest} px down.'
+        return f"Position unchanged, {after} of {furthest} px down."
+    return f"{after} of {furthest} px down."
 
 
-RequestKind = Literal['navigation', 'subframe', 'data', 'subresource']
+RequestKind = Literal["navigation", "subframe", "data", "subresource"]
 """What a request is for, which is what an egress rule is usually about.
 
 `navigation` is the top-level document, `subframe` a document loaded into an
@@ -572,7 +620,7 @@ EventSource, WebSocket, `sendBeacon`), and `subresource` the passive assets that
 render a page (images, stylesheets, scripts, fonts, media).
 """
 
-DEFAULT_ALLOWLIST_REACH: frozenset[RequestKind] = frozenset({'navigation', 'data'})
+DEFAULT_ALLOWLIST_REACH: frozenset[RequestKind] = frozenset({"navigation", "data"})
 """Which request kinds `allowed_domains` bounds unless the policy says otherwise.
 
 Navigation, so the agent stays on the sites it was given, and data requests, so a
@@ -582,7 +630,9 @@ aborted renders as a broken page, and sub-frame documents because a permitted
 page's identity-provider and payment steps live in them.
 """
 
-_DATA_RESOURCE_TYPES = frozenset({'fetch', 'xhr', 'eventsource', 'websocket', 'ping', 'preflight'})
+_DATA_RESOURCE_TYPES = frozenset(
+    {"fetch", "xhr", "eventsource", "websocket", "ping", "preflight"}
+)
 """Playwright resource types that carry data rather than render the page.
 
 `ping` is `navigator.sendBeacon`, which is a send channel like the rest of them.
@@ -597,10 +647,10 @@ def _request_kind(request: PlaywrightRequest, top_level: bool) -> RequestKind:
     policy usually treats differently.
     """
     if request.resource_type in _DATA_RESOURCE_TYPES:
-        return 'data'
+        return "data"
     if request.is_navigation_request():
-        return 'navigation' if top_level else 'subframe'
-    return 'subresource'
+        return "navigation" if top_level else "subframe"
+    return "subresource"
 
 
 @dataclass(frozen=True)
@@ -614,9 +664,9 @@ class EgressRequest:
 
     url: str
     kind: RequestKind
-    resource_type: str = 'document'
+    resource_type: str = "document"
     """Playwright's own classification, e.g. `document`, `xhr`, `image`, `font`."""
-    method: str = 'GET'
+    method: str = "GET"
     top_level: bool = True
     """Whether this is the main frame's own document rather than something inside the page."""
     resolved_addresses: tuple[str, ...] = ()
@@ -671,20 +721,20 @@ class EgressPolicy:
     """Which kinds have their host resolved so `block_private_addresses` can see where a name points."""
 
     def __post_init__(self) -> None:
-        for field_name in ('allowed_domains', 'blocked_domains'):
+        for field_name in ("allowed_domains", "blocked_domains"):
             for entry in getattr(self, field_name) or ():
                 # Validated as `_matches` will read it, so an entry that only
                 # differs by surrounding whitespace cannot dodge a check.
                 entry = entry.strip()
-                if '*' in entry:
+                if "*" in entry:
                     raise UserError(
-                        f'{field_name} entry {entry!r} contains a wildcard, which never matches a host. '
-                        'Write the bare domain: subdomains are included unless include_subdomains=False.'
+                        f"{field_name} entry {entry!r} contains a wildcard, which never matches a host. "
+                        "Write the bare domain: subdomains are included unless include_subdomains=False."
                     )
-                if entry.startswith('.'):
+                if entry.startswith("."):
                     raise UserError(
-                        f'{field_name} entry {entry!r} starts with a dot, which never matches a host. '
-                        'Write the bare domain: subdomains are included unless include_subdomains=False.'
+                        f"{field_name} entry {entry!r} starts with a dot, which never matches a host. "
+                        "Write the bare domain: subdomains are included unless include_subdomains=False."
                     )
 
     def refuse(self, request: EgressRequest) -> str | None:
@@ -710,18 +760,26 @@ class EgressPolicy:
         # out of the override's release in the default path too.
         if host is not None and is_always_blocked_address(host):
             return _PRIVATE_ADDRESS_REASON
-        if host is not None and self.block_private_addresses and is_blocked_address(host):
+        if (
+            host is not None
+            and self.block_private_addresses
+            and is_blocked_address(host)
+        ):
             return _PRIVATE_ADDRESS_REASON
         if self.block_private_addresses and request.resolution_failed:
             return _UNRESOLVED_REASON
-        if self.block_private_addresses and any(is_blocked_address(a) for a in request.resolved_addresses):
+        if self.block_private_addresses and any(
+            is_blocked_address(a) for a in request.resolved_addresses
+        ):
             return _PRIVATE_ADDRESS_REASON
         if host is None:
-            return None if request.kind in ('data', 'subresource') else 'URL with no host'
+            return (
+                None if request.kind in ("data", "subresource") else "URL with no host"
+            )
         if self._matches(host, self.blocked_domains):
-            return 'domain in blocked_domains'
+            return "domain in blocked_domains"
         if request.kind in self.allowlist_reach and not self._permitted(host):
-            return 'domain not in allowed_domains'
+            return "domain not in allowed_domains"
         return None
 
     def _permitted(self, host: str) -> bool:
@@ -735,7 +793,10 @@ class EgressPolicy:
         host = _to_idna(host)
         for entry in domains:
             domain = _to_idna(entry.strip().lower())
-            if domain and (host == domain or (self.include_subdomains and host.endswith('.' + domain))):
+            if domain and (
+                host == domain
+                or (self.include_subdomains and host.endswith("." + domain))
+            ):
                 return True
         return False
 
@@ -753,51 +814,58 @@ class EgressPolicy:
 
     def enforced(self) -> bool:
         """Whether anything is restricted, i.e. whether a route guard is worth installing."""
-        return self.allowed_domains is not None or bool(self.blocked_domains) or self.block_private_addresses
+        return (
+            self.allowed_domains is not None
+            or bool(self.blocked_domains)
+            or self.block_private_addresses
+        )
 
     def describe(self) -> str:
         """The reach, phrased for the model's instructions."""
         if self.allowed_domains is None:
-            domains = 'all'
+            domains = "all"
         elif self.allowed_domains:
-            domains = ', '.join(self.allowed_domains)
+            domains = ", ".join(self.allowed_domains)
             if self.include_subdomains:
-                domains += ' (and their subdomains)'
+                domains += " (and their subdomains)"
         else:
-            domains = 'none'
-        if self.allowed_domains is not None and self.allowlist_reach != DEFAULT_ALLOWLIST_REACH:
+            domains = "none"
+        if (
+            self.allowed_domains is not None
+            and self.allowlist_reach != DEFAULT_ALLOWLIST_REACH
+        ):
             # Named only when it is not the default, so the model is told what the
             # allowlist actually bounds rather than being left with the reach the
             # default sentence implies.
-            domains += f' (allowlist bounds {", ".join(sorted(self.allowlist_reach)) or "nothing"})'
+            domains += f" (allowlist bounds {', '.join(sorted(self.allowlist_reach)) or 'nothing'})"
         if self.blocked_domains:
-            domains += f', except {", ".join(self.blocked_domains)}'
+            domains += f", except {', '.join(self.blocked_domains)}"
         if self.block_private_addresses:
-            domains += ' (private/internal addresses blocked)'
+            domains += " (private/internal addresses blocked)"
         return domains
 
 
 _CREDENTIAL_PARAMETERS = (
-    'access_token',
-    'api_key',
-    'apikey',
-    'auth',
-    'awsaccesskeyid',
-    'client_secret',
-    'code',
-    'id_token',
-    'key',
-    'oauth_token',
-    'password',
-    'pwd',
-    'refresh_token',
-    'secret',
-    'session',
-    'sig',
-    'signature',
-    'token',
-    'x-amz-signature',
-    'x-goog-signature',
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth",
+    "awsaccesskeyid",
+    "client_secret",
+    "code",
+    "id_token",
+    "key",
+    "oauth_token",
+    "password",
+    "pwd",
+    "refresh_token",
+    "secret",
+    "session",
+    "sig",
+    "signature",
+    "token",
+    "x-amz-signature",
+    "x-goog-signature",
 )
 """Query and fragment parameters whose values are treated as credentials.
 
@@ -809,7 +877,7 @@ full because the pattern anchors a name at `?`, `&` or `#`, so `secret` does not
 cover `client_secret`.
 """
 
-_USERINFO = re.compile(r'(?<![\w.+-])([a-zA-Z][\w+.\-]*://)[^/?#\s@]*@')
+_USERINFO = re.compile(r"(?<![\w.+-])([a-zA-Z][\w+.\-]*://)[^/?#\s@]*@")
 """A URL's `user:password@` prefix, wherever the URL sits.
 
 Unanchored, because this also cleans console text, where the URL a page logged is
@@ -818,7 +886,7 @@ sentence with an `@` in it later cannot be swallowed into one match.
 """
 
 _CREDENTIAL_VALUE = re.compile(
-    r'(?i)([?&#](?:' + '|'.join(_CREDENTIAL_PARAMETERS) + r')=)[^&#]*',
+    r"(?i)([?&#](?:" + "|".join(_CREDENTIAL_PARAMETERS) + r")=)[^&#]*",
 )
 
 
@@ -837,7 +905,7 @@ def _without_credentials(url: str) -> str:
     scheme, host, path, and the names of every parameter survive: they are what
     identifies the request the model is looking for.
     """
-    return _CREDENTIAL_VALUE.sub(r'\1REDACTED', _USERINFO.sub(r'\1', url))
+    return _CREDENTIAL_VALUE.sub(r"\1REDACTED", _USERINFO.sub(r"\1", url))
 
 
 def _without_endpoint_credentials(message: str, cdp_url: str) -> str:
@@ -851,15 +919,15 @@ def _without_endpoint_credentials(message: str, cdp_url: str) -> str:
     """
     try:
         parsed = urlparse(cdp_url)
-        host = parsed.hostname or ''
+        host = parsed.hostname or ""
         # `.port` parses lazily and raises on a non-numeric port, so it has to be
         # read inside the guard: this runs while an error is already being built.
         if parsed.port is not None:
-            host = f'{host}:{parsed.port}'
+            host = f"{host}:{parsed.port}"
         scheme = parsed.scheme
     except ValueError:
-        return message.replace(cdp_url, '<cdp_url>')
-    safe = f'{scheme}://{host}' if scheme else host
+        return message.replace(cdp_url, "<cdp_url>")
+    safe = f"{scheme}://{host}" if scheme else host
     return message.replace(cdp_url, safe)
 
 
@@ -867,10 +935,10 @@ def _truncate(text: str, max_chars: int) -> str:
     """Cap tool output at `max_chars`, keeping the head where the substance sits."""
     if len(text) <= max_chars:
         return text
-    marker = f'\n[... tool output truncated at {max_chars} characters]'
+    marker = f"\n[... tool output truncated at {max_chars} characters]"
     if len(marker) >= max_chars:
         return text[:max_chars]
-    return f'{text[: max_chars - len(marker)]}{marker}'
+    return f"{text[: max_chars - len(marker)]}{marker}"
 
 
 class BrowserUnavailableError(RuntimeError):
@@ -893,9 +961,9 @@ class BrowserUnavailableWarning(UserWarning):
 
 
 _CHROMIUM_MISSING_MESSAGE = (
-    'Chromium is not installed. Run `playwright install chromium` (on a fresh Linux or CI image use '
-    '`playwright install --with-deps chromium` to also install the required system libraries) and restart '
-    'the agent to enable browser tools.'
+    "Chromium is not installed. Run `playwright install chromium` (on a fresh Linux or CI image use "
+    "`playwright install --with-deps chromium` to also install the required system libraries) and restart "
+    "the agent to enable browser tools."
 )
 
 
@@ -909,10 +977,10 @@ async def _auto_install_chromium() -> str | None:
     """
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
-        '-m',
-        'playwright',
-        'install',
-        'chromium',
+        "-m",
+        "playwright",
+        "install",
+        "chromium",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
@@ -924,17 +992,17 @@ async def _auto_install_chromium() -> str | None:
         raise
     if proc.returncode == 0:
         return None
-    return stdout.decode(errors='replace')
+    return stdout.decode(errors="replace")
 
 
-_FALLBACK_TRACER = trace.get_tracer('pydantic-ai-harness.playwright')
+_FALLBACK_TRACER = trace.get_tracer("pydantic-ai-harness.playwright")
 """Tracer used when the session is driven outside an agent run.
 
 Inside a run the session takes the run's own tracer, so browser spans land
 wherever the agent's instrumentation settings send its tool calls.
 """
 
-_ABORTED_FAILURE = 'net::ERR_FAILED'
+_ABORTED_FAILURE = "net::ERR_FAILED"
 """Failure text Chromium reports for a request the route guard aborted.
 
 The guard records its own refusal with the reason, so the matching
@@ -955,7 +1023,7 @@ memory and telemetry volume the run spends.
 
 def _clip(text: str) -> str:
     """Cap a page-controlled string at the per-event limit."""
-    return text if len(text) <= _MAX_EVENT_CHARS else f'{text[:_MAX_EVENT_CHARS]}...'
+    return text if len(text) <= _MAX_EVENT_CHARS else f"{text[:_MAX_EVENT_CHARS]}..."
 
 
 @dataclass(frozen=True)
@@ -979,16 +1047,16 @@ class BrowserEvent:
     """
 
     kind: Literal[
-        'console',
-        'page_error',
-        'response',
-        'request_failed',
-        'request_blocked',
-        'popup_opened',
-        'popup_closed',
-        'dialog',
+        "console",
+        "page_error",
+        "response",
+        "request_failed",
+        "request_blocked",
+        "popup_opened",
+        "popup_closed",
+        "dialog",
     ]
-    level: Literal['info', 'warning', 'error']
+    level: Literal["info", "warning", "error"]
     message: str
     url: str | None = None
     method: str | None = None
@@ -996,7 +1064,7 @@ class BrowserEvent:
 
     def describe(self) -> str:
         """Render the event as one model-facing line."""
-        parts = [f'[{self.level}] {self.kind}']
+        parts = [f"[{self.level}] {self.kind}"]
         if self.method is not None:
             parts.append(self.method)
         if self.status is not None:
@@ -1005,7 +1073,7 @@ class BrowserEvent:
             parts.append(self.url)
         if self.message:
             parts.append(self.message)
-        return ' '.join(parts)
+        return " ".join(parts)
 
     def attributes(self) -> dict[str, str | int]:
         """Render the event as OpenTelemetry span-event attributes.
@@ -1014,15 +1082,18 @@ class BrowserEvent:
         backend that already understands `url.full` or `http.response.status_code`
         reads these without a custom mapping.
         """
-        attributes: dict[str, str | int] = {'browser.event.kind': self.kind, 'browser.event.level': self.level}
+        attributes: dict[str, str | int] = {
+            "browser.event.kind": self.kind,
+            "browser.event.level": self.level,
+        }
         if self.message:
-            attributes['browser.event.message'] = self.message
+            attributes["browser.event.message"] = self.message
         if self.url is not None:
-            attributes['url.full'] = self.url
+            attributes["url.full"] = self.url
         if self.method is not None:
-            attributes['http.request.method'] = self.method
+            attributes["http.request.method"] = self.method
         if self.status is not None:
-            attributes['http.response.status_code'] = self.status
+            attributes["http.response.status_code"] = self.status
         return attributes
 
 
@@ -1172,7 +1243,7 @@ class BrowserSession:
         self.events_recorded += 1
         span = self.operation_span
         if span is not None and span.is_recording():
-            span.add_event(f'browser.{event.kind}', event.attributes())
+            span.add_event(f"browser.{event.kind}", event.attributes())
 
     def failure_since_operation_start(self) -> BrowserEvent | None:
         """The last refused or failed request caused by the running operation, if any.
@@ -1184,31 +1255,37 @@ class BrowserSession:
         cause of this one.
         """
         caused_here = self.events_recorded - self.operation_events_mark
-        for event in reversed(list(self.events)[-caused_here:] if caused_here > 0 else []):
-            if event.kind in ('request_blocked', 'request_failed'):
+        for event in reversed(
+            list(self.events)[-caused_here:] if caused_here > 0 else []
+        ):
+            if event.kind in ("request_blocked", "request_failed"):
                 return event
         return None
 
     def _on_console(self, message: _ConsoleMessage) -> None:
         """Record a console message, keeping the page's own severity."""
-        level: Literal['info', 'warning', 'error'] = 'info'
-        if message.type == 'error':
-            level = 'error'
-        elif message.type == 'warning':
-            level = 'warning'
-        self.record(BrowserEvent(kind='console', level=level, message=f'{message.type}: {message.text}'))
+        level: Literal["info", "warning", "error"] = "info"
+        if message.type == "error":
+            level = "error"
+        elif message.type == "warning":
+            level = "warning"
+        self.record(
+            BrowserEvent(
+                kind="console", level=level, message=f"{message.type}: {message.text}"
+            )
+        )
 
     def _on_page_error(self, error: object) -> None:
         """Record an uncaught exception from page scripts."""
-        self.record(BrowserEvent(kind='page_error', level='error', message=str(error)))
+        self.record(BrowserEvent(kind="page_error", level="error", message=str(error)))
 
     def _on_response(self, response: _Response) -> None:
         """Record a response, so the agent can find the request a page made for its data."""
         self.record(
             BrowserEvent(
-                kind='response',
-                level='error' if response.status >= 400 else 'info',
-                message='',
+                kind="response",
+                level="error" if response.status >= 400 else "info",
+                message="",
                 url=response.url,
                 method=response.request.method,
                 status=response.status,
@@ -1222,11 +1299,17 @@ class BrowserSession:
         already recorded those with their reason, so they are dropped to keep one
         entry per refusal.
         """
-        failure = request.failure or 'failed'
+        failure = request.failure or "failed"
         if failure == _ABORTED_FAILURE:
             return
         self.record(
-            BrowserEvent(kind='request_failed', level='error', message=failure, url=request.url, method=request.method)
+            BrowserEvent(
+                kind="request_failed",
+                level="error",
+                message=failure,
+                url=request.url,
+                method=request.method,
+            )
         )
 
     async def ensure_page(self) -> _Page:
@@ -1253,14 +1336,16 @@ class BrowserSession:
                         # fix a capability that was never started, so this one ends
                         # the run rather than becoming a tool result.
                         raise RuntimeError(
-                            'PlaywrightBrowser is not running: PlaywrightBrowser.wrap_run must be active before any '
-                            'browser tool.'
+                            "PlaywrightBrowser is not running: PlaywrightBrowser.wrap_run must be active before any "
+                            "browser tool."
                         )
                     await self._launch()
             if self.launch_error is not None:
                 raise BrowserUnavailableError(self.launch_error)
             if self.page is None:
-                raise BrowserUnavailableError('Browser failed to launch.')  # pragma: no cover
+                raise BrowserUnavailableError(
+                    "Browser failed to launch."
+                )  # pragma: no cover
         return self.page
 
     async def _launch(self) -> None:
@@ -1311,9 +1396,9 @@ class BrowserSession:
         context = await self._bounded(
             browser.new_context(
                 storage_state=self._storage_state,
-                service_workers='block',
+                service_workers="block",
                 accept_downloads=False,
-                viewport={'width': self._viewport[0], 'height': self._viewport[1]},
+                viewport={"width": self._viewport[0], "height": self._viewport[1]},
                 is_mobile=self._is_mobile if self._mobile else False,
                 has_touch=self._has_touch if self._mobile else False,
                 device_scale_factor=self._device_scale_factor if self._mobile else 1,
@@ -1323,9 +1408,9 @@ class BrowserSession:
         self._context = context
         page = await self._bounded(context.new_page())
         if self.policy.enforced():
-            await self._bounded(context.route('**/*', self._route_guard))
+            await self._bounded(context.route("**/*", self._route_guard))
             # A network route never sees a WebSocket, so sockets get a guard of their own.
-            await self._bounded(context.route_web_socket('**/*', self._websocket_guard))
+            await self._bounded(context.route_web_socket("**/*", self._websocket_guard))
         self._wire_page(page)
         self.pages.append(page)
         self.page = page
@@ -1355,7 +1440,11 @@ class BrowserSession:
         self._mobile = mobile if mobile is not None else self._mobile
         self._is_mobile = is_mobile if is_mobile is not None else self._is_mobile
         self._has_touch = has_touch if has_touch is not None else self._has_touch
-        self._device_scale_factor = device_scale_factor if device_scale_factor is not None else self._device_scale_factor
+        self._device_scale_factor = (
+            device_scale_factor
+            if device_scale_factor is not None
+            else self._device_scale_factor
+        )
         self._user_agent = user_agent if user_agent is not None else self._user_agent
 
         # Preserve the page the agent was looking at across the rebuild.
@@ -1375,19 +1464,21 @@ class BrowserSession:
 
             # Reopen the previous page so the agent picks up where it left off, unless
             # it was on the initial blank tab.
-            if previous_url and previous_url != 'about:blank' and self.page is not None:
+            if previous_url and previous_url != "about:blank" and self.page is not None:
                 try:
-                    await self._bounded(self.page.goto(previous_url, timeout=self._launch_timeout_ms))
+                    await self._bounded(
+                        self.page.goto(previous_url, timeout=self._launch_timeout_ms)
+                    )
                 except Exception:
                     # The rebuild is still useful even if the old URL no longer loads;
                     # report the current state so the agent can react.
                     pass
 
-        mode = 'mobile' if self._mobile else 'desktop'
+        mode = "mobile" if self._mobile else "desktop"
         return (
-            f'viewport={self._viewport[0]}x{self._viewport[1]} {mode}'
-            f'{", touch" if self._mobile and self._has_touch else ""}'
-            f' scale={self._device_scale_factor if self._mobile else 1}'
+            f"viewport={self._viewport[0]}x{self._viewport[1]} {mode}"
+            f"{', touch' if self._mobile and self._has_touch else ''}"
+            f" scale={self._device_scale_factor if self._mobile else 1}"
         )
 
     async def _bounded(self, awaitable: Awaitable[_T]) -> _T:
@@ -1403,7 +1494,9 @@ class BrowserSession:
         except TimeoutError as exc:
             # Raised as a Playwright timeout so the tools map it like any other
             # deadline they already handle.
-            raise PlaywrightTimeoutError(f'Timeout {self._launch_timeout_ms}ms exceeded.') from exc
+            raise PlaywrightTimeoutError(
+                f"Timeout {self._launch_timeout_ms}ms exceeded."
+            ) from exc
 
     async def _connect(self, pw: PlaywrightDriver) -> PlaywrightBrowserHandle | None:
         """Attach to or start a browser, or record why none is available.
@@ -1421,18 +1514,26 @@ class BrowserSession:
         """
         if self._cdp_url is not None:
             try:
-                return await pw.chromium.connect_over_cdp(self._cdp_url, timeout=self._launch_timeout_ms)
+                return await pw.chromium.connect_over_cdp(
+                    self._cdp_url, timeout=self._launch_timeout_ms
+                )
             except PlaywrightError as exc:
-                raise PlaywrightError(_without_endpoint_credentials(str(exc), self._cdp_url)) from exc
+                raise PlaywrightError(
+                    _without_endpoint_credentials(str(exc), self._cdp_url)
+                ) from exc
         if os.path.exists(pw.chromium.executable_path):
             return await pw.chromium.launch(
-                headless=self._headless, chromium_sandbox=self._chromium_sandbox, timeout=self._launch_timeout_ms
+                headless=self._headless,
+                chromium_sandbox=self._chromium_sandbox,
+                timeout=self._launch_timeout_ms,
             )
         # Binary genuinely absent: raise a clear install hint, or fetch it when
         # opted in. A launch failure with the binary present (sandbox, missing
         # system libs, no display) is left to surface as its own error rather than
         # being masked as "Chromium is not installed".
-        browser = await self._install_and_retry(pw) if self._auto_install_chromium else None
+        browser = (
+            await self._install_and_retry(pw) if self._auto_install_chromium else None
+        )
         if browser is None:  # pragma: no branch
             if self.launch_error is None:
                 self.launch_error = _CHROMIUM_MISSING_MESSAGE
@@ -1441,7 +1542,9 @@ class BrowserSession:
             warnings.warn(self.launch_error, BrowserUnavailableWarning, stacklevel=2)
         return browser
 
-    async def _install_and_retry(self, pw: PlaywrightDriver) -> PlaywrightBrowserHandle | None:
+    async def _install_and_retry(
+        self, pw: PlaywrightDriver
+    ) -> PlaywrightBrowserHandle | None:
         """Fetch Chromium and relaunch once.
 
         Returns the browser on success. On install failure it records a launch
@@ -1451,9 +1554,11 @@ class BrowserSession:
         install_output = await _auto_install_chromium()
         if install_output is None:
             return await pw.chromium.launch(  # pragma: no cover
-                headless=self._headless, chromium_sandbox=self._chromium_sandbox, timeout=self._launch_timeout_ms
+                headless=self._headless,
+                chromium_sandbox=self._chromium_sandbox,
+                timeout=self._launch_timeout_ms,
             )
-        self.launch_error = f'{_CHROMIUM_MISSING_MESSAGE}\nAuto-install failed:\n{install_output[-300:]}'
+        self.launch_error = f"{_CHROMIUM_MISSING_MESSAGE}\nAuto-install failed:\n{install_output[-300:]}"
         return None
 
     async def decide(self, request: EgressRequest) -> str | None:
@@ -1467,10 +1572,16 @@ class BrowserSession:
         host = _url_host(request.url)
         if host is not None and self.policy.needs_resolution(request):
             addresses = await _resolve_host(host)
-            request = replace(request, resolved_addresses=addresses or (), resolution_failed=addresses is None)
+            request = replace(
+                request,
+                resolved_addresses=addresses or (),
+                resolution_failed=addresses is None,
+            )
         return self.policy.refuse(request)
 
-    async def _route_guard(self, route: PlaywrightRoute, request: PlaywrightRequest) -> None:
+    async def _route_guard(
+        self, route: PlaywrightRoute, request: PlaywrightRequest
+    ) -> None:
         """Network-layer egress policy: abort what the policy refuses, pass the rest.
 
         Every request reaches here, whatever its type and whichever frame made it,
@@ -1491,7 +1602,7 @@ class BrowserSession:
                 kind=kind,
                 resource_type=request.resource_type,
                 method=request.method,
-                top_level=top_level and kind == 'navigation',
+                top_level=top_level and kind == "navigation",
             )
         )
         if reason is None:
@@ -1512,17 +1623,33 @@ class BrowserSession:
         handler at all takes Playwright out of its pass-through mode.
         """
         reason = await self.decide(
-            EgressRequest(url=websocket.url, kind='data', resource_type='websocket', top_level=False)
+            EgressRequest(
+                url=websocket.url,
+                kind="data",
+                resource_type="websocket",
+                top_level=False,
+            )
         )
         if reason is not None:
-            self.record(BrowserEvent(kind='request_blocked', level='warning', message=reason, url=websocket.url))
+            self.record(
+                BrowserEvent(
+                    kind="request_blocked",
+                    level="warning",
+                    message=reason,
+                    url=websocket.url,
+                )
+            )
             await websocket.close()
             return
         websocket.connect_to_server()
 
     async def _abort(self, route: PlaywrightRoute, url: str, reason: str) -> None:
         """Refuse a request and record why, so a blocked page is diagnosable."""
-        self.record(BrowserEvent(kind='request_blocked', level='warning', message=reason, url=url))
+        self.record(
+            BrowserEvent(
+                kind="request_blocked", level="warning", message=reason, url=url
+            )
+        )
         await route.abort()
 
     def _wire_page(self, page: PlaywrightPage) -> None:
@@ -1532,13 +1659,13 @@ class BrowserSession:
         requests and dialogs never reach the model, so every page goes through
         here rather than only the one the context started with.
         """
-        page.on('popup', self._on_popup)
-        page.on('console', self._on_console)
-        page.on('pageerror', self._on_page_error)
-        page.on('response', self._on_response)
-        page.on('requestfailed', self._on_request_failed)
-        page.on('dialog', self._on_dialog)
-        page.on('close', self._on_page_closed)
+        page.on("popup", self._on_popup)
+        page.on("console", self._on_console)
+        page.on("pageerror", self._on_page_error)
+        page.on("response", self._on_response)
+        page.on("requestfailed", self._on_request_failed)
+        page.on("dialog", self._on_dialog)
+        page.on("close", self._on_page_closed)
 
     def _spawn(self, coro: Coroutine[object, object, None]) -> None:
         """Run work a synchronous page event cannot await, keeping a strong task reference.
@@ -1569,15 +1696,22 @@ class BrowserSession:
         if len(self.pages) >= _MAX_TABS:
             self.record(
                 BrowserEvent(
-                    kind='popup_closed',
-                    level='warning',
-                    message=f'tab limit of {_MAX_TABS} reached',
+                    kind="popup_closed",
+                    level="warning",
+                    message=f"tab limit of {_MAX_TABS} reached",
                     url=popup.url,
                 )
             )
             self._spawn(popup.close())
             return
-        self.record(BrowserEvent(kind='popup_opened', level='info', message='opened by the page', url=popup.url))
+        self.record(
+            BrowserEvent(
+                kind="popup_opened",
+                level="info",
+                message="opened by the page",
+                url=popup.url,
+            )
+        )
         self._wire_page(popup)
         self.pages.append(popup)
 
@@ -1600,14 +1734,16 @@ class BrowserSession:
         accepted = decision is not None and decision.accept
         self.record(
             BrowserEvent(
-                kind='dialog',
-                level='warning',
-                message=f'{dialog.type} {"accepted" if accepted else "dismissed"}: {dialog.message}',
+                kind="dialog",
+                level="warning",
+                message=f"{dialog.type} {'accepted' if accepted else 'dismissed'}: {dialog.message}",
             )
         )
         self._spawn(self._answer_dialog(dialog, decision))
 
-    async def _answer_dialog(self, dialog: _Dialog, decision: _DialogDecision | None) -> None:
+    async def _answer_dialog(
+        self, dialog: _Dialog, decision: _DialogDecision | None
+    ) -> None:
         """Accept or dismiss a dialog. Errors are swallowed: the page may already be gone."""
         try:
             if decision is not None and decision.accept:
@@ -1726,12 +1862,12 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
     ) -> None:
         if max_content_tokens < 0:
-            raise ValueError('max_content_tokens must be greater than or equal to 0')
+            raise ValueError("max_content_tokens must be greater than or equal to 0")
         if action_timeout_ms < 0:
-            raise ValueError('action_timeout_ms must be greater than or equal to 0')
+            raise ValueError("action_timeout_ms must be greater than or equal to 0")
         if navigation_timeout_ms < 0:
-            raise ValueError('navigation_timeout_ms must be greater than or equal to 0')
-        super().__init__(id='playwright')
+            raise ValueError("navigation_timeout_ms must be greater than or equal to 0")
+        super().__init__(id="playwright")
         self._session = session
         # The session's policy, never a separate one. These checks and the route
         # guard the session installs are two layers of one decision: a toolset
@@ -1744,25 +1880,25 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         self._action_timeout_ms = action_timeout_ms
         self._navigation_timeout_ms = navigation_timeout_ms
         self._operation_lock = asyncio.Lock()
-        self.add_function(self.navigate, name='navigate')
-        self.add_function(self.click, name='click')
-        self.add_function(self.type_text, name='type_text')
-        self.add_function(self.press_key, name='press_key')
-        self.add_function(self.select_option, name='select_option')
-        self.add_function(self.hover, name='hover')
-        self.add_function(self.screenshot, name='screenshot')
-        self.add_function(self.get_text, name='get_text')
-        self.add_function(self.scroll, name='scroll')
-        self.add_function(self.go_back, name='go_back')
-        self.add_function(self.go_forward, name='go_forward')
-        self.add_function(self.execute_js, name='execute_js')
-        self.add_function(self.wait_for, name='wait_for')
-        self.add_function(self.snapshot, name='snapshot')
-        self.add_function(self.tabs, name='tabs')
-        self.add_function(self.handle_next_dialog, name='handle_next_dialog')
-        self.add_function(self.console_messages, name='console_messages')
-        self.add_function(self.network_requests, name='network_requests')
-        self.add_function(self.set_viewport, name='set_viewport')
+        self.add_function(self.navigate, name="navigate")
+        self.add_function(self.click, name="click")
+        self.add_function(self.type_text, name="type_text")
+        self.add_function(self.press_key, name="press_key")
+        self.add_function(self.select_option, name="select_option")
+        self.add_function(self.hover, name="hover")
+        self.add_function(self.screenshot, name="screenshot")
+        self.add_function(self.get_text, name="get_text")
+        self.add_function(self.scroll, name="scroll")
+        self.add_function(self.go_back, name="go_back")
+        self.add_function(self.go_forward, name="go_forward")
+        self.add_function(self.execute_js, name="execute_js")
+        self.add_function(self.wait_for, name="wait_for")
+        self.add_function(self.snapshot, name="snapshot")
+        self.add_function(self.tabs, name="tabs")
+        self.add_function(self.handle_next_dialog, name="handle_next_dialog")
+        self.add_function(self.console_messages, name="console_messages")
+        self.add_function(self.network_requests, name="network_requests")
+        self.add_function(self.set_viewport, name="set_viewport")
 
     async def _frame_text(self, page: _Page, budget_ms: int) -> list[str]:
         """Return the text of each child frame that has any, newest layout first.
@@ -1780,11 +1916,11 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         async def sweep() -> None:
             for frame in page.frames[1:]:
                 try:
-                    text = await frame.inner_text('body', timeout=budget_ms)
+                    text = await frame.inner_text("body", timeout=budget_ms)
                 except PlaywrightError:
                     continue
                 if text.strip():
-                    texts.append(f'[frame {_without_credentials(frame.url)}]\n{text}')
+                    texts.append(f"[frame {_without_credentials(frame.url)}]\n{text}")
 
         try:
             await asyncio.wait_for(sweep(), budget_ms / 1000)
@@ -1800,9 +1936,9 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         second path into the launch machinery, raising `RuntimeError` where the
         callers only guard against `PlaywrightError`.
         """
-        text = await page.inner_text('body', timeout=timeout_ms)
+        text = await page.inner_text("body", timeout=timeout_ms)
         frames = await self._frame_text(page, self._frame_budget(timeout_ms))
-        return self._truncate_output('\n\n'.join([text, *frames]))
+        return self._truncate_output("\n\n".join([text, *frames]))
 
     def _frame_budget(self, timeout_ms: int | None) -> int:
         """Return the deadline for the child-frame sweep.
@@ -1829,7 +1965,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
         span = self._session.operation_span
         if span is not None and span.is_recording():
-            span.set_attribute('browser.outcome', 'error')
+            span.set_attribute("browser.outcome", "error")
         return self._truncate_output(message)
 
     def _truncate_output_keeping(self, text: str, note: str) -> str:
@@ -1841,13 +1977,15 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         whole budget: it carries why the result is missing.
         """
         budget = self._max_content_tokens * _CHARS_PER_TOKEN
-        separator = '\n\n'
+        separator = "\n\n"
         room = budget - len(note) - len(separator)
         if room <= 0:
             return _truncate(note, budget)
-        return f'{_truncate(text, room)}{separator}{note}'
+        return f"{_truncate(text, room)}{separator}{note}"
 
-    def _playwright_error(self, action: str, exc: PlaywrightError, timeout_ms: int) -> str:
+    def _playwright_error(
+        self, action: str, exc: PlaywrightError, timeout_ms: int
+    ) -> str:
         """Map a Playwright error to a bounded, model-actionable string.
 
         A timeout, strict-mode match count, `net::ERR_*` code, or closed target is
@@ -1861,21 +1999,23 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
         if isinstance(exc, PlaywrightTimeoutError):
             return (
-                f'Error: {action} timed out after {timeout_ms}ms. The element may not exist or '
-                'the page may be slow; try a different selector, or navigate again. '
-                'Content inside an iframe needs an `aria-ref=` handle from `snapshot`, not a CSS selector.'
+                f"Error: {action} timed out after {timeout_ms}ms. The element may not exist or "
+                "the page may be slow; try a different selector, or navigate again. "
+                "Content inside an iframe needs an `aria-ref=` handle from `snapshot`, not a CSS selector."
             )
         if isinstance(exc, TargetClosedError):
             if not self._session.pages:
                 # The active pointer deliberately stays on the closed page rather than
                 # falling back to a fresh browser, which would drop the session's
                 # cookies and history without saying so.
-                return self._error(f"Error: {action} failed: the active tab has closed. Open one with tabs('new').")
+                return self._error(
+                    f"Error: {action} failed: the active tab has closed. Open one with tabs('new')."
+                )
             return (
-                f'Error: {action} failed: the browser or page was closed unexpectedly. '
-                'Browser tools may be unavailable for the rest of this run.'
+                f"Error: {action} failed: the browser or page was closed unexpectedly. "
+                "Browser tools may be unavailable for the rest of this run."
             )
-        return f'Error: {action} failed: {_without_credentials(str(exc))}'
+        return f"Error: {action} failed: {_without_credentials(str(exc))}"
 
     def _deadlines(self, timeout_ms: int | None) -> _Deadlines:
         """Resolve the deadlines an operation runs under.
@@ -1885,10 +2025,18 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
         started = monotonic()
         if timeout_ms is not None:
-            return _Deadlines(action_ms=timeout_ms, navigation_ms=timeout_ms, started=started)
-        return _Deadlines(action_ms=self._action_timeout_ms, navigation_ms=self._navigation_timeout_ms, started=started)
+            return _Deadlines(
+                action_ms=timeout_ms, navigation_ms=timeout_ms, started=started
+            )
+        return _Deadlines(
+            action_ms=self._action_timeout_ms,
+            navigation_ms=self._navigation_timeout_ms,
+            started=started,
+        )
 
-    async def _await_with_timeout(self, awaitable: Awaitable[_T], timeout_ms: int) -> _T:
+    async def _await_with_timeout(
+        self, awaitable: Awaitable[_T], timeout_ms: int
+    ) -> _T:
         """Bound an operation whose Playwright API has no `timeout` parameter."""
         if timeout_ms == 0:
             return await awaitable
@@ -1897,7 +2045,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         except TimeoutError as exc:
             # asyncio.wait_for raises asyncio.TimeoutError, which is a distinct class
             # from the builtin TimeoutError on Python 3.10 (aliased only from 3.11).
-            raise PlaywrightTimeoutError(f'Timeout {timeout_ms}ms exceeded.') from exc
+            raise PlaywrightTimeoutError(f"Timeout {timeout_ms}ms exceeded.") from exc
 
     def _timeout_error(self, timeout_ms: int | None) -> str | None:
         """Return a bounded error when a per-call timeout override is not positive, else `None`.
@@ -1908,7 +2056,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         could otherwise ask for an unbounded call that never returns.
         """
         if timeout_ms is not None and timeout_ms <= 0:
-            return self._truncate_output('Error: timeout_ms must be greater than 0.')
+            return self._truncate_output("Error: timeout_ms must be greater than 0.")
         return None
 
     def _oversized_screenshot_error(self, png: bytes) -> str | None:
@@ -1916,11 +2064,13 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         if len(png) <= _MAX_SCREENSHOT_BYTES:
             return None
         return (
-            f'Error: screenshot is {len(png)} bytes, over the {_MAX_SCREENSHOT_BYTES} byte image limit; '
-            'capture the viewport (full_page=False) or scroll and capture sections instead.'
+            f"Error: screenshot is {len(png)} bytes, over the {_MAX_SCREENSHOT_BYTES} byte image limit; "
+            "capture the viewport (full_page=False) or scroll and capture sections instead."
         )
 
-    async def _enforce_navigation_policy(self, page: _Page, action: str, timeout: int) -> str | None:
+    async def _enforce_navigation_policy(
+        self, page: _Page, action: str, timeout: int
+    ) -> str | None:
         """After an action, bounce to `about:blank` if the page left the permitted set.
 
         Navigation can happen through clicks, `execute_js` setting
@@ -1943,14 +2093,22 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         if page.url.startswith(_ERROR_PAGE_SCHEME):
             await page.goto(_BLANK_PAGE, timeout=timeout)
             failure = self._session.failure_since_operation_start()
-            cause = 'the navigation did not complete' if failure is None else f'{failure.message}: {failure.url}'
-            return self._error(f'Error: {action} loaded no page ({cause}); the browser is back at about:blank.')
-        reason = await self._session.decide(EgressRequest(url=page.url, kind='navigation'))
+            cause = (
+                "the navigation did not complete"
+                if failure is None
+                else f"{failure.message}: {failure.url}"
+            )
+            return self._error(
+                f"Error: {action} loaded no page ({cause}); the browser is back at about:blank."
+            )
+        reason = await self._session.decide(
+            EgressRequest(url=page.url, kind="navigation")
+        )
         if reason is None:
             return None
         blocked = _without_credentials(page.url)
         await page.goto(_BLANK_PAGE, timeout=timeout)
-        return self._error(f'Error: {action} reached a {reason}: {blocked}')
+        return self._error(f"Error: {action} reached a {reason}: {blocked}")
 
     async def _in_operation(
         self,
@@ -1985,12 +2143,20 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             deadlines = self._deadlines(timeout_ms)
             # The configured budget, not what is left of it: the error copy tells the
             # model how long the call was allowed, which a countdown would understate.
-            reported = deadlines.navigation_ms if governed_by_navigation else deadlines.action_ms
+            reported = (
+                deadlines.navigation_ms
+                if governed_by_navigation
+                else deadlines.action_ms
+            )
             with self._session.tracer.start_as_current_span(
-                f'browser {action}',
+                f"browser {action}",
                 # The outcome starts at `ok` and every failure path overwrites it,
                 # because a tool failure is a returned string, not an exception.
-                attributes={'browser.action': action, 'browser.timeout_ms': reported, 'browser.outcome': 'ok'},
+                attributes={
+                    "browser.action": action,
+                    "browser.timeout_ms": reported,
+                    "browser.outcome": "ok",
+                },
             ) as span:
                 self._session.operation_span = span
                 self._session.operation_events_mark = self._session.events_recorded
@@ -2006,7 +2172,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                     self._session.launch_error = None
                     return self._error(str(exc))
                 except BaseException:
-                    span.set_attribute('browser.outcome', 'error')
+                    span.set_attribute("browser.outcome", "error")
                     raise
                 finally:
                     # Recorded whether or not the operation succeeded: which page a
@@ -2014,9 +2180,13 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                     # The session's active page rather than the one acquired above,
                     # because `tabs` can have moved it, and the span should name the
                     # tab the operation left rather than the one it started on.
-                    ended_on = self._session.page if self._session.page is not None else page
+                    ended_on = (
+                        self._session.page if self._session.page is not None else page
+                    )
                     if ended_on is not None:
-                        span.set_attribute('url.full', _without_credentials(ended_on.url))
+                        span.set_attribute(
+                            "url.full", _without_credentials(ended_on.url)
+                        )
                     self._session.operation_span = None
 
     async def _refuse(self, action: str, timeout_ms: int | None, message: str) -> str:
@@ -2035,7 +2205,8 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             if (error := self._timeout_error(timeout_ms)) is not None:
                 return error
             with self._session.tracer.start_as_current_span(
-                f'browser {action}', attributes={'browser.action': action, 'browser.outcome': 'ok'}
+                f"browser {action}",
+                attributes={"browser.action": action, "browser.outcome": "ok"},
             ) as span:
                 self._session.operation_span = span
                 try:
@@ -2043,17 +2214,21 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                 finally:
                     self._session.operation_span = None
 
-    async def _settle(self, page: _Page, action: str, deadlines: _Deadlines) -> str | None:
+    async def _settle(
+        self, page: _Page, action: str, deadlines: _Deadlines
+    ) -> str | None:
         """Let the navigation finish, then re-check where it landed.
 
         The order is the point: the policy has to see the settled URL, because
         reading it before the load completes checks the page the action started
         from. Returns the bounced error, or `None` when the result is permitted.
         """
-        await page.wait_for_load_state('domcontentloaded', timeout=deadlines.navigation)
+        await page.wait_for_load_state("domcontentloaded", timeout=deadlines.navigation)
         return await self._enforce_navigation_policy(page, action, deadlines.navigation)
 
-    async def navigate(self, url: str, timeout_ms: int | None = None) -> str | ToolReturn[str]:
+    async def navigate(
+        self, url: str, timeout_ms: int | None = None
+    ) -> str | ToolReturn[str]:
         """Navigate to a URL and return the page's title and visible text.
 
         Args:
@@ -2066,31 +2241,39 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             embedded frames. When `screenshot_on_navigate` is set, a screenshot is
             attached as image content for vision models.
         """
-        reason = await self._session.decide(EgressRequest(url=url, kind='navigation'))
+        reason = await self._session.decide(EgressRequest(url=url, kind="navigation"))
         if reason is not None:
             # Refused before `_in_operation`, so a disallowed URL never launches Chromium.
             # Not redacted, unlike the URLs below: this one is the argument the model
             # just passed, so echoing it tells it nothing it did not write, and a
             # refusal that hid the userinfo would hide what was refused.
-            return await self._refuse('navigate', timeout_ms, f'Error: {reason}: {url}')
+            return await self._refuse("navigate", timeout_ms, f"Error: {reason}: {url}")
 
-        async def _navigate(page: _Page, deadlines: _Deadlines) -> str | ToolReturn[str]:
+        async def _navigate(
+            page: _Page, deadlines: _Deadlines
+        ) -> str | ToolReturn[str]:
             await page.goto(url, timeout=deadlines.navigation)
-            if (blocked := await self._settle(page, 'navigate', deadlines)) is not None:
+            if (blocked := await self._settle(page, "navigate", deadlines)) is not None:
                 return blocked
             # Everything past the load runs on the navigation budget: the action one
             # is already spent by any page that took more than a moment to arrive.
             title = await self._await_with_timeout(page.title(), deadlines.navigation)
             text = await self._page_text(page, deadlines.navigation)
-            result = self._truncate_output(f'URL: {_without_credentials(page.url)}\nTitle: {title}\n\n{text}')
+            result = self._truncate_output(
+                f"URL: {_without_credentials(page.url)}\nTitle: {title}\n\n{text}"
+            )
             if not self._screenshot_on_navigate:
                 return result
             png = await page.screenshot(timeout=deadlines.navigation)
             if (oversized := self._oversized_screenshot_error(png)) is not None:
                 return self._truncate_output_keeping(result, oversized)
-            return ToolReturn(result, content=[BinaryContent(data=png, media_type='image/png')])
+            return ToolReturn(
+                result, content=[BinaryContent(data=png, media_type="image/png")]
+            )
 
-        return await self._in_operation('navigate', timeout_ms, _navigate, governed_by_navigation=True)
+        return await self._in_operation(
+            "navigate", timeout_ms, _navigate, governed_by_navigation=True
+        )
 
     async def click(self, selector: str, timeout_ms: int | None = None) -> str:
         """Click an element on the current page.
@@ -2106,7 +2289,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         Returns:
             The page's visible text after the click.
         """
-        parts = selector.split(',', 1)
+        parts = selector.split(",", 1)
         coordinates: tuple[int, int] | None = None
         if len(parts) == 2:
             try:
@@ -2118,19 +2301,29 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             if coordinates is not None:
                 # `Mouse.click` takes no `timeout`, so it is bounded externally like
                 # the coordinate branch of `scroll`.
-                await self._await_with_timeout(page.mouse.click(*coordinates), deadlines.action)
+                await self._await_with_timeout(
+                    page.mouse.click(*coordinates), deadlines.action
+                )
             else:
                 await page.click(selector, timeout=deadlines.action)
-            if (blocked := await self._settle(page, 'click', deadlines)) is not None:
+            if (blocked := await self._settle(page, "click", deadlines)) is not None:
                 return blocked
             # The read follows a navigation the click may have triggered, so it takes
             # the budget that allowed for it rather than what is left of the action's.
             text = await self._page_text(page, deadlines.navigation)
-            return self._truncate_output(f"Clicked '{selector}'. URL: {_without_credentials(page.url)}\n\n{text}")
+            return self._truncate_output(
+                f"Clicked '{selector}'. URL: {_without_credentials(page.url)}\n\n{text}"
+            )
 
-        return await self._in_operation('click', timeout_ms, _click)
+        return await self._in_operation("click", timeout_ms, _click)
 
-    async def type_text(self, selector: str, text: str, sequential: bool = False, timeout_ms: int | None = None) -> str:
+    async def type_text(
+        self,
+        selector: str,
+        text: str,
+        sequential: bool = False,
+        timeout_ms: int | None = None,
+    ) -> str:
         """Type text into an input field, replacing any existing value.
 
         This sets the field's value; it does not submit. Use `press_key('Enter')`
@@ -2156,15 +2349,21 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                 # Cleared first: `press_sequentially` types at the cursor, so without
                 # this the field would keep whatever it already held and the two
                 # modes would not mean the same thing.
-                await page.fill(selector, '', timeout=deadlines.action)
-                await page.locator(selector).press_sequentially(text, timeout=deadlines.action)
+                await page.fill(selector, "", timeout=deadlines.action)
+                await page.locator(selector).press_sequentially(
+                    text, timeout=deadlines.action
+                )
             else:
                 await page.fill(selector, text, timeout=deadlines.action)
-            return self._truncate_output(f"Typed into '{selector}'.\n\n{await self._page_text(page, deadlines.action)}")
+            return self._truncate_output(
+                f"Typed into '{selector}'.\n\n{await self._page_text(page, deadlines.action)}"
+            )
 
-        return await self._in_operation('type_text', timeout_ms, _type_text)
+        return await self._in_operation("type_text", timeout_ms, _type_text)
 
-    async def press_key(self, key: str, selector: str | None = None, timeout_ms: int | None = None) -> str:
+    async def press_key(
+        self, key: str, selector: str | None = None, timeout_ms: int | None = None
+    ) -> str:
         """Press a keyboard key, optionally focusing an element first.
 
         Reaches what typing cannot: submitting a search box with `Enter`, closing
@@ -2184,18 +2383,26 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
 
         async def _press_key(page: _Page, deadlines: _Deadlines) -> str:
             if selector is None:
-                await self._await_with_timeout(page.keyboard.press(key), deadlines.action)
+                await self._await_with_timeout(
+                    page.keyboard.press(key), deadlines.action
+                )
             else:
                 await page.press(selector, key, timeout=deadlines.action)
             # A key press is a common way to trigger navigation (Enter in a search
             # box), so the result is settled and re-checked like a click.
-            if (blocked := await self._settle(page, 'press_key', deadlines)) is not None:
+            if (
+                blocked := await self._settle(page, "press_key", deadlines)
+            ) is not None:
                 return blocked
-            return self._truncate_output(f"Pressed '{key}'.\n\n{await self._page_text(page, deadlines.navigation)}")
+            return self._truncate_output(
+                f"Pressed '{key}'.\n\n{await self._page_text(page, deadlines.navigation)}"
+            )
 
-        return await self._in_operation('press_key', timeout_ms, _press_key)
+        return await self._in_operation("press_key", timeout_ms, _press_key)
 
-    async def select_option(self, selector: str, values: list[str], timeout_ms: int | None = None) -> str:
+    async def select_option(
+        self, selector: str, values: list[str], timeout_ms: int | None = None
+    ) -> str:
         """Choose one or more options in a `<select>` dropdown.
 
         A native dropdown does not open as page content, so clicking it does not
@@ -2214,13 +2421,19 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
 
         async def _select_option(page: _Page, deadlines: _Deadlines) -> str:
-            selected = await page.select_option(selector, values, timeout=deadlines.action)
-            if (blocked := await self._settle(page, 'select_option', deadlines)) is not None:
+            selected = await page.select_option(
+                selector, values, timeout=deadlines.action
+            )
+            if (
+                blocked := await self._settle(page, "select_option", deadlines)
+            ) is not None:
                 return blocked
             text = await self._page_text(page, deadlines.navigation)
-            return self._truncate_output(f"Selected {selected} in '{selector}'.\n\n{text}")
+            return self._truncate_output(
+                f"Selected {selected} in '{selector}'.\n\n{text}"
+            )
 
-        return await self._in_operation('select_option', timeout_ms, _select_option)
+        return await self._in_operation("select_option", timeout_ms, _select_option)
 
     async def hover(self, selector: str, timeout_ms: int | None = None) -> str:
         """Hover over an element, revealing menus and tooltips that appear on hover.
@@ -2237,11 +2450,15 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
 
         async def _hover(page: _Page, deadlines: _Deadlines) -> str:
             await page.hover(selector, timeout=deadlines.action)
-            return self._truncate_output(f"Hovered '{selector}'.\n\n{await self._page_text(page, deadlines.action)}")
+            return self._truncate_output(
+                f"Hovered '{selector}'.\n\n{await self._page_text(page, deadlines.action)}"
+            )
 
-        return await self._in_operation('hover', timeout_ms, _hover)
+        return await self._in_operation("hover", timeout_ms, _hover)
 
-    async def screenshot(self, full_page: bool = False, timeout_ms: int | None = None) -> str | ToolReturn[str]:
+    async def screenshot(
+        self, full_page: bool = False, timeout_ms: int | None = None
+    ) -> str | ToolReturn[str]:
         """Capture a screenshot of the current page.
 
         Args:
@@ -2255,18 +2472,24 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             vision models can see it.
         """
 
-        async def _screenshot(page: _Page, deadlines: _Deadlines) -> str | ToolReturn[str]:
+        async def _screenshot(
+            page: _Page, deadlines: _Deadlines
+        ) -> str | ToolReturn[str]:
             png = await page.screenshot(full_page=full_page, timeout=deadlines.action)
             if (oversized := self._oversized_screenshot_error(png)) is not None:
                 return self._error(oversized)
             return ToolReturn(
-                self._truncate_output(f'Screenshot captured. URL: {_without_credentials(page.url)}'),
-                content=[BinaryContent(data=png, media_type='image/png')],
+                self._truncate_output(
+                    f"Screenshot captured. URL: {_without_credentials(page.url)}"
+                ),
+                content=[BinaryContent(data=png, media_type="image/png")],
             )
 
-        return await self._in_operation('screenshot', timeout_ms, _screenshot)
+        return await self._in_operation("screenshot", timeout_ms, _screenshot)
 
-    async def get_text(self, selector: str | None = None, timeout_ms: int | None = None) -> str:
+    async def get_text(
+        self, selector: str | None = None, timeout_ms: int | None = None
+    ) -> str:
         """Extract text from the page or a specific element.
 
         Args:
@@ -2290,13 +2513,19 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             except Exception as exc:
                 # Named after the selector rather than the action: which selector failed
                 # is the part the model needs to act on.
-                return self._error(f"Error getting text from '{selector}': {_without_credentials(str(exc))}")
+                return self._error(
+                    f"Error getting text from '{selector}': {_without_credentials(str(exc))}"
+                )
             return self._truncate_output(text)
 
-        return await self._in_operation('get_text', timeout_ms, _get_text)
+        return await self._in_operation("get_text", timeout_ms, _get_text)
 
     async def scroll(
-        self, direction: str, x: int | None = None, y: int | None = None, timeout_ms: int | None = None
+        self,
+        direction: str,
+        x: int | None = None,
+        y: int | None = None,
+        timeout_ms: int | None = None,
     ) -> str:
         """Scroll the page in a direction.
 
@@ -2317,23 +2546,25 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         # a line: the previous fixed 300px moved less than half a default viewport,
         # which cost several calls (and a full page read each) per screen.
         moves = {
-            'up': 'window.scrollBy(0, -window.innerHeight * 0.9)',
-            'down': 'window.scrollBy(0, window.innerHeight * 0.9)',
-            'left': 'window.scrollBy(-window.innerWidth * 0.9, 0)',
-            'right': 'window.scrollBy(window.innerWidth * 0.9, 0)',
-            'top': 'window.scrollTo(0, 0)',
-            'bottom': 'window.scrollTo(0, document.body.scrollHeight)',
+            "up": "window.scrollBy(0, -window.innerHeight * 0.9)",
+            "down": "window.scrollBy(0, window.innerHeight * 0.9)",
+            "left": "window.scrollBy(-window.innerWidth * 0.9, 0)",
+            "right": "window.scrollBy(window.innerWidth * 0.9, 0)",
+            "top": "window.scrollTo(0, 0)",
+            "bottom": "window.scrollTo(0, document.body.scrollHeight)",
         }
         deltas: dict[str, tuple[int, int]] = {
-            'up': (0, -300),
-            'down': (0, 300),
-            'left': (-300, 0),
-            'right': (300, 0),
+            "up": (0, -300),
+            "down": (0, 300),
+            "left": (-300, 0),
+            "right": (300, 0),
         }
         move = moves.get(direction.lower())
         if move is None:
             return await self._refuse(
-                'scroll', timeout_ms, f'Error: invalid direction {direction!r}; use up/down/left/right/top/bottom'
+                "scroll",
+                timeout_ms,
+                f"Error: invalid direction {direction!r}; use up/down/left/right/top/bottom",
             )
         delta = deltas.get(direction.lower())
 
@@ -2343,17 +2574,23 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                 # externally like `evaluate` below: an unbounded await here would
                 # hold the operation lock for the rest of the run.
                 await self._await_with_timeout(page.mouse.move(x, y), deadlines.action)
-                await self._await_with_timeout(page.mouse.wheel(*delta), deadlines.action)
+                await self._await_with_timeout(
+                    page.mouse.wheel(*delta), deadlines.action
+                )
             else:
                 # `evaluate` has no `timeout` parameter and hangs if the page's
                 # main thread is blocked, so it is bounded externally.
-                reported = await self._await_with_timeout(page.evaluate(_scroll_script(move)), deadlines.action)
-                return self._truncate_output(
-                    f'Scrolled {direction}. {_scroll_position(reported)}\n\n{await self._page_text(page, deadlines.action)}'
+                reported = await self._await_with_timeout(
+                    page.evaluate(_scroll_script(move)), deadlines.action
                 )
-            return self._truncate_output(f'Scrolled {direction}.\n\n{await self._page_text(page, deadlines.action)}')
+                return self._truncate_output(
+                    f"Scrolled {direction}. {_scroll_position(reported)}\n\n{await self._page_text(page, deadlines.action)}"
+                )
+            return self._truncate_output(
+                f"Scrolled {direction}.\n\n{await self._page_text(page, deadlines.action)}"
+            )
 
-        return await self._in_operation('scroll', timeout_ms, _scroll)
+        return await self._in_operation("scroll", timeout_ms, _scroll)
 
     async def go_back(self, timeout_ms: int | None = None) -> str:
         """Navigate back in the browser history.
@@ -2369,13 +2606,17 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
 
         async def _go_back(page: _Page, deadlines: _Deadlines) -> str:
             if await page.go_back(timeout=deadlines.navigation) is None:
-                return self._truncate_output('No previous page in browser history.')
-            if (blocked := await self._settle(page, 'go_back', deadlines)) is not None:
+                return self._truncate_output("No previous page in browser history.")
+            if (blocked := await self._settle(page, "go_back", deadlines)) is not None:
                 return blocked
             text = await self._page_text(page, deadlines.navigation)
-            return self._truncate_output(f'Went back. URL: {_without_credentials(page.url)}\n\n{text}')
+            return self._truncate_output(
+                f"Went back. URL: {_without_credentials(page.url)}\n\n{text}"
+            )
 
-        return await self._in_operation('go_back', timeout_ms, _go_back, governed_by_navigation=True)
+        return await self._in_operation(
+            "go_back", timeout_ms, _go_back, governed_by_navigation=True
+        )
 
     async def go_forward(self, timeout_ms: int | None = None) -> str:
         """Navigate forward in the browser history.
@@ -2391,13 +2632,19 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
 
         async def _go_forward(page: _Page, deadlines: _Deadlines) -> str:
             if await page.go_forward(timeout=deadlines.navigation) is None:
-                return self._truncate_output('No next page in browser history.')
-            if (blocked := await self._settle(page, 'go_forward', deadlines)) is not None:
+                return self._truncate_output("No next page in browser history.")
+            if (
+                blocked := await self._settle(page, "go_forward", deadlines)
+            ) is not None:
                 return blocked
             text = await self._page_text(page, deadlines.navigation)
-            return self._truncate_output(f'Went forward. URL: {_without_credentials(page.url)}\n\n{text}')
+            return self._truncate_output(
+                f"Went forward. URL: {_without_credentials(page.url)}\n\n{text}"
+            )
 
-        return await self._in_operation('go_forward', timeout_ms, _go_forward, governed_by_navigation=True)
+        return await self._in_operation(
+            "go_forward", timeout_ms, _go_forward, governed_by_navigation=True
+        )
 
     async def execute_js(self, script: str, timeout_ms: int | None = None) -> str:
         """Evaluate a JavaScript expression and return its result.
@@ -2418,23 +2665,29 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                 # parameter, so a never-resolving promise (or a blocked main
                 # thread) would hold the operation lock forever without the
                 # external deadline.
-                result = await self._await_with_timeout(page.evaluate(script), deadlines.action)
+                result = await self._await_with_timeout(
+                    page.evaluate(script), deadlines.action
+                )
             except (PlaywrightTimeoutError, TargetClosedError):
                 # `evaluate` raises for script exceptions too, so the browser's own
                 # failures are picked out by type and left to the operation's mapper.
                 raise
             except Exception as exc:
-                return self._error(f'JS error: {_without_credentials(str(exc))}')
+                return self._error(f"JS error: {_without_credentials(str(exc))}")
             try:
-                blocked = await self._enforce_navigation_policy(page, 'execute_js', deadlines.navigation)
+                blocked = await self._enforce_navigation_policy(
+                    page, "execute_js", deadlines.navigation
+                )
             except PlaywrightError as exc:
                 # Kept out of the try above on purpose: that one ends early so a
                 # script exception maps to 'JS error', which a failed bounce is not.
-                return self._error(self._playwright_error('execute_js', exc, deadlines.navigation_ms))
+                return self._error(
+                    self._playwright_error("execute_js", exc, deadlines.navigation_ms)
+                )
             if blocked is not None:
                 return blocked
             if result is None:
-                return self._truncate_output('undefined')
+                return self._truncate_output("undefined")
             if isinstance(result, str):
                 return self._truncate_output(result)
             try:
@@ -2442,7 +2695,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             except TypeError:  # pragma: no cover
                 return self._truncate_output(str(result))
 
-        return await self._in_operation('execute_js', timeout_ms, _execute_js)
+        return await self._in_operation("execute_js", timeout_ms, _execute_js)
 
     async def wait_for(
         self,
@@ -2470,20 +2723,20 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             A short confirmation followed by the page's visible text, or a bounded
             error string when neither/both arguments are given or the wait times out.
         """
-        invalid = 'Error: wait_for requires exactly one of selector or text.'
+        invalid = "Error: wait_for requires exactly one of selector or text."
         if text is not None:
             if selector is not None:
-                return await self._refuse('wait_for', timeout_ms, invalid)
+                return await self._refuse("wait_for", timeout_ms, invalid)
             # Quoted inside `:text()` rather than interpolated after `text=`, where
             # the selector grammar would read a `>>` in the text as a chain and a
             # quote as an exact-match toggle. `:text` keeps the substring matching
             # `text=` has, and the quotes make the value inert.
-            escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
             query = f':text("{escaped}")'
         elif selector is not None:
             query = selector
         else:
-            return await self._refuse('wait_for', timeout_ms, invalid)
+            return await self._refuse("wait_for", timeout_ms, invalid)
 
         # The engine query matches; the caller's own argument is what the result
         # echoes, so the model reads back what it asked for.
@@ -2491,12 +2744,16 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
 
         async def _wait_for(page: _Page, deadlines: _Deadlines) -> str:
             await self._wait_in_any_frame(page, query, deadlines.action, gone=gone)
-            settled = 'Gone' if gone else 'Found'
-            return self._truncate_output(f"{settled} '{label}'.\n\n{await self._page_text(page, deadlines.action)}")
+            settled = "Gone" if gone else "Found"
+            return self._truncate_output(
+                f"{settled} '{label}'.\n\n{await self._page_text(page, deadlines.action)}"
+            )
 
-        return await self._in_operation('wait_for', timeout_ms, _wait_for)
+        return await self._in_operation("wait_for", timeout_ms, _wait_for)
 
-    async def _wait_in_any_frame(self, page: _Page, query: str, timeout_ms: int, *, gone: bool) -> None:
+    async def _wait_in_any_frame(
+        self, page: _Page, query: str, timeout_ms: int, *, gone: bool
+    ) -> None:
         """Wait until `query` matches in the main page or in any child frame, or matches nowhere.
 
         `page.wait_for_selector` matches the main frame only, so content arriving
@@ -2511,9 +2768,12 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         contained the element reports it hidden immediately, and a race would
         settle on that frame before the one that does contain it has let go.
         """
-        state: _WaitState = 'hidden' if gone else 'visible'
+        state: _WaitState = "hidden" if gone else "visible"
         waits = [page.wait_for_selector(query, timeout=timeout_ms, state=state)]
-        waits.extend(frame.wait_for_selector(query, timeout=timeout_ms, state=state) for frame in page.frames[1:])
+        waits.extend(
+            frame.wait_for_selector(query, timeout=timeout_ms, state=state)
+            for frame in page.frames[1:]
+        )
         tasks = [asyncio.ensure_future(wait) for wait in waits]
         if gone:
             try:
@@ -2523,10 +2783,14 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
             return
-        failure: BaseException = PlaywrightTimeoutError(f'Timeout {timeout_ms}ms exceeded.')
+        failure: BaseException = PlaywrightTimeoutError(
+            f"Timeout {timeout_ms}ms exceeded."
+        )
         try:
             while tasks:
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                done, pending = await asyncio.wait(
+                    tasks, return_when=asyncio.FIRST_COMPLETED
+                )
                 tasks = list(pending)
                 # Every finished wait is read, including when an earlier one in the
                 # same batch already matched: an exception nobody retrieves surfaces
@@ -2565,11 +2829,13 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
 
         async def _snapshot(page: _Page, deadlines: _Deadlines) -> str:
-            return self._truncate_output(await page.aria_snapshot(mode='ai', timeout=deadlines.action))
+            return self._truncate_output(
+                await page.aria_snapshot(mode="ai", timeout=deadlines.action)
+            )
 
-        return await self._in_operation('snapshot', timeout_ms, _snapshot)
+        return await self._in_operation("snapshot", timeout_ms, _snapshot)
 
-    async def tabs(self, action: str = 'list', index: int | None = None) -> str:
+    async def tabs(self, action: str = "list", index: int | None = None) -> str:
         """List the open tabs, or switch to, open, or close one.
 
         A site opens a second tab for a `target="_blank"` link, a sign-in popup,
@@ -2588,69 +2854,95 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             The tab list, or a confirmation followed by the active tab's visible
             text, or a bounded error string.
         """
-        if action not in ('list', 'select', 'close', 'new'):
+        if action not in ("list", "select", "close", "new"):
             return await self._refuse(
-                'tabs', None, f'Error: unknown tabs action {action!r}; use list, select, close or new.'
+                "tabs",
+                None,
+                f"Error: unknown tabs action {action!r}; use list, select, close or new.",
             )
 
         async def _tabs(page: _Page, deadlines: _Deadlines) -> str:
             session = self._session
-            if action == 'list':
-                return self._truncate_output(await self._describe_tabs(session.pages, page, deadlines))
-            if action == 'new':
+            if action == "list":
+                return self._truncate_output(
+                    await self._describe_tabs(session.pages, page, deadlines)
+                )
+            if action == "new":
                 if len(session.pages) >= _MAX_TABS:
-                    return self._error(f'Error: the tab limit of {_MAX_TABS} is reached. Close one first.')
+                    return self._error(
+                        f"Error: the tab limit of {_MAX_TABS} is reached. Close one first."
+                    )
                 # The three tab mutations drive Playwright calls that take no
                 # `timeout` of their own, so the operation's deadline is applied
                 # around them rather than left to the driver.
                 await self._await_with_timeout(session.open_tab(), deadlines.action)
                 return self._truncate_output(
-                    f'Opened blank tab {len(session.pages) - 1} and made it active. Load it with navigate.'
+                    f"Opened blank tab {len(session.pages) - 1} and made it active. Load it with navigate."
                 )
             if page not in session.pages:
                 # A page can close itself, and the session moves the active pointer
                 # to whatever is left. Nothing was, so there is no tab to act on.
-                return self._error("Error: the active tab has closed. Open one with tabs('new').")
+                return self._error(
+                    "Error: the active tab has closed. Open one with tabs('new')."
+                )
             target = session.pages.index(page) if index is None else index
             if not 0 <= target < len(session.pages):
-                return self._error(f'Error: no tab {target}. {len(session.pages)} open; list them with tabs.')
-            if action == 'close':
+                return self._error(
+                    f"Error: no tab {target}. {len(session.pages)} open; list them with tabs."
+                )
+            if action == "close":
                 if len(session.pages) == 1:
-                    return self._error('Error: the last tab cannot be closed.')
+                    return self._error("Error: the last tab cannot be closed.")
                 closing = session.pages[target]
-                await self._await_with_timeout(session.close_tab(closing), deadlines.action)
+                await self._await_with_timeout(
+                    session.close_tab(closing), deadlines.action
+                )
                 # The session repoints only when the tab that closed was the active
                 # one; otherwise the operation keeps acting on the page it started on.
                 active = page if closing is not page else session.pages[-1]
-                return self._truncate_output(f'Closed tab {target}. Active tab is now {session.pages.index(active)}.')
-            selected = await self._await_with_timeout(session.activate(session.pages[target]), deadlines.action)
-            if (blocked := await self._enforce_navigation_policy(selected, 'tabs', deadlines.navigation)) is not None:
+                return self._truncate_output(
+                    f"Closed tab {target}. Active tab is now {session.pages.index(active)}."
+                )
+            selected = await self._await_with_timeout(
+                session.activate(session.pages[target]), deadlines.action
+            )
+            if (
+                blocked := await self._enforce_navigation_policy(
+                    selected, "tabs", deadlines.navigation
+                )
+            ) is not None:
                 return blocked
             text = await self._page_text(selected, deadlines.action)
             url = _without_credentials(selected.url)
-            return self._truncate_output(f'Selected tab {target}. URL: {url}\n\n{text}')
+            return self._truncate_output(f"Selected tab {target}. URL: {url}\n\n{text}")
 
-        return await self._in_operation('tabs', None, _tabs)
+        return await self._in_operation("tabs", None, _tabs)
 
-    async def _describe_tabs(self, pages: list[_Page], active: _Page, deadlines: _Deadlines) -> str:
+    async def _describe_tabs(
+        self, pages: list[_Page], active: _Page, deadlines: _Deadlines
+    ) -> str:
         """Render one line per open tab, marking the active one.
 
         A title that cannot be read does not fail the listing: the reason to list
         tabs is often that one of them is misbehaving.
         """
         if not pages:
-            return 'No tabs open.'
+            return "No tabs open."
         lines: list[str] = []
         for position, page in enumerate(pages):
             try:
                 title = await self._await_with_timeout(page.title(), deadlines.action)
             except PlaywrightError:
-                title = '<title unavailable>'
-            marker = ' (active)' if page is active else ''
-            lines.append(f'{position}{marker}: {title} -- {_without_credentials(page.url)}')
-        return '\n'.join(lines)
+                title = "<title unavailable>"
+            marker = " (active)" if page is active else ""
+            lines.append(
+                f"{position}{marker}: {title} -- {_without_credentials(page.url)}"
+            )
+        return "\n".join(lines)
 
-    async def handle_next_dialog(self, accept: bool, prompt_text: str | None = None) -> str:
+    async def handle_next_dialog(
+        self, accept: bool, prompt_text: str | None = None
+    ) -> str:
         """Decide how the next `alert`, `confirm` or `prompt` dialog is answered.
 
         A dialog blocks the page until it is answered, so the decision has to be
@@ -2671,11 +2963,13 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
 
         def _arm() -> str:
-            self._session.dialog_decision = _DialogDecision(accept=accept, prompt_text=prompt_text)
-            answer = 'be accepted' if accept else 'be dismissed'
-            return f'The next dialog will {answer}.'
+            self._session.dialog_decision = _DialogDecision(
+                accept=accept, prompt_text=prompt_text
+            )
+            answer = "be accepted" if accept else "be dismissed"
+            return f"The next dialog will {answer}."
 
-        return await self._in_session('handle_next_dialog', _arm)
+        return await self._in_session("handle_next_dialog", _arm)
 
     async def console_messages(self, errors_only: bool = False) -> str:
         """Return the console output and uncaught script errors the page produced.
@@ -2690,13 +2984,17 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         Returns:
             One line per message, oldest first, or a note when there are none.
         """
-        kinds = ('console', 'page_error', 'dialog')
+        kinds = ("console", "page_error", "dialog")
         events = [event for event in self._session.events if event.kind in kinds]
         if errors_only:
-            events = [event for event in events if event.level == 'error']
-        return await self._in_session('console_messages', lambda: self._render_events(events, 'console messages'))
+            events = [event for event in events if event.level == "error"]
+        return await self._in_session(
+            "console_messages", lambda: self._render_events(events, "console messages")
+        )
 
-    async def network_requests(self, url_contains: str | None = None, errors_only: bool = False) -> str:
+    async def network_requests(
+        self, url_contains: str | None = None, errors_only: bool = False
+    ) -> str:
         """Return the network requests the page made, with their URL, method and status.
 
         Pages that render from an API often name the data more directly here than
@@ -2713,13 +3011,19 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         Returns:
             One line per request, oldest first, or a note when there are none.
         """
-        kinds = ('response', 'request_failed', 'request_blocked')
+        kinds = ("response", "request_failed", "request_blocked")
         events = [event for event in self._session.events if event.kind in kinds]
         if url_contains is not None:
-            events = [event for event in events if event.url is not None and url_contains in event.url]
+            events = [
+                event
+                for event in events
+                if event.url is not None and url_contains in event.url
+            ]
         if errors_only:
-            events = [event for event in events if event.level != 'info']
-        return await self._in_session('network_requests', lambda: self._render_events(events, 'network requests'))
+            events = [event for event in events if event.level != "info"]
+        return await self._in_session(
+            "network_requests", lambda: self._render_events(events, "network requests")
+        )
 
     async def set_viewport(
         self,
@@ -2757,12 +3061,16 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
         async with self._operation_lock:
             with self._session.tracer.start_as_current_span(
-                'browser set_viewport', attributes={'browser.action': 'set_viewport', 'browser.outcome': 'ok'}
+                "browser set_viewport",
+                attributes={"browser.action": "set_viewport", "browser.outcome": "ok"},
             ):
                 viewport = None
                 if width is not None or height is not None:
                     vw, vh = self._session._viewport
-                    viewport = (width if width is not None else vw, height if height is not None else vh)
+                    viewport = (
+                        width if width is not None else vw,
+                        height if height is not None else vh,
+                    )
                 return await self._session.recreate_viewport(
                     viewport=viewport,
                     mobile=mobile,
@@ -2782,7 +3090,8 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         """
         async with self._operation_lock:
             with self._session.tracer.start_as_current_span(
-                f'browser {action}', attributes={'browser.action': action, 'browser.outcome': 'ok'}
+                f"browser {action}",
+                attributes={"browser.action": action, "browser.outcome": "ok"},
             ):
                 return body()
 
@@ -2794,7 +3103,7 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
         page loaded first and drop the failure that prompted the call.
         """
         if not events:
-            return self._truncate_output(f'No {label} recorded.')
+            return self._truncate_output(f"No {label} recorded.")
         lines = [event.describe() for event in events]
         budget = self._max_content_tokens * _CHARS_PER_TOKEN
         kept: list[str] = []
@@ -2805,11 +3114,11 @@ class BrowserToolset(FunctionToolset[AgentDepsT]):
             used += len(line) + 1
             kept.append(line)
         if len(kept) == len(lines):
-            return self._truncate_output('\n'.join(lines))
+            return self._truncate_output("\n".join(lines))
         # The marker counts against the budget like any other line, and dropping one
         # more entry to make room for it changes what it says.
-        marker = f'[... {len(lines) - len(kept)} older {label} dropped]'
+        marker = f"[... {len(lines) - len(kept)} older {label} dropped]"
         while len(kept) > 1 and used + len(marker) + 1 > budget:
             used -= len(kept.pop()) + 1
-            marker = f'[... {len(lines) - len(kept)} older {label} dropped]'
-        return self._truncate_output('\n'.join([marker, *reversed(kept)]))
+            marker = f"[... {len(lines) - len(kept)} older {label} dropped]"
+        return self._truncate_output("\n".join([marker, *reversed(kept)]))

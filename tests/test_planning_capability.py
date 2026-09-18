@@ -182,7 +182,9 @@ def test_update_task_status_wrong_id_raises_model_retry_with_plan() -> None:
             import pydantic_ai.exceptions as _paie
 
             with pytest.raises(_paie.ModelRetry) as exc:
-                await toolset.update_task_status(ctx, task_id="nope", status=TaskStatus.completed)
+                await toolset.update_task_status(
+                    ctx, task_id="nope", status=TaskStatus.completed
+                )
             msg = str(exc.value)
             assert "not found" in msg
             assert "Current plan:" in msg
@@ -285,7 +287,9 @@ def test_set_items_emits_created_per_item() -> None:
             store = FilePlanStore(tmp, conversation_id="conv-e", event_emitter=emitter)
             await store.set_items([PlanItem(content="a"), PlanItem(content="b")])
             created = [e for e in seen if e.event_type is PlanEventType.created]
-            assert len(created) == 2, f"expected 2 created, got {[e.item.content for e in created]!r}"
+            assert len(created) == 2, (
+                f"expected 2 created, got {[e.item.content for e in created]!r}"
+            )
             assert {e.item.content for e in created} == {"a", "b"}
 
         asyncio.run(body())
@@ -301,8 +305,12 @@ def test_set_items_diffs_deleted_on_re_run() -> None:
         async def body():
             seen: list[tuple[PlanEventType, str]] = []
             emitter = PlanEventEmitter()
-            emitter.on(PlanEventType.created, lambda e: seen.append((e.event_type, e.item.id)))
-            emitter.on(PlanEventType.deleted, lambda e: seen.append((e.event_type, e.item.id)))
+            emitter.on(
+                PlanEventType.created, lambda e: seen.append((e.event_type, e.item.id))
+            )
+            emitter.on(
+                PlanEventType.deleted, lambda e: seen.append((e.event_type, e.item.id))
+            )
             store = FilePlanStore(tmp, conversation_id="conv-d", event_emitter=emitter)
 
             await store.set_items([PlanItem(content="keep"), PlanItem(content="drop")])
@@ -310,11 +318,15 @@ def test_set_items_diffs_deleted_on_re_run() -> None:
             seen.clear()
 
             # drop "drop", keep "keep" -> one deleted, keeper shared so not created again
-            await store.set_items([PlanItem(id=kept_id, content="keep"), PlanItem(content="new")])
+            await store.set_items(
+                [PlanItem(id=kept_id, content="keep"), PlanItem(content="new")]
+            )
             kinds = [k for k, _ in seen]
             assert kinds.count(PlanEventType.deleted) == 1
             created_ids = [i for k, i in seen if k is PlanEventType.created]
-            assert len(created_ids) == 1 and created_ids[0] != kept_id  # the new item, not the keeper
+            assert (
+                len(created_ids) == 1 and created_ids[0] != kept_id
+            )  # the new item, not the keeper
             # the shared "keep" survived unchanged -> no updated event for it
 
         asyncio.run(body())
@@ -344,7 +356,10 @@ def test_plan_reminder_marker_is_in_shared_sop() -> None:
 
     # the reminder is a marker-tagged TextContent, not a bare mutable string
     part = UserPromptPart([TextContent("plan text", metadata="paf.plan.v1:abc123")])
-    assert any(isinstance(i, TextContent) and str(i.metadata).startswith("paf.plan.v1") for i in part.content)
+    assert any(
+        isinstance(i, TextContent) and str(i.metadata).startswith("paf.plan.v1")
+        for i in part.content
+    )
 
 
 def test_remove_previous_injection_strips_plan_reminder() -> None:
@@ -362,7 +377,11 @@ def test_remove_previous_injection_strips_plan_reminder() -> None:
 
     cap = Planning()
     stale = UserPromptPart(
-        content=["<plan-reminder>\n", CachePoint(ttl="5m"), TextContent("old plan", metadata="paf.plan.v1:abc")]
+        content=[
+            "<plan-reminder>\n",
+            CachePoint(ttl="5m"),
+            TextContent("old plan", metadata="paf.plan.v1:abc"),
+        ]
     )
     sign = UserPromptPart("real user prompt")
     request = ModelRequest(parts=[sign, stale])

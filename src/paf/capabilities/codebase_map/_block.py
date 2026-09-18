@@ -25,7 +25,9 @@ from pathlib import Path
 from ._schema import BlockRef, Span
 
 
-def read_block(path: str | Path, span: Span | None = None, *, limit_bytes: int = 65536) -> str | None:
+def read_block(
+    path: str | Path, span: Span | None = None, *, limit_bytes: int = 65536
+) -> str | None:
     """Return the source text for ``span`` of ``path``, bounded to ``limit_bytes``.
 
     - With a ``Span`` carrying byte offsets: exact ``[start_byte:end_byte]`` slice.

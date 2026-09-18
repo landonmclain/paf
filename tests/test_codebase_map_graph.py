@@ -31,6 +31,7 @@ Call-edge expectations (Phase 1.2; gold_calls.jsonl + gold_no_call.jsonl):
 The fixture is gitignored; if absent this gate skips (suite stays green on a
 clean checkout).
 """
+
 from __future__ import annotations
 
 import json
@@ -60,13 +61,19 @@ def _gold_edges() -> list[dict]:
 def _gold_calls() -> list[dict]:
     if not GOLD_CALLS.exists():
         return []
-    return [json.loads(line) for line in GOLD_CALLS.read_text().splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in GOLD_CALLS.read_text().splitlines() if line.strip()
+    ]
 
 
 def _gold_no_call() -> list[dict]:
     if not GOLD_NO_CALL.exists():
         return []
-    return [json.loads(line) for line in GOLD_NO_CALL.read_text().splitlines() if line.strip()]
+    return [
+        json.loads(line)
+        for line in GOLD_NO_CALL.read_text().splitlines()
+        if line.strip()
+    ]
 
 
 def _fixture_present() -> bool:
@@ -102,7 +109,9 @@ def _build() -> list[dict]:
 def edges() -> list[dict]:
     """The full edge set over the fixture (reference + call refinement)."""
     if not _fixture_present():
-        pytest.skip("paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md")
+        pytest.skip(
+            "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
+        )
     return _build()
 
 
@@ -121,7 +130,9 @@ def call_map(edges: list[dict]) -> dict[tuple[str, str], dict]:
 def test_build_edges_is_deterministic() -> None:
     """Same input -> identical output across runs (no hash-order flakiness)."""
     if not _fixture_present():
-        pytest.skip("paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md")
+        pytest.skip(
+            "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
+        )
     infos, sources = _load_infos()
     assert infos, "fixture produced no FileInfo records"
     e1 = build_edges(infos, sources)
@@ -129,7 +140,9 @@ def test_build_edges_is_deterministic() -> None:
     assert e1 == e2
     assert e1, "expected some edges over the paf-src fixture"
     # Some edges must be calls once sources are supplied (Phase 1.2 works).
-    assert any(e["kind"] == "call" for e in e1), "call refinement produced no call edges"
+    assert any(e["kind"] == "call" for e in e1), (
+        "call refinement produced no call edges"
+    )
 
 
 def test_no_sources_gives_all_reference(edges: list[dict]) -> None:
@@ -166,9 +179,7 @@ def test_gold_edge_symbol_fidelity(edge_map: dict, entry: dict) -> None:
 def test_gold_call_is_call(call_map: dict, entry: dict) -> None:
     """Every gold call edge is marked kind=call and carries the verified call symbols."""
     src, dst = entry["edge"].split(" -> ")
-    assert (src, dst) in call_map, (
-        f"gold call edge missing outright: {entry['edge']}"
-    )
+    assert (src, dst) in call_map, f"gold call edge missing outright: {entry['edge']}"
     e = call_map[(src, dst)]
     assert e["kind"] == "call", (
         f"expected {entry['edge']} to be a CALL but got kind={e['kind']}"

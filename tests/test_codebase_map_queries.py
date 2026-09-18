@@ -212,12 +212,18 @@ def test_signature_pos_only() -> None:
 
 def test_signature_quoted_annotation() -> None:
     _, by = _analyze()
-    assert by["quoted_ann"].signature == 'quoted_ann(x: "Point", y: "list[Point]") -> "Point"'
+    assert (
+        by["quoted_ann"].signature
+        == 'quoted_ann(x: "Point", y: "list[Point]") -> "Point"'
+    )
 
 
 def test_signature_complex_generic() -> None:
     _, by = _analyze()
-    assert by["complex_ann"].signature == "complex_ann() -> dict[str, list[tuple[int, str]]]"
+    assert (
+        by["complex_ann"].signature
+        == "complex_ann() -> dict[str, list[tuple[int, str]]]"
+    )
 
 
 def test_signature_union() -> None:
@@ -241,7 +247,10 @@ def test_signature_methods() -> None:
 def test_signature_multiline() -> None:
     _, by = _analyze()
     got = by["MyClass.long_sig"].signature
-    assert got == "long_sig(self,\n                 a: int,\n                 b: int = 3,\n                 **kwargs) -> None"
+    assert (
+        got
+        == "long_sig(self,\n                 a: int,\n                 b: int = 3,\n                 **kwargs) -> None"
+    )
 
 
 def test_class_signature_is_none() -> None:
@@ -315,7 +324,9 @@ def test_no_duplicate_searchable_symbols() -> None:
     """Regression: _walk_with_children double-appended children (Base.method x2)."""
     fi, _ = _analyze()
     quals = [s.qualified for s in fi.searchable_symbols]
-    assert len(quals) == len(set(quals)), f"duplicates: {[q for q in quals if quals.count(q) > 1]}"
+    assert len(quals) == len(set(quals)), (
+        f"duplicates: {[q for q in quals if quals.count(q) > 1]}"
+    )
 
 
 def test_symbols_top_level_list() -> None:
@@ -512,7 +523,10 @@ def test_recovery_preceding_comment_block() -> None:
 
 def test_recovery_module_docstring() -> None:
     rec = QueryRecovery(language="python", source=_FIXTURE)
-    assert rec.module_docstring() == "Module docstring — em-dash here exercises byte offsets."
+    assert (
+        rec.module_docstring()
+        == "Module docstring — em-dash here exercises byte offsets."
+    )
 
 
 def test_recovery_strip_quotes_and_dedent() -> None:
@@ -520,4 +534,7 @@ def test_recovery_strip_quotes_and_dedent() -> None:
 
     assert _strip_quotes('"""Hello."""') == "Hello."
     assert _strip_quotes("'''Hello.'''") == "Hello."
-    assert _dedent("Docstring here.\n\n    Second paragraph.") == "Docstring here.\n\nSecond paragraph."
+    assert (
+        _dedent("Docstring here.\n\n    Second paragraph.")
+        == "Docstring here.\n\nSecond paragraph."
+    )

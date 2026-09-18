@@ -17,6 +17,7 @@ The gate is intentionally tolerant: it skips any gold file that no longer exists
 the fixture, so it stays green across fixture re-clones. The fixture itself is
 gitignored, so on a clean checkout this file has no fixture -> all gold params skip.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,7 +35,9 @@ FIXTURE = ROOT / "tests" / "fixtures" / "chatbot"
 def _gold_entries() -> list[dict]:
     if not QUERIES.exists():
         return []
-    return [json.loads(line) for line in QUERIES.read_text().splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in QUERIES.read_text().splitlines() if line.strip()
+    ]
 
 
 def _fixture_present() -> bool:
@@ -45,7 +48,9 @@ def _fixture_present() -> bool:
 def test_ts_extraction_completeness_zero_errors() -> None:
     """Every TS/TSX/JS fixture file either extracts cleanly or is a legit skip."""
     if not _fixture_present():
-        pytest.skip("chatbot fixture not present (gitignored) — re-clone per tests/fixtures/README.md")
+        pytest.skip(
+            "chatbot fixture not present (gitignored) — re-clone per tests/fixtures/README.md"
+        )
     errors: list[str] = []
     for f in sorted(FIXTURE.rglob("*")):
         if f.suffix.lower() not in (".ts", ".tsx", ".js", ".jsx"):
@@ -63,7 +68,9 @@ def test_ts_extraction_completeness_zero_errors() -> None:
 def test_ts_gold_answer_surfaced_by_extraction(entry: dict) -> None:
     """Each TS gold answer's file+symbols are surfaced by extraction."""
     if not _fixture_present():
-        pytest.skip("chatbot fixture not present — re-clone per tests/fixtures/README.md")
+        pytest.skip(
+            "chatbot fixture not present — re-clone per tests/fixtures/README.md"
+        )
     for ans_file in entry.get("answer_files", []):
         p = FIXTURE / ans_file
         if not p.exists():
@@ -77,8 +84,9 @@ def test_ts_gold_answer_surfaced_by_extraction(entry: dict) -> None:
 
         names = {s.name for s in fi.searchable_symbols}
         quals = {s.qualified for s in fi.searchable_symbols if s.qualified}
-        missing = [w for w in want
-                   if w not in names and not any(q.endswith(w) for q in quals)]
+        missing = [
+            w for w in want if w not in names and not any(q.endswith(w) for q in quals)
+        ]
         assert not missing, (
             f"gold symbol(s) {missing} not surfaced in {ans_file} "
             f"(have {sorted(names)})"

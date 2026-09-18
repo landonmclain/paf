@@ -92,7 +92,8 @@ def test_append_toolset_appends_to_journal(tmp_path: Path) -> None:
             _FakeCtx(),
             type="preference",
             fact="user prefers flat-file storage",
-            tier="t1", born_on="2026-08-17T10:00:00+00:00",
+            tier="t1",
+            born_on="2026-08-17T10:00:00+00:00",
             source_ref="seed-lmem-3f9a:12",
         )
     )
@@ -103,7 +104,8 @@ def test_append_toolset_appends_to_journal(tmp_path: Path) -> None:
     assert recs[0][1] == MemoryRecord(
         type="preference",
         fact="user prefers flat-file storage",
-        tier="t1", born_on="2026-08-17T10:00:00+00:00",
+        tier="t1",
+        born_on="2026-08-17T10:00:00+00:00",
         source_ref="seed-lmem-3f9a:12",
     )
 
@@ -118,7 +120,8 @@ def test_append_toolset_is_append_only(tmp_path: Path) -> None:
                 _FakeCtx(),
                 type="fact",
                 fact="same fact twice",
-                tier="t1", born_on="2026-08-17T10:00:00+00:00",
+                tier="t1",
+                born_on="2026-08-17T10:00:00+00:00",
                 source_ref="seed-lmem-3f9a:12",
             )
         )
@@ -136,7 +139,8 @@ def test_append_toolset_rejects_bad_type(tmp_path: Path) -> None:
                 _FakeCtx(),
                 type="not-a-type",
                 fact="anything",
-                tier="t1", born_on="2026-08-17T10:00:00+00:00",
+                tier="t1",
+                born_on="2026-08-17T10:00:00+00:00",
                 source_ref="seed-lmem-3f9a:12",
             )
         )

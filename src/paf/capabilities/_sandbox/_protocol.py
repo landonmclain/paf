@@ -45,7 +45,7 @@ class BackgroundHandle:
 class BackgroundStatus:
     """Snapshot of a background process at ``check`` time."""
 
-    status: Literal['running', 'finished']
+    status: Literal["running", "finished"]
     stdout: str
     stderr: str
     exit_code: int | None = None

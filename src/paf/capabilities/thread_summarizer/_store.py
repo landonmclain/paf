@@ -146,7 +146,6 @@ class ThreadSummaryStore:
             return None
         return (last.run_id, last.turn_id)
 
-
     def append_summary(self, record: ThreadSummaryRecord) -> None:
         """Append a summary exactly once, idempotently by its run/turn anchor."""
         if record.conversation_id != self.conversation_id:

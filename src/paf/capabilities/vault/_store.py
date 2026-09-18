@@ -70,7 +70,11 @@ class ScanScope:
 
         if not patterns:
             return False
-        return any(fnmatch.fnmatch(rel_posix, pat) or fnmatch.fnmatch(Path(rel_posix).name, pat) for pat in patterns)
+        return any(
+            fnmatch.fnmatch(rel_posix, pat)
+            or fnmatch.fnmatch(Path(rel_posix).name, pat)
+            for pat in patterns
+        )
 
     def _allowed(self, path: Path) -> bool:
         rel = path.relative_to(self.root).as_posix()
@@ -180,7 +184,11 @@ class FlatFileVaultStorage:
             except OSError:
                 continue
             prev = files.get(rel) if isinstance(files, dict) else None
-            if prev is not None and prev.get("size") == st.st_size and prev.get("mtime") == st.st_mtime:
+            if (
+                prev is not None
+                and prev.get("size") == st.st_size
+                and prev.get("mtime") == st.st_mtime
+            ):
                 continue
             if self._hash_file(path) != (prev.get("sha256") if prev else None):
                 confirmed.add(rel)
@@ -196,7 +204,10 @@ class FlatFileVaultStorage:
 
 # --- Index building ----------------------------------------------------------
 
-def build_index(root: str | Path, scope: ScanScope, storage: FlatFileVaultStorage) -> dict:
+
+def build_index(
+    root: str | Path, scope: ScanScope, storage: FlatFileVaultStorage
+) -> dict:
     """(Re)build the full index for a vault: per-note rows + fresh snapshot.
 
     Pure derivation from the in-scope walk. Returns the ``index.json`` payload;

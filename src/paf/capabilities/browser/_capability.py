@@ -254,13 +254,16 @@ class Browser(AbstractCapability[AgentDepsT]):
     _policy: EgressPolicy = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.policy is not None and (self.allowed_domains is not None or not self.block_private_addresses):
+        if self.policy is not None and (
+            self.allowed_domains is not None or not self.block_private_addresses
+        ):
             raise UserError(
-                'Pass either policy or the allowed_domains/block_private_addresses shorthands, not both: '
-                'set those fields on the policy instead, so one object decides.'
+                "Pass either policy or the allowed_domains/block_private_addresses shorthands, not both: "
+                "set those fields on the policy instead, so one object decides."
             )
         self._policy = self.policy or EgressPolicy(
-            allowed_domains=self.allowed_domains, block_private_addresses=self.block_private_addresses
+            allowed_domains=self.allowed_domains,
+            block_private_addresses=self.block_private_addresses,
         )
         self._session = BrowserSession(
             policy=self._policy,
@@ -285,7 +288,9 @@ class Browser(AbstractCapability[AgentDepsT]):
             navigation_timeout_ms=self.navigation_timeout_ms,
         )
 
-    def for_agent(self, agent: AbstractAgent[AgentDepsT, object]) -> AbstractCapability[AgentDepsT]:
+    def for_agent(
+        self, agent: AbstractAgent[AgentDepsT, object]
+    ) -> AbstractCapability[AgentDepsT]:
         """Refuse to bind to a durable-execution agent.
 
         Durable execution (e.g. `TemporalDurability`) wraps the toolsets captured
@@ -305,9 +310,9 @@ class Browser(AbstractCapability[AgentDepsT]):
         for sibling in siblings:
             if isinstance(sibling, BaseDurabilityCapability):
                 raise UserError(
-                    'PlaywrightBrowser does not support durable execution (e.g. TemporalDurability): '
-                    'a live Chromium browser cannot survive activity replay or worker restart. '
-                    'Run the browser agent outside the durable agent, or remove the durability capability.'
+                    "PlaywrightBrowser does not support durable execution (e.g. TemporalDurability): "
+                    "a live Chromium browser cannot survive activity replay or worker restart. "
+                    "Run the browser agent outside the durable agent, or remove the durability capability."
                 )
         return self
 
@@ -324,12 +329,15 @@ class Browser(AbstractCapability[AgentDepsT]):
 
         def _instructions(ctx: RunContext[AgentDepsT]) -> str | None:
             return _INSTRUCTIONS.format(
-                max_content_tokens=self.max_content_tokens, allowed_domains=self._policy.describe()
+                max_content_tokens=self.max_content_tokens,
+                allowed_domains=self._policy.describe(),
             )
 
         return _instructions
 
-    async def wrap_run(self, ctx: RunContext[AgentDepsT], *, handler: WrapRunHandler) -> AgentRunResult[Any]:
+    async def wrap_run(
+        self, ctx: RunContext[AgentDepsT], *, handler: WrapRunHandler
+    ) -> AgentRunResult[Any]:
         """Hold the run's browser session open, and release it however the run ends.
 
         Chromium starts on the first browser-tool call, not here, so a run that
@@ -371,7 +379,9 @@ class Browser(AbstractCapability[AgentDepsT]):
         """
         return cls(
             headless=headless,
-            allowed_domains=list(allowed_domains) if allowed_domains is not None else None,
+            allowed_domains=list(allowed_domains)
+            if allowed_domains is not None
+            else None,
             block_private_addresses=block_private_addresses,
             screenshot_on_navigate=screenshot_on_navigate,
             max_content_tokens=max_content_tokens,

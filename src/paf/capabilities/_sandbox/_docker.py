@@ -28,7 +28,7 @@ import anyio
 # The host Docker daemon socket. A sandboxed ``docker`` command must never reach
 # the host daemon, so this path is never mounted into the container (see
 # ``_overlay_mounts``).
-_HOST_DOCKER_SOCKET = '/var/run/docker.sock'
+_HOST_DOCKER_SOCKET = "/var/run/docker.sock"
 
 from paf.capabilities._sandbox._protocol import (
     BackgroundHandle,
@@ -72,19 +72,19 @@ class DockerExecutor:
     def __init__(
         self,
         *,
-        image: str = 'python:3.12-slim',
-        mode: str = 'exec',
-        network: str = 'none',
-        user: str = '1000:1000',
+        image: str = "python:3.12-slim",
+        mode: str = "exec",
+        network: str = "none",
+        user: str = "1000:1000",
         read_only: bool = True,
-        memory: str = '1g',
-        cpus: str = '1.0',
+        memory: str = "1g",
+        cpus: str = "1.0",
         pids_limit: int = 256,
-        workspace: str = '/workspace',
+        workspace: str = "/workspace",
         container_name: str | None = None,
         exclude: Sequence[str] = (),
     ) -> None:
-        if mode not in ('exec', 'run'):
+        if mode not in ("exec", "run"):
             raise ValueError("mode must be 'exec' or 'run'")
         self._image = image
         self._mode = mode
@@ -119,13 +119,13 @@ class DockerExecutor:
         # Resolve the socket once: on many systems /var/run is a symlink to /run,
         # so a realpath comparison must be against the resolved socket path.
         host_socket = os.path.realpath(_HOST_DOCKER_SOCKET)
-        overlay_root = Path(tempfile.mkdtemp(prefix='paf-overlay-'))
+        overlay_root = Path(tempfile.mkdtemp(prefix="paf-overlay-"))
         mounts: list[str] = []
         for pattern in self._exclude:
             for host_path in sorted(cwd.glob(pattern)):
                 if os.path.realpath(host_path) == host_socket:
                     raise RuntimeError(
-                        'Refusing to mount the host Docker socket into the sandbox.'
+                        "Refusing to mount the host Docker socket into the sandbox."
                     )
                 rel = host_path.relative_to(cwd)
                 overlay_path = overlay_root / rel
@@ -134,22 +134,29 @@ class DockerExecutor:
                 else:
                     overlay_path.parent.mkdir(parents=True, exist_ok=True)
                     overlay_path.touch()
-                mounts.extend(['-v', f'{overlay_path}:{self._workspace}/{rel}'])
+                mounts.extend(["-v", f"{overlay_path}:{self._workspace}/{rel}"])
         return mounts
 
     def _base_run_args(self) -> list[str]:
         args = [
-            '--network', self._network,
-            '--user', self._user,
-            '--memory', self._memory,
-            '--cpus', self._cpus,
-            '--pids-limit', str(self._pids_limit),
+            "--network",
+            self._network,
+            "--user",
+            self._user,
+            "--memory",
+            self._memory,
+            "--cpus",
+            self._cpus,
+            "--pids-limit",
+            str(self._pids_limit),
         ]
         if self._read_only:
-            args.append('--read-only')
+            args.append("--read-only")
         return args
 
-    async def _docker(self, args: list[str], *, timeout: float = 60.0) -> tuple[int, str, str]:
+    async def _docker(
+        self, args: list[str], *, timeout: float = 60.0
+    ) -> tuple[int, str, str]:
         """Run a docker CLI command and return (exit_code, stdout, stderr)."""
         proc = await anyio.open_process(
             args,
@@ -180,8 +187,8 @@ class DockerExecutor:
         finally:
             await proc.aclose()
 
-        stdout = b''.join(stdout_chunks).decode('utf-8', errors='replace')
-        stderr = b''.join(stderr_chunks).decode('utf-8', errors='replace')
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
         exit_code = proc.returncode if proc.returncode is not None else 0
         return exit_code, stdout, stderr
 
@@ -189,18 +196,27 @@ class DockerExecutor:
         """Create the long-lived container for ``mode='exec'`` on first use."""
         if self._container_id is not None:
             return
-        name = self._container_name or f'paf-sandbox-{uuid.uuid4().hex[:8]}'
+        name = self._container_name or f"paf-sandbox-{uuid.uuid4().hex[:8]}"
         args = [
-            'docker', 'run', '-d', '--name', name,
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
             *self._base_run_args(),
-            '-v', f'{cwd}:{self._workspace}', '-w', self._workspace,
+            "-v",
+            f"{cwd}:{self._workspace}",
+            "-w",
+            self._workspace,
             *self._overlay_mounts(cwd),
-            self._image, 'sleep', 'infinity',
+            self._image,
+            "sleep",
+            "infinity",
         ]
         code, out, err = await self._docker(args)
         if code != 0:
             raise RuntimeError(
-                f'Failed to start sandbox container: {err.strip() or out.strip()}'
+                f"Failed to start sandbox container: {err.strip() or out.strip()}"
             )
         self._container_id = out.strip()
         self._container_name = name
@@ -213,16 +229,24 @@ class DockerExecutor:
         env: dict[str, str] | None,
         timeout: float,
     ) -> ExecResult:
-        if self._mode == 'exec':
+        if self._mode == "exec":
             await self._ensure_container(cwd)
-            args = ['docker', 'exec', self._container_id, 'sh', '-c', command]
+            args = ["docker", "exec", self._container_id, "sh", "-c", command]
         else:
             args = [
-                'docker', 'run', '--rm',
+                "docker",
+                "run",
+                "--rm",
                 *self._base_run_args(),
-                '-v', f'{cwd}:{self._workspace}', '-w', self._workspace,
+                "-v",
+                f"{cwd}:{self._workspace}",
+                "-w",
+                self._workspace,
                 *self._overlay_mounts(cwd),
-                self._image, 'sh', '-c', command,
+                self._image,
+                "sh",
+                "-c",
+                command,
             ]
         code, out, err = await self._docker(args, timeout=timeout)
         return ExecResult(stdout=out, stderr=err, exit_code=code)
@@ -235,18 +259,28 @@ class DockerExecutor:
         env: dict[str, str] | None,
     ) -> BackgroundHandle:
         command_id = uuid.uuid4().hex[:12]
-        name = f'paf-bg-{command_id}'
+        name = f"paf-bg-{command_id}"
         args = [
-            'docker', 'run', '-d', '--name', name,
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
             *self._base_run_args(),
-            '-v', f'{cwd}:{self._workspace}', '-w', self._workspace,
+            "-v",
+            f"{cwd}:{self._workspace}",
+            "-w",
+            self._workspace,
             *self._overlay_mounts(cwd),
-            self._image, 'sh', '-c', command,
+            self._image,
+            "sh",
+            "-c",
+            command,
         ]
         code, out, err = await self._docker(args)
         if code != 0:
             raise RuntimeError(
-                f'Failed to start background container: {err.strip() or out.strip()}'
+                f"Failed to start background container: {err.strip() or out.strip()}"
             )
         state = _DockerBackgroundState(container_id=name)
         return BackgroundHandle(command_id=command_id, state=state)
@@ -254,15 +288,17 @@ class DockerExecutor:
     async def check(self, handle: BackgroundHandle) -> BackgroundStatus:
         state: _DockerBackgroundState = handle.state
         _, running_out, _ = await self._docker(
-            ['docker', 'inspect', '-f', '{{.State.Running}}', state.container_id]
+            ["docker", "inspect", "-f", "{{.State.Running}}", state.container_id]
         )
-        is_running = running_out.strip() == 'true'
-        _, logs_out, logs_err = await self._docker(['docker', 'logs', state.container_id])
-        status = 'running' if is_running else 'finished'
+        is_running = running_out.strip() == "true"
+        _, logs_out, logs_err = await self._docker(
+            ["docker", "logs", state.container_id]
+        )
+        status = "running" if is_running else "finished"
         exit_code: int | None = None
         if not is_running:
             _, code_out, _ = await self._docker(
-                ['docker', 'inspect', '-f', '{{.State.ExitCode}}', state.container_id]
+                ["docker", "inspect", "-f", "{{.State.ExitCode}}", state.container_id]
             )
             try:
                 exit_code = int(code_out.strip())
@@ -274,16 +310,18 @@ class DockerExecutor:
 
     async def stop(self, handle: BackgroundHandle) -> BackgroundStatus:
         state: _DockerBackgroundState = handle.state
-        await self._docker(['docker', 'stop', state.container_id])
-        _, logs_out, logs_err = await self._docker(['docker', 'logs', state.container_id])
-        _, code_out, _ = await self._docker(
-            ['docker', 'inspect', '-f', '{{.State.ExitCode}}', state.container_id]
+        await self._docker(["docker", "stop", state.container_id])
+        _, logs_out, logs_err = await self._docker(
+            ["docker", "logs", state.container_id]
         )
-        await self._docker(['docker', 'rm', state.container_id])
+        _, code_out, _ = await self._docker(
+            ["docker", "inspect", "-f", "{{.State.ExitCode}}", state.container_id]
+        )
+        await self._docker(["docker", "rm", state.container_id])
         try:
             exit_code = int(code_out.strip())
         except ValueError:
             exit_code = None
         return BackgroundStatus(
-            status='finished', stdout=logs_out, stderr=logs_err, exit_code=exit_code
+            status="finished", stdout=logs_out, stderr=logs_err, exit_code=exit_code
         )

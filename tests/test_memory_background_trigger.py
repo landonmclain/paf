@@ -159,12 +159,18 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
     """The full service path: trigger → enqueue → worker folds + renders + advances."""
     records = [
         MemoryRecord(
-            type="fact", fact="Landon lives in Bentonville", tier="t1",
-            born_on="2026-08-28T00:00:00Z", source_ref="r1:1",
+            type="fact",
+            fact="Landon lives in Bentonville",
+            tier="t1",
+            born_on="2026-08-28T00:00:00Z",
+            source_ref="r1:1",
         ),
         MemoryRecord(
-            type="preference", fact="Prefers flat-file-first storage", tier="t1",
-            born_on="2026-08-28T00:00:01Z", source_ref="r1:2",
+            type="preference",
+            fact="Prefers flat-file-first storage",
+            tier="t1",
+            born_on="2026-08-28T00:00:01Z",
+            source_ref="r1:2",
         ),
     ]
 
@@ -179,9 +185,7 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
         )
         # The trigger decides a job is due (>= every accrued since consumed):
         wm = MemoryWatermark(run_id="r1", consumed_ts=_TS0)
-        assert (
-            should_fire(wm, tip_ts=_TS0 + timedelta(hours=1), every=_EVERY) is True
-        )
+        assert should_fire(wm, tip_ts=_TS0 + timedelta(hours=1), every=_EVERY) is True
         q.enqueue("s1", ConsolidationJob(run_id="r1", turn_id=12))
         await q.drain("s1")
 

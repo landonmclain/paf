@@ -42,7 +42,7 @@ _DEFAULT_MEMORY_GUIDANCE = (
     "job is to USE it, not maintain it.\n"
     "\n"
     "Memory is a curated, bounded snapshot, not raw history:\n"
-    "- **Tiers.** `## t1` = stable \"who the user is\" (identity, preferences, constraints — "
+    '- **Tiers.** `## t1` = stable "who the user is" (identity, preferences, constraints — '
     "supersede-only, always kept); `## t2` = goals / current work; `## t3` = recent / "
     "ephemeral (capped, may age out).\n"
     "- **Ordered newest-first** within a tier (identity pinned to the top of t1), so among "
@@ -390,12 +390,8 @@ class Memory(AbstractCapability[AgentDepsT]):
             if not isinstance(
                 latest, ModelRequest
             ):  # pragma: no cover - guaranteed by the agent graph
-                raise RuntimeError(
-                    "model request history must end with a ModelRequest"
-                )
-            request_context.messages[-1] = replace(
-                latest, parts=[*latest.parts, part]
-            )
+                raise RuntimeError("model request history must end with a ModelRequest")
+            request_context.messages[-1] = replace(latest, parts=[*latest.parts, part])
 
             if span.is_recording():
                 span.set_attributes(

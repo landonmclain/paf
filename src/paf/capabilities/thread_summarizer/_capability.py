@@ -164,7 +164,12 @@ def render_thread_summary(
         while len(lines) > 1 and len(body) > max_chars:
             lines.pop(0)
             body = "\n".join(lines)
-    return _THREAD_DATA_PREFIX + body + ("\n" + footer if footer else "") + _THREAD_DATA_SUFFIX
+    return (
+        _THREAD_DATA_PREFIX
+        + body
+        + ("\n" + footer if footer else "")
+        + _THREAD_DATA_SUFFIX
+    )
 
 
 @dataclass(init=False)
@@ -197,7 +202,9 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
     ) -> None:
         super().__init__()
         self._capture_directory = (
-            Path(capture_directory) if capture_directory is not None else capture_directory_for(agent_name)
+            Path(capture_directory)
+            if capture_directory is not None
+            else capture_directory_for(agent_name)
         )
         self._conversation_id: str | None = None
         self.inject_thread_summary = inject_thread_summary
@@ -215,13 +222,13 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
         if not records:
             return ""
         try:
-            return render_thread_summary(records, window=self.window, max_chars=self.max_chars)
+            return render_thread_summary(
+                records, window=self.window, max_chars=self.max_chars
+            )
         except Exception:  # a render glitch must never break the turn
             return ""
 
-    def _remove_previous_injection(
-        self, messages: list[Any], marker: str
-    ) -> None:
+    def _remove_previous_injection(self, messages: list[Any], marker: str) -> None:
         """Drop any prior ``<thread-summary>`` block tagged with ``marker``.
 
         Mirrors ``Memory._remove_previous_injection``: strip the tagged
@@ -290,12 +297,12 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
             # Nothing to inject — but the prior block may still be stripped above.
             return request_context
         latest = request_context.messages[-1]
-        if not isinstance(latest, ModelRequest):  # pragma: no cover — guaranteed by the agent graph
+        if not isinstance(
+            latest, ModelRequest
+        ):  # pragma: no cover — guaranteed by the agent graph
             return request_context
         part = UserPromptPart([TextContent(rendered, metadata=marker)])
-        request_context.messages[-1] = replace(
-            latest, parts=[*latest.parts, part]
-        )
+        request_context.messages[-1] = replace(latest, parts=[*latest.parts, part])
         return request_context
 
     @classmethod
@@ -308,7 +315,9 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
         max_chars = kwargs.get("max_chars", _THREAD_MAX_CHARS)
         return cls(
             agent_name=str(agent_name) if agent_name is not None else None,
-            capture_directory=str(capture_directory) if capture_directory is not None else None,
+            capture_directory=str(capture_directory)
+            if capture_directory is not None
+            else None,
             inject_thread_summary=bool(inject_thread_summary),
             window=int(window),
             max_chars=int(max_chars),

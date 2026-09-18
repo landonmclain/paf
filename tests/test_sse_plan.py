@@ -77,7 +77,9 @@ def test_turn_frames_emits_plan_snapshot_on_mutation_and_unsubscribes() -> None:
     sess = _fake_session(block_on)
     frames = sse._turn_frames(sess, "hi", "conv-1")  # type: ignore[attr-defined]
 
-    plan_frame = {"items": [{"id": "c5b38e0a", "content": "step one", "status": "in_progress"}]}
+    plan_frame = {
+        "items": [{"id": "c5b38e0a", "content": "step one", "status": "in_progress"}]
+    }
 
     async def _drive():
         # 1. First frame = turn text.
@@ -85,12 +87,16 @@ def test_turn_frames_emits_plan_snapshot_on_mutation_and_unsubscribes() -> None:
         assert "partial" in first
         # 2. Fire a plan mutation on the shared emitter (the agent's store does
         #    this in production). The SSE listener must push a snapshot frame.
-        with mock.patch.object(sse, "_plan_snapshot", new=mock.AsyncMock(return_value=plan_frame["items"])):
+        with mock.patch.object(
+            sse, "_plan_snapshot", new=mock.AsyncMock(return_value=plan_frame["items"])
+        ):
             emitter = get_plan_emitter("conv-1")
             await emitter.emit(
                 PlanEvent(
                     event_type=PlanEventType.status_changed,
-                    item=PlanItem(id="c5b38e0a", content="step one", status="in_progress"),
+                    item=PlanItem(
+                        id="c5b38e0a", content="step one", status="in_progress"
+                    ),
                 )
             )
             second = await asyncio.wait_for(anext(frames), timeout=2)
@@ -116,14 +122,18 @@ def test_turn_frames_no_plan_frame_without_mutation() -> None:
         first = await anext(frames)
         assert "partial" in first
         block_on.set()  # let the turn end
-        with mock.patch.object(sse, "_plan_snapshot", new=mock.AsyncMock(return_value=[])):
+        with mock.patch.object(
+            sse, "_plan_snapshot", new=mock.AsyncMock(return_value=[])
+        ):
             got = []
             try:
                 while True:
                     got.append(await anext(frames))
             except StopAsyncIteration:
                 pass
-        assert all("event: plan" not in f for f in got), "no plan event -> no plan frame"
+        assert all("event: plan" not in f for f in got), (
+            "no plan event -> no plan frame"
+        )
 
     asyncio.run(_drive())
 
@@ -132,7 +142,9 @@ def test_serialize_plan_items_shape() -> None:
     """_serialize_plan_items produces the exact UI item shape with real ids."""
     items = [
         PlanItem(id="aaaa1111", content="c1", status="completed"),
-        PlanItem(id="bbbb2222", content="c2", status="pending", depends_on=["aaaa1111"]),
+        PlanItem(
+            id="bbbb2222", content="c2", status="pending", depends_on=["aaaa1111"]
+        ),
     ]
     out = sse._serialize_plan_items(items)
     assert out == [
@@ -169,8 +181,13 @@ def test_rest_endpoint_returns_authoritative_snapshot() -> None:
             return f"demo:{cid}"
 
     async def _drive():
-        with mock.patch.object(sse, "_get_session", new=mock.AsyncMock(return_value=_Sess())), mock.patch.object(
-            sse, "_plan_snapshot", new=mock.AsyncMock(return_value=payload["items"])
+        with (
+            mock.patch.object(
+                sse, "_get_session", new=mock.AsyncMock(return_value=_Sess())
+            ),
+            mock.patch.object(
+                sse, "_plan_snapshot", new=mock.AsyncMock(return_value=payload["items"])
+            ),
         ):
             resp = await sse.conversation_plan("conv-1")  # type: ignore[attr-defined]
         assert resp == payload

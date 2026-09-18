@@ -100,7 +100,9 @@ def test_vault_overview_shows_nested_tree(vault: tuple[Path, VaultToolset]) -> N
 def test_vault_overview_empty(tmp_path: Path) -> None:
     root = tmp_path / "empty"
     root.mkdir()
-    toolset = VaultToolset(vault_root=root, storage=FlatFileVaultStorage(index_root=tmp_path / "eidx"))
+    toolset = VaultToolset(
+        vault_root=root, storage=FlatFileVaultStorage(index_root=tmp_path / "eidx")
+    )
     out = toolset.vault_overview()
     assert "empty" in out
 
@@ -147,9 +149,9 @@ def test_resolve_pathlike_miss_is_hard_never_basename_match(tmp_path: Path) -> N
     still uses the Obsidian basename matcher."""
     root = tmp_path / "vault"
     root.mkdir()
-    _seed(root, "Index.md", _IDX)                       # first in scan order
-    _seed(root, "Investigations/Foo/Index.md", _IDX)    # also basename "Index"
-    _seed(root, "Portfolio-GitHub/Index.md", _IDX)      # the intended target
+    _seed(root, "Index.md", _IDX)  # first in scan order
+    _seed(root, "Investigations/Foo/Index.md", _IDX)  # also basename "Index"
+    _seed(root, "Portfolio-GitHub/Index.md", _IDX)  # the intended target
     store = FlatFileVaultStorage(index_root=tmp_path / "idx")
     build_index(root, ScanScope(root), store)
     toolset = VaultToolset(vault_root=root, storage=store)
@@ -281,6 +283,7 @@ def test_deny_excludes_subtree(tmp_path: Path) -> None:
 
 def test_parse_frontmatter() -> None:
     from paf.capabilities.vault import extract_wikilinks, parse_frontmatter
+
     meta, body = parse_frontmatter(_MEMORY)
     assert meta.get("title") == "Memory Design"
     assert "memory" in meta.get("tags", [])
@@ -318,7 +321,9 @@ def test_index_root_override_wins(tmp_path: Path) -> None:
     assert not (root / "data").exists()
 
 
-def test_default_index_is_repo_owned_not_in_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_index_is_repo_owned_not_in_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """With default storage, the index is keyed under the capability's default
     index dir (data/.paf-vault-index by default), NOT co-located inside the vault tree.
 
@@ -338,10 +343,16 @@ def test_default_index_is_repo_owned_not_in_vault(tmp_path: Path, monkeypatch: p
     # Point the default index dir at pytest's tmp area so the "repo-owned,
     # keyed by vault-root hash" behavior is proven WITHOUT leaking one unique
     # folder into the real data/.paf-vault-index per test run.
-    monkeypatch.setattr(_store, "_DEFAULT_VAULT_INDEX_DIR", str(tmp_path / "repo-index"))
+    monkeypatch.setattr(
+        _store, "_DEFAULT_VAULT_INDEX_DIR", str(tmp_path / "repo-index")
+    )
     store = FFS()  # default storage -> capability default (monkeypatched) index dir
     build_index(root, ScanScope(root), store)
-    expected = PROJECT_ROOT / Path(_store._DEFAULT_VAULT_INDEX_DIR) / index_dir_for_root(root).name
+    expected = (
+        PROJECT_ROOT
+        / Path(_store._DEFAULT_VAULT_INDEX_DIR)
+        / index_dir_for_root(root).name
+    )
     assert expected == index_dir_for_root(root)
     # index built at the configured location, keyed by the vault root's hash
     assert (index_dir_for_root(root) / "index.json").exists()
@@ -380,7 +391,9 @@ def test_note_links_resolves_outgoing(vault: tuple[Path, VaultToolset]) -> None:
 
 def test_note_links_marks_dangling(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
-    _seed(vault[0], "Dangling.md", "---\ntitle: Dangling\n---\nPoints to [[Nowhere]].\n")
+    _seed(
+        vault[0], "Dangling.md", "---\ntitle: Dangling\n---\nPoints to [[Nowhere]].\n"
+    )
     out = toolset.note_links("Dangling")
     assert out is not None
     assert "Nowhere (unresolved)" in out
@@ -405,7 +418,9 @@ def test_note_backlinks_none(vault: tuple[Path, VaultToolset]) -> None:
     # ------------------------------------------------------------------ Tier B: note_create
 
 
-def test_note_create_writes_note_with_frontmatter(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_create_writes_note_with_frontmatter(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     out = toolset.note_create("Concepts/New Idea", body="Fresh idea.", tags=["draft"])
     assert "Created Concepts/New Idea.md" in out
@@ -460,18 +475,26 @@ def test_note_rename_rewrites_inbound_links(vault: tuple[Path, VaultToolset]) ->
     assert toolset.lookup_note("Foundations") is not None
 
 
-def test_note_rename_updates_auto_title_keeps_custom(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_rename_updates_auto_title_keeps_custom(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     toolset.note_create("Auto", body="x")
     toolset.note_rename("Auto", "AutoRenamed")
-    assert "title: AutoRenamed" in (vault[0] / "AutoRenamed.md").read_text(encoding="utf-8")
+    assert "title: AutoRenamed" in (vault[0] / "AutoRenamed.md").read_text(
+        encoding="utf-8"
+    )
     # a note with a hand-set display title keeps it
     _seed(vault[0], "Concept.md", "---\ntitle: My Display Name\n---\nbody")
     toolset.note_rename("Concept", "ConceptRenamed")
-    assert "title: My Display Name" in (vault[0] / "ConceptRenamed.md").read_text(encoding="utf-8")
+    assert "title: My Display Name" in (vault[0] / "ConceptRenamed.md").read_text(
+        encoding="utf-8"
+    )
 
 
-def test_note_rename_refuses_collision_and_escape(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_rename_refuses_collision_and_escape(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     with pytest.raises(ModelRetry, match="already exists"):
         toolset.note_rename("Index", "Grounding")  # collides with existing Grounding.md
@@ -509,7 +532,9 @@ def test_rename_note_title_preserves_custom() -> None:
 # ------------------------------------------------------------------ Tier C: read_note version header
 
 
-def test_read_note_reports_content_version_header(vault: tuple[Path, VaultToolset]) -> None:
+def test_read_note_reports_content_version_header(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     out = toolset.read_note("Grounding")
     assert out is not None
@@ -521,7 +546,9 @@ def test_read_note_reports_content_version_header(vault: tuple[Path, VaultToolse
     assert "See [[Index]]." in out
 
 
-def test_read_note_version_matches_content_hash(vault: tuple[Path, VaultToolset]) -> None:
+def test_read_note_version_matches_content_hash(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     import hashlib
 
@@ -543,7 +570,9 @@ def test_read_note_numbers_lines(vault: tuple[Path, VaultToolset]) -> None:
     assert body[4].startswith("     5\t")
 
 
-def test_read_note_pages_with_offset_and_limit(vault: tuple[Path, VaultToolset]) -> None:
+def test_read_note_pages_with_offset_and_limit(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     out = toolset.read_note("Grounding", offset=1, limit=2)
     assert out is not None
@@ -578,9 +607,14 @@ def test_read_note_default_limit_caps_large_notes(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ Tier C: note_edit
 
 
-def test_note_edit_replaces_exact_once_and_returns_new_version(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_edit_replaces_exact_once_and_returns_new_version(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
-    out = toolset.note_edit("Grounding", [{"old_text": "See [[Index]].", "new_text": "See [[Foundations]]."}])
+    out = toolset.note_edit(
+        "Grounding",
+        [{"old_text": "See [[Index]].", "new_text": "See [[Foundations]]."}],
+    )
     assert "Edited Grounding.md" in out
     assert "[version:" in out
     text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
@@ -590,31 +624,42 @@ def test_note_edit_replaces_exact_once_and_returns_new_version(vault: tuple[Path
     assert "Foundations" in toolset.lookup_note("Grounding")
 
 
-def test_note_edit_version_chaining_read_edit_edit(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_edit_version_chaining_read_edit_edit(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     read = toolset.read_note("Grounding")
     assert read is not None
     v1 = read.splitlines()[0].rsplit("version: ", 1)[1].rstrip("]")
     r1 = toolset.note_edit(
-        "Grounding", [{"old_text": "See [[Index]].", "new_text": "First pass."}], expected_version=v1
+        "Grounding",
+        [{"old_text": "See [[Index]].", "new_text": "First pass."}],
+        expected_version=v1,
     )
     v2 = r1.splitlines()[0].rsplit("version:", 1)[1].strip("]")
     # second edit with the freshly returned version succeeds
     r2 = toolset.note_edit(
-        "Grounding", [{"old_text": "First pass.", "new_text": "Second pass."}], expected_version=v2
+        "Grounding",
+        [{"old_text": "First pass.", "new_text": "Second pass."}],
+        expected_version=v2,
     )
     assert "Edited Grounding.md" in r2
     assert "Second pass." in (vault[0] / "Grounding.md").read_text(encoding="utf-8")
 
 
-def test_note_edit_batch_applies_all_pairs_in_one_write(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_edit_batch_applies_all_pairs_in_one_write(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     # two independent changes, one atomic call, and a per-pair diff each
     out = toolset.note_edit(
         "Grounding",
         [
             {"old_text": "See [[Index]].", "new_text": "See [[Foundations]]."},
-            {"old_text": "tags: [grounding, curated]", "new_text": "tags: [grounding, curated, edited]"},
+            {
+                "old_text": "tags: [grounding, curated]",
+                "new_text": "tags: [grounding, curated, edited]",
+            },
         ],
     )
     assert "Edited Grounding.md" in out
@@ -627,7 +672,9 @@ def test_note_edit_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -
     _, toolset = vault
     with pytest.raises(ModelRetry, match="Conflict"):
         toolset.note_edit(
-            "Grounding", [{"old_text": "See [[Index]].", "new_text": "Changed."}], expected_version="stale-deadbeef"
+            "Grounding",
+            [{"old_text": "See [[Index]].", "new_text": "Changed."}],
+            expected_version="stale-deadbeef",
         )
     # the note was NOT modified
     text = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
@@ -635,17 +682,23 @@ def test_note_edit_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -
     assert "Changed." not in text
 
 
-def test_note_edit_no_expected_version_allowed(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_edit_no_expected_version_allowed(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     # expected_version is optional when the caller doesn't need CAS
-    out = toolset.note_edit("Grounding", [{"old_text": "See [[Index]].", "new_text": "See [[Index]] fine."}])
+    out = toolset.note_edit(
+        "Grounding", [{"old_text": "See [[Index]].", "new_text": "See [[Index]] fine."}]
+    )
     assert "Edited Grounding.md" in out
 
 
 def test_note_edit_old_text_not_found(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
     with pytest.raises(ModelRetry, match="old_text not found"):
-        toolset.note_edit("Grounding", [{"old_text": "no such text anywhere", "new_text": "x"}])
+        toolset.note_edit(
+            "Grounding", [{"old_text": "no such text anywhere", "new_text": "x"}]
+        )
     assert "See [[Index]]." in (vault[0] / "Grounding.md").read_text(encoding="utf-8")
 
 
@@ -658,7 +711,9 @@ def test_note_edit_old_text_not_unique(vault: tuple[Path, VaultToolset]) -> None
     assert "IDX" not in (vault[0] / "Index.md").read_text(encoding="utf-8")
 
 
-def test_note_edit_batch_rejects_all_when_any_pair_fails(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_edit_batch_rejects_all_when_any_pair_fails(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     # one valid + one garbage pair → the WHOLE batch is rejected, nothing lands
     with pytest.raises(ModelRetry, match="Refusing to edit"):
@@ -712,7 +767,9 @@ def test_note_append_twice_stacks_in_order(vault: tuple[Path, VaultToolset]) -> 
     assert "Line one." in text
     assert "Line two." in text
     # appended blocks all follow the original body line, in order
-    assert text.index("See [[Index]].") < text.index("Line one.") < text.index("Line two.")
+    assert (
+        text.index("See [[Index]].") < text.index("Line one.") < text.index("Line two.")
+    )
 
 
 def test_note_append_version_chaining_cas(vault: tuple[Path, VaultToolset]) -> None:
@@ -727,7 +784,9 @@ def test_note_append_version_chaining_cas(vault: tuple[Path, VaultToolset]) -> N
     assert "Appended" in r2
 
 
-def test_note_append_conflict_on_stale_version(vault: tuple[Path, VaultToolset]) -> None:
+def test_note_append_conflict_on_stale_version(
+    vault: tuple[Path, VaultToolset],
+) -> None:
     _, toolset = vault
     before = (vault[0] / "Grounding.md").read_text(encoding="utf-8")
     with pytest.raises(ModelRetry, match="Conflict"):
@@ -763,6 +822,7 @@ def test_write_atomic_is_thread_safe() -> None:
     d = Path(tempfile.mkdtemp())
     target = d / "index.json"
     errors: list[tuple[int, str]] = []
+
     def _worker(n: int) -> None:
         try:
             for _ in range(3000):

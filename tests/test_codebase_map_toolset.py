@@ -42,7 +42,7 @@ _SRC_A = (
     '    """A widget factory."""\n'
     "    def make(self, tool: str) -> str:\n"
     '        """Make something from a tool."""\n'
-    "        return f\"made-{tool}\"\n"
+    '        return f"made-{tool}"\n'
     "\n"
     "def helper(x: int) -> int:\n"
     '    """Add one."""\n'
@@ -67,7 +67,9 @@ def scanned(tmp_path: Path) -> tuple[Path, CodebaseMapToolset]:
 # ------------------------------------------------------------------ get_overview
 
 
-def test_get_overview_shows_nested_tree(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_shows_nested_tree(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     root, t = scanned
     out = t.get_overview()
     assert f"Overview of {root.resolve()}" in out
@@ -78,7 +80,9 @@ def test_get_overview_shows_nested_tree(scanned: tuple[Path, CodebaseMapToolset]
     assert "top.py" in out
 
 
-def test_get_overview_depth_folds_subdirs(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_depth_folds_subdirs(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """depth caps the open tree: subdirs below the cap show their header with
     contents folded (not expanded), keeping the overview bounded on big repos.
     (``depth`` is the renamed ``max_depth``, anchored at the repo root by default.)"""
@@ -90,7 +94,9 @@ def test_get_overview_depth_folds_subdirs(scanned: tuple[Path, CodebaseMapToolse
     assert "top.py" in out  # depth-1 file still visible
 
 
-def test_get_overview_path_scopes_subtree(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_path_scopes_subtree(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """path anchors the overview to one directory; siblings are not re-rendered."""
     root, t = scanned
     _seed(root, "src/a.py", "# a\n")  # ensure src has depth-2 files
@@ -149,12 +155,14 @@ def test_get_overview_absolute_path_outside_scan_root_teaches_rule(
     assert "get_overview() with no path" in out
 
 
-
-def test_get_overview_path_depth_relative(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_path_depth_relative(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """depth under a path is relative to that path (not the repo root)."""
     root, _ = scanned
     _seed(root, "src/nested/deep.py", "def d():\n    return 1\n")
     from paf.capabilities.codebase_map._scan import scan_and_write
+
     store = FlatFileStorage()
     scan_and_write(root, store)
     t = CodebaseMapToolset(scan_root=root, storage=store)
@@ -168,7 +176,9 @@ def test_get_overview_path_depth_relative(scanned: tuple[Path, CodebaseMapToolse
     assert "  a.py  (" not in out0
 
 
-def test_get_overview_collapses_noise_dirs(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_collapses_noise_dirs(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """Known-noise dirs (tests/docs/etc.) fold to one line; real code dirs expand."""
     root, t = scanned
     _seed(root, "tests/test_a.py", "# ta\n")
@@ -176,6 +186,7 @@ def test_get_overview_collapses_noise_dirs(scanned: tuple[Path, CodebaseMapTools
     _seed(root, "docs/index.md", "# docs\n")
     # Re-scan so the fixture's overview.json picks up the new dirs.
     from paf.capabilities.codebase_map._scan import scan_and_write
+
     store = FlatFileStorage()
     scan_and_write(root, store)
     t = CodebaseMapToolset(scan_root=root, storage=store)
@@ -190,11 +201,14 @@ def test_get_overview_collapses_noise_dirs(scanned: tuple[Path, CodebaseMapTools
     assert "  a.py  (" in out
 
 
-def test_get_overview_anchor_matching_collapse_still_expands(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_anchor_matching_collapse_still_expands(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """The anchored dir expands even when it matches a collapse pattern."""
     root, t = scanned
     _seed(root, "tests/test_a.py", "# ta\n")
     from paf.capabilities.codebase_map._scan import scan_and_write
+
     store = FlatFileStorage()
     scan_and_write(root, store)
     t = CodebaseMapToolset(scan_root=root, storage=store)
@@ -203,18 +217,23 @@ def test_get_overview_anchor_matching_collapse_still_expands(scanned: tuple[Path
     assert "test_a.py" in out  # its children are revealed
 
 
-def test_get_overview_missing_path_reports(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_missing_path_reports(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """An unknown anchor path reports the miss instead of crashing."""
     _, t = scanned
     out = t.get_overview(path="does_not_exist")
     assert "No directory named" in out
 
 
-def test_get_overview_deep_anchor_preserves_path(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_deep_anchor_preserves_path(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """A deeply-nested anchor keeps its ancestor dirs so the tree can climb to it."""
     root, _ = scanned
     _seed(root, "pkg/deep/leaf.py", "def leaf():\n    return 1\n")
     from paf.capabilities.codebase_map._scan import scan_and_write
+
     store = FlatFileStorage()
     scan_and_write(root, store)
     t = CodebaseMapToolset(scan_root=root, storage=store)
@@ -230,7 +249,9 @@ def test_get_overview_deep_anchor_preserves_path(scanned: tuple[Path, CodebaseMa
     assert "leaf.py" not in out0
 
 
-def test_get_overview_negative_depth_raises(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_get_overview_negative_depth_raises(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """Negative depth is rejected."""
     _, t = scanned
     with pytest.raises(ValueError):
@@ -258,12 +279,16 @@ def test_lookup_file_symbol_head(scanned: tuple[Path, CodebaseMapToolset]) -> No
     assert "class" in out.lower()
 
 
-def test_lookup_file_unknown_symbol_is_none(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_unknown_symbol_is_none(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     _, t = scanned
     assert t.lookup_file("src/a.py", symbol="Nope") is None
 
 
-def test_lookup_file_symbol_detail_emits_child_span_index(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_symbol_detail_emits_child_span_index(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """The single-symbol detail form must expose a drill-down span index for nested
     symbols (class methods / inner functions), so the model can read_block(path:L1-L2)
     without a blind window guess or a whole-class body dump."""
@@ -277,15 +302,21 @@ def test_lookup_file_symbol_detail_emits_child_span_index(scanned: tuple[Path, C
     assert "make" in out
     assert "[5-7]" in out  # make() spans def(5) + docstring(6) + return(7)
     # The index appears before any raw body text.
-    assert out.index("children:") < (out.index("return") if "return" in out else len(out))
+    assert out.index("children:") < (
+        out.index("return") if "return" in out else len(out)
+    )
 
 
-def test_lookup_file_unknown_path_is_none(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_unknown_path_is_none(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     _, t = scanned
     assert t.lookup_file("src/missing.py") is None
 
 
-def test_lookup_file_detail_has_signature_no_body(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_detail_has_signature_no_body(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     # Whole-file detail is METADATA only (kind/signature/docstring/span) — no bodies.
     # It must stay bounded no matter the file size; source/body comes from read_block
     # or the single-symbol form. See the lookup_file docstring contract.
@@ -297,7 +328,9 @@ def test_lookup_file_detail_has_signature_no_body(scanned: tuple[Path, CodebaseM
     assert "made-" not in out  # body text must NOT be dumped
 
 
-def test_lookup_file_symbol_detail_has_body(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_lookup_file_symbol_detail_has_body(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     # The single-symbol form DOES include the body — the bounded "read one symbol".
     _, t = scanned
     out = t.lookup_file("src/a.py", symbol="helper", detail=True)
@@ -315,7 +348,7 @@ def test_read_block_whole_file(scanned: tuple[Path, CodebaseMapToolset]) -> None
     out = t.read_block("src/a.py")
     assert out is not None
     assert "class Widget" in out
-    assert "return f\"made-{tool}\"" in out
+    assert 'return f"made-{tool}"' in out
 
 
 def test_read_block_region_by_lines(scanned: tuple[Path, CodebaseMapToolset]) -> None:
@@ -332,7 +365,9 @@ def test_read_block_missing_file_none(scanned: tuple[Path, CodebaseMapToolset]) 
     assert t.read_block("src/does-not-exist.py") is None
 
 
-def test_read_block_path_escape_blocked(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_read_block_path_escape_blocked(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     root, t = scanned
     outside = root.parent / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
@@ -387,7 +422,9 @@ def test_read_block_routes_through_storage_seam(tmp_path: Path) -> None:
 # ------------------------------------------------------------- search_codebase
 
 
-def test_search_codebase_hits_live_artifacts(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_search_codebase_hits_live_artifacts(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     _, t = scanned
     out = t.search_codebase("Widget")
     assert "Widget" in out
@@ -399,7 +436,9 @@ def test_search_codebase_no_results(scanned: tuple[Path, CodebaseMapToolset]) ->
     assert "No results" in t.search_codebase("zznotawordzz")
 
 
-def test_search_codebase_emits_pasteable_read_block_ref(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_search_codebase_emits_pasteable_read_block_ref(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """The whole point of the index: a search hit collapses to a pointer. The hit
     must expose a directly-usable ``read_block`` ref (``read: path:L1-L2``) so the
     agent can paste it straight into ``read_block`` without re-typing the path."""
@@ -409,7 +448,11 @@ def test_search_codebase_emits_pasteable_read_block_ref(scanned: tuple[Path, Cod
     assert "read: " in out
     # Pull the first "read: <ref>" line and feed it back into read_block — it must
     # resolve to the matched symbol's source region, not return None.
-    ref = next(line.strip().removeprefix("read: ") for line in out.splitlines() if "read: " in line)
+    ref = next(
+        line.strip().removeprefix("read: ")
+        for line in out.splitlines()
+        if "read: " in line
+    )
     assert ref.startswith("src/a.py:")
     block = t.read_block(ref)
     assert block is not None
@@ -431,7 +474,9 @@ def test_get_repo_map_built(scanned: tuple[Path, CodebaseMapToolset]) -> None:
     assert "src/a.py" in out or "capabilities" in out
 
 
-def test_search_exposed_tools_are_the_six_live_ladder(scanned: tuple[Path, CodebaseMapToolset]) -> None:
+def test_search_exposed_tools_are_the_six_live_ladder(
+    scanned: tuple[Path, CodebaseMapToolset],
+) -> None:
     """The agent-facing surface is the six live tools — get_repo_map is registered."""
     _, t = scanned
     assert sorted(t.tools) == [
@@ -456,7 +501,9 @@ def test_run_codebase_map_reindexes(scanned: tuple[Path, CodebaseMapToolset]) ->
     assert t.lookup_file("src/late.py") is not None
 
 
-def test_codebase_map_capability_steers_code_questions_to_ladder(tmp_path: Path) -> None:
+def test_codebase_map_capability_steers_code_questions_to_ladder(
+    tmp_path: Path,
+) -> None:
     """The capability injects a tool-choice steer toward the ladder for code.
 
     The steer (mere guidance, not removal) exists so the demo agent reaches for
@@ -467,7 +514,10 @@ def test_codebase_map_capability_steers_code_questions_to_ladder(tmp_path: Path)
     instructions = cap.get_instructions()
     assert instructions is not None
     text = " ".join(instructions)
-    assert "reach for the codebase tools" in text or "start with the codebase tools" in text
+    assert (
+        "reach for the codebase tools" in text
+        or "start with the codebase tools" in text
+    )
     assert "get_overview" in text
     assert "search_codebase" in text
     assert "lookup_file" in text

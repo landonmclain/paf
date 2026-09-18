@@ -47,7 +47,9 @@ def _msg(*, user: str, assistant: str) -> list[ModelMessage]:
     ]
 
 
-def _store(tmp_path: Path, runs: dict[str, list[ModelMessage]], conversation_id: str) -> FileStepStore:
+def _store(
+    tmp_path: Path, runs: dict[str, list[ModelMessage]], conversation_id: str
+) -> FileStepStore:
     """Write a FileStepStore with one run per key, all under one conversation."""
     store = FileStepStore(directory=tmp_path / "store")
     for i, (run_id, msgs) in enumerate(runs.items()):
@@ -138,7 +140,9 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
         async def scenario():
             await session.background._maybe_trigger_thread_summarize("profile:cid")
             q = session.background.thread_summarizer_queue
-            assert q is not None, ">= 10 complete turns -> the queue must be constructed"
+            assert q is not None, (
+                ">= 10 complete turns -> the queue must be constructed"
+            )
             await q.drain("profile:cid")
 
         asyncio.run(scenario())
@@ -147,7 +151,9 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.run_id == "run-a"
     assert wm.turn_id == 9
-    assert any(task.status == "done" for task in session.background._background_tasks.values())
+    assert any(
+        task.status == "done" for task in session.background._background_tasks.values()
+    )
 
     # exactly one 10-turn block was written (sparse {at,what} beats + a summary)
     recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
@@ -207,7 +213,9 @@ def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.run_id == "run-a"
     assert wm.turn_id == 10
-    assert any(task.status == "done" for task in session.background._background_tasks.values())
+    assert any(
+        task.status == "done" for task in session.background._background_tasks.values()
+    )
 
 
 def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> None:
@@ -233,12 +241,12 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
     msgs_b = []
     for i in range(6):
         msgs_b.extend(_msg(user=f"b{i}", assistant=f"rb{i}"))
-    store = _store(
-        tmp_path, {"run-a": msgs_a, "run-b": msgs_b}, "profile:cid"
-    )
+    store = _store(tmp_path, {"run-a": msgs_a, "run-b": msgs_b}, "profile:cid")
     capture_root = str(tmp_path / "summaries" / "assistant")
     # Fresh watermark: ThreadSummaryStore dir exists but holds NO watermark file.
-    ThreadSummaryStore(capture_root, "profile:cid").directory.mkdir(parents=True, exist_ok=True)
+    ThreadSummaryStore(capture_root, "profile:cid").directory.mkdir(
+        parents=True, exist_ok=True
+    )
 
     with Session(
         "runtime2_test",
@@ -257,7 +265,9 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
         async def scenario():
             await session.background._maybe_trigger_thread_summarize("profile:cid")
             q = session.background.thread_summarizer_queue
-            assert q is not None, ">=10 complete turns across the backlog -> must enqueue"
+            assert q is not None, (
+                ">=10 complete turns across the backlog -> must enqueue"
+            )
             await q.drain("profile:cid")
 
         asyncio.run(scenario())
@@ -265,7 +275,9 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
     # Whole backlog must be folded (up to the in-flight tip of run-b).
     wm = _wm(ThreadSummaryStore(capture_root, "profile:cid"))
     assert wm.turn_id is not None
-    assert any(task.status == "done" for task in session.background._background_tasks.values())
+    assert any(
+        task.status == "done" for task in session.background._background_tasks.values()
+    )
     recs = ThreadSummaryStore(capture_root, "profile:cid").existing_summaries()
     assert len(recs) >= 1
     refs = recs[0].refs
@@ -287,9 +299,9 @@ def test_trigger_skips_below_turn_threshold(tmp_path: Path) -> None:
     # watermark at turn 8 => span = turns 9..9 = 1 turn < BLOCK_TURNS => skip.
     store_dir = ThreadSummaryStore(capture_root, "profile:cid").directory
     store_dir.mkdir(parents=True, exist_ok=True)
-    MemoryWatermark(
-        run_id="run-a", turn_id=8, consumed_ts=datetime.now(UTC)
-    ).save(store_dir, filename=THREAD_WATERMARK_FILENAME)
+    MemoryWatermark(run_id="run-a", turn_id=8, consumed_ts=datetime.now(UTC)).save(
+        store_dir, filename=THREAD_WATERMARK_FILENAME
+    )
 
     with Session(
         "runtime2_test",
@@ -344,9 +356,7 @@ def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
     """
     store = _store(tmp_path, {"ra": _msg(user="hi", assistant="hey")}, "profile:cA")
 
-    with Session(
-        "runtime2_test", trace=False, resume=False, store=store
-    ) as session:
+    with Session("runtime2_test", trace=False, resume=False, store=store) as session:
         session.background = BackgroundCoordinator(
             store=store, agent_name="runtime2_test"
         )

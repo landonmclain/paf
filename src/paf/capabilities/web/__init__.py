@@ -12,6 +12,6 @@ from ._capability import Web
 from ._toolset import WebToolset
 
 __all__ = [
-    'Web',
-    'WebToolset',
+    "Web",
+    "WebToolset",
 ]

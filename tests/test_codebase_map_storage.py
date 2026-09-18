@@ -59,7 +59,9 @@ def test_read_missing_artifact_returns_none(tmp_path: Path) -> None:
 def test_read_block_byte_slice(tmp_path: Path) -> None:
     src = tmp_path / "f.py"
     src.write_text("aaaa\nbbbb\ncccc\n", encoding="utf-8")
-    ref = BlockRef(file=str(src), span=Span(start_byte=5, end_byte=9, start_line=2, end_line=2))
+    ref = BlockRef(
+        file=str(src), span=Span(start_byte=5, end_byte=9, start_line=2, end_line=2)
+    )
     store = FlatFileStorage()
     assert store.read_block(ref) == "bbbb"
 
@@ -69,13 +71,19 @@ def test_read_block_line_fallback(tmp_path: Path) -> None:
     src.write_text("l1\nl2\nl3\n", encoding="utf-8")
     store = FlatFileStorage()
     # byte offsets absent (None) -> line fallback
-    ref = BlockRef(file=str(src), span=Span(start_byte=None, end_byte=None, start_line=2, end_line=2))
+    ref = BlockRef(
+        file=str(src),
+        span=Span(start_byte=None, end_byte=None, start_line=2, end_line=2),
+    )
     assert store.read_block(ref) == "l2"
 
 
 def test_read_block_missing_file_returns_none(tmp_path: Path) -> None:
     store = FlatFileStorage()
-    ref = BlockRef(file=str(tmp_path / "nope.py"), span=Span(start_byte=0, end_byte=1, start_line=1, end_line=1))
+    ref = BlockRef(
+        file=str(tmp_path / "nope.py"),
+        span=Span(start_byte=0, end_byte=1, start_line=1, end_line=1),
+    )
     assert store.read_block(ref) is None
 
 
@@ -86,14 +94,24 @@ def test_sync_changed_detects_content_change(tmp_path: Path) -> None:
 
     f = _seed_file(root, "mod.py", "v1")
     # seed a snapshot so the file is "known"
-    snapshot = {"files": {f.relative_to(root).as_posix(): {"size": f.stat().st_size, "mtime": f.stat().st_mtime, "sha256": "x" * 64}}}
+    snapshot = {
+        "files": {
+            f.relative_to(root).as_posix(): {
+                "size": f.stat().st_size,
+                "mtime": f.stat().st_mtime,
+                "sha256": "x" * 64,
+            }
+        }
+    }
     store.write(ArtifactKind.SNAPSHOT, root, snapshot)
 
     # unchanged -> not flagged (only hashed when stat differs)
     assert store.sync_changed(root) == set()
 
     # change content but preserve size+mtime (touch-style) -> hash confirm catches it
-    f.write_text("v1 changeddddddd", encoding="utf-8")  # different size -> stat gate fires
+    f.write_text(
+        "v1 changeddddddd", encoding="utf-8"
+    )  # different size -> stat gate fires
     assert (f.relative_to(root).as_posix()) in store.sync_changed(root)
 
 
@@ -107,7 +125,9 @@ def test_sync_changed_skips_index_and_git(tmp_path: Path) -> None:
     changed = store.sync_changed(root)
     # .git and .agent-codeindex are ignored; real.py shows as new (not in snapshot)
     assert "real.py" in changed
-    assert not any(c.startswith(".git") or c.startswith(".agent-codeindex") for c in changed)
+    assert not any(
+        c.startswith(".git") or c.startswith(".agent-codeindex") for c in changed
+    )
 
 
 # --------------------------------------------------------------------------- schema
@@ -115,14 +135,18 @@ def test_sync_changed_skips_index_and_git(tmp_path: Path) -> None:
 
 def test_schema_records_construct() -> None:
     sym = SymbolInfo(name="f", kind="FUNCTION", signature="def f()", doc="doc")
-    fi = FileInfo(path="a.py", language="python", symbols=["f"], searchable_symbols=[sym])
+    fi = FileInfo(
+        path="a.py", language="python", symbols=["f"], searchable_symbols=[sym]
+    )
     assert fi.searchable_symbols[0].doc == "doc"
     hit = SearchHit(file="a.py", start_line=1, end_line=5, symbol="f", score=1.0)
     assert hit.score == 1.0
 
 
 def test_search_hit_carries_blockref_pointer() -> None:
-    ref = BlockRef(file="a.py", span=Span(start_byte=0, end_byte=10, start_line=1, end_line=1))
+    ref = BlockRef(
+        file="a.py", span=Span(start_byte=0, end_byte=10, start_line=1, end_line=1)
+    )
     hit = SearchHit(file="a.py", start_line=1, end_line=1, symbol="f", block=ref)
     assert hit.block is not None
     assert hit.block.span.end_byte == 10

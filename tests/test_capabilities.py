@@ -95,9 +95,7 @@ def test_warn_on_cache_busts_cataloged_and_wired() -> None:
     from paf.capabilities.build import build_runtime_capabilities
 
     built = build_runtime_capabilities(DEMO_PROFILE)
-    monitor = next(
-        (c for c in built if type(c).__name__ == "WarnOnCacheBusts"), None
-    )
+    monitor = next((c for c in built if type(c).__name__ == "WarnOnCacheBusts"), None)
     assert monitor is not None
     assert isinstance(monitor, WarnOnCacheBusts)
     assert monitor.collapse_ratio == 0.5
@@ -143,9 +141,7 @@ def test_cache_bust_warning_flips_active_span_to_error() -> None:
 
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
-    assert spans[0].status.status_code.name == "ERROR", (
-        spans[0].status
-    )
+    assert spans[0].status.status_code.name == "ERROR", spans[0].status
     events = [e for e in spans[0].events]
     assert any(e.name == "exception" for e in events)
     # The turn continues: the `with` block above completed without raising.
@@ -270,9 +266,7 @@ def test_browser_spec_config_wins_over_capability_default() -> None:
 
     # No browser_config -> the capability's loopback-only default.
     built_default = build_runtime_capabilities(DEMO_PROFILE)
-    browser_default = next(
-        (c for c in built_default if isinstance(c, Browser)), None
-    )
+    browser_default = next((c for c in built_default if isinstance(c, Browser)), None)
     assert browser_default is not None
     assert browser_default.allowed_domains == [
         "localhost",
@@ -293,9 +287,7 @@ def test_browser_private_guard_default_and_override() -> None:
 
     # Secure default: no browser_config -> guard stays ON.
     b_default = next(
-        c
-        for c in build_runtime_capabilities(DEMO_PROFILE)
-        if isinstance(c, Browser)
+        c for c in build_runtime_capabilities(DEMO_PROFILE) if isinstance(c, Browser)
     )
     assert b_default.block_private_addresses is True
 
@@ -365,7 +357,11 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
         content = out.messages[0].parts[0].content
         assert not any(isinstance(p, BinaryContent) for p in content)
         stub = next(
-            (p for p in content if isinstance(p, TextContent) and "screenshot captured" in p.content),
+            (
+                p
+                for p in content
+                if isinstance(p, TextContent) and "screenshot captured" in p.content
+            ),
             None,
         )
         assert stub is not None
@@ -382,7 +378,9 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
         # the hook must strip it there too (the run-verified root cause of the
         # original 404 -- deepseek still saw the image in the UserPromptPart).
         ascii_png = b"\x89PNG\r\n\x1a\n" + b"\xaa" * 16
-        user_part = UserPromptPart(content=[BinaryContent(data=ascii_png, media_type="image/png")])
+        user_part = UserPromptPart(
+            content=[BinaryContent(data=ascii_png, media_type="image/png")]
+        )
         ctx3 = _ctx([ModelRequest(parts=[user_part])], vision=True)
         out3 = await vis.before_model_request(None, ctx3)
         new_parts = out3.messages[0].parts
@@ -396,7 +394,6 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
         assert all(k == "TextContent" for k in kinds)
 
     asyncio.run(_run())
-
 
 
 def test_only_one_real_profile_for_m1() -> None:
@@ -515,11 +512,17 @@ def test_turn_boundary_compact_now_trims_large_history_noop_small() -> None:
     # A large cross-turn history, well over the 150k boundary target.
     large = []
     for i in range(60):
-        large.append(ModelRequest(parts=[UserPromptPart(content=f"user {i} " + "x" * 12000)]))
-        large.append(ModelResponse(parts=[TextPart(content=f"reply {i} " + "y" * 10000)]))
+        large.append(
+            ModelRequest(parts=[UserPromptPart(content=f"user {i} " + "x" * 12000)])
+        )
+        large.append(
+            ModelResponse(parts=[TextPart(content=f"reply {i} " + "y" * 10000)])
+        )
 
     def _run() -> None:
-        compacted = asyncio.run(compact_now(boundary, list(large), model=model, deps=None))
+        compacted = asyncio.run(
+            compact_now(boundary, list(large), model=model, deps=None)
+        )
         assert len(compacted) < len(large)
         assert compacted != large
 
@@ -537,11 +540,10 @@ def test_turn_boundary_compact_now_trims_large_history_noop_small() -> None:
 
 # --- EgressPolicy: secure default, explicit override, metadata firebreak ----
 
+
 def _policy(*, block_private: bool, allowed: list[str] | None) -> EgressPolicy:
     """A browser egress policy with the given guard + allowlist."""
-    return EgressPolicy(
-        allowed_domains=allowed, block_private_addresses=block_private
-    )
+    return EgressPolicy(allowed_domains=allowed, block_private_addresses=block_private)
 
 
 def _req(url: str, kind: str = "navigation") -> EgressRequest:
@@ -573,7 +575,9 @@ def test_egress_default_blocks_private_and_metadata() -> None:
     assert _refuse(p, "http://192.168.1.50/admin") is not None
 
     # A public host is allowed when named in the allowlist.
-    p_public = _policy(block_private=True, allowed=["staging.example.com"])
+    p_public = _policy(
+        block_private=True, allowed=["staging.example.com"]
+    )
     assert _refuse(p_public, "http://staging.example.com/") is None
 
 
@@ -603,7 +607,10 @@ def test_egress_override_reaches_loopback_but_not_metadata() -> None:
         allowed=["localhost", "169.254.169.254", "metadata.google.internal"],
     )
     assert _refuse(p_meta, "http://169.254.169.254/latest/meta-data/iam/") is not None
-    assert _refuse(p_meta, "http://metadata.google.internal/computeMetadata/v1/") is not None
+    assert (
+        _refuse(p_meta, "http://metadata.google.internal/computeMetadata/v1/")
+        is not None
+    )
 
 
 def test_egress_metadata_always_blocked_even_when_allowlisted_default() -> None:

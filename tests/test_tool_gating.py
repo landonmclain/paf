@@ -32,9 +32,7 @@ def test_gated_tool_is_blocked(monkeypatch):
     so they don't block normal operations, pending the approval-path design), so
     this pins the block path deterministically by gating one tool for the test.
     """
-    monkeypatch.setattr(
-        tool_gating, "DEFAULT_GATED_TOOLS", frozenset({"run_command"})
-    )
+    monkeypatch.setattr(tool_gating, "DEFAULT_GATED_TOOLS", frozenset({"run_command"}))
 
     async def run_command(cmd: str) -> str:
         return "EXECUTED: " + cmd

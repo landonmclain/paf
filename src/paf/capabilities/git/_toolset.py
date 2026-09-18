@@ -30,7 +30,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 
-_P = ParamSpec('_P')
+_P = ParamSpec("_P")
 
 DEFAULT_DIFF_CHUNK_LINES = 400
 MAX_DIFF_CHUNK_LINES = 1200
@@ -77,7 +77,7 @@ def _resolve_safe_path(root: Path, user_path: str) -> Path:
     try:
         full.relative_to(root)
     except ValueError as e:
-        raise ValueError(f'Path outside allowed workspace: {full}') from e
+        raise ValueError(f"Path outside allowed workspace: {full}") from e
     return full
 
 
@@ -100,11 +100,17 @@ class GitToolset(FunctionToolset):
         self._root = root.resolve()
         self._timeout = timeout
 
-        self.add_function(self.git_status, name='git_status', retries=_GIT_TOOL_RETRIES)
-        self.add_function(self.git_changed_files, name='git_changed_files', retries=_GIT_TOOL_RETRIES)
-        self.add_function(self.git_diff, name='git_diff', retries=_GIT_TOOL_RETRIES)
-        self.add_function(self.git_checkpoint, name='git_checkpoint', retries=_GIT_TOOL_RETRIES)
-        self.add_function(self.git_restore_paths, name='git_restore_paths', retries=_GIT_TOOL_RETRIES)
+        self.add_function(self.git_status, name="git_status", retries=_GIT_TOOL_RETRIES)
+        self.add_function(
+            self.git_changed_files, name="git_changed_files", retries=_GIT_TOOL_RETRIES
+        )
+        self.add_function(self.git_diff, name="git_diff", retries=_GIT_TOOL_RETRIES)
+        self.add_function(
+            self.git_checkpoint, name="git_checkpoint", retries=_GIT_TOOL_RETRIES
+        )
+        self.add_function(
+            self.git_restore_paths, name="git_restore_paths", retries=_GIT_TOOL_RETRIES
+        )
 
     async def for_run(self, ctx: RunContext) -> AbstractToolset:
         """Return a fresh instance per run (stateless here, but keep isolation)."""
@@ -116,7 +122,7 @@ class GitToolset(FunctionToolset):
         if cwd.is_file():
             cwd = cwd.parent
         if not cwd.is_dir():
-            raise ValueError(f'Working directory is not a directory: {cwd}')
+            raise ValueError(f"Working directory is not a directory: {cwd}")
         return cwd
 
     def _validated_paths(self, paths: list[str] | None) -> list[str]:
@@ -166,32 +172,32 @@ class GitToolset(FunctionToolset):
             with anyio.CancelScope(shield=True):
                 await proc.wait()
             raise TimeoutError(
-                f'git command timed out after {self._timeout}s: {" ".join(parts)}'
+                f"git command timed out after {self._timeout}s: {' '.join(parts)}"
             ) from None
         finally:
             await proc.aclose()
 
         exit_code = proc.returncode if proc.returncode is not None else 0
-        stdout = b''.join(out).decode('utf-8', errors='replace')
-        stderr = b''.join(err).decode('utf-8', errors='replace')
+        stdout = b"".join(out).decode("utf-8", errors="replace")
+        stderr = b"".join(err).decode("utf-8", errors="replace")
         return exit_code, stdout, stderr
 
     def _format_result(self, *, stdout: str, stderr: str, exit_code: int) -> str:
         """Assemble a labeled result string like the shell toolset's output."""
         parts: list[str] = []
         if stdout:
-            parts.append(f'[stdout]\n{stdout}')
+            parts.append(f"[stdout]\n{stdout}")
         if stderr:
-            parts.append(f'[stderr]\n{stderr}')
-        output = '\n'.join(parts) if parts else '(no output)'
+            parts.append(f"[stderr]\n{stderr}")
+        output = "\n".join(parts) if parts else "(no output)"
         if exit_code != 0:
-            output = f'{output}\n[exit code: {exit_code}]'
+            output = f"{output}\n[exit code: {exit_code}]"
         return output
 
     # -- tools -------------------------------------------------------------
 
     @_recoverable
-    async def git_status(self, rel_path: str = '.') -> str:
+    async def git_status(self, rel_path: str = ".") -> str:
         """Show concise git working tree status.
 
         Safe read-only inspection tool. Use this before editing, checkpointing,
@@ -209,11 +215,13 @@ class GitToolset(FunctionToolset):
                 Usually "." unless working in a specific subproject.
         """
         cwd = self._git_cwd(rel_path)
-        exit_code, stdout, stderr = await self._run_git(cwd, ['git', 'status', '--short'])
+        exit_code, stdout, stderr = await self._run_git(
+            cwd, ["git", "status", "--short"]
+        )
         return self._format_result(stdout=stdout, stderr=stderr, exit_code=exit_code)
 
     @_recoverable
-    async def git_changed_files(self, rel_path: str = '.') -> str:
+    async def git_changed_files(self, rel_path: str = ".") -> str:
         """Show changed tracked files without returning full diff content.
 
         Safe read-only inspection tool. Use this before git_diff when there may
@@ -233,13 +241,15 @@ class GitToolset(FunctionToolset):
                 Usually "." unless working in a specific subproject.
         """
         cwd = self._git_cwd(rel_path)
-        exit_code, stdout, stderr = await self._run_git(cwd, ['git', 'diff', '--name-status'])
+        exit_code, stdout, stderr = await self._run_git(
+            cwd, ["git", "diff", "--name-status"]
+        )
         return self._format_result(stdout=stdout, stderr=stderr, exit_code=exit_code)
 
     @_recoverable
     async def git_diff(
         self,
-        rel_path: str = '.',
+        rel_path: str = ".",
         paths: list[str] | None = None,
         start_line: int = 1,
         max_lines: int = DEFAULT_DIFF_CHUNK_LINES,
@@ -273,13 +283,15 @@ class GitToolset(FunctionToolset):
         safe_paths = self._validated_paths(paths)
 
         if safe_paths:
-            parts = ['git', 'diff', '--', *safe_paths]
+            parts = ["git", "diff", "--", *safe_paths]
         else:
-            parts = ['git', 'diff']
+            parts = ["git", "diff"]
 
         exit_code, stdout, stderr = await self._run_git(cwd, parts)
         if exit_code != 0:
-            return self._format_result(stdout=stdout, stderr=stderr, exit_code=exit_code)
+            return self._format_result(
+                stdout=stdout, stderr=stderr, exit_code=exit_code
+            )
         return _format_diff_chunk(
             diff_text=stdout,
             start_line=start_line,
@@ -287,7 +299,9 @@ class GitToolset(FunctionToolset):
         )
 
     @_recoverable
-    async def git_checkpoint(self, message: str, paths: list[str], rel_path: str = '.') -> str:
+    async def git_checkpoint(
+        self, message: str, paths: list[str], rel_path: str = "."
+    ) -> str:
         """Create a git checkpoint commit for explicit paths only.
 
         Write tool. Stages explicit files and creates a commit.
@@ -317,26 +331,30 @@ class GitToolset(FunctionToolset):
         """
         if not paths:
             return (
-                'Refusing to create checkpoint without explicit paths.\n\n'
-                'Pass the specific changed files to checkpoint using paths=[...]. '
-                'This avoids accidentally committing unrelated local changes.'
+                "Refusing to create checkpoint without explicit paths.\n\n"
+                "Pass the specific changed files to checkpoint using paths=[...]. "
+                "This avoids accidentally committing unrelated local changes."
             )
 
         cwd = self._git_cwd(rel_path)
         safe_paths = self._validated_paths(paths)
 
-        add_ec, add_out, add_err = await self._run_git(cwd, ['git', 'add', '--', *safe_paths])
-        commit_ec, commit_out, commit_err = await self._run_git(
-            cwd, ['git', 'commit', '-m', message]
+        add_ec, add_out, add_err = await self._run_git(
+            cwd, ["git", "add", "--", *safe_paths]
         )
-        add_block = self._format_result(stdout=add_out, stderr=add_err, exit_code=add_ec)
+        commit_ec, commit_out, commit_err = await self._run_git(
+            cwd, ["git", "commit", "-m", message]
+        )
+        add_block = self._format_result(
+            stdout=add_out, stderr=add_err, exit_code=add_ec
+        )
         commit_block = self._format_result(
             stdout=commit_out, stderr=commit_err, exit_code=commit_ec
         )
-        return f'{add_block}\n\n---\n\n{commit_block}'
+        return f"{add_block}\n\n---\n\n{commit_block}"
 
     @_recoverable
-    async def git_restore_paths(self, paths: list[str], rel_path: str = '.') -> str:
+    async def git_restore_paths(self, paths: list[str], rel_path: str = ".") -> str:
         """Discard unstaged changes for explicit paths.
 
         Destructive write tool. Use this only when the user explicitly asks to
@@ -365,12 +383,12 @@ class GitToolset(FunctionToolset):
                 Usually "." unless working in a specific subproject.
         """
         if not paths:
-            return 'No paths provided for restore.'
+            return "No paths provided for restore."
 
         cwd = self._git_cwd(rel_path)
         safe_paths = self._validated_paths(paths)
         exit_code, stdout, stderr = await self._run_git(
-            cwd, ['git', 'restore', '--', *safe_paths]
+            cwd, ["git", "restore", "--", *safe_paths]
         )
         return self._format_result(stdout=stdout, stderr=stderr, exit_code=exit_code)
 
@@ -404,34 +422,35 @@ def _format_diff_chunk(
         Human-readable chunk with total line count and continuation metadata.
     """
     if start_line < 1:
-        return 'start_line must be >= 1'
+        return "start_line must be >= 1"
     if max_lines < 1:
-        return 'max_lines must be >= 1'
+        return "max_lines must be >= 1"
 
     max_lines = min(max_lines, MAX_DIFF_CHUNK_LINES)
     lines = diff_text.splitlines()
     total_lines = len(lines)
 
     if total_lines == 0:
-        return 'Diff lines: 0\nNo diff.'
+        return "Diff lines: 0\nNo diff."
 
     start_idx = start_line - 1
     if start_idx >= total_lines:
-        return f'Diff lines: {total_lines}\nstart_line {start_line} is beyond end of diff.'
+        return (
+            f"Diff lines: {total_lines}\nstart_line {start_line} is beyond end of diff."
+        )
 
     end_idx = min(start_idx + max_lines, total_lines)
     selected = lines[start_idx:end_idx]
     next_start_line = end_idx + 1 if end_idx < total_lines else None
 
-    body = '\n'.join(
-        f'{line_no}: {line}'
-        for line_no, line in enumerate(selected, start=start_line)
+    body = "\n".join(
+        f"{line_no}: {line}" for line_no, line in enumerate(selected, start=start_line)
     )
 
     return (
-        f'Diff lines: {total_lines}\n'
-        f'Showing lines {start_line}-{end_idx} of {total_lines}\n'
-        f'Next start_line: {next_start_line}\n'
-        f'Use git_diff with start_line={next_start_line} to continue if needed.\n\n'
-        f'{body}'
+        f"Diff lines: {total_lines}\n"
+        f"Showing lines {start_line}-{end_idx} of {total_lines}\n"
+        f"Next start_line: {next_start_line}\n"
+        f"Use git_diff with start_line={next_start_line} to continue if needed.\n\n"
+        f"{body}"
     )

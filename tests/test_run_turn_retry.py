@@ -84,8 +84,12 @@ class _FakeStream:
         result = types.SimpleNamespace(
             output="final answer",
             usage=types.SimpleNamespace(
-                input_tokens=1, output_tokens=2, cache_read_tokens=3,
-                cache_write_tokens=4, total_tokens=5, requests=1,
+                input_tokens=1,
+                output_tokens=2,
+                cache_read_tokens=3,
+                cache_write_tokens=4,
+                total_tokens=5,
+                requests=1,
             ),
         )
         return AgentRunResultEvent(result=result)

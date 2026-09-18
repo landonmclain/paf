@@ -22,7 +22,7 @@ from ._capability import Browser
 from ._toolset import BrowserSession, BrowserToolset
 
 __all__ = [
-    'Browser',
-    'BrowserSession',
-    'BrowserToolset',
+    "Browser",
+    "BrowserSession",
+    "BrowserToolset",
 ]

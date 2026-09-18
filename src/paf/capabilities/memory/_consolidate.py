@@ -165,9 +165,7 @@ def _consolidation_model_settings() -> ModelSettings:
     out["top_p"] = 1.0
     if settings.consol_seed is not None:
         out["seed"] = settings.consol_seed
-    pinned_quantizations = [
-        q for q in settings.consol_provider_quantizations if q
-    ]
+    pinned_quantizations = [q for q in settings.consol_provider_quantizations if q]
     if settings.consol_provider_order:
         provider: dict = {"order": list(settings.consol_provider_order)}
         if pinned_quantizations:
@@ -320,7 +318,9 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
                 tid = a
                 break
         run_id = runs[idx]
-        turn_refs.append(f"{run_id}:{tid}" if run_id is not None and tid is not None else None)
+        turn_refs.append(
+            f"{run_id}:{tid}" if run_id is not None and tid is not None else None
+        )
 
     def _label(role: str, idx: int, inline_date: str | None = None) -> str:
         ref = turn_refs[idx]
@@ -407,7 +407,9 @@ async def consolidate(
             "defensively over an empty view (folds only if it writes)",
             len(evicted),
         )
-        evicted_text = "No new durable user or assistant text was captured in this span."
+        evicted_text = (
+            "No new durable user or assistant text was captured in this span."
+        )
     result = await owner.run(
         CONSOLIDATION_PROMPT.format(evicted_text=evicted_text),
     )
@@ -557,7 +559,8 @@ def _split_chunks(text: str, *, max_tokens: int) -> list[str]:
         # legacy ``User: <text>`` form. Lines inside a message's content do not
         # carry the label.
         is_msg_start = (
-            line.startswith("User:") or line.startswith("User ")
+            line.startswith("User:")
+            or line.startswith("User ")
             or line.startswith("Assistant:")
             or line.startswith("Assistant ")
         )

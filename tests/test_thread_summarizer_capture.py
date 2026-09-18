@@ -49,7 +49,9 @@ def _ctx_like(conversation_id: str | None):
 def test_capture_directory_for_is_per_agent(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     # relative to CWD (mirrors memory's DEFAULT_MEMORY_DIR data/memory/<agent>)
-    assert capture_directory_for("assistant") == Path("data") / "summaries" / "assistant"
+    assert (
+        capture_directory_for("assistant") == Path("data") / "summaries" / "assistant"
+    )
     assert capture_directory_for(None) == Path("data") / "summaries" / "agent"
 
 
@@ -59,7 +61,11 @@ def test_window_fires_hook_with_correct_refs():
     for i in range(5):
         msgs.extend(_turn(f"q{i}", run_id="run-a" if i < 3 else "run-b"))
     captured: list[tuple[list[dict], int]] = []
-    window = TurnBoundSlidingWindow(max_messages=100, keep_messages=2, capture_hook=lambda rows, keep: captured.append((rows, keep)))
+    window = TurnBoundSlidingWindow(
+        max_messages=100,
+        keep_messages=2,
+        capture_hook=lambda rows, keep: captured.append((rows, keep)),
+    )
 
     asyncio.run(window.compact(msgs, _ctx_like("prof:cid")))
 
@@ -69,7 +75,7 @@ def test_window_fires_hook_with_correct_refs():
     refs = [r["ref"] for r in rows]
     assert refs == sorted(refs)
     assert set(refs) == {"run-a:0", "run-a:1", "run-a:2"}
-    assert refs[0] == refs[1]           # first turn's req+resp share run-a:0
+    assert refs[0] == refs[1]  # first turn's req+resp share run-a:0
     assert all("role" in r and "text" in r for r in rows)
 
 
@@ -84,7 +90,11 @@ def test_window_hook_off_by_default_no_capture():
 
 def test_window_no_eviction_no_hook():
     captured: list = []
-    window = TurnBoundSlidingWindow(max_messages=100, keep_messages=2, capture_hook=lambda rows, keep: captured.append((rows, keep)))
+    window = TurnBoundSlidingWindow(
+        max_messages=100,
+        keep_messages=2,
+        capture_hook=lambda rows, keep: captured.append((rows, keep)),
+    )
     msgs = _turn("only-one-turn")
     asyncio.run(window.compact(msgs, _ctx_like("prof:cid")))
     assert captured == []  # nothing evictable -> hook not called
@@ -92,7 +102,11 @@ def test_window_no_eviction_no_hook():
 
 def test_window_never_evicts_active_turn():
     captured: list = []
-    window = TurnBoundSlidingWindow(max_messages=100, keep_messages=2, capture_hook=lambda rows, keep: captured.append((rows, keep)))
+    window = TurnBoundSlidingWindow(
+        max_messages=100,
+        keep_messages=2,
+        capture_hook=lambda rows, keep: captured.append((rows, keep)),
+    )
     msgs: list[ModelMessage] = []
     for i in range(3):
         msgs.extend(_turn(f"q{i}"))
@@ -123,7 +137,9 @@ def test_capture_drops_thinking_and_intermediate_keeps_final_text():
 
     from paf.capabilities._window import _first_text
 
-    user0 = ModelRequest(parts=[UserPromptPart(content="actual user question")], run_id="run-z")
+    user0 = ModelRequest(
+        parts=[UserPromptPart(content="actual user question")], run_id="run-z"
+    )
     intermediate = ModelResponse(
         parts=[
             ThinkingPart("let me think about this..."),
@@ -144,11 +160,17 @@ def test_capture_drops_thinking_and_intermediate_keeps_final_text():
         ],
         run_id="run-z",
     )
-    user1 = ModelRequest(parts=[UserPromptPart(content="next question")], run_id="run-z")
+    user1 = ModelRequest(
+        parts=[UserPromptPart(content="next question")], run_id="run-z"
+    )
 
     msgs: list[ModelMessage] = [user0, intermediate, toolret, final0, user1]
     captured: list[tuple[list[dict], int]] = []
-    window = TurnBoundSlidingWindow(max_messages=100, keep_messages=0, capture_hook=lambda rows, keep: captured.append((rows, keep)))
+    window = TurnBoundSlidingWindow(
+        max_messages=100,
+        keep_messages=0,
+        capture_hook=lambda rows, keep: captured.append((rows, keep)),
+    )
     asyncio.run(window.compact(msgs, _ctx_like("prof:cid")))
 
     assert captured  # something was evicted

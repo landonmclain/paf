@@ -61,7 +61,7 @@ from ._store import (
 # the model to correct instead of killing the run. Mirrors fs `_FS_TOOL_RETRIES`.
 _VAULT_TOOL_RETRIES = 5
 
-_MAX_HEAD_LINES = 15   # lines of note body shown in lookup_note at default
+_MAX_HEAD_LINES = 15  # lines of note body shown in lookup_note at default
 _MAX_SEARCH_HITS = 20  # note_search cap
 
 _INSERT = "  "  # tree indent
@@ -151,10 +151,16 @@ class VaultToolset(FunctionToolset):
         self.add_function(self.note_search, name="note_search")
         self.add_function(self.note_links, name="note_links")
         self.add_function(self.note_backlinks, name="note_backlinks")
-        self.add_function(self.note_create, name="note_create", retries=_VAULT_TOOL_RETRIES)
-        self.add_function(self.note_rename, name="note_rename", retries=_VAULT_TOOL_RETRIES)
+        self.add_function(
+            self.note_create, name="note_create", retries=_VAULT_TOOL_RETRIES
+        )
+        self.add_function(
+            self.note_rename, name="note_rename", retries=_VAULT_TOOL_RETRIES
+        )
         self.add_function(self.note_edit, name="note_edit", retries=_VAULT_TOOL_RETRIES)
-        self.add_function(self.note_append, name="note_append", retries=_VAULT_TOOL_RETRIES)
+        self.add_function(
+            self.note_append, name="note_append", retries=_VAULT_TOOL_RETRIES
+        )
 
     # -- index freshness -----------------------------------------------------
 
@@ -263,11 +269,17 @@ class VaultToolset(FunctionToolset):
                     subdirs.add(rest.split("/")[0])
             for name in sorted(subdirs):
                 child = f"{dir_rel}/{name}" if dir_rel else name
-                count = sum(1 for n in notes if posixpath.dirname(n["path"]) == child or posixpath.dirname(n["path"]).startswith(child + "/"))
+                count = sum(
+                    1
+                    for n in notes
+                    if posixpath.dirname(n["path"]) == child
+                    or posixpath.dirname(n["path"]).startswith(child + "/")
+                )
                 lines.append(f"{prefix}{name}/  ({count} notes)")
                 _emit(child, prefix + _INSERT)
             for name in direct_files:
                 lines.append(f"{prefix}{name.rsplit('/', 1)[-1]}")
+
         _emit("", "")
         return "\n".join(lines)
 
@@ -300,7 +312,9 @@ class VaultToolset(FunctionToolset):
                 return self._format_head(n, detail=detail)
         return None
 
-    def read_note(self, path: str, *, offset: int = 0, limit: int | None = None) -> str | None:
+    def read_note(
+        self, path: str, *, offset: int = 0, limit: int | None = None
+    ) -> str | None:
         """Read a note's body with line numbers, in blocks.
 
         ``path`` is a vault-relative path, a note title, or a ``[[wikilink]]``
@@ -337,7 +351,10 @@ class VaultToolset(FunctionToolset):
         )
 
     def note_find(
-        self, title: str | None = None, tag: str | None = None, folder: str | None = None
+        self,
+        title: str | None = None,
+        tag: str | None = None,
+        folder: str | None = None,
     ) -> str:
         """Find notes by title, tag, and/or folder (Obsidian-style lookup).
 
@@ -362,7 +379,9 @@ class VaultToolset(FunctionToolset):
             return "No notes match."
         return "\n".join(hits)
 
-    def note_search(self, text: str, tag: str | None = None, folder: str | None = None) -> str:
+    def note_search(
+        self, text: str, tag: str | None = None, folder: str | None = None
+    ) -> str:
         """Content search over notes (escape hatch when you know a word).
 
         Returns up to ``_MAX_SEARCH_HITS`` notes whose *body* contains ``text``
@@ -508,9 +527,13 @@ class VaultToolset(FunctionToolset):
             rel = rel + ".md"
         full = self._in_scope_path(rel)
         if full is None:
-            raise ModelRetry(f"Refusing to create {path!r}: outside the vault root or excluded by scope.")
+            raise ModelRetry(
+                f"Refusing to create {path!r}: outside the vault root or excluded by scope."
+            )
         if full.exists():
-            raise ModelRetry(f"Refusing to create {rel!r}: a note already exists there.")
+            raise ModelRetry(
+                f"Refusing to create {rel!r}: a note already exists there."
+            )
         title = Path(rel).stem
         parts: list[str] = ["---", f"title: {title}"]
         if tags:
@@ -545,9 +568,13 @@ class VaultToolset(FunctionToolset):
             return "New path is the same as the old path; nothing to do."
         new_full = self._in_scope_path(new_rel)
         if new_full is None:
-            raise ModelRetry(f"Refusing to rename to {new_path!r}: outside the vault root or excluded by scope.")
+            raise ModelRetry(
+                f"Refusing to rename to {new_path!r}: outside the vault root or excluded by scope."
+            )
         if new_full.exists():
-            raise ModelRetry(f"Refusing to rename to {new_rel!r}: a note already exists there.")
+            raise ModelRetry(
+                f"Refusing to rename to {new_rel!r}: a note already exists there."
+            )
 
         old_full = self._abs(old_rel)
         if old_full is None or not old_full.is_file():
@@ -563,7 +590,9 @@ class VaultToolset(FunctionToolset):
         for n in notes:
             if n["path"] == old_rel:
                 continue
-            if not any(resolve_note(link, notes) == old_rel for link in (n.get("links") or [])):
+            if not any(
+                resolve_note(link, notes) == old_rel for link in (n.get("links") or [])
+            ):
                 continue
             full = self._abs(n["path"])
             if full is None or not full.is_file():
@@ -588,7 +617,11 @@ class VaultToolset(FunctionToolset):
 
         head = f"Renamed {old_rel} → {new_rel}."
         if rewritten:
-            head += f" Rewrote inbound links in {len(rewritten)} note(s): " + ", ".join(rewritten) + "."
+            head += (
+                f" Rewrote inbound links in {len(rewritten)} note(s): "
+                + ", ".join(rewritten)
+                + "."
+            )
         else:
             head += " No inbound links to rewrite."
         return head
@@ -702,10 +735,7 @@ class VaultToolset(FunctionToolset):
 
         # CAS-at-commit: reject if the caller's version is stale.
         current_version = _content_hash(current)
-        if (
-            expected_version is not None
-            and current_version != expected_version
-        ):
+        if expected_version is not None and current_version != expected_version:
             raise ModelRetry(
                 f"Conflict: {rel!r} has changed since you read it "
                 f"(expected version: {expected_version}, got: {current_version}). "
@@ -753,5 +783,7 @@ class VaultToolset(FunctionToolset):
             body = full.read_text(encoding="utf-8", errors="replace")
             body_lines = [ln for ln in body.splitlines() if ln.strip()][:3]
             if body_lines and not detail:
-                lines.append("preview: " + " | ".join(ln.strip()[:80] for ln in body_lines))
+                lines.append(
+                    "preview: " + " | ".join(ln.strip()[:80] for ln in body_lines)
+                )
         return "\n".join(lines)

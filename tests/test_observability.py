@@ -14,6 +14,7 @@ TracerProvider (which OTel only lets you set once). If the root span carries bot
 Langfuse attributes, then any real run through ``Session.stream`` will too (it
 uses the same helper via the process tracer).
 """
+
 from __future__ import annotations
 
 import json
@@ -68,7 +69,14 @@ def test_root_span_values_are_json_serialized(captured) -> None:
     with root_span(
         "paf.run.x",
         _tracer(captured),
-        **( {"langfuse.observation.input": {"prompt": "remember", "conversation_id": "x"}}),
+        **(
+            {
+                "langfuse.observation.input": {
+                    "prompt": "remember",
+                    "conversation_id": "x",
+                }
+            }
+        ),
     ):
         pass
     captured.force_flush()

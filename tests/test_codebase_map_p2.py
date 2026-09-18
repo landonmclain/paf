@@ -36,7 +36,12 @@ def _file(
     """
     symbols = symbols or []
     imports = imports or []
-    syms = [SymbolInfo(name=n, kind="FUNCTION", signature=f"def {n}()", body=f"def {n}(): ...") for n in symbols]
+    syms = [
+        SymbolInfo(
+            name=n, kind="FUNCTION", signature=f"def {n}()", body=f"def {n}(): ..."
+        )
+        for n in symbols
+    ]
     return {
         "path": rel,
         "language": "python",
@@ -54,8 +59,15 @@ def _file(
 def test_reference_counts_inbound_across_files() -> None:
     files = [
         FileInfo(path="a.py", symbols=["Settings"], imports=[], searchable_symbols=[]),
-        FileInfo(path="b.py", symbols=["run"], imports=["Settings"], searchable_symbols=[]),
-        FileInfo(path="c.py", symbols=["helper"], imports=["Settings", "run"], searchable_symbols=[]),
+        FileInfo(
+            path="b.py", symbols=["run"], imports=["Settings"], searchable_symbols=[]
+        ),
+        FileInfo(
+            path="c.py",
+            symbols=["helper"],
+            imports=["Settings", "run"],
+            searchable_symbols=[],
+        ),
     ]
     counts = reference_counts(files)
     # b and c both reference Settings (defined in a); c references run (defined in b)
@@ -66,7 +78,12 @@ def test_reference_counts_inbound_across_files() -> None:
 
 def test_reference_counts_excludes_self_reference() -> None:
     files = [
-        FileInfo(path="a.py", symbols=["Settings"], imports=["Settings"], searchable_symbols=[]),
+        FileInfo(
+            path="a.py",
+            symbols=["Settings"],
+            imports=["Settings"],
+            searchable_symbols=[],
+        ),
         FileInfo(path="b.py", symbols=["x"], imports=[], searchable_symbols=[]),
     ]
     counts = reference_counts(files)
@@ -89,11 +106,25 @@ def test_apply_references_mutates_manifest_records() -> None:
 # ------------------------------------------------------------------ rank (BM25)
 
 
-def _f(rel: str, symbols: list[str] | None = None, imports: list[str] | None = None, doc: str = "") -> FileInfo:
+def _f(
+    rel: str,
+    symbols: list[str] | None = None,
+    imports: list[str] | None = None,
+    doc: str = "",
+) -> FileInfo:
     symbols = symbols or []
     imports = imports or []
-    syms = [SymbolInfo(name=n, signature=f"def {n}()", body=f"def {n}(): ...") for n in symbols]
-    return FileInfo(path=rel, symbols=list(symbols), imports=list(imports), doc=doc, searchable_symbols=syms)
+    syms = [
+        SymbolInfo(name=n, signature=f"def {n}()", body=f"def {n}(): ...")
+        for n in symbols
+    ]
+    return FileInfo(
+        path=rel,
+        symbols=list(symbols),
+        imports=list(imports),
+        doc=doc,
+        searchable_symbols=syms,
+    )
 
 
 def test_rank_name_field_weights_high() -> None:
@@ -145,7 +176,9 @@ def test_lexical_retrieval_end_to_end(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     root.mkdir()
     (root / "a.py").write_text("def Settings(): ...\n", encoding="utf-8")
-    (root / "b.py").write_text("from a import Settings\ndef run(): ...\n", encoding="utf-8")
+    (root / "b.py").write_text(
+        "from a import Settings\ndef run(): ...\n", encoding="utf-8"
+    )
     scan_and_write(root)
 
     retr = LexicalRetrieval(storage=FlatFileStorage(), scan_root=root)

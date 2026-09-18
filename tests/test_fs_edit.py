@@ -86,7 +86,9 @@ def test_edit_file_cas_conflict(tmp_path: Path) -> None:
     with pytest.raises(Exception, match="Conflict"):
         _run(
             fs.edit_file(
-                "app.py", [{"old_text": "x = 1", "new_text": "x = 10"}], expected_hash="stale-hash"
+                "app.py",
+                [{"old_text": "x = 1", "new_text": "x = 10"}],
+                expected_hash="stale-hash",
             )
         )
     assert "x = 10" not in (tmp_path / "app.py").read_text(encoding="utf-8")
@@ -106,7 +108,9 @@ def test_write_file_uses_shared_atomic_no_debris(tmp_path: Path) -> None:
     body = (tmp_path / "new.txt").read_text(encoding="utf-8")
     assert body == "hello world\n"
     # write_file goes through the shared mkstemp atomic: no temp/staging debris
-    debris = [p.name for p in tmp_path.glob("*.tmp")] + [p.name for p in tmp_path.glob(".*.tmp")]
+    debris = [p.name for p in tmp_path.glob("*.tmp")] + [
+        p.name for p in tmp_path.glob(".*.tmp")
+    ]
     assert debris == [], f"leftover temp files: {debris}"
     # overwrite also lands atomically + hash bumps
 
@@ -157,5 +161,3 @@ def test_search_files_byte_cap(tmp_path: Path) -> None:
     # 8,000 matching lines were all returned. The truncation marker must fire.
     assert "bytes]" in out
     assert len(out.encode("utf-8")) < 300 * 1024  # far under the uncapped result
-
-

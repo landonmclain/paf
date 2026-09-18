@@ -69,8 +69,12 @@ class FileInfo:
     language: str | None = None
     doc: str | None = None  # module-level docstring (describes the whole file)
     symbols: list[str] = field(default_factory=list)  # name list
-    imports: list[str] = field(default_factory=list)  # raw statement strings (display/legacy)
-    import_names: list[str] = field(default_factory=list)  # structured imported SYMBOL names
+    imports: list[str] = field(
+        default_factory=list
+    )  # raw statement strings (display/legacy)
+    import_names: list[str] = field(
+        default_factory=list
+    )  # structured imported SYMBOL names
     references_count: int = 0
     searchable_symbols: list[SymbolInfo] = field(default_factory=list)
     # True when the file is in-scope (part of the codebase) but no extractor could

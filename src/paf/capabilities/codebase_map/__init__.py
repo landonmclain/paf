@@ -56,6 +56,7 @@ def run_codebase_map(
         scan_root = Path.cwd()
     return scan_and_write(Path(scan_root), storage)
 
+
 __all__ = [
     # records (schema)
     "BlockRef",

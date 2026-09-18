@@ -128,7 +128,9 @@ def _render_message(message: ModelMessage, *, full: bool = False) -> str:
                         if isinstance(item, str):
                             # Plain string segments are durable user text.
                             parts_out.append(item)
-                        elif isinstance(item, TextContent) and not _is_injected_text(item):
+                        elif isinstance(item, TextContent) and not _is_injected_text(
+                            item
+                        ):
                             parts_out.append(item.content)
                     content = " ".join(parts_out)
                     if not content:
@@ -145,7 +147,9 @@ def _render_message(message: ModelMessage, *, full: bool = False) -> str:
                 lines.append(f"Tool [{part.tool_name}]: {content}")
             else:
                 lines.append(f"[{type(part).__name__}]")
-        return " ".join(lines) if lines else f"<ModelRequest {len(message.parts)} parts>"
+        return (
+            " ".join(lines) if lines else f"<ModelRequest {len(message.parts)} parts>"
+        )
     if isinstance(message, ModelResponse):
         lines = []
         for part in message.parts:
@@ -195,11 +199,11 @@ class TurnFinder:
             return self._render_turn(history, turn_id, run_id, full=full)
         return self._render_run(history, run_id, full=full)
 
-    def _render_turn(self, history, turn_id: int, run_id: str, *, full: bool = False) -> str:
+    def _render_turn(
+        self, history, turn_id: int, run_id: str, *, full: bool = False
+    ) -> str:
         # Find the turn_id-th ModelRequest carrying a UserPromptPart (the anchor).
-        anchors = [
-            i for i, m in enumerate(history) if _is_user_turn(m)
-        ]
+        anchors = [i for i, m in enumerate(history) if _is_user_turn(m)]
         if turn_id < 0 or turn_id >= len(anchors):
             return (
                 f"No turn at index {turn_id} in run '{run_id}' "
@@ -245,7 +249,9 @@ class ReadTurnToolset(FunctionToolset[AgentDepsT]):
     ) -> None:
         super().__init__(id=tool_id)
         self._finder = TurnFinder(source)
-        self.add_function(self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION)
+        self.add_function(
+            self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION
+        )
 
     async def read_turn(
         self,
@@ -260,4 +266,6 @@ class ReadTurnToolset(FunctionToolset[AgentDepsT]):
         byte-complete turn, including untruncated tool returns.
         """
         run_id, _, _ = ref.partition(":")
-        return await self._finder.resolve(ref, run_id=run_id, conversation_id=ctx.conversation_id, full=full)
+        return await self._finder.resolve(
+            ref, run_id=run_id, conversation_id=ctx.conversation_id, full=full
+        )

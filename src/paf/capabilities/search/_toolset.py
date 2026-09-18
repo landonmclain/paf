@@ -141,9 +141,13 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         if max_matches < 0:
             raise ValueError(f"max_matches must be non-negative, got {max_matches!r}.")
         if context_lines < 0:
-            raise ValueError(f"context_lines must be non-negative, got {context_lines!r}.")
+            raise ValueError(
+                f"context_lines must be non-negative, got {context_lines!r}."
+            )
         if not math.isfinite(bm25_k1) or bm25_k1 < 0:
-            raise ValueError(f"bm25_k1 must be a non-negative finite number, got {bm25_k1!r}.")
+            raise ValueError(
+                f"bm25_k1 must be a non-negative finite number, got {bm25_k1!r}."
+            )
         if not 0.0 <= bm25_b <= 1.0:
             raise ValueError(f"bm25_b must be between 0.0 and 1.0, got {bm25_b!r}.")
         self._source = source
@@ -157,7 +161,9 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # on each `Agent.run()` and on any `read_turn`. `read_turn` is the expand-a-hit
         # step that constitutes retrieval progress, so reaching it clears the streak.
         self._s_run: str | None = None
-        self._sigs: list[str] = []  # query sig of each consecutive search since last read_turn/reset
+        self._sigs: list[
+            str
+        ] = []  # query sig of each consecutive search since last read_turn/reset
 
         description = SEARCH_HISTORY_DESCRIPTION
         if scope == "conversation":
@@ -172,7 +178,9 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # search is the permanent retrieval layer, its search hits can hand the
         # model a `run_id:turn_id` ref to expand -- the model reaches the full
         # turn without any index. Same tool/ref format as the index uses.
-        self.add_function(self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION)
+        self.add_function(
+            self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION
+        )
 
     async def read_turn(
         self,
@@ -212,9 +220,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         self._sigs.append(sig)
         return len(self._sigs)
 
-    def _guard_search(
-        self, ctx: RunContext[AgentDepsT], sig: str
-    ) -> str | None:
+    def _guard_search(self, ctx: RunContext[AgentDepsT], sig: str) -> str | None:
         """Nudge/ModelRetry an agent stuck re-searching without reading a hit.
 
         Keys on *retrieval progress* (`read_turn`), not identical args, so it catches
@@ -227,18 +233,22 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         n = self._bump_search_streak(ctx, sig)
         if n >= _SEARCH_RETRY:
             raise ModelRetry(
-                f'You have run {n} searches without calling `read_turn` on any hit '
-                '({\"' + '", "'.join(dict.fromkeys(self._sigs)) + '"}). Re-searching the same '
-                'theme will not change the result — the transcript is static. STOP searching. '
+                f"You have run {n} searches without calling `read_turn` on any hit "
+                '({"'
+                + '", "'.join(dict.fromkeys(self._sigs))
+                + '"}). Re-searching the same '
+                "theme will not change the result — the transcript is static. STOP searching. "
                 'Call `read_turn("<hit ref>")` on your best hit to expand it, then answer from '
-                'the full turn; or answer now from the evidence you already have.'
+                "the full turn; or answer now from the evidence you already have."
             )
         if n >= _SEARCH_NUDGE:
             return (
-                f'You have run {n} searches with no `read_turn` in between '
-                '({\"' + '", "'.join(dict.fromkeys(self._sigs)) + '"}). You are looping on '
-                'this theme. Pick your best hit and call `read_turn` on its turn ref to '
-                'expand it — or answer now.'
+                f"You have run {n} searches with no `read_turn` in between "
+                '({"'
+                + '", "'.join(dict.fromkeys(self._sigs))
+                + '"}). You are looping on '
+                "this theme. Pick your best hit and call `read_turn` on its turn ref to "
+                "expand it — or answer now."
             )
         return None
 
@@ -323,7 +333,13 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                     if tid_str.isdigit():
                         tid = int(tid_str)
             blended.append(
-                {"doc_idx": doc_idx, "score": score, "date": dso, "run": run, "tid": tid}
+                {
+                    "doc_idx": doc_idx,
+                    "score": score,
+                    "date": dso,
+                    "run": run,
+                    "tid": tid,
+                }
             )
         # Relevance-first candidate selection (scores untouched), capped at max_matches.
         blended.sort(key=lambda b: b["score"], reverse=True)
@@ -360,7 +376,8 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             # retrieval can be scored by ID-membership (LongMemEval recall@k).
             sid = (
                 section.session_ids[line_idx]
-                if section.session_ids is not None and line_idx < len(section.session_ids)
+                if section.session_ids is not None
+                and line_idx < len(section.session_ids)
                 else None
             )
             label = section.label + (f" | session: {sid}" if sid else "")
@@ -374,7 +391,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 if section.turn_refs is not None and line_idx < len(section.turn_refs)
                 else None
             )
-            label += (f" | turn: {tref}" if tref else "")
+            label += f" | turn: {tref}" if tref else ""
             dso = (
                 section.dates[line_idx]
                 if section.dates is not None and line_idx < len(section.dates)
@@ -383,7 +400,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             # Surface the message's source datetime (ISO) so the model can
             # resolve "newer wins" / "which happened first" from the hit itself,
             # instead of re-searching to recover ordering (a loop trigger).
-            label += (f" | date: {dso}" if dso else "")
+            label += f" | date: {dso}" if dso else ""
             # Recency rank: 1 = newest. Results are PRESENTED newest-first (recency
             # shapes only presentation order + this label, never the BM25 score).
             label += f" | recency: {shown_rank}"
@@ -407,7 +424,9 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             runs = [run for run in runs if run.run_id == run_id]
         sections: list[_RunSection] = []
         for run in runs:
-            messages: list[ModelMessage] = await self._source.run_history(run_id=run.run_id)
+            messages: list[ModelMessage] = await self._source.run_history(
+                run_id=run.run_id
+            )
             # Drop compaction-summary artifacts from the corpus (derived,
             # not original): mirror the harness `SnapshotHistorySource`.
             messages = [m for m in messages if not is_summary_artifact(m)]

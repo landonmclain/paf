@@ -79,6 +79,7 @@ _NEAR_MATCH_THRESHOLD = 0.60
 # derived keys (the incremental O(1) lookup)
 # --------------------------------------------------------------------------
 
+
 def _tokens(fact: str) -> set[str]:
     """Lowercased alnum tokens minus stopwords, dropping length<=2 (deterministic)."""
     raw = re.findall(r"[a-z0-9]+", fact.lower())
@@ -97,14 +98,18 @@ def fact_keys(fact: str) -> dict[str, str]:
     tokset = _tokens(fact)
     return {
         "exact": hashlib.sha256(norm.encode("utf-8")).hexdigest(),
-        "tokens": hashlib.sha256(
-            " ".join(sorted(tokset)).encode("utf-8")
-        ).hexdigest(),
+        "tokens": hashlib.sha256(" ".join(sorted(tokset)).encode("utf-8")).hexdigest(),
     }
 
 
-def _winner_better(candidate_line: int, cand_tier: str, cand_born,
-                   cur_line: int, cur_tier: str, cur_born) -> bool:
+def _winner_better(
+    candidate_line: int,
+    cand_tier: str,
+    cand_born,
+    cur_line: int,
+    cur_tier: str,
+    cur_born,
+) -> bool:
     """Keep-winner rule: highest tier, then most-recent born_on, then newest.
 
     Operates on plain (tier, born_on) so it needs no reconstructed record.
@@ -134,6 +139,7 @@ def _born_ts(born_on: str | datetime | None):
 # --------------------------------------------------------------------------
 # the index document
 # --------------------------------------------------------------------------
+
 
 class MemoryIndex:
     """In-memory view of the derived index (one winner per surviving fact)."""
@@ -172,8 +178,10 @@ class MemoryIndex:
             "watermark": self.watermark,
             "entries": self.entries,
         }
-        write_atomic(os.path.join(os.fspath(directory), _INDEX_FILENAME),
-                     json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+        write_atomic(
+            os.path.join(os.fspath(directory), _INDEX_FILENAME),
+            json.dumps(doc, indent=2, ensure_ascii=False) + "\n",
+        )
 
     # -- lookups -----------------------------------------------------------
 
@@ -214,8 +222,12 @@ class MemoryIndex:
 
     def _absorb(self, winner: dict, line_number: int, record: MemoryRecord) -> None:
         if _winner_better(
-            line_number, record.tier, record.born_on,
-            int(winner["current_line"]), winner.get("tier"), winner.get("born_on"),
+            line_number,
+            record.tier,
+            record.born_on,
+            int(winner["current_line"]),
+            winner.get("tier"),
+            winner.get("born_on"),
         ):
             # the new record wins -> old winner becomes a deduped predecessor
             old_line = int(winner["current_line"])
@@ -253,6 +265,7 @@ class MemoryIndex:
 # first build (full pass, includes one-time fuzzy cluster collapse)
 # --------------------------------------------------------------------------
 
+
 def build_index(directory: str | os.PathLike) -> int:
     """Full (re)build of the index from the entire journal. Returns entry count.
 
@@ -268,7 +281,9 @@ def build_index(directory: str | os.PathLike) -> int:
 
     # --- pass 1: fold every record via the incremental rule (exact/token) ---
     for line_no, rec in records:
-        idx.fold(line_no, rec, directory)  # saves per fold (a bit chatty, fine for a build)
+        idx.fold(
+            line_no, rec, directory
+        )  # saves per fold (a bit chatty, fine for a build)
 
     # --- pass 2: fuzzy cluster collapse over the surviving winners ----------
     # One-time fuzzy (O(n^2)) collapse over the full record list so
@@ -282,17 +297,21 @@ def build_index(directory: str | os.PathLike) -> int:
     return len(idx.entries)
 
 
-def _collapse_fuzzy_from_records(idx: MemoryIndex, records: list[tuple[int, MemoryRecord]]) -> None:
+def _collapse_fuzzy_from_records(
+    idx: MemoryIndex, records: list[tuple[int, MemoryRecord]]
+) -> None:
     if len(records) < 2:
         return
     toks: dict[int, set[str]] = {ln: _tokens(r.fact) for ln, r in records}
     parent: dict[int, int] = {}
+
     def find(x: int) -> int:
         parent.setdefault(x, x)
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
+
     def union(a: int, b: int) -> None:
         ra, rb = find(a), find(b)
         if ra != rb:
@@ -324,9 +343,13 @@ def _collapse_fuzzy_from_records(idx: MemoryIndex, records: list[tuple[int, Memo
             if ln != winner_ln and ln not in dedup:
                 dedup.append(ln)
         # remove the other cluster members' own winning entries from the index
-        idx.entries = [e for e in idx.entries
-                       if not any(ln != winner_ln and int(e.get("current_line")) == ln
-                                  for ln, _ in lines)]
+        idx.entries = [
+            e
+            for e in idx.entries
+            if not any(
+                ln != winner_ln and int(e.get("current_line")) == ln for ln, _ in lines
+            )
+        ]
     idx._rebuild_key_index()
 
 
@@ -360,6 +383,7 @@ def _containment(a: set[str], b: set[str]) -> float:
 # --------------------------------------------------------------------------
 # top-level entry points (used by the write path and tests)
 # --------------------------------------------------------------------------
+
 
 def update_index(directory: str | os.PathLike) -> int:
     """Incrementally fold any new journal lines into the index. Returns entries.

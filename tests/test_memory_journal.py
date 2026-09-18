@@ -42,7 +42,8 @@ def test_record_roundtrips_to_row_and_back() -> None:
     rec = MemoryRecord(
         type="preference",
         fact="Landon prefers flat-file, diffable storage",
-        tier="t1", born_on="2026-08-17T00:00:00Z",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
         source_ref="seed-lmem-3f9a:12",
     )
     assert rec.to_row() == {
@@ -64,7 +65,8 @@ def test_record_rejects_invalid_type(bad_type: str) -> None:
         MemoryRecord(
             type=bad_type,
             fact="anything",
-            tier="t1", born_on="2026-08-17T00:00:00Z",
+            tier="t1",
+            born_on="2026-08-17T00:00:00Z",
             source_ref="run:0",
         )
 
@@ -86,7 +88,13 @@ def test_record_rejects_blank_fields(which: str) -> None:
 def test_all_locked_types_accepted() -> None:
     for t in ("identity", "preference", "fact", "event", "task", "current"):
         # Should not raise.
-        MemoryRecord(type=t, fact="x", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+        MemoryRecord(
+            type=t,
+            fact="x",
+            tier="t1",
+            born_on="2026-08-17T00:00:00Z",
+            source_ref="run:0",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +106,8 @@ def test_naive_datetime_normalized_to_utc() -> None:
     rec = MemoryRecord(
         type="fact",
         fact="x",
-        tier="t1", born_on=datetime(2026, 8, 17, 10, 30),
+        tier="t1",
+        born_on=datetime(2026, 8, 17, 10, 30),
         source_ref="run:1",
     )
     assert rec.born_on == "2026-08-17T10:30:00+00:00"
@@ -108,24 +117,39 @@ def test_aware_datetime_kept() -> None:
     rec = MemoryRecord(
         type="fact",
         fact="x",
-        tier="t1", born_on=datetime(2026, 8, 17, 10, 30, tzinfo=UTC),
+        tier="t1",
+        born_on=datetime(2026, 8, 17, 10, 30, tzinfo=UTC),
         source_ref="run:1",
     )
     assert rec.born_on == "2026-08-17T10:30:00+00:00"
 
 
 def test_iso_string_z_normalized() -> None:
-    rec = MemoryRecord(type="fact", fact="x", tier="t1", born_on="2026-08-17T10:30:00Z", source_ref="run:1")
+    rec = MemoryRecord(
+        type="fact",
+        fact="x",
+        tier="t1",
+        born_on="2026-08-17T10:30:00Z",
+        source_ref="run:1",
+    )
     assert rec.born_on == "2026-08-17T10:30:00+00:00"
 
 
 def test_born_on_sorts_lexically() -> None:
     """ISO (UTC) born_on stringifies so lexical sort == chronological sort."""
     earlier = MemoryRecord(
-        type="fact", fact="early", tier="t1", born_on="2026-08-16T00:00:00Z", source_ref="run:0"
+        type="fact",
+        fact="early",
+        tier="t1",
+        born_on="2026-08-16T00:00:00Z",
+        source_ref="run:0",
     ).born_on
     later = MemoryRecord(
-        type="fact", fact="late", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:1"
+        type="fact",
+        fact="late",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:1",
     ).born_on
     assert earlier < later
 
@@ -133,7 +157,9 @@ def test_born_on_sorts_lexically() -> None:
 def test_empty_born_on_is_allowed_and_stored_empty(tmp_path) -> None:
     """A fact with no derivable date is recorded with empty born_on — never a
     fabricated one, and never rejected/dropped (the fabrication-bug fix)."""
-    rec = MemoryRecord(type="fact", fact="no date", tier="t1", born_on="", source_ref="run:0")
+    rec = MemoryRecord(
+        type="fact", fact="no date", tier="t1", born_on="", source_ref="run:0"
+    )
     assert rec.born_on == ""
     rec_none = MemoryRecord(type="fact", fact="no date", tier="t1", source_ref="run:1")
     assert rec_none.born_on == ""
@@ -151,8 +177,20 @@ def test_empty_born_on_is_allowed_and_stored_empty(tmp_path) -> None:
 
 def test_ids_are_sequential_line_numbers(tmp_path) -> None:
     store = JournalStore(tmp_path)
-    r1 = store.append(type="fact", fact="first", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
-    r2 = store.append(type="fact", fact="second", tier="t1", born_on="2026-08-17T00:01:00Z", source_ref="run:1")
+    r1 = store.append(
+        type="fact",
+        fact="first",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
+    r2 = store.append(
+        type="fact",
+        fact="second",
+        tier="t1",
+        born_on="2026-08-17T00:01:00Z",
+        source_ref="run:1",
+    )
 
     rows = store.read_all()
     assert [i for i, _ in rows] == [1, 2]
@@ -165,18 +203,39 @@ def test_empty_store_is_empty_and_first_append_is_line_1(tmp_path) -> None:
     assert store.read_all() == []
     assert store.count() == 0
 
-    store.append(type="fact", fact="hello", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+    store.append(
+        type="fact",
+        fact="hello",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
     assert store.count() == 1
-    assert store.read_all() == [(1, MemoryRecord(
-        type="fact", fact="hello", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0"
-    ))]
+    assert store.read_all() == [
+        (
+            1,
+            MemoryRecord(
+                type="fact",
+                fact="hello",
+                tier="t1",
+                born_on="2026-08-17T00:00:00Z",
+                source_ref="run:0",
+            ),
+        )
+    ]
 
 
 def test_journal_file_lives_at_memory_dir(tmp_path) -> None:
     store = JournalStore(tmp_path)
     assert store.filename == "memory-journal.jsonl"
     assert store.path == str(tmp_path / "memory-journal.jsonl")
-    store.append(type="fact", fact="x", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+    store.append(
+        type="fact",
+        fact="x",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
     assert (tmp_path / "memory-journal.jsonl").is_file()
 
 
@@ -191,8 +250,20 @@ def test_duplicate_fact_legitimately_appends_second_record(tmp_path) -> None:
     Newest-wins is resolved at RENDER, never here. There must be no `has` gate.
     """
     store = JournalStore(tmp_path)
-    store.append(type="preference", fact="Prefers Terminal.app", tier="t1", born_on="2026-08-16T00:00:00Z", source_ref="run:0")
-    store.append(type="preference", fact="Prefers Terminal.app", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:5")
+    store.append(
+        type="preference",
+        fact="Prefers Terminal.app",
+        tier="t1",
+        born_on="2026-08-16T00:00:00Z",
+        source_ref="run:0",
+    )
+    store.append(
+        type="preference",
+        fact="Prefers Terminal.app",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:5",
+    )
 
     rows = store.read_all()
     assert len(rows) == 2
@@ -204,9 +275,21 @@ def test_duplicate_fact_legitimately_appends_second_record(tmp_path) -> None:
 def test_append_is_never_a_rewrite(tmp_path) -> None:
     """Appending never rewrites/compacts prior records -- ids stay stable."""
     store = JournalStore(tmp_path)
-    store.append(type="fact", fact="a", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+    store.append(
+        type="fact",
+        fact="a",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
     ids_after_one = [i for i, _ in store.read_all()]
-    store.append(type="fact", fact="b", tier="t1", born_on="2026-08-17T00:01:00Z", source_ref="run:1")
+    store.append(
+        type="fact",
+        fact="b",
+        tier="t1",
+        born_on="2026-08-17T00:01:00Z",
+        source_ref="run:1",
+    )
     ids_after_two = [i for i, _ in store.read_all()]
     assert ids_after_one == [1]
     assert ids_after_two == [1, 2]
@@ -220,9 +303,27 @@ def test_append_is_never_a_rewrite(tmp_path) -> None:
 def test_append_many_writes_one_block(tmp_path) -> None:
     store = JournalStore(tmp_path)
     block = [
-        MemoryRecord(type="fact", fact="one", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0"),
-        MemoryRecord(type="preference", fact="two", tier="t1", born_on="2026-08-17T00:01:00Z", source_ref="run:0"),
-        MemoryRecord(type="task", fact="three", tier="t1", born_on="2026-08-17T00:02:00Z", source_ref="run:1"),
+        MemoryRecord(
+            type="fact",
+            fact="one",
+            tier="t1",
+            born_on="2026-08-17T00:00:00Z",
+            source_ref="run:0",
+        ),
+        MemoryRecord(
+            type="preference",
+            fact="two",
+            tier="t1",
+            born_on="2026-08-17T00:01:00Z",
+            source_ref="run:0",
+        ),
+        MemoryRecord(
+            type="task",
+            fact="three",
+            tier="t1",
+            born_on="2026-08-17T00:02:00Z",
+            source_ref="run:1",
+        ),
     ]
     store.append_many(block)
     rows = store.read_all()
@@ -244,7 +345,8 @@ def test_every_written_line_parses(tmp_path) -> None:
         store.append(
             type="fact",
             fact=f"durable fact number {i} with some detail",
-            tier="t1", born_on=f"2026-08-17T00:{i:02d}:00Z",
+            tier="t1",
+            born_on=f"2026-08-17T00:{i:02d}:00Z",
             source_ref=f"run:{i}",
         )
     raw = (tmp_path / "memory-journal.jsonl").read_text(encoding="utf-8").splitlines()
@@ -256,12 +358,38 @@ def test_every_written_line_parses(tmp_path) -> None:
 
 def test_interleaved_append_and_append_many(tmp_path) -> None:
     store = JournalStore(tmp_path)
-    store.append(type="fact", fact="solo-before", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
-    store.append_many([
-        MemoryRecord(type="fact", fact="block-1", tier="t1", born_on="2026-08-17T00:01:00Z", source_ref="run:0"),
-        MemoryRecord(type="fact", fact="block-2", tier="t1", born_on="2026-08-17T00:02:00Z", source_ref="run:0"),
-    ])
-    store.append(type="fact", fact="solo-after", tier="t1", born_on="2026-08-17T00:03:00Z", source_ref="run:1")
+    store.append(
+        type="fact",
+        fact="solo-before",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
+    store.append_many(
+        [
+            MemoryRecord(
+                type="fact",
+                fact="block-1",
+                tier="t1",
+                born_on="2026-08-17T00:01:00Z",
+                source_ref="run:0",
+            ),
+            MemoryRecord(
+                type="fact",
+                fact="block-2",
+                tier="t1",
+                born_on="2026-08-17T00:02:00Z",
+                source_ref="run:0",
+            ),
+        ]
+    )
+    store.append(
+        type="fact",
+        fact="solo-after",
+        tier="t1",
+        born_on="2026-08-17T00:03:00Z",
+        source_ref="run:1",
+    )
     ids = [i for i, _ in store.read_all()]
     assert ids == [1, 2, 3, 4]
 
@@ -271,7 +399,8 @@ def test_source_ref_and_type_preserved_through_append(tmp_path) -> None:
     store.append(
         type="event",
         fact="Deployed v2 on 2026-08-15",
-        tier="t1", born_on="2026-08-15T12:00:00Z",
+        tier="t1",
+        born_on="2026-08-15T12:00:00Z",
         source_ref="seed-lmem-a1b2c3d4:7",
     )
     _, rec = store.read_all()[0]
@@ -285,18 +414,22 @@ def test_source_ref_and_type_preserved_through_append(tmp_path) -> None:
 
 
 def _rec(type, fact, born_on, source_ref="run:0", tier="t1"):
-    return MemoryRecord(type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref)
+    return MemoryRecord(
+        type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref
+    )
 
 
 def test_render_groups_by_tier_and_sorts_newest_first(tmp_path) -> None:
     store = JournalStore(tmp_path)
-    store.append_many([
-        _rec("preference", "t1 older pref", "2026-08-16T00:00:00Z"),
-        _rec("preference", "t1 newer pref", "2026-08-17T00:00:00Z"),
-        _rec("preference", "t1 middle pref", "2026-08-16T12:00:00Z"),
-        _rec("fact", "a t3 ephemeral fact", "2026-08-15T00:00:00Z", tier="t3"),
-        _rec("task", "a t2 goal", "2026-08-17T00:00:00Z", tier="t2"),
-    ])
+    store.append_many(
+        [
+            _rec("preference", "t1 older pref", "2026-08-16T00:00:00Z"),
+            _rec("preference", "t1 newer pref", "2026-08-17T00:00:00Z"),
+            _rec("preference", "t1 middle pref", "2026-08-16T12:00:00Z"),
+            _rec("fact", "a t3 ephemeral fact", "2026-08-15T00:00:00Z", tier="t3"),
+            _rec("task", "a t2 goal", "2026-08-17T00:00:00Z", tier="t2"),
+        ]
+    )
     md = render_journal_memory(store)
 
     # Tier sections, in fixed ladder order: t1 first, then t2, then t3.
@@ -315,14 +448,16 @@ def test_render_pins_identity_type_to_top_of_tier(tmp_path) -> None:
 
     An OLDER identity fact beats a NEWER non-identity fact within the same tier
     ("who the user is" stays uppermost), and recency still rules within each group.
-"""
+    """
     store = JournalStore(tmp_path)
-    store.append_many([
-        _rec("preference", "newer non-identity pref", "2026-08-20T00:00:00Z"),
-        _rec("identity", "older identity fact", "2026-08-10T00:00:00Z"),
-        _rec("identity", "newest identity fact", "2026-08-18T00:00:00Z"),
-        _rec("fact", "a plain fact", "2026-08-15T00:00:00Z"),
-    ])
+    store.append_many(
+        [
+            _rec("preference", "newer non-identity pref", "2026-08-20T00:00:00Z"),
+            _rec("identity", "older identity fact", "2026-08-10T00:00:00Z"),
+            _rec("identity", "newest identity fact", "2026-08-18T00:00:00Z"),
+            _rec("fact", "a plain fact", "2026-08-15T00:00:00Z"),
+        ]
+    )
     md = render_journal_memory(store)
     t1_block = md.split("## t1", 1)[1].split("## ", 1)[0]
     lines = [ln for ln in t1_block.splitlines() if ln.startswith("- ")]
@@ -330,7 +465,9 @@ def test_render_pins_identity_type_to_top_of_tier(tmp_path) -> None:
 
     assert len(lines) == 4
     # identity-type block comes before ANY non-identity line
-    assert joined.index("newest identity fact") < joined.index("newer non-identity pref")
+    assert joined.index("newest identity fact") < joined.index(
+        "newer non-identity pref"
+    )
     assert joined.index("older identity fact") < joined.index("newer non-identity pref")
     # recency within identity kept (newest identity before older identity)
     assert joined.index("newest identity fact") < joined.index("older identity fact")
@@ -341,7 +478,8 @@ def test_render_each_line_carries_fact_date_journal_id(tmp_path) -> None:
     store.append(
         type="preference",
         fact="user prefers flat-file, diffable storage",
-        tier="t1", born_on="2026-08-17T10:30:00Z",
+        tier="t1",
+        born_on="2026-08-17T10:30:00Z",
         source_ref="seed-lmem-a1b2c3d4:12",
     )
     md = render_journal_memory(store)
@@ -361,7 +499,13 @@ def test_render_each_line_carries_fact_date_journal_id(tmp_path) -> None:
 
 def test_render_omits_absent_tiers(tmp_path) -> None:
     store = JournalStore(tmp_path)
-    store.append(type="fact", fact="only a fact", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+    store.append(
+        type="fact",
+        fact="only a fact",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
     md = render_journal_memory(store)
     assert "## t1" in md
     for absent in ("## t2", "## t3"):
@@ -370,12 +514,14 @@ def test_render_omits_absent_tiers(tmp_path) -> None:
 
 def test_render_is_deterministic(tmp_path) -> None:
     store = JournalStore(tmp_path)
-    store.append_many([
-        _rec("preference", "a", "2026-08-17T00:00:00Z", tier="t1"),
-        _rec("fact", "b", "2026-08-15T00:00:00Z", tier="t2"),
-        _rec("task", "c", "2026-08-16T00:00:00Z", tier="t3"),
-        _rec("event", "d", "2026-08-14T00:00:00Z", tier="t1"),
-    ])
+    store.append_many(
+        [
+            _rec("preference", "a", "2026-08-17T00:00:00Z", tier="t1"),
+            _rec("fact", "b", "2026-08-15T00:00:00Z", tier="t2"),
+            _rec("task", "c", "2026-08-16T00:00:00Z", tier="t3"),
+            _rec("event", "d", "2026-08-14T00:00:00Z", tier="t1"),
+        ]
+    )
     assert render_journal_memory(store) == render_journal_memory(store)
 
 
@@ -388,7 +534,12 @@ def test_render_from_explicit_record_list(tmp_path) -> None:
     """render_journal_memory also accepts a record list (no disk needed)."""
     records = [
         _rec("current", "newer current state", "2026-08-17T01:00:00Z", tier="t2"),
-        _rec("current", "currently rebuilding staging.com", "2026-08-17T00:00:00Z", tier="t2"),
+        _rec(
+            "current",
+            "currently rebuilding staging.com",
+            "2026-08-17T00:00:00Z",
+            tier="t2",
+        ),
     ]
     md = render_journal_memory(records)
     assert "## t2" in md
@@ -398,7 +549,13 @@ def test_render_from_explicit_record_list(tmp_path) -> None:
 
 def test_write_render_writes_atomic_md(tmp_path) -> None:
     store = JournalStore(tmp_path)
-    store.append(type="fact", fact="written fact", tier="t1", born_on="2026-08-17T00:00:00Z", source_ref="run:0")
+    store.append(
+        type="fact",
+        fact="written fact",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
+        source_ref="run:0",
+    )
     md_path = tmp_path / "MEMORY.md"
     rendered = write_render(store, str(md_path))
     assert md_path.is_file()
@@ -411,7 +568,8 @@ def test_render_multi_line_fact_stays_one_line(tmp_path) -> None:
     store.append(
         type="fact",
         fact="line one\nline two\nline three",
-        tier="t1", born_on="2026-08-17T00:00:00Z",
+        tier="t1",
+        born_on="2026-08-17T00:00:00Z",
         source_ref="run:0",
     )
     md = render_journal_memory(store)

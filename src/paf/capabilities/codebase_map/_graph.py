@@ -40,7 +40,15 @@ _REF_TOKEN_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 # Python/TS import-statement keywords that are never symbol references. Used only by
 # the backward-compat fallback when a hand-built FileInfo lacks structured import_names.
 _IMPORT_KEYWORDS = {
-    "from", "import", "as", "export", "default", "type", "return", "def", "class",
+    "from",
+    "import",
+    "as",
+    "export",
+    "default",
+    "type",
+    "return",
+    "def",
+    "class",
 }
 
 
@@ -158,7 +166,13 @@ def _fileinfo_from_record(record: dict) -> FileInfo:
     for s in record.get("symbols") or []:
         span = s.get("span")
         if isinstance(span, dict):
-            span = Span(**{k: v for k, v in span.items() if k in ("start_byte", "end_byte", "start_line", "end_line")})
+            span = Span(
+                **{
+                    k: v
+                    for k, v in span.items()
+                    if k in ("start_byte", "end_byte", "start_line", "end_line")
+                }
+            )
         syms.append(
             SymbolInfo(
                 name=s.get("name", ""),

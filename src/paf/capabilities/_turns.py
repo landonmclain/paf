@@ -76,7 +76,7 @@ def _real_user_prompt_text(message: ModelMessage) -> str | None:
     actual words — the same content the thread summarizer and memory
     consolidation persist/consume.
     """
-    for part in (getattr(message, "parts", None) or []):
+    for part in getattr(message, "parts", None) or []:
         if isinstance(part, UserPromptPart):
             text = _user_prompt_text(part)
             if text is not None:

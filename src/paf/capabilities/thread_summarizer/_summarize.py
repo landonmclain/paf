@@ -20,8 +20,12 @@ from paf.capabilities._turns import user_anchor_indices
 class Beat(BaseModel):
     """One sparse, receipt-backed marker in a thread block."""
 
-    at: str = Field(description="The exact {run_id}:{turn_id} ref of the turn this marks.")
-    what: str = Field(description="What happened at that turn, in a few words, without speculation.")
+    at: str = Field(
+        description="The exact {run_id}:{turn_id} ref of the turn this marks."
+    )
+    what: str = Field(
+        description="What happened at that turn, in a few words, without speculation."
+    )
 
 
 class BeatsRecord(BaseModel):

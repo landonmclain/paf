@@ -34,11 +34,11 @@ class PlanEventType(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps event_typ
         completed: A step transitioned to `completed`.
     """
 
-    created = 'created'
-    updated = 'updated'
-    status_changed = 'status_changed'
-    deleted = 'deleted'
-    completed = 'completed'
+    created = "created"
+    updated = "updated"
+    status_changed = "status_changed"
+    deleted = "deleted"
+    completed = "completed"
 
 
 class PlanEvent(BaseModel):

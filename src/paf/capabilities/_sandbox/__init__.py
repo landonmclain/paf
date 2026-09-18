@@ -17,11 +17,11 @@ from paf.capabilities._sandbox._protocol import (
 )
 
 __all__ = [
-    'BackgroundHandle',
-    'BackgroundStatus',
-    'DockerExecutor',
-    'ExecResult',
-    'LocalProcessExecutor',
-    'SandboxedExecutor',
-    'docker_available',
+    "BackgroundHandle",
+    "BackgroundStatus",
+    "DockerExecutor",
+    "ExecResult",
+    "LocalProcessExecutor",
+    "SandboxedExecutor",
+    "docker_available",
 ]

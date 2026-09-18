@@ -294,6 +294,7 @@ def test_job_status_summary_thread_row_reads_hashed_watermark_dir(monkeypatch) -
 
     # Temp thread capture root so we never touch real data/summaries.
     import tempfile
+
     temp_root = tempfile.mkdtemp(prefix="paf-summaries-")
     bg = BackgroundCoordinator(
         FileStepStore(directory=mkdtemp()),
@@ -310,7 +311,7 @@ def test_job_status_summary_thread_row_reads_hashed_watermark_dir(monkeypatch) -
     wrong = f"{temp_root}/conversations/cid123"
     assert str(correct) in {d for (d, _) in calls}, (
         f"thread idle row did not load from ThreadSummaryStore dir {correct}; "
-        f"loaded dirs: {sorted(d for (d,_) in calls)}"
+        f"loaded dirs: {sorted(d for (d, _) in calls)}"
     )
     assert not any(wrong in d for (d, _) in calls), (
         f"thread idle row still loads raw-cid dir {wrong!r}"
@@ -380,9 +381,7 @@ def test_reconcile_keeps_active_task_running_past_hold() -> None:
     task = BackgroundTask(id="consolidation.cid123.1", label="Consolidating memory")
     task.status = PROCESSING
     task.detail = "folding"
-    task.updated_at = (
-        datetime.now(UTC) - timedelta(minutes=5)
-    ).isoformat()
+    task.updated_at = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     bg._background_tasks[task.id] = task
 
     idle_row = JobIdleStatus(

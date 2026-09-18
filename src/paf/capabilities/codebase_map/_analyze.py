@@ -40,7 +40,15 @@ _MAX_SOURCE_BYTES = 1_000_000  # 1 MB per file
 # id set (12 in the wheel). We analyze only code files; config/data files (json/toml)
 # flow through data_extraction later, not here.
 _SUPPORTED = {
-    "python", "typescript", "tsx", "javascript", "php", "go", "rust", "java", "c",
+    "python",
+    "typescript",
+    "tsx",
+    "javascript",
+    "php",
+    "go",
+    "rust",
+    "java",
+    "c",
 }
 
 
@@ -88,7 +96,7 @@ def _native_signature(it) -> str | None:
         sig = sig[:-1].rstrip()  # drop the trailing colon the header always has
     for kw in ("async def ", "def "):  # strip the language keyword(s)
         if sig.startswith(kw):
-            sig = sig[len(kw):]
+            sig = sig[len(kw) :]
             break
     return sig or None
 
@@ -172,9 +180,17 @@ def _read_source(path: str | Path) -> str | None:
 def _detect_language(filename: str) -> str | None:
     ext = Path(filename).suffix.lstrip(".").lower()
     _EXT = {
-        "py": "python", "ts": "typescript", "tsx": "tsx", "js": "javascript",
-        "jsx": "javascript", "php": "php", "go": "go", "rs": "rust",
-        "java": "java", "c": "c", "h": "c",
+        "py": "python",
+        "ts": "typescript",
+        "tsx": "tsx",
+        "js": "javascript",
+        "jsx": "javascript",
+        "php": "php",
+        "go": "go",
+        "rs": "rust",
+        "java": "java",
+        "c": "c",
+        "h": "c",
     }
     return _EXT.get(ext)
 
@@ -196,7 +212,7 @@ def _module_assignments(recovery: QueryRecovery) -> list[SymbolInfo]:
     typescript, tsx, javascript today; others deferred per "one language at a time").
     """
     out: list[SymbolInfo] = []
-    for (name, start, end, type_ann) in recovery.module_assignments():
+    for name, start, end, type_ann in recovery.module_assignments():
         span = Span(start_byte=start, end_byte=end)
         kind = "Constant" if name.upper() == name and "_" in name else "Variable"
         signature = f"{name}: {type_ann}" if type_ann else None

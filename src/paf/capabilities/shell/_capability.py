@@ -17,27 +17,27 @@ from paf.capabilities._sandbox import SandboxedExecutor
 from ._toolset import ShellToolset
 
 _DEFAULT_DENIED_COMMANDS: tuple[str, ...] = (
-    'rm',
-    'rmdir',
-    'mkfs',
-    'dd',
-    'format',
-    'shutdown',
-    'reboot',
-    'halt',
-    'poweroff',
-    'init',
+    "rm",
+    "rmdir",
+    "mkfs",
+    "dd",
+    "format",
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "init",
 )
 
 
 LLM_API_KEY_ENV_PATTERNS: tuple[str, ...] = (
-    'ANTHROPIC_*',
-    'GATEWAY_*',
-    'GEMINI_*',
-    'GOOGLE_*',
-    'OPENAI_*',
-    'OPENROUTER_*',
-    'PYDANTIC_AI_GATEWAY_API_KEY',
+    "ANTHROPIC_*",
+    "GATEWAY_*",
+    "GEMINI_*",
+    "GOOGLE_*",
+    "OPENAI_*",
+    "OPENROUTER_*",
+    "PYDANTIC_AI_GATEWAY_API_KEY",
 )
 """Glob patterns for common LLM provider credentials, for `denied_env_patterns`.
 
@@ -57,7 +57,7 @@ class Shell(AbstractCapability[AgentDepsT]):
     or `denied_commands` to control what the agent can invoke.
     """
 
-    cwd: str | Path = '.'
+    cwd: str | Path = "."
     """Working directory for command execution."""
 
     allowed_commands: Sequence[str] = field(default_factory=list[str])
@@ -117,7 +117,9 @@ class Shell(AbstractCapability[AgentDepsT]):
     def __post_init__(self) -> None:
         """Resolve the built-in denylist according to the selected policy."""
         if self.denied_commands is _DEFAULT_DENIED_COMMANDS:
-            self.denied_commands = [] if self.allowed_commands else list(_DEFAULT_DENIED_COMMANDS)
+            self.denied_commands = (
+                [] if self.allowed_commands else list(_DEFAULT_DENIED_COMMANDS)
+            )
 
     def get_toolset(self) -> ShellToolset[AgentDepsT]:
         """Build and return the shell toolset."""

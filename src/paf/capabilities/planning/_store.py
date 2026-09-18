@@ -4,6 +4,7 @@ PlanStore protocol plus InMemoryPlanStore and SqlitePlanStore. paf adds a
 flat-file FilePlanStore (Task 3) so plans are inspectable/diffable JSON under
 data/plans/<conversation_id>/plan.json.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,7 @@ from paf.capabilities._storage import FlatFileStorage, StorageService
 from paf.capabilities.planning._events import PlanEvent, PlanEventEmitter, PlanEventType
 from paf.capabilities.planning._types import PlanItem, TaskStatus
 
-_VALID_TABLE_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}')
+_VALID_TABLE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
 
 
 @runtime_checkable
@@ -80,7 +81,7 @@ class PlanStore(Protocol):
 def validate_table_name(table: str) -> None:
     """Reject a table name that is not a safe bare SQL identifier."""
     if not _VALID_TABLE_RE.fullmatch(table):
-        raise ValueError(f'invalid table name: {table!r}')
+        raise ValueError(f"invalid table name: {table!r}")
 
 
 def apply_updates(
@@ -113,32 +114,46 @@ def _snapshot(item: PlanItem) -> PlanItem:
 async def emit_created(emitter: PlanEventEmitter | None, item: PlanItem) -> None:
     """Emit a `created` event when an emitter is attached."""
     if emitter is not None:
-        await emitter.emit(PlanEvent(event_type=PlanEventType.created, item=_snapshot(item)))
+        await emitter.emit(
+            PlanEvent(event_type=PlanEventType.created, item=_snapshot(item))
+        )
 
 
 async def emit_deleted(emitter: PlanEventEmitter | None, item: PlanItem) -> None:
     """Emit a `deleted` event when an emitter is attached."""
     if emitter is not None:
-        await emitter.emit(PlanEvent(event_type=PlanEventType.deleted, item=_snapshot(item)))
+        await emitter.emit(
+            PlanEvent(event_type=PlanEventType.deleted, item=_snapshot(item))
+        )
 
 
-async def emit_mutation(emitter: PlanEventEmitter | None, updated: PlanItem, previous: PlanItem | None) -> None:
+async def emit_mutation(
+    emitter: PlanEventEmitter | None, updated: PlanItem, previous: PlanItem | None
+) -> None:
     """Emit `updated`, then `status_changed`/`completed` if the status moved."""
     if emitter is None or previous is None:
         return
     await emitter.emit(
-        PlanEvent(event_type=PlanEventType.updated, item=_snapshot(updated), previous_state=_snapshot(previous))
+        PlanEvent(
+            event_type=PlanEventType.updated,
+            item=_snapshot(updated),
+            previous_state=_snapshot(previous),
+        )
     )
     if updated.status != previous.status:
         await emitter.emit(
             PlanEvent(
-                event_type=PlanEventType.status_changed, item=_snapshot(updated), previous_state=_snapshot(previous)
+                event_type=PlanEventType.status_changed,
+                item=_snapshot(updated),
+                previous_state=_snapshot(previous),
             )
         )
         if updated.status is TaskStatus.completed:
             await emitter.emit(
                 PlanEvent(
-                    event_type=PlanEventType.completed, item=_snapshot(updated), previous_state=_snapshot(previous)
+                    event_type=PlanEventType.completed,
+                    item=_snapshot(updated),
+                    previous_state=_snapshot(previous),
                 )
             )
 
@@ -194,7 +209,7 @@ class InMemoryPlanStore:
     async def add_item(self, item: PlanItem) -> PlanItem:
         """Append `item` and return it."""
         if any(existing.id == item.id for existing in self._items):
-            raise ValueError(f'A step with id {item.id!r} is already in this plan.')
+            raise ValueError(f"A step with id {item.id!r} is already in this plan.")
         stored = _snapshot(item)
         self._items.append(stored)
         await emit_created(self._emitter, stored)
@@ -252,14 +267,14 @@ class SqlitePlanStore:
 
     def __init__(
         self,
-        database: str = '.agent-plan.db',
+        database: str = ".agent-plan.db",
         *,
-        session: str = 'default',
-        table: str = 'plan_items',
+        session: str = "default",
+        table: str = "plan_items",
         event_emitter: PlanEventEmitter | None = None,
     ) -> None:
         validate_table_name(table)
-        if database == ':memory:':
+        if database == ":memory:":
             raise ValueError(
                 "SqlitePlanStore does not support ':memory:'; use InMemoryPlanStore or a file-backed database."
             )
@@ -274,10 +289,10 @@ class SqlitePlanStore:
         connection = sqlite3.connect(self._database)
         if not self._ready:
             connection.execute(
-                f'CREATE TABLE IF NOT EXISTS {self._table} ('
-                'session TEXT NOT NULL, seq INTEGER NOT NULL, id TEXT NOT NULL, '
-                'content TEXT NOT NULL, status TEXT NOT NULL, active_form TEXT NOT NULL, '
-                'parent_id TEXT, depends_on TEXT NOT NULL, PRIMARY KEY (session, id))'
+                f"CREATE TABLE IF NOT EXISTS {self._table} ("
+                "session TEXT NOT NULL, seq INTEGER NOT NULL, id TEXT NOT NULL, "
+                "content TEXT NOT NULL, status TEXT NOT NULL, active_form TEXT NOT NULL, "
+                "parent_id TEXT, depends_on TEXT NOT NULL, PRIMARY KEY (session, id))"
             )
             connection.commit()
             self._ready = True
@@ -310,8 +325,8 @@ class SqlitePlanStore:
             connection = self._connect()
             try:
                 rows = connection.execute(
-                    f'SELECT id, content, status, active_form, parent_id, depends_on '
-                    f'FROM {self._table} WHERE session = ? ORDER BY seq',
+                    f"SELECT id, content, status, active_form, parent_id, depends_on "
+                    f"FROM {self._table} WHERE session = ? ORDER BY seq",
                     (self._session,),
                 ).fetchall()
             finally:
@@ -322,11 +337,13 @@ class SqlitePlanStore:
         with self._lock:
             connection = self._connect()
             try:
-                connection.execute(f'DELETE FROM {self._table} WHERE session = ?', (self._session,))
+                connection.execute(
+                    f"DELETE FROM {self._table} WHERE session = ?", (self._session,)
+                )
                 connection.executemany(
-                    f'INSERT INTO {self._table} '
-                    '(session, seq, id, content, status, active_form, parent_id, depends_on) '
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    f"INSERT INTO {self._table} "
+                    "(session, seq, id, content, status, active_form, parent_id, depends_on) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     [self._insert_params(seq, item) for seq, item in enumerate(items)],
                 )
                 connection.commit()
@@ -338,13 +355,13 @@ class SqlitePlanStore:
             connection = self._connect()
             try:
                 next_seq = connection.execute(
-                    f'SELECT COALESCE(MAX(seq) + 1, 0) FROM {self._table} WHERE session = ?',
+                    f"SELECT COALESCE(MAX(seq) + 1, 0) FROM {self._table} WHERE session = ?",
                     (self._session,),
                 ).fetchone()[0]
                 connection.execute(
-                    f'INSERT INTO {self._table} '
-                    '(session, seq, id, content, status, active_form, parent_id, depends_on) '
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                    f"INSERT INTO {self._table} "
+                    "(session, seq, id, content, status, active_form, parent_id, depends_on) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     self._insert_params(int(next_seq), item),
                 )
                 connection.commit()
@@ -356,8 +373,8 @@ class SqlitePlanStore:
             connection = self._connect()
             try:
                 row = connection.execute(
-                    f'SELECT id, content, status, active_form, parent_id, depends_on '
-                    f'FROM {self._table} WHERE session = ? AND id = ?',
+                    f"SELECT id, content, status, active_form, parent_id, depends_on "
+                    f"FROM {self._table} WHERE session = ? AND id = ?",
                     (self._session, item_id),
                 ).fetchone()
             finally:
@@ -369,8 +386,8 @@ class SqlitePlanStore:
             connection = self._connect()
             try:
                 connection.execute(
-                    f'UPDATE {self._table} SET content = ?, status = ?, active_form = ?, '
-                    'parent_id = ?, depends_on = ? WHERE session = ? AND id = ?',
+                    f"UPDATE {self._table} SET content = ?, status = ?, active_form = ?, "
+                    "parent_id = ?, depends_on = ? WHERE session = ? AND id = ?",
                     (
                         item.content,
                         item.status.value,
@@ -390,7 +407,7 @@ class SqlitePlanStore:
             connection = self._connect()
             try:
                 cursor = connection.execute(
-                    f'DELETE FROM {self._table} WHERE session = ? AND id = ?',
+                    f"DELETE FROM {self._table} WHERE session = ? AND id = ?",
                     (self._session, item_id),
                 )
                 connection.commit()
@@ -497,7 +514,11 @@ class FilePlanStore:
         return [PlanItem.model_validate(row) for row in rows]
 
     def _save_sync(self, items: list[PlanItem]) -> None:
-        self._storage.write(self.KIND, self._conversation_id, {"items": [item.model_dump() for item in items]})
+        self._storage.write(
+            self.KIND,
+            self._conversation_id,
+            {"items": [item.model_dump() for item in items]},
+        )
 
     def _get_items_sync(self) -> list[PlanItem]:
         return [_snapshot(item) for item in self._load_sync()]
@@ -512,7 +533,7 @@ class FilePlanStore:
     def _add_item_sync(self, item: PlanItem) -> PlanItem:
         items = self._load_sync()
         if any(existing.id == item.id for existing in items):
-            raise ValueError(f'A step with id {item.id!r} is already in this plan.')
+            raise ValueError(f"A step with id {item.id!r} is already in this plan.")
         stored = _snapshot(item)
         items.append(stored)
         self._save_sync(items)

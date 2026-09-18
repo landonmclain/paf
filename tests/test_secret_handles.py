@@ -105,9 +105,7 @@ def test_integration_tool_gets_real_value_window_never_sees_it(monkeypatch):
     agent = Agent(
         _SecretProposingModel(call_tools=["call_api"]),
         capabilities=[
-            ToolGuardrail(
-                guard=secret_handle_guard, result_guard=secret_result_guard
-            )
+            ToolGuardrail(guard=secret_handle_guard, result_guard=secret_result_guard)
         ],
         tools=[call_api],
     )

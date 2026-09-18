@@ -25,7 +25,9 @@ from paf.capabilities.codebase_map import (
 from paf.capabilities.codebase_map._schema import FileInfo, Span, SymbolInfo
 
 
-def _fi(rel: str, symbols: list[SymbolInfo], doc: str = "", imports: list[str] | None = None) -> FileInfo:
+def _fi(
+    rel: str, symbols: list[SymbolInfo], doc: str = "", imports: list[str] | None = None
+) -> FileInfo:
     return FileInfo(
         path=rel,
         language="python",
@@ -52,14 +54,19 @@ def test_build_tokens_symbol_scoped_with_field_tags() -> None:
     tok = build_tokens([fi])["files"]["a.py"]
     # the symbol name appears as a name-field posting
     name_posts = tok.get("widget", [])
-    assert any(p["field"] == "name" and p["symbol"] == "widget" and p["kind"] == "FUNCTION" for p in name_posts)
+    assert any(
+        p["field"] == "name" and p["symbol"] == "widget" and p["kind"] == "FUNCTION"
+        for p in name_posts
+    )
     # tokens from signature and doc are also present, tagged with their field
     sig_posts = tok.get("widget", [])  # 'widget' appears in name + signature
     assert any(p["field"] == "signature" for p in sig_posts)
     # a signature-only word is tagged signature
     assert any(p["field"] == "signature" for p in tok.get("maker", []))
     # a doc-only word is tagged doc
-    assert any(p["field"] == "doc" and p["symbol"] == "widget" for p in tok.get("make", []))
+    assert any(
+        p["field"] == "doc" and p["symbol"] == "widget" for p in tok.get("make", [])
+    )
     # every posting carries a manifest_ref pointing at the symbol's block
     for post in tok.get("widget", []):
         assert post["manifest_ref"] == {"start_line": 3, "end_line": 10}
@@ -99,7 +106,9 @@ def test_build_tokens_excludes_body() -> None:
 
 
 def test_build_tokens_skips_unparsed_files() -> None:
-    unparsed = FileInfo(path="data.bin", language=None, symbols=[], imports=[], unparsed=True)
+    unparsed = FileInfo(
+        path="data.bin", language=None, symbols=[], imports=[], unparsed=True
+    )
     tok = build_tokens([unparsed])
     assert tok["files"] == {}
 
@@ -122,7 +131,9 @@ def test_tokens_rank_hit_collapses_to_symbol_block() -> None:
     hit = hits[0]
     assert hit.symbol == "foo"
     assert hit.block is not None and hit.block.file == "a.py"
-    assert hit.block.span.start_line == 7 and hit.block.span.end_line == 12  # symbol block, not whole file
+    assert (
+        hit.block.span.start_line == 7 and hit.block.span.end_line == 12
+    )  # symbol block, not whole file
     assert hit.snippet == "head doc"  # index HEAD presentation
 
 
@@ -138,7 +149,8 @@ def test_scan_writes_lean_head_and_tokens(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     root.mkdir()
     (root / "a.py").write_text(
-        '"""module doc."""\nclass Widget:\n    def spin(self): ...\ndef helper(): ...\n', encoding="utf-8"
+        '"""module doc."""\nclass Widget:\n    def spin(self): ...\ndef helper(): ...\n',
+        encoding="utf-8",
     )
     scan_and_write(root)
     storage = FlatFileStorage()
@@ -147,7 +159,15 @@ def test_scan_writes_lean_head_and_tokens(tmp_path: Path) -> None:
     index = storage.read(ArtifactKind.INDEX, root)
     row = index["files"][0]
     assert set(row) == {
-        "path", "language", "doc", "imports", "classes", "functions", "symbols", "references_count", "unparsed",
+        "path",
+        "language",
+        "doc",
+        "imports",
+        "classes",
+        "functions",
+        "symbols",
+        "references_count",
+        "unparsed",
     }
     assert "Widget" in row["classes"]
     assert "helper" in row["functions"]
@@ -158,14 +178,18 @@ def test_scan_writes_lean_head_and_tokens(tmp_path: Path) -> None:
     tokens = storage.read(ArtifactKind.TOKENS, root)
     assert tokens["version"] == 1
     assert "a.py" in tokens["files"]
-    assert any(p["symbol"] == "Widget" for p in tokens["files"]["a.py"].get("widget", []))
+    assert any(
+        p["symbol"] == "Widget" for p in tokens["files"]["a.py"].get("widget", [])
+    )
 
 
 def test_lexical_retrieval_search_over_tokens(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     root.mkdir()
     (root / "a.py").write_text("def Settings(): ...\n", encoding="utf-8")
-    (root / "b.py").write_text("from a import Settings\ndef run(): ...\n", encoding="utf-8")
+    (root / "b.py").write_text(
+        "from a import Settings\ndef run(): ...\n", encoding="utf-8"
+    )
     scan_and_write(root)
 
     retr = LexicalRetrieval(storage=FlatFileStorage(), scan_root=root)
@@ -191,6 +215,8 @@ def test_manifest_keeps_detail_and_references(tmp_path: Path) -> None:
     a_syms = manifest["a.py"]["symbols"]
     assert a_syms and "signature" in a_syms[0] and "span" in a_syms[0]
     # references calculated over manifest, mirrored onto the lean index head
-    index_row = {r["path"]: r for r in storage.read(ArtifactKind.INDEX, root)["files"]}["a.py"]
+    index_row = {r["path"]: r for r in storage.read(ArtifactKind.INDEX, root)["files"]}[
+        "a.py"
+    ]
     assert index_row["references_count"] == 1  # b.py references Settings
     assert manifest["a.py"]["references_count"] == 1

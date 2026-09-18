@@ -5,6 +5,7 @@ can react to plan changes. paf owns this so it can wire it through its
 capability-toolset seam (registry + profile + builder) instead of using the
 harness directly.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -39,21 +40,21 @@ if TYPE_CHECKING:
     from pydantic_ai.models import ModelRequestContext
 
 _WRITE_PLAN_GUIDANCE = (
-    'You have a planning tool, `write_plan`. For multi-step work, call it first to lay out the '
-    'steps, then keep it current: mark exactly one step `in_progress`, and mark a step `completed` '
-    'as soon as it is fully done. Pass the full plan every time you call `write_plan`.'
+    "You have a planning tool, `write_plan`. For multi-step work, call it first to lay out the "
+    "steps, then keep it current: mark exactly one step `in_progress`, and mark a step `completed` "
+    "as soon as it is fully done. Pass the full plan every time you call `write_plan`."
 )
 
 _GRANULAR_GUIDANCE = (
-    'Use `add_task` to append a single step, `update_task_status`/`update_task_statuses` to move '
-    'steps between statuses, and `read_plan` to see step ids before a granular edit.'
+    "Use `add_task` to append a single step, `update_task_status`/`update_task_statuses` to move "
+    "steps between statuses, and `read_plan` to see step ids before a granular edit."
 )
 
 _SUBTASK_GUIDANCE = (
-    'Break a complex step into subtasks with `add_subtask`, and record ordering with '
-    '`set_dependency`: a step stays `blocked` until every step it depends on is resolved '
-    '(`completed` or `cancelled`). Call `get_available_tasks` to pick the next step that has no '
-    'incomplete dependencies.'
+    "Break a complex step into subtasks with `add_subtask`, and record ordering with "
+    "`set_dependency`: a step stays `blocked` until every step it depends on is resolved "
+    "(`completed` or `cancelled`). Call `get_available_tasks` to pick the next step that has no "
+    "incomplete dependencies."
 )
 
 
@@ -98,7 +99,7 @@ class Planning(AbstractCapability[AgentDepsT]):
     `runtime_authoring`, which read the same way.
     """
 
-    cache_ttl: Literal['5m', '1h'] = '5m'
+    cache_ttl: Literal["5m", "1h"] = "5m"
     """TTL for the cache breakpoint placed after the stable plan-reminder opening tag."""
 
     store: PlanStore | None = None
@@ -129,7 +130,9 @@ class Planning(AbstractCapability[AgentDepsT]):
     descriptions: dict[str, str] | None = None
     """Optional per-tool description overrides, keyed by tool name. Unknown names raise `ValueError`."""
 
-    _resolved_store: PlanStore | None = field(default=None, init=False, repr=False, compare=False)
+    _resolved_store: PlanStore | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     async def for_run(self, ctx: RunContext[AgentDepsT]) -> Planning[AgentDepsT]:
         """Return a clone with this run's store resolved and cached (per-run isolation)."""
@@ -165,15 +168,24 @@ class Planning(AbstractCapability[AgentDepsT]):
         """
         if self.guidance is not None:
             return self.guidance or None
-        registered = available_tool_names(subtasks=self.enable_subtasks) if self.tools is None else set(self.tools)
+        registered = (
+            available_tool_names(subtasks=self.enable_subtasks)
+            if self.tools is None
+            else set(self.tools)
+        )
         parts: list[str] = []
-        if 'write_plan' in registered:
+        if "write_plan" in registered:
             parts.append(_WRITE_PLAN_GUIDANCE)
-        if registered & {'read_plan', 'add_task', 'update_task_status', 'update_task_statuses'}:
+        if registered & {
+            "read_plan",
+            "add_task",
+            "update_task_status",
+            "update_task_statuses",
+        }:
             parts.append(_GRANULAR_GUIDANCE)
         if registered & set(SUBTASK_TOOL_NAMES):
             parts.append(_SUBTASK_GUIDANCE)
-        return ' '.join(parts) or None
+        return " ".join(parts) or None
 
     async def wrap_model_request(
         self,
@@ -205,7 +217,7 @@ class Planning(AbstractCapability[AgentDepsT]):
             rendered = _reminder_text(render_plan(items))
             reminder = UserPromptPart(
                 content=[
-                    '<plan-reminder>\n',
+                    "<plan-reminder>\n",
                     CachePoint(ttl=self.cache_ttl),
                     TextContent(rendered, metadata=marker),
                 ]
@@ -216,10 +228,18 @@ class Planning(AbstractCapability[AgentDepsT]):
     def _plan_marker_for(self, ctx: RunContext[AgentDepsT]) -> str:
         """Scope-qualified plan marker for `ctx`, so several agents/sessions on one
         history strip only their own prior reminder."""
-        scope = getattr(ctx, "conversation_id", None) or getattr(ctx, "agent", None) or "default"
-        return f"{PLAN_MARKER_BASE}:{hashlib.sha256(str(scope).encode()).hexdigest()[:16]}"
+        scope = (
+            getattr(ctx, "conversation_id", None)
+            or getattr(ctx, "agent", None)
+            or "default"
+        )
+        return (
+            f"{PLAN_MARKER_BASE}:{hashlib.sha256(str(scope).encode()).hexdigest()[:16]}"
+        )
 
-    def _remove_previous_injection(self, messages: list[ModelMessage], marker: str) -> None:
+    def _remove_previous_injection(
+        self, messages: list[ModelMessage], marker: str
+    ) -> None:
         """Drop any prior plan reminder tagged with `marker` from every ModelRequest.
 
         Mirrors ``Memory._remove_previous_injection`` / the thread summarizer's:
@@ -234,13 +254,18 @@ class Planning(AbstractCapability[AgentDepsT]):
             parts: list = []
             changed = False
             for part in message.parts:
-                if not isinstance(part, UserPromptPart) or isinstance(part.content, str):
+                if not isinstance(part, UserPromptPart) or isinstance(
+                    part.content, str
+                ):
                     parts.append(part)
                     continue
                 content = [
                     item
                     for item in part.content
-                    if not (isinstance(item, TextContent) and str(item.metadata).startswith(marker.split(":")[0]))
+                    if not (
+                        isinstance(item, TextContent)
+                        and str(item.metadata).startswith(marker.split(":")[0])
+                    )
                 ]
                 if len(content) == len(part.content):
                     parts.append(part)
@@ -255,21 +280,21 @@ class Planning(AbstractCapability[AgentDepsT]):
     def from_spec(
         cls,
         *,
-        backend: Literal['memory', 'sqlite'] = 'memory',
-        database: str = '.agent-plan.db',
-        session: str = 'default',
+        backend: Literal["memory", "sqlite"] = "memory",
+        database: str = ".agent-plan.db",
+        session: str = "default",
         enable_subtasks: bool = False,
         inject: bool = True,
         guidance: str | None = None,
-        cache_ttl: Literal['5m', '1h'] = '5m',
+        cache_ttl: Literal["5m", "1h"] = "5m",
         tools: list[str] | None = None,
     ) -> Planning[AgentDepsT]:
         """Construct a `Planning` capability from serializable options."""
-        if backend != 'sqlite' and database != '.agent-plan.db':
+        if backend != "sqlite" and database != ".agent-plan.db":
             raise ValueError('database is only valid with backend="sqlite"')
-        if backend == 'memory':
+        if backend == "memory":
             store: PlanStore | None = None
-        elif backend == 'sqlite':
+        elif backend == "sqlite":
             from paf.capabilities.planning._store import SqlitePlanStore
 
             store = SqlitePlanStore(database, session=session)
@@ -277,7 +302,9 @@ class Planning(AbstractCapability[AgentDepsT]):
             # `backend` is a `Literal`, but this is the deserialization entry point: the value
             # arrives from a YAML or JSON spec, where nothing has checked it. Falling through
             # to SQLite would silently write `postgres` plans to `.agent-plan.db`.
-            raise ValueError(f"Unknown planning backend {backend!r}; expected 'memory' or 'sqlite'.")
+            raise ValueError(
+                f"Unknown planning backend {backend!r}; expected 'memory' or 'sqlite'."
+            )
         return cls(
             store=store,
             enable_subtasks=enable_subtasks,
@@ -290,8 +317,8 @@ class Planning(AbstractCapability[AgentDepsT]):
     @classmethod
     def get_serialization_name(cls) -> str | None:
         """Serialization name for agent-spec support."""
-        return 'Planning'
+        return "Planning"
 
 
 def _reminder_text(plan: str) -> str:
-    return f'Your current plan (keep it updated with the planning tools):\n\n{plan}\n</plan-reminder>'
+    return f"Your current plan (keep it updated with the planning tools):\n\n{plan}\n</plan-reminder>"

@@ -68,9 +68,7 @@ def test_local_run_inherits_env_when_none(tmp_path):
 def test_local_run_explicit_env(tmp_path):
     async def scenario() -> None:
         ex = LocalProcessExecutor()
-        res = await ex.run(
-            "echo $FOO", cwd=tmp_path, env={"FOO": "bar"}, timeout=10.0
-        )
+        res = await ex.run("echo $FOO", cwd=tmp_path, env={"FOO": "bar"}, timeout=10.0)
         assert res.stdout.strip() == "bar"
 
     _run(scenario())
@@ -179,8 +177,12 @@ def test_docker_run_captures_output(tmp_path):
 def test_docker_exec_mode_persists_state(tmp_path):
     async def scenario() -> None:
         ex = DockerExecutor(mode="exec")
-        await ex.run("echo one > /workspace/state.txt", cwd=tmp_path, env=None, timeout=30.0)
-        res = await ex.run("cat /workspace/state.txt", cwd=tmp_path, env=None, timeout=30.0)
+        await ex.run(
+            "echo one > /workspace/state.txt", cwd=tmp_path, env=None, timeout=30.0
+        )
+        res = await ex.run(
+            "cat /workspace/state.txt", cwd=tmp_path, env=None, timeout=30.0
+        )
         assert res.exit_code == 0
         assert "one" in res.stdout
 

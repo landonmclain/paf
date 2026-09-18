@@ -121,7 +121,9 @@ def apply_edits(
         write: Seam — atomically writes ``content`` to ``path``.
     """
     if not isinstance(edits, list) or not edits:
-        raise ModelRetry("edits must be a non-empty list of {old_text, new_text} pairs.")
+        raise ModelRetry(
+            "edits must be a non-empty list of {old_text, new_text} pairs."
+        )
 
     # 1. ONE fresh read; everything is validated/written against this snapshot.
     try:
@@ -147,7 +149,9 @@ def apply_edits(
             failures.append(f"edit #{i + 1}: {err} ({pair.get('old_text', '')[:60]!r})")
     if failures:
         joined = "; ".join(failures)
-        raise ModelRetry(f"Refusing to edit {path.name}: {joined}. Re-read (or read_note) and retry with exact text.")
+        raise ModelRetry(
+            f"Refusing to edit {path.name}: {joined}. Re-read (or read_note) and retry with exact text."
+        )
 
     # 4. Apply all replacements to the single snapshot.
     new_text = text

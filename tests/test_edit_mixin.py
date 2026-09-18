@@ -35,7 +35,13 @@ def test_single_edit(tmp_path: Path) -> None:
     p.write_text("one-two-three", encoding="utf-8")
     read, write = _seams(p)
 
-    result = apply_edits(p, [{"old_text": "two", "new_text": "2"}], expected_version=None, read=read, write=write)
+    result = apply_edits(
+        p,
+        [{"old_text": "two", "new_text": "2"}],
+        expected_version=None,
+        read=read,
+        write=write,
+    )
 
     assert isinstance(result, EditResult)
     assert p.read_text(encoding="utf-8") == "one-2-three"
@@ -60,7 +66,9 @@ def test_batch_applies_all_in_one_write(tmp_path: Path) -> None:
         {"old_text": "c", "new_text": "C"},
         {"old_text": "d", "new_text": "D"},
     ]
-    result = apply_edits(p, edits, expected_version=None, read=read, write=counting_write)
+    result = apply_edits(
+        p, edits, expected_version=None, read=read, write=counting_write
+    )
 
     assert p.read_text(encoding="utf-8") == "A B C D"
     assert calls["writes"] == 1  # exactly one write for the whole batch
@@ -90,7 +98,13 @@ def test_validate_all_rejects_on_ambiguity(tmp_path: Path) -> None:
     read, write = _seams(p)
 
     with pytest.raises(ModelRetry, match="found 2 times"):
-        apply_edits(p, [{"old_text": "dup", "new_text": "x"}], expected_version=None, read=read, write=write)
+        apply_edits(
+            p,
+            [{"old_text": "dup", "new_text": "x"}],
+            expected_version=None,
+            read=read,
+            write=write,
+        )
 
 
 def test_cas_mismatch_rejects(tmp_path: Path) -> None:
@@ -113,9 +127,17 @@ def test_cas_pass_allows(tmp_path: Path) -> None:
     p = tmp_path / "note.md"
     p.write_text("version one", encoding="utf-8")
     read, write = _seams(p)
-    ver = __import__("paf.capabilities._edit", fromlist=["_content_hash"])._content_hash("version one")
+    ver = __import__(
+        "paf.capabilities._edit", fromlist=["_content_hash"]
+    )._content_hash("version one")
 
-    result = apply_edits(p, [{"old_text": "one", "new_text": "two"}], expected_version=ver, read=read, write=write)
+    result = apply_edits(
+        p,
+        [{"old_text": "one", "new_text": "two"}],
+        expected_version=ver,
+        read=read,
+        write=write,
+    )
     assert "two" in p.read_text(encoding="utf-8")
     assert result.version != ver
 
@@ -132,7 +154,13 @@ def test_never_lie_on_unpersisted_write(tmp_path: Path) -> None:
         return None
 
     with pytest.raises(ModelRetry, match="did not persist"):
-        apply_edits(p, [{"old_text": "original", "new_text": "CHANGED"}], expected_version=None, read=read, write=lying_write)
+        apply_edits(
+            p,
+            [{"old_text": "original", "new_text": "CHANGED"}],
+            expected_version=None,
+            read=read,
+            write=lying_write,
+        )
 
 
 def test_empty_edits_rejected(tmp_path: Path) -> None:
@@ -147,7 +175,13 @@ def test_missing_file_rejected(tmp_path: Path) -> None:
     p = tmp_path / "nope.md"
     read, write = _seams(p)
     with pytest.raises(ModelRetry, match="File not found"):
-        apply_edits(p, [{"old_text": "a", "new_text": "b"}], expected_version=None, read=read, write=write)
+        apply_edits(
+            p,
+            [{"old_text": "a", "new_text": "b"}],
+            expected_version=None,
+            read=read,
+            write=write,
+        )
 
 
 def test_diff_capped(tmp_path: Path) -> None:

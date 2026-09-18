@@ -82,7 +82,9 @@ def build_overview(scan_root: str | Path) -> dict[str, Any]:
     }
 
 
-def load_overview(storage: StorageService, scan_root: str | Path) -> dict[str, Any] | None:
+def load_overview(
+    storage: StorageService, scan_root: str | Path
+) -> dict[str, Any] | None:
     """Read the overview artifact (None when not indexed yet)."""
     payload = storage.read(ArtifactKind.OVERVIEW, Path(scan_root).resolve())
     return payload if isinstance(payload, dict) else None

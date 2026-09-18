@@ -7,6 +7,7 @@ turn-index experiment — see `tests/retired/` and `archive/turn_index/`.
 
 No live model. Runs in default `pytest`. Uses a real FileStepStore in a tmp dir.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,7 +39,9 @@ def test_all_retrieval_tools_exposed_on_built_agent() -> None:
     from paf.specs import build_agent
 
     agent = build_agent("assistant")
-    combined = next(ts for ts in agent.toolsets if type(ts).__name__ == "CombinedToolset")
+    combined = next(
+        ts for ts in agent.toolsets if type(ts).__name__ == "CombinedToolset"
+    )
     names: set[str] = set()
     for ts in combined.toolsets:
         wrapped = getattr(ts, "wrapped", ts)
@@ -50,10 +53,20 @@ def test_all_retrieval_tools_exposed_on_built_agent() -> None:
     # `read_turn` is owned by the search capability (ConversationSearch -> ReadTurn).
     assert "read_turn" in names, f"read_turn missing; got {sorted(names)}"
     # M2 INJECT-ONLY memory: the subject must carry NO memory tools.
-    for mtool in ("search_memory", "read_memory", "write_memory", "delete_memory", "append_memory"):
-        assert mtool not in names, f"{mtool} should be absent (inject-only); got {sorted(names)}"
+    for mtool in (
+        "search_memory",
+        "read_memory",
+        "write_memory",
+        "delete_memory",
+        "append_memory",
+    ):
+        assert mtool not in names, (
+            f"{mtool} should be absent (inject-only); got {sorted(names)}"
+        )
     # `search_index` was the retired TurnIndex-only tool — gone.
-    assert "search_index" not in names, f"search_index should be absent; got {sorted(names)}"
+    assert "search_index" not in names, (
+        f"search_index should be absent; got {sorted(names)}"
+    )
 
 
 def test_read_turn_resolves_and_renders_turn(tmp_path: Path) -> None:
@@ -68,18 +81,24 @@ def test_read_turn_resolves_and_renders_turn(tmp_path: Path) -> None:
 
     async def go():
         await store.save_snapshot(
-            ContinuableSnapshot(run_id="run-abc", step_index=0, messages=msgs, conversation_id="c1")
+            ContinuableSnapshot(
+                run_id="run-abc", step_index=0, messages=msgs, conversation_id="c1"
+            )
         )
         source = SnapshotHistorySource(store)
         finder = TurnFinder(source)
         out = await finder.resolve("run-abc:0", run_id="run-abc", conversation_id="c1")
         assert "the deploy port is 8080" in out, out
         # malformed ref
-        out = await finder.resolve("run-abc:nope", run_id="run-abc", conversation_id="c1")
+        out = await finder.resolve(
+            "run-abc:nope", run_id="run-abc", conversation_id="c1"
+        )
         assert "Malformed" in out, out
 
 
-def test_read_turn_truncates_by_default_and_full_is_byte_complete(tmp_path: Path) -> None:
+def test_read_turn_truncates_by_default_and_full_is_byte_complete(
+    tmp_path: Path,
+) -> None:
     """`read_turn` returns tool calls/results (not just user/assistant text) and
     truncates them by default; `full=True` renders the byte-complete originals."""
     store = FileStepStore(directory=tmp_path / "steps")
@@ -98,22 +117,28 @@ def test_read_turn_truncates_by_default_and_full_is_byte_complete(tmp_path: Path
 
     async def go():
         await store.save_snapshot(
-            ContinuableSnapshot(run_id="run-tr", step_index=0, messages=msgs, conversation_id="c1")
+            ContinuableSnapshot(
+                run_id="run-tr", step_index=0, messages=msgs, conversation_id="c1"
+            )
         )
         source = SnapshotHistorySource(store)
         finder = TurnFinder(source)
 
         # Default (bounded) read: tool call + tool return present, but truncated.
-        bounded = await finder.resolve("run-tr:0", run_id="run-tr", conversation_id="c1", full=False)
-        assert "Tool [read_file]" in bounded, bounded          # tool return no longer dropped
-        assert "Tool Call [read_file]" in bounded, bounded     # tool call rendered
-        assert "z" * 900 not in bounded, bounded               # user text capped at 500
-        assert "y" * 900 not in bounded, bounded               # tool call args capped at 200
-        assert "x" * 2000 not in bounded, bounded              # tool return capped at 500
+        bounded = await finder.resolve(
+            "run-tr:0", run_id="run-tr", conversation_id="c1", full=False
+        )
+        assert "Tool [read_file]" in bounded, bounded  # tool return no longer dropped
+        assert "Tool Call [read_file]" in bounded, bounded  # tool call rendered
+        assert "z" * 900 not in bounded, bounded  # user text capped at 500
+        assert "y" * 900 not in bounded, bounded  # tool call args capped at 200
+        assert "x" * 2000 not in bounded, bounded  # tool return capped at 500
         assert bounded.count("...") >= 3, bounded
 
         # full=True: byte-complete originals.
-        full = await finder.resolve("run-tr:0", run_id="run-tr", conversation_id="c1", full=True)
+        full = await finder.resolve(
+            "run-tr:0", run_id="run-tr", conversation_id="c1", full=True
+        )
         assert "z" * 900 in full, "user text should be full when full=True"
         assert "y" * 900 in full, "tool call args should be full when full=True"
         assert "x" * 2000 in full, "tool return payload should be full when full=True"

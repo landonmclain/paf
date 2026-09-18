@@ -46,7 +46,9 @@ def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
-def _call_event(tool: str = "run_command", sid: str = "call_123") -> FunctionToolCallEvent:
+def _call_event(
+    tool: str = "run_command", sid: str = "call_123"
+) -> FunctionToolCallEvent:
     part = ToolCallPart(
         tool_name=tool,
         args='{"command": "pwd"}',
@@ -264,12 +266,8 @@ def test_session2_init_injects_spec_profile_for_keyword_agent_name(
     fell back to ASSISTANT_PROFILE (building an assistant-profile agent under a
     test-agent name instead of the lean Shell-only toolset).
     """
-    monkeypatch.setattr(
-        runtime, "resolve_profile_name", lambda name: "runtime2_test"
-    )
-    monkeypatch.setattr(
-        runtime, "PROFILES", {"runtime2_test": _FAKE_SHELL_PROFILE}
-    )
+    monkeypatch.setattr(runtime, "resolve_profile_name", lambda name: "runtime2_test")
+    monkeypatch.setattr(runtime, "PROFILES", {"runtime2_test": _FAKE_SHELL_PROFILE})
     # Stub the heavy build paths so constructing Session needs no API key.
     monkeypatch.setattr(runtime, "build_agent", lambda name, profile=None: object())
     monkeypatch.setattr(runtime, "_build_store", lambda: object())
@@ -338,13 +336,12 @@ class _FakeToolStore:
 
     async def list_unresolved_tool_effects(self, *, run_id: str) -> list[object]:
         del run_id
-        return [
-            type("Rec", (), {"tool_call_id": tid})() for tid in self._unresolved
-        ]
+        return [type("Rec", (), {"tool_call_id": tid})() for tid in self._unresolved]
 
 
 def _trim_interrupted(unresolved: set[str], history: list[object]) -> list[object]:
     """Run Session._recover_interrupted against a fake store, synchronously."""
+
     async def _run() -> list[object]:
         s = object.__new__(runtime.Session)
         s._store = _FakeToolStore(unresolved)  # type: ignore[attr-defined]
@@ -360,14 +357,10 @@ def test_recover_interrupted_trims_unresolved_tool_tail() -> None:
     )
     resp_ok = ModelResponse(parts=[TextPart(content="partial done")])
     resp_bad = ModelResponse(
-        parts=[
-            ToolCallPart(tool_name="shell", tool_call_id="call_unresolved")
-        ]
+        parts=[ToolCallPart(tool_name="shell", tool_call_id="call_unresolved")]
     )
     # History ends on the unresolved tool call -> that tail must be trimmed.
-    trimmed = _trim_interrupted(
-        {"call_unresolved"}, [user_ok, resp_ok, resp_bad]
-    )
+    trimmed = _trim_interrupted({"call_unresolved"}, [user_ok, resp_ok, resp_bad])
     assert len(trimmed) == 2
     assert trimmed[0] is user_ok
     assert trimmed[1] is resp_ok
@@ -375,7 +368,9 @@ def test_recover_interrupted_trims_unresolved_tool_tail() -> None:
 
 def test_recover_interrupted_keeps_history_when_no_unresolved() -> None:
     """No unresolved tool effects -> recovered history returned intact."""
-    user_ok = ModelRequest(parts=[UserPromptPart(content="hi", part_kind="user-prompt")])
+    user_ok = ModelRequest(
+        parts=[UserPromptPart(content="hi", part_kind="user-prompt")]
+    )
     resp = ModelResponse(
         parts=[ToolCallPart(tool_name="shell", tool_call_id="call_resolved")]
     )

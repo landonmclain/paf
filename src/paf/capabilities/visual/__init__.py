@@ -18,6 +18,6 @@ from ._capability import Visual
 from ._toolset import VisualToolset
 
 __all__ = [
-    'Visual',
-    'VisualToolset',
+    "Visual",
+    "VisualToolset",
 ]

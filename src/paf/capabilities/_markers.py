@@ -19,18 +19,18 @@ transient per-request artifact, not part of the durable turn.
 from __future__ import annotations
 
 # Our injected turn-index block marker. Matches `_capability.py:_MARKER`.
-TURN_INDEX_MARKER = 'turn-index.v1'
+TURN_INDEX_MARKER = "turn-index.v1"
 
 # The harness Memory capability's scope-qualified marker base. We strip this
 # family too so a recalled turn never carries a stale memory block pasted into
 # a User message that StepPersistence snapshotted.
-MEMORY_MARKER_BASE = 'pydantic-ai-harness.memory.v1'
+MEMORY_MARKER_BASE = "pydantic-ai-harness.memory.v1"
 
 # The paf-owned thread-summary and planning injected-block marker bases. These
 # are scope-qualified on injection (`paf.thread-summary.v1:<hash>`,
 # `paf.plan.v1:<hash>`); stripping the base (prefix) covers every scope.
-THREAD_SUMMARY_MARKER_BASE = 'paf.thread-summary.v1'
-PLAN_MARKER_BASE = 'paf.plan.v1'
+THREAD_SUMMARY_MARKER_BASE = "paf.thread-summary.v1"
+PLAN_MARKER_BASE = "paf.plan.v1"
 
 
 def injected_artifact_markers() -> tuple[str, ...]:
@@ -42,4 +42,9 @@ def injected_artifact_markers() -> tuple[str, ...]:
     etc.).
     """
     # Exact match for ours, prefix match for the scope-qualified injected markers.
-    return (TURN_INDEX_MARKER, MEMORY_MARKER_BASE, THREAD_SUMMARY_MARKER_BASE, PLAN_MARKER_BASE)
+    return (
+        TURN_INDEX_MARKER,
+        MEMORY_MARKER_BASE,
+        THREAD_SUMMARY_MARKER_BASE,
+        PLAN_MARKER_BASE,
+    )

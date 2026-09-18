@@ -51,7 +51,7 @@ def test_docker_network_dropped(tmp_path):
     async def scenario() -> None:
         ex = DockerExecutor(mode="run")
         res = await ex.run(
-            "python -c \"import urllib.request; "
+            'python -c "import urllib.request; '
             "urllib.request.urlopen('https://example.com', timeout=5)\"",
             cwd=tmp_path,
             env=None,
@@ -67,7 +67,9 @@ def test_docker_root_read_only(tmp_path):
 
     async def scenario() -> None:
         ex = DockerExecutor(mode="run")
-        res = await ex.run("touch /etc/security_probe.txt", cwd=tmp_path, env=None, timeout=30.0)
+        res = await ex.run(
+            "touch /etc/security_probe.txt", cwd=tmp_path, env=None, timeout=30.0
+        )
         assert res.exit_code != 0, "sandbox unexpectedly wrote to a read-only path"
 
     _run(scenario())
@@ -78,7 +80,9 @@ def test_docker_workspace_writable(tmp_path):
 
     async def scenario() -> None:
         ex = DockerExecutor(mode="run")
-        res = await ex.run("touch /workspace/security_probe.txt", cwd=tmp_path, env=None, timeout=30.0)
+        res = await ex.run(
+            "touch /workspace/security_probe.txt", cwd=tmp_path, env=None, timeout=30.0
+        )
         assert res.exit_code == 0
         assert (tmp_path / "security_probe.txt").exists(), (
             "workspace write did not land on the host bind mount"
@@ -94,7 +98,9 @@ def test_docker_non_root(tmp_path):
         ex = DockerExecutor(mode="run")
         res = await ex.run("id -u", cwd=tmp_path, env=None, timeout=30.0)
         assert res.exit_code == 0
-        assert res.stdout.strip() == "1000", f"expected uid 1000, got {res.stdout.strip()!r}"
+        assert res.stdout.strip() == "1000", (
+            f"expected uid 1000, got {res.stdout.strip()!r}"
+        )
 
     _run(scenario())
 
@@ -125,7 +131,9 @@ def test_docker_exclude_overlays_env(tmp_path):
         res = await ex.run("cat /workspace/.env", cwd=tmp_path, env=None, timeout=30.0)
         assert res.exit_code == 0
         assert "super-secret-value" not in res.stdout, "secret leaked into the sandbox"
-        assert res.stdout.strip() == "", "excluded .env should be empty in the container"
+        assert res.stdout.strip() == "", (
+            "excluded .env should be empty in the container"
+        )
 
     _run(scenario())
     # The real host file is never touched by the overlay.
@@ -147,7 +155,9 @@ def test_docker_exclude_write_hits_overlay(tmp_path):
         assert res.exit_code == 0
 
     _run(scenario())
-    assert (tmp_path / ".env").read_text() == "SECRET=original\n", "host .env was modified"
+    assert (tmp_path / ".env").read_text() == "SECRET=original\n", (
+        "host .env was modified"
+    )
 
 
 def test_docker_exclude_overlays_git_dir(tmp_path):
@@ -157,9 +167,13 @@ def test_docker_exclude_overlays_git_dir(tmp_path):
 
     async def scenario() -> None:
         ex = DockerExecutor(mode="run", exclude=[".git"])
-        res = await ex.run("ls -A /workspace/.git", cwd=tmp_path, env=None, timeout=30.0)
+        res = await ex.run(
+            "ls -A /workspace/.git", cwd=tmp_path, env=None, timeout=30.0
+        )
         assert res.exit_code == 0
-        assert res.stdout.strip() == "", "excluded .git should be empty in the container"
+        assert res.stdout.strip() == "", (
+            "excluded .git should be empty in the container"
+        )
 
     _run(scenario())
     assert (tmp_path / ".git" / "HEAD").read_text() == "ref: refs/heads/main\n"

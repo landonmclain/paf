@@ -129,8 +129,7 @@ def test_spec_browser_config_private_override_false(tmp_path: Path) -> None:
 def test_spec_browser_config_private_override_true(tmp_path: Path) -> None:
     """`block_private_addresses: true` is explicit and never dissolved."""
     (tmp_path / "e.yaml").write_text(
-        "name: e\nmodel: test\nbrowser:\n"
-        "  block_private_addresses: true\n"
+        "name: e\nmodel: test\nbrowser:\n  block_private_addresses: true\n"
     )
     assert _spec_browser_config(tmp_path / "e.yaml") == {
         "block_private_addresses": True

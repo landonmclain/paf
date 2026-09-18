@@ -152,7 +152,9 @@ def build_compaction(config: CompactionConfig | None = None) -> TieredCompaction
     return _build_ladder(cfg, target)
 
 
-def build_boundary_compaction(config: CompactionConfig | None = None) -> TieredCompaction:
+def build_boundary_compaction(
+    config: CompactionConfig | None = None,
+) -> TieredCompaction:
     """Build the Tier A **turn-boundary** compaction strategy (routine trim).
 
     Same ladder as :func:`build_compaction` (clamp → clear → window), but targeted at
@@ -164,8 +166,10 @@ def build_boundary_compaction(config: CompactionConfig | None = None) -> TieredC
     design removes.
     """
     cfg = config or CompactionConfig()
-    target = cfg.turn_boundary_target if cfg.turn_boundary_target is not None else (
-        cfg.target_tokens if cfg.target_tokens is not None else 4000
+    target = (
+        cfg.turn_boundary_target
+        if cfg.turn_boundary_target is not None
+        else (cfg.target_tokens if cfg.target_tokens is not None else 4000)
     )
     return _build_ladder(cfg, target)
 

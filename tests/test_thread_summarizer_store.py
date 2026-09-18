@@ -21,7 +21,9 @@ from paf.capabilities.thread_summarizer._store import (
 )
 
 
-def _record(run: str = "run-a", turn: int = 0, cid: str = "p:c1", summary: str = "t") -> ThreadSummaryRecord:
+def _record(
+    run: str = "run-a", turn: int = 0, cid: str = "p:c1", summary: str = "t"
+) -> ThreadSummaryRecord:
     return ThreadSummaryRecord(
         conversation_id=cid,
         run_id=run,
@@ -80,10 +82,14 @@ def test_summary_append_is_idempotent_by_run_turn_anchor(tmp_path) -> None:
 
     assert store.existing_summaries() == [record]
     # exactly one line in the file
-    assert (store.directory / SUMMARIES_FILENAME).read_text(encoding="utf-8").count("\n") == 1
+    assert (store.directory / SUMMARIES_FILENAME).read_text(encoding="utf-8").count(
+        "\n"
+    ) == 1
 
 
-def test_summary_append_rejects_wrong_conversation_and_conflicting_duplicate(tmp_path) -> None:
+def test_summary_append_rejects_wrong_conversation_and_conflicting_duplicate(
+    tmp_path,
+) -> None:
     store = ThreadSummaryStore(tmp_path / "assistant", "p:c1")
     store.append_summary(_record(run="run-a", turn=0))
 
@@ -110,7 +116,9 @@ def test_conversation_directories_are_stable_and_separate(tmp_path) -> None:
 def test_conversation_no_cross_read(tmp_path) -> None:
     """c1's summaries never appear in c2's store."""
     root = tmp_path / "assistant"
-    ThreadSummaryStore(root, "p:c1").append_summary(_record(run="run-a", turn=0, cid="p:c1"))
+    ThreadSummaryStore(root, "p:c1").append_summary(
+        _record(run="run-a", turn=0, cid="p:c1")
+    )
     assert len(ThreadSummaryStore(root, "p:c2").existing_summaries()) == 0
 
 
@@ -120,7 +128,9 @@ def test_watermark_file_contract(tmp_path) -> None:
 
     store = ThreadSummaryStore(tmp_path / "assistant", "p:c1")
     store.directory.mkdir(parents=True, exist_ok=True)
-    MemoryWatermark(run_id="run-a", turn_id=9).save(store.directory, filename="thread-watermark.json")
+    MemoryWatermark(run_id="run-a", turn_id=9).save(
+        store.directory, filename="thread-watermark.json"
+    )
 
     path = store.directory / "thread-watermark.json"
     assert path.read_text(encoding="utf-8").count("\n") == 1

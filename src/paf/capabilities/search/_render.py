@@ -42,7 +42,10 @@ def is_summary_artifact(message: ModelMessage) -> bool:
     """
     if not isinstance(message, ModelRequest):
         return False
-    return any(isinstance(part, SystemPromptPart) and part.content.startswith(_SUMMARY_PREFIX) for part in message.parts)
+    return any(
+        isinstance(part, SystemPromptPart) and part.content.startswith(_SUMMARY_PREFIX)
+        for part in message.parts
+    )
 
 
 # Literal mirror of `pydantic_ai_harness.compaction._summarizing_compaction._SUMMARY_PREFIX`.
@@ -139,4 +142,6 @@ def display_lines(messages: list[ModelMessage]) -> list[str]:
     no renderable text gets a placeholder so excerpts don't show bare numbers.
     """
     lines = format_messages(messages, truncate=True)
-    return [f"[{index}] {line or '[no text content]'}" for index, line in enumerate(lines)]
+    return [
+        f"[{index}] {line or '[no text content]'}" for index, line in enumerate(lines)
+    ]

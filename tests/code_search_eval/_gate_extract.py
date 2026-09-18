@@ -5,6 +5,7 @@ Walks the paf ``src/`` tree, runs ``analyze_file`` on every ``.py``, and reports
 - per-file symbol counts + a sampled symbol dump for hand-inspection
 - any process() exceptions (should be none on our own code)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -34,7 +35,9 @@ def main(top: str = "src/paf", show: int = 0) -> None:
 
     print(f"== scan_root={scan} ==")
     print(f"python files: {len(py_files)}")
-    print(f"extracted: {len(extracted)}  no-symbols/skip: {len(skipped_empty)}  error: {len(skipped_err)}")
+    print(
+        f"extracted: {len(extracted)}  no-symbols/skip: {len(skipped_empty)}  error: {len(skipped_err)}"
+    )
     print(f"total searchable symbols: {total_symbols}")
 
     if skipped_err:

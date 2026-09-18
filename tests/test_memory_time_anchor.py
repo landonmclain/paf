@@ -35,7 +35,9 @@ def _turns(*labels: str) -> list[ModelMessage]:
 
 
 def _resolve(span_source, wm, tip_run, tip_turn, **kw):
-    return resolve_unseen_span(span_source, wm, tip_run=tip_run, tip_turn=tip_turn, **kw)
+    return resolve_unseen_span(
+        span_source, wm, tip_run=tip_run, tip_turn=tip_turn, **kw
+    )
 
 
 def _user_texts(messages) -> set[str]:
@@ -52,7 +54,7 @@ def test_folds_new_run_after_watermark_in_old_run(tmp_path) -> None:
     """A fork into a NEW run is folded even though its local turn_id restarts."""
     histories = {
         "run-a": _turns("a0", "a1", "a2"),  # 2 complete turns (turn 2 is last)
-        "run-b": _turns("b0", "b1"),        # fork; local turn ids restart at 0
+        "run-b": _turns("b0", "b1"),  # fork; local turn ids restart at 0
     }
 
     store = _store(tmp_path, {"run-a": histories["run-a"], "run-b": histories["run-b"]})
@@ -148,7 +150,9 @@ def test_process_job_does_not_advance_watermark_on_zero_fold(tmp_path) -> None:
     )
 
     src = SnapshotHistorySource(store)
-    seed = MemoryWatermark(run_id="run-a", turn_id=1, consumed_ts=datetime(2026, 1, 1, tzinfo=UTC))
+    seed = MemoryWatermark(
+        run_id="run-a", turn_id=1, consumed_ts=datetime(2026, 1, 1, tzinfo=UTC)
+    )
     seed.save(str(memdir))
 
     async def span_source(run_id: str, up_to_turn_id: int):
@@ -192,7 +196,9 @@ def test_process_job_advances_watermark_on_real_fold(tmp_path) -> None:
     )
 
     src = SnapshotHistorySource(store)
-    MemoryWatermark(run_id="run-a", turn_id=1, consumed_ts=datetime(2026, 1, 1, tzinfo=UTC)).save(str(memdir))
+    MemoryWatermark(
+        run_id="run-a", turn_id=1, consumed_ts=datetime(2026, 1, 1, tzinfo=UTC)
+    ).save(str(memdir))
 
     async def span_source(run_id: str, up_to_turn_id: int):
         wm = MemoryWatermark.load(str(memdir), run_id=run_id)
@@ -205,8 +211,10 @@ def test_process_job_advances_watermark_on_real_fold(tmp_path) -> None:
 
     async def scenario():
         q = MemoryConsolidationQueue(
-            memory_directory=str(memdir), agent_name="assistant",
-            span_source=span_source, consolidate_span=real_fold,
+            memory_directory=str(memdir),
+            agent_name="assistant",
+            span_source=span_source,
+            consolidate_span=real_fold,
         )
         q.enqueue("assistant", ConsolidationJob(run_id="run-a", turn_id=3))
         await q.drain("assistant")
@@ -332,13 +340,26 @@ def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
     from tests.test_memory_background_real_store import _msg
 
     msgs: list[ModelMessage] = []
-    for _t in ["coffee", "remote work", "dark mode", "python", "gardening",
-               "hiking", "cooking", "photography", "reading", "cycling",
-               "chess", "bread"]:
-        msgs.extend(_msg(
-            user=f"The user enjoys {_t} as a hobby and prefers it on weekends",
-            assistant=f"Recorded the {_t} preference.",
-        ))
+    for _t in [
+        "coffee",
+        "remote work",
+        "dark mode",
+        "python",
+        "gardening",
+        "hiking",
+        "cooking",
+        "photography",
+        "reading",
+        "cycling",
+        "chess",
+        "bread",
+    ]:
+        msgs.extend(
+            _msg(
+                user=f"The user enjoys {_t} as a hobby and prefers it on weekends",
+                assistant=f"Recorded the {_t} preference.",
+            )
+        )
     store = _store(tmp_path, {"run-a": msgs})
     memdir = tmp_path / "mem"
     memdir.mkdir(exist_ok=True)
@@ -384,10 +405,13 @@ def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
             consolidate_span=success_fold,
         )
         for t in ["coffee", "remote work", "dark mode"]:
-            session.history.extend(_msg(
-                user=f"The user enjoys {t} as a hobby",
-                assistant=f"Recorded the {t} preference.",
-            ))
+            session.history.extend(
+                _msg(
+                    user=f"The user enjoys {t} as a hobby",
+                    assistant=f"Recorded the {t} preference.",
+                )
+            )
+
         async def scenario():
             await session.background._maybe_trigger_consolidation("c1")
             q = session.background.memory_queue
@@ -413,13 +437,26 @@ def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
     from tests.test_memory_background_real_store import _msg
 
     msgs: list[ModelMessage] = []
-    for _t in ["coffee", "remote work", "dark mode", "python", "gardening",
-               "hiking", "cooking", "photography", "reading", "cycling",
-               "chess", "bread"]:
-        msgs.extend(_msg(
-            user=f"The user enjoys {_t} as a hobby and prefers it on weekends",
-            assistant=f"Recorded the {_t} preference.",
-        ))
+    for _t in [
+        "coffee",
+        "remote work",
+        "dark mode",
+        "python",
+        "gardening",
+        "hiking",
+        "cooking",
+        "photography",
+        "reading",
+        "cycling",
+        "chess",
+        "bread",
+    ]:
+        msgs.extend(
+            _msg(
+                user=f"The user enjoys {_t} as a hobby and prefers it on weekends",
+                assistant=f"Recorded the {_t} preference.",
+            )
+        )
     store = _store(tmp_path, {"run-a": msgs})
     memdir = tmp_path / "mem"
     memdir.mkdir(exist_ok=True)
@@ -447,10 +484,13 @@ def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
             consolidate_span=nothing_fold,
         )
         for t in ["coffee", "remote work", "dark mode"]:
-            session.history.extend(_msg(
-                user=f"The user enjoys {t} as a hobby",
-                assistant=f"Recorded the {t} preference.",
-            ))
+            session.history.extend(
+                _msg(
+                    user=f"The user enjoys {t} as a hobby",
+                    assistant=f"Recorded the {t} preference.",
+                )
+            )
+
         async def scenario():
             await session.background._maybe_trigger_consolidation("c1")
             q = session.background.memory_queue
@@ -485,31 +525,48 @@ def test_resolve_unseen_span_filters_by_conversation(tmp_path) -> None:
 
     store = FileStepStore(directory=tmp_path)
     runs_by_conv = {
-        "prof:cA": {"a0": _turns("a0", "a1"),
-                    "a1": _turns("a2")},
+        "prof:cA": {"a0": _turns("a0", "a1"), "a1": _turns("a2")},
         "prof:cB": {"b0": _turns("b0", "b1")},
     }
     idx = 0
     for conv, runs in runs_by_conv.items():
         for run_id, msgs in runs.items():
-            asyncio.run(store.register_run(RunRecord(
-                run_id=run_id, conversation_id=conv,
-                started_at=datetime(2026, 1, 1 + idx, tzinfo=UTC),
-            )))
-            asyncio.run(store.save_snapshot(ContinuableSnapshot(
-                run_id=run_id, step_index=0, conversation_id=conv, messages=msgs,
-            )))
+            asyncio.run(
+                store.register_run(
+                    RunRecord(
+                        run_id=run_id,
+                        conversation_id=conv,
+                        started_at=datetime(2026, 1, 1 + idx, tzinfo=UTC),
+                    )
+                )
+            )
+            asyncio.run(
+                store.save_snapshot(
+                    ContinuableSnapshot(
+                        run_id=run_id,
+                        step_index=0,
+                        conversation_id=conv,
+                        messages=msgs,
+                    )
+                )
+            )
             idx += 1
     src = SnapshotHistorySource(store)
     wm = MemoryWatermark()
 
     # Conversation-filtered: only cA's runs are folded (tip = a1's round of a2).
-    span_a = asyncio.run(_resolve(src, wm, tip_run="a1", tip_turn=0, conversation_id="prof:cA"))
+    span_a = asyncio.run(
+        _resolve(src, wm, tip_run="a1", tip_turn=0, conversation_id="prof:cA")
+    )
     a_texts = _user_texts(span_a.messages)
     assert "a0" in a_texts and "a1" in a_texts
     assert "b0" not in a_texts, "conversation B must not bleed into A's span"
 
-    span_b = asyncio.run(_resolve(src, MemoryWatermark(), tip_run="b0", tip_turn=1, conversation_id="prof:cB"))
+    span_b = asyncio.run(
+        _resolve(
+            src, MemoryWatermark(), tip_run="b0", tip_turn=1, conversation_id="prof:cB"
+        )
+    )
     b_texts = _user_texts(span_b.messages)
     assert "b0" in b_texts
     assert not (a_texts & b_texts), "conversation A and B spans must be disjoint"

@@ -3,6 +3,7 @@
 PlanItem, TaskStatus, PlanStatusUpdate -- the data model for the model-owned
 task plan.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -18,11 +19,11 @@ class TaskStatus(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps statuses JSO
     `enable_subtasks=True`; otherwise the toolset rejects it.
     """
 
-    pending = 'pending'
-    in_progress = 'in_progress'
-    completed = 'completed'
-    cancelled = 'cancelled'
-    blocked = 'blocked'
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    cancelled = "cancelled"
+    blocked = "blocked"
 
 
 class PlanItem(BaseModel):
@@ -42,30 +43,36 @@ class PlanItem(BaseModel):
         depends_on: Ids of steps that must complete before this one (subtasks mode only).
     """
 
-    id: str = Field(default_factory=lambda: uuid4().hex[:8], description='Step id. Auto-generated if omitted.')
-    content: str = Field(description='Imperative description of the step, e.g. "Add the database migration".')
+    id: str = Field(
+        default_factory=lambda: uuid4().hex[:8],
+        description="Step id. Auto-generated if omitted.",
+    )
+    content: str = Field(
+        description='Imperative description of the step, e.g. "Add the database migration".'
+    )
     status: TaskStatus = Field(
         default=TaskStatus.pending,
         description='Current status of this step. "blocked" requires subtasks to be enabled.',
     )
     active_form: str = Field(
-        default='',
+        default="",
         description='Present-continuous label shown while the step runs, e.g. "Adding the database migration".',
     )
     parent_id: str | None = Field(
-        default=None, description='Parent step id for a subtask hierarchy. Requires subtasks to be enabled.'
+        default=None,
+        description="Parent step id for a subtask hierarchy. Requires subtasks to be enabled.",
     )
     depends_on: list[str] = Field(
         default_factory=lambda: [],
-        description='Ids of steps that must complete before this one. Requires subtasks to be enabled.',
+        description="Ids of steps that must complete before this one. Requires subtasks to be enabled.",
     )
 
 
 class PlanStatusUpdate(BaseModel):
     """One entry of the `update_task_statuses` batch tool."""
 
-    task_id: str = Field(description='Id of the step to update (from `read_plan`).')
+    task_id: str = Field(description="Id of the step to update (from `read_plan`).")
     status: TaskStatus = Field(
-        description='New status: pending, in_progress, completed, or cancelled -- '
-        'or blocked, when subtasks are enabled.'
+        description="New status: pending, in_progress, completed, or cancelled -- "
+        "or blocked, when subtasks are enabled."
     )

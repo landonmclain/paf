@@ -170,9 +170,7 @@ def render_journal_memory(
     return "\n\n".join(sections) + ("\n" if sections else "")
 
 
-def _select_index_winners(
-    store: JournalStore, index
-) -> list[tuple[int, MemoryRecord]]:
+def _select_index_winners(store: JournalStore, index) -> list[tuple[int, MemoryRecord]]:
     """Return the (journal-line-id, record) pairs that are surviving facts.
 
     ``index`` is a :class:`._index.MemoryIndex` (loaded, not its raw dict). For

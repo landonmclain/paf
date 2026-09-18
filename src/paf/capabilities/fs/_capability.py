@@ -19,12 +19,12 @@ from pydantic_ai.tools import AgentDepsT
 from ._toolset import FileSystemToolset
 
 _DEFAULT_PROTECTED: list[str] = [
-    '.git/*',
-    '.env',
-    '.env.*',
-    '*.pem',
-    '*.key',
-    '**/secrets*',
+    ".git/*",
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "**/secrets*",
 ]
 
 
@@ -36,7 +36,7 @@ class FileSystem(AbstractCapability[AgentDepsT]):
     is rejected. Symlinks are resolved before authorization.
     """
 
-    root_dir: str | Path = '.'
+    root_dir: str | Path = "."
     """Root directory for all file operations. Defaults to the current directory."""
 
     allowed_patterns: Sequence[str] = field(default_factory=list[str])
@@ -45,7 +45,9 @@ class FileSystem(AbstractCapability[AgentDepsT]):
     denied_patterns: Sequence[str] = field(default_factory=list[str])
     """Paths matching any of these glob patterns are rejected."""
 
-    protected_patterns: Sequence[str] = field(default_factory=lambda: list(_DEFAULT_PROTECTED))
+    protected_patterns: Sequence[str] = field(
+        default_factory=lambda: list(_DEFAULT_PROTECTED)
+    )
     """Paths matching these patterns are read-only (writes are rejected).
 
     Defaults to protecting `.git/`, `.env`, key files, and secrets.
@@ -78,16 +80,16 @@ class FileSystem(AbstractCapability[AgentDepsT]):
         # Runtime validation: dataclass field annotations are advisory, not enforced.
         # A config-driven caller could pass a string that would otherwise propagate.
         values: dict[str, Any] = {
-            'max_read_lines': self.max_read_lines,
-            'max_search_results': self.max_search_results,
-            'max_find_results': self.max_find_results,
-            'max_search_file_bytes': self.max_search_file_bytes,
-            'search_excerpt_chars': self.search_excerpt_chars,
-            'max_search_total_bytes': self.max_search_total_bytes,
+            "max_read_lines": self.max_read_lines,
+            "max_search_results": self.max_search_results,
+            "max_find_results": self.max_find_results,
+            "max_search_file_bytes": self.max_search_file_bytes,
+            "search_excerpt_chars": self.search_excerpt_chars,
+            "max_search_total_bytes": self.max_search_total_bytes,
         }
         for name, value in values.items():
             if not isinstance(value, int) or value <= 0:
-                raise ValueError(f'{name} must be a positive integer, got {value!r}')
+                raise ValueError(f"{name} must be a positive integer, got {value!r}")
 
     def get_toolset(self) -> FileSystemToolset[AgentDepsT]:
         """Build and return the filesystem toolset."""

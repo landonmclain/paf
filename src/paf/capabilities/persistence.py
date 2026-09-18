@@ -122,9 +122,7 @@ def _build_step_persistence(store: FileStepStore) -> StepPersistence:
 
 def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
     """Lossless recall over the SAME store StepPersistence writes to."""
-    return ConversationSearch(
-        source=SnapshotHistorySource(store), scope="conversation"
-    )
+    return ConversationSearch(source=SnapshotHistorySource(store), scope="conversation")
 
 
 # Name -> builder, keyed by the SAME names a profile allowlists (registry.py).

@@ -13,7 +13,7 @@ from paf.capabilities.codebase_map._queries import QueryRecovery
 from paf.capabilities.codebase_map._schema import Span
 
 CASES = {
-    "python": "def add(a: int, b: int) -> int:\n    \"\"\"Add two ints.\"\"\"\n    return a + b\n",
+    "python": 'def add(a: int, b: int) -> int:\n    """Add two ints."""\n    return a + b\n',
     "typescript": "/** ts doc */\nexport function greet(u: User): string { return 'x'; }\n",
     "tsx": "/** button doc */\nfunction Button({label}: Props): JSX { return <div>{label}</div>; }\n",
     "javascript": "function greet(user) { /** Hi */ return user; }\n",
@@ -27,6 +27,7 @@ CASES = {
 
 def find_first_fn(res):
     """Return the first function-ish structure item with real byte spans."""
+
     def walk(items):
         for it in items:
             kind = getattr(it.kind, "value", str(it.kind))
@@ -36,6 +37,7 @@ def find_first_fn(res):
             if r:
                 return r
         return None
+
     return walk(res.structure)
 
 
@@ -44,15 +46,25 @@ for lang, src in CASES.items():
     fn = find_first_fn(res)
     print(f"\n{lang}:")
     if fn is None:
-        print("  no function symbol found in structure; structure=",
-              [(s.name, s.kind) for s in res.structure])
+        print(
+            "  no function symbol found in structure; structure=",
+            [(s.name, s.kind) for s in res.structure],
+        )
         continue
-    span = Span(start_byte=fn.span.start_byte, end_byte=fn.span.end_byte,
-                start_line=fn.span.start_line, end_line=fn.span.end_line)
+    span = Span(
+        start_byte=fn.span.start_byte,
+        end_byte=fn.span.end_byte,
+        start_line=fn.span.start_line,
+        end_line=fn.span.end_line,
+    )
     body = None
     if fn.body_span is not None:
-        body = Span(start_byte=fn.body_span.start_byte, end_byte=fn.body_span.end_byte,
-                    start_line=fn.body_span.start_line, end_line=fn.body_span.end_line)
+        body = Span(
+            start_byte=fn.body_span.start_byte,
+            end_byte=fn.body_span.end_byte,
+            start_line=fn.body_span.start_line,
+            end_line=fn.body_span.end_line,
+        )
     r = QueryRecovery(language=lang, source=src)
     try:
         print(f"  process signature/visibility: {fn.signature!r} / {fn.visibility!r}")

@@ -30,9 +30,11 @@ _KILL_GRACE_PERIOD: float = 2.0
 class _LocalBackgroundState:
     """State for a background process using temp files for output."""
 
-    __slots__ = ('proc', 'stdout_path', 'stderr_path', 'finished', 'exit_code')
+    __slots__ = ("proc", "stdout_path", "stderr_path", "finished", "exit_code")
 
-    def __init__(self, proc: anyio.abc.Process, stdout_path: str, stderr_path: str) -> None:
+    def __init__(
+        self, proc: anyio.abc.Process, stdout_path: str, stderr_path: str
+    ) -> None:
         self.proc = proc
         self.stdout_path = stdout_path
         self.stderr_path = stderr_path
@@ -85,12 +87,12 @@ class LocalProcessExecutor:
             with anyio.CancelScope(shield=True):
                 await proc.wait()
                 await self._drain_with_timeout(stdout_chunks, stderr_chunks, proc)
-            return ExecResult(stdout='', stderr='', exit_code=-1, timed_out=True)
+            return ExecResult(stdout="", stderr="", exit_code=-1, timed_out=True)
         finally:
             await proc.aclose()
 
-        stdout = b''.join(stdout_chunks).decode('utf-8', errors='replace')
-        stderr = b''.join(stderr_chunks).decode('utf-8', errors='replace')
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
         exit_code = proc.returncode if proc.returncode is not None else 0
         return ExecResult(stdout=stdout, stderr=stderr, exit_code=exit_code)
 
@@ -103,10 +105,10 @@ class LocalProcessExecutor:
     ) -> BackgroundHandle:
         command_id = uuid.uuid4().hex[:12]
         stdout_file = tempfile.NamedTemporaryFile(
-            mode='w+b', prefix=f'harness_{command_id}_out_', delete=False
+            mode="w+b", prefix=f"harness_{command_id}_out_", delete=False
         )
         stderr_file = tempfile.NamedTemporaryFile(
-            mode='w+b', prefix=f'harness_{command_id}_err_', delete=False
+            mode="w+b", prefix=f"harness_{command_id}_err_", delete=False
         )
         try:
             proc = await anyio.open_process(
@@ -135,7 +137,7 @@ class LocalProcessExecutor:
             state.exit_code = state.proc.returncode
             state.finished = True
         stdout, stderr = self._read_bg_output(state)
-        status = 'finished' if state.finished else 'running'
+        status = "finished" if state.finished else "running"
         return BackgroundStatus(
             status=status, stdout=stdout, stderr=stderr, exit_code=state.exit_code
         )
@@ -152,7 +154,7 @@ class LocalProcessExecutor:
         self._cleanup_bg_files(state)
         await state.proc.aclose()
         return BackgroundStatus(
-            status='finished', stdout=stdout, stderr=stderr, exit_code=state.exit_code
+            status="finished", stdout=stdout, stderr=stderr, exit_code=state.exit_code
         )
 
     async def _kill_process_group(self, proc: anyio.abc.Process) -> None:
@@ -206,13 +208,17 @@ class LocalProcessExecutor:
 
     def _read_bg_output(self, state: _LocalBackgroundState) -> tuple[str, str]:
         try:
-            stdout = Path(state.stdout_path).read_text(encoding='utf-8', errors='replace')
+            stdout = Path(state.stdout_path).read_text(
+                encoding="utf-8", errors="replace"
+            )
         except OSError:
-            stdout = ''
+            stdout = ""
         try:
-            stderr = Path(state.stderr_path).read_text(encoding='utf-8', errors='replace')
+            stderr = Path(state.stderr_path).read_text(
+                encoding="utf-8", errors="replace"
+            )
         except OSError:
-            stderr = ''
+            stderr = ""
         return stdout, stderr
 
     def _cleanup_bg_files(self, state: _LocalBackgroundState) -> None:

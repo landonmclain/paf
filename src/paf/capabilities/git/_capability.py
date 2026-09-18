@@ -25,7 +25,7 @@ class Git(AbstractCapability):
     write tools refuse empty path lists (no broad `git add -A`).
     """
 
-    root: str | Path = '.'
+    root: str | Path = "."
     """Workspace root all git commands operate within relative to."""
 
     timeout: float = field(default=60.0)

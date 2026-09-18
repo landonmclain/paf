@@ -65,13 +65,19 @@ LME_RETRY_MAX_ATTEMPTS = int(os.environ.get("LME_RETRY_MAX_ATTEMPTS", "6"))
 LME_RETRY_BASE_BACKOFF = float(os.environ.get("LME_RETRY_BASE_BACKOFF", "30.0"))
 # Constant (default) vs exponential backoff. Exponential doubles the base each
 # retry, capped at LME_RETRY_MAX_BACKOFF; constant just repeats the base.
-LME_RETRY_BACKOFF_EXPONENTIAL = os.environ.get("LME_RETRY_BACKOFF_EXPONENTIAL", "0") == "1"
+LME_RETRY_BACKOFF_EXPONENTIAL = (
+    os.environ.get("LME_RETRY_BACKOFF_EXPONENTIAL", "0") == "1"
+)
 LME_RETRY_MAX_BACKOFF = float(os.environ.get("LME_RETRY_MAX_BACKOFF", "60.0"))
 # Retryable=device error HTTP statuses. 5xx = server/upstream blips (502 is what
 # OpenRouter surfaces as "Network connection lost"); 429 = rate-limited; 408 =
 # provider-side request timeout. Everything else is left for the caller to see.
 LME_RETRYABLE_STATUSES = frozenset(
-    int(x) for x in os.environ.get("LME_RETRYABLE_STATUSES", "408,429,500,502,503,504").split(",") if x.strip()
+    int(x)
+    for x in os.environ.get("LME_RETRYABLE_STATUSES", "408,429,500,502,503,504").split(
+        ","
+    )
+    if x.strip()
 )
 
 # ---------------------------------------------------------------------------
@@ -93,26 +99,24 @@ LME_RETRYABLE_STATUSES = frozenset(
 # ---------------------------------------------------------------------------
 # Default subject provider chain (fp8). Empty string disables the pin.
 SUBJECT_PROVIDER_ORDER = [
-    p for p in os.environ.get(
+    p
+    for p in os.environ.get(
         "LME_SUBJECT_PROVIDER_ORDER", "deepinfra,parasail,coreweave"
-    ).split(",") if p
+    ).split(",")
+    if p
 ]
 SUBJECT_PROVIDER_QUANTIZATIONS = [
-    q for q in os.environ.get(
-        "LME_SUBJECT_PROVIDER_QUANTIZATIONS", "fp8"
-    ).split(",") if q
+    q
+    for q in os.environ.get("LME_SUBJECT_PROVIDER_QUANTIZATIONS", "fp8").split(",")
+    if q
 ]
 # Judge chain (gpt-4o-mini): OpenAI first-party is the canonical host. Pin keeps
 # the judge from flapping while we measure the subject. Empty disables.
 JUDGE_PROVIDER_ORDER = [
-    p for p in os.environ.get(
-        "LME_JUDGE_PROVIDER_ORDER", "openai"
-    ).split(",") if p
+    p for p in os.environ.get("LME_JUDGE_PROVIDER_ORDER", "openai").split(",") if p
 ]
 JUDGE_PROVIDER_QUANTIZATIONS = [
-    q for q in os.environ.get(
-        "LME_JUDGE_PROVIDER_QUANTIZATIONS", ""
-    ).split(",") if q
+    q for q in os.environ.get("LME_JUDGE_PROVIDER_QUANTIZATIONS", "").split(",") if q
 ]
 # Fixed sampler determinism seed (use a stable constant unless overridden).
 LME_SAMPLER_SEED = int(os.environ.get("LME_SAMPLER_SEED", "20260815"))
@@ -237,10 +241,10 @@ SUBJECT_SYSTEM_PROMPT = (
     "INFERENCE — when the retrieved context does not name the asked-for fact "
     "explicitly, but the history strongly and single-mindedly implies one "
     "specific answer — or the entire session establishes one unambiguous "
-    "context — do not stop at \"that's not on record\". Give the implied answer "
-    "in hedged form — \"Most likely X, but you never told me the exact Y\" — so "
+    'context — do not stop at "that\'s not on record". Give the implied answer '
+    'in hedged form — "Most likely X, but you never told me the exact Y" — so '
     "the user gets the useful answer while you stay honest about the "
-    "uncertainty. Reserve a flat \"not in our history\" refusal for when the "
+    'uncertainty. Reserve a flat "not in our history" refusal for when the '
     "history is genuinely ambiguous or empty. The hedged inference is preferred "
     "over a bare refusal whenever the evidence points at a single answer.\n"
     "ORDER — when asked what happened first, answer by the date the event "
@@ -410,6 +414,7 @@ def _build_agent(
         ),
     )
 
+
 def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
     """Run one turn; return {text, tools, tool_outputs, usage} over a root span.
 
@@ -425,8 +430,12 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
     tool_outputs: list[str] = []
     text: str = ""
     usage: dict = {
-        "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
-        "cache_write_tokens": 0, "total_tokens": 0, "requests": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "requests": 0,
     }
     bailed: bool = False
 
@@ -466,7 +475,8 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
             with capture_run_messages() as history:
                 try:
                     async with agent.run_stream_events(
-                        prompt, conversation_id=cid,
+                        prompt,
+                        conversation_id=cid,
                         usage_limits=UsageLimits(**_ul),
                     ) as es:
                         async for event in es:
@@ -481,11 +491,21 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                                     tool_outputs.append(c)
                             elif isinstance(event, AgentRunResultEvent):
                                 u = event.result.usage
-                                usage["input_tokens"] = getattr(u, "input_tokens", 0) or 0
-                                usage["output_tokens"] = getattr(u, "output_tokens", 0) or 0
-                                usage["cache_read_tokens"] = getattr(u, "cache_read_tokens", 0) or 0
-                                usage["cache_write_tokens"] = getattr(u, "cache_write_tokens", 0) or 0
-                                usage["total_tokens"] = getattr(u, "total_tokens", 0) or 0
+                                usage["input_tokens"] = (
+                                    getattr(u, "input_tokens", 0) or 0
+                                )
+                                usage["output_tokens"] = (
+                                    getattr(u, "output_tokens", 0) or 0
+                                )
+                                usage["cache_read_tokens"] = (
+                                    getattr(u, "cache_read_tokens", 0) or 0
+                                )
+                                usage["cache_write_tokens"] = (
+                                    getattr(u, "cache_write_tokens", 0) or 0
+                                )
+                                usage["total_tokens"] = (
+                                    getattr(u, "total_tokens", 0) or 0
+                                )
                                 usage["requests"] = getattr(u, "requests", 0) or 0
                                 text = event.result.output
                 except UsageLimitExceeded:
@@ -498,6 +518,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     # message history contains unprocessed tool calls."
                     bailed = True
                     from pydantic_ai._agent_graph import _repair_dangling_tool_calls
+
                     repaired = _repair_dangling_tool_calls(
                         history, repair_last_response=True
                     )
@@ -520,6 +541,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     bailed = True  # noqa: F841  # read via `nonlocal bailed` -> returned in `out`
                     try:
                         from pydantic_ai._agent_graph import _repair_dangling_tool_calls
+
                         repaired = _repair_dangling_tool_calls(
                             history, repair_last_response=True
                         )
@@ -556,12 +578,20 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                 # double-count tool calls / usage if this retry succeeds.
                 tools.clear()
                 tool_outputs.clear()
-                for _k in ("input_tokens", "output_tokens", "cache_read_tokens",
-                           "cache_write_tokens", "total_tokens", "requests"):
+                for _k in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_read_tokens",
+                    "cache_write_tokens",
+                    "total_tokens",
+                    "requests",
+                ):
                     usage[_k] = 0
                 text = ""
 
-                def _delay(exc: ModelHTTPError | None, _attempt: int = attempt) -> float:
+                def _delay(
+                    exc: ModelHTTPError | None, _attempt: int = attempt
+                ) -> float:
                     """Compute the sleep before the next retry.
 
                     The loop counter is captured as a default arg so ruff's B023
@@ -615,5 +645,11 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     await asyncio.sleep(delay)
 
     asyncio.run(run())
-    out = {"text": text, "tools": tools, "tool_outputs": tool_outputs, "usage": usage, "bailed": bailed}
+    out = {
+        "text": text,
+        "tools": tools,
+        "tool_outputs": tool_outputs,
+        "usage": usage,
+        "bailed": bailed,
+    }
     return out

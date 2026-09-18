@@ -115,7 +115,9 @@ def _unparsed_record(path: Path, root: Path) -> FileInfo:
     )
 
 
-def scan_and_write(scan_root: str | Path, storage: StorageService | None = None) -> dict[str, Any]:
+def scan_and_write(
+    scan_root: str | Path, storage: StorageService | None = None
+) -> dict[str, Any]:
     """Scan ``scan_root`` for in-scope files, extract, and write the artifacts.
 
     Returns a small summary dict (file count, symbol count, skipped, unparsed) for the
@@ -133,11 +135,11 @@ def scan_and_write(scan_root: str | Path, storage: StorageService | None = None)
 
     files = walk_all_files(root)
 
-    index_rows: list[dict[str, Any]] = []   # lean HEAD rows
-    manifests: dict[str, Any] = {}          # path -> DETAILED record
+    index_rows: list[dict[str, Any]] = []  # lean HEAD rows
+    manifests: dict[str, Any] = {}  # path -> DETAILED record
     snap_files: dict[str, Any] = {}
-    rich: list[FileInfo] = []               # in-memory records (tokens + refs source)
-    sources: dict[str, str] = {}            # repo-relative path -> raw source (graph edges)
+    rich: list[FileInfo] = []  # in-memory records (tokens + refs source)
+    sources: dict[str, str] = {}  # repo-relative path -> raw source (graph edges)
     total_symbols = 0
     skipped: list[str] = []
     unparsed: list[str] = []

@@ -127,7 +127,9 @@ async def resolve_unseen_span(
     runs = await source.list_runs()
 
     if conversation_id is not None:
-        runs = [r for r in runs if getattr(r, "conversation_id", None) == conversation_id]
+        runs = [
+            r for r in runs if getattr(r, "conversation_id", None) == conversation_id
+        ]
 
     tip_idx = next(
         (i for i, r in enumerate(runs) if r.run_id == tip_run),
@@ -169,9 +171,7 @@ async def resolve_unseen_span(
             wm_n = len(wm_hist)
             for _t in range(min(watermark.turn_id + 1, len(wm_anchors))):
                 _s, _e = _turn_bounds(wm_anchors, _t, wm_n)
-                seen_turn_keys.add(
-                    "\n".join(_content_hash(m) for m in wm_hist[_s:_e])
-                )
+                seen_turn_keys.add("\n".join(_content_hash(m) for m in wm_hist[_s:_e]))
 
     for i, r in enumerate(runs):
         if i < wm_run_idx:
@@ -242,7 +242,6 @@ async def resolve_unseen_span(
     return ResolvedSpan(messages=collected, watermark=final_wm)
 
 
-
 @dataclass(frozen=True)
 class ConsolidationJob:
     """A request to fold the unseen persisted span into durable memory.
@@ -271,9 +270,7 @@ SpanSource = Callable[[str, int], Awaitable[ResolvedSpan]]
 
 #: Type of the consolidate seam: fold a span's messages into the journal.
 #: Defaults to the real owner; a test injects a journal-fenced stand-in.
-ConsolidateSpan = Callable[
-    [list["ModelMessage"], str, MemoryWatermark], Awaitable[int]
-]
+ConsolidateSpan = Callable[[list["ModelMessage"], str, MemoryWatermark], Awaitable[int]]
 
 
 class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
@@ -331,7 +328,9 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         del state  # unused; single queue, FIFO serialization is enough
         directory = self.memory_directory
         if not directory:
-            log.error("memory_consolidation_queue missing memory_directory; dropping job")
+            log.error(
+                "memory_consolidation_queue missing memory_directory; dropping job"
+            )
             return
 
         journal = JournalStore(directory)
@@ -348,13 +347,17 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 messages=job.messages,
                 watermark=watermark,
             )
-            advance_target = job.watermark if job.watermark is not None else messages_span.watermark
+            advance_target = (
+                job.watermark if job.watermark is not None else messages_span.watermark
+            )
         else:
             if self.span_source is None:
                 log.error(
                     "memory_consolidation_queue has no span_source; cannot fold job "
                     "session=%s run=%s turn=%s — the builder must supply one",
-                    session_id, job.run_id, job.turn_id,
+                    session_id,
+                    job.run_id,
+                    job.turn_id,
                 )
                 return
             messages_span = await self.span_source(job.run_id, job.turn_id)
@@ -383,8 +386,11 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         log.info(
             "memory_consolidation_job session=%s success folded=%r "
             "watermark=%s:%s ts=%s",
-            session_id, new_records,
-            watermark.run_id, watermark.turn_id, watermark.consumed_ts,
+            session_id,
+            new_records,
+            watermark.run_id,
+            watermark.turn_id,
+            watermark.consumed_ts,
         )
 
         # Re-render MEMORY.md (and the derived index) only when the fold actually
@@ -457,7 +463,9 @@ class ReviewJob:
 
     __slots__ = ("run_id", "turn_id", "watermark")
 
-    def __init__(self, run_id: str, turn_id: int, watermark: MemoryWatermark | None = None):
+    def __init__(
+        self, run_id: str, turn_id: int, watermark: MemoryWatermark | None = None
+    ):
         self.run_id = run_id
         self.turn_id = turn_id
         self.watermark = watermark
@@ -536,10 +544,12 @@ class MemoryReviewQueue(BackgroundQueueService[ReviewJob]):
             wm.turn_id = job.turn_id
         wm.save(directory, filename="memory-review-watermark.json")
         log.info(
-            "memory_review_job session=%s success applied=%r "
-            "watermark=%s:%s ts=%s",
-            session_id, applied,
-            wm.run_id, wm.turn_id, wm.consumed_ts,
+            "memory_review_job session=%s success applied=%r watermark=%s:%s ts=%s",
+            session_id,
+            applied,
+            wm.run_id,
+            wm.turn_id,
+            wm.consumed_ts,
         )
 
     async def _default_review(self, directory: str) -> int:

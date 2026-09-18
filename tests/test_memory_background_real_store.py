@@ -53,7 +53,9 @@ def _msg(*, user: str, assistant: str) -> list[ModelMessage]:
     ]
 
 
-def _store(tmp_path: Path, runs: dict[str, list[ModelMessage]], conversation_id: str = "c1") -> FileStepStore:
+def _store(
+    tmp_path: Path, runs: dict[str, list[ModelMessage]], conversation_id: str = "c1"
+) -> FileStepStore:
     """Write a FileStepStore with one run per key, in the given dict order."""
     store = FileStepStore(directory=tmp_path)
     for i, (run_id, msgs) in enumerate(runs.items()):
@@ -96,7 +98,9 @@ def _turns(messages: list[ModelMessage]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_unseen_span_fresh_watermark_returns_all_complete_turns(tmp_path: Path) -> None:
+def test_resolve_unseen_span_fresh_watermark_returns_all_complete_turns(
+    tmp_path: Path,
+) -> None:
     """Fresh watermark (nothing consumed) -> every complete turn, in order.
 
     ``third`` is the in-flight tip (tip=run-b:1), so it is excluded — the fold
@@ -106,7 +110,10 @@ def test_resolve_unseen_span_fresh_watermark_returns_all_complete_turns(tmp_path
         tmp_path,
         {
             "run-a": [*_msg(user="first", assistant="a1")],
-            "run-b": [*_msg(user="second", assistant="b1"), *_msg(user="third", assistant="b2")],
+            "run-b": [
+                *_msg(user="second", assistant="b1"),
+                *_msg(user="third", assistant="b2"),
+            ],
         },
     )
     source = SnapshotHistorySource(store)
@@ -128,8 +135,14 @@ def test_resolve_unseen_span_skips_consumed_tail_past_watermark(tmp_path: Path) 
     store = _store(
         tmp_path,
         {
-            "run-a": [_msg(user="consumed", assistant="a1")[0], _msg(user="mid", assistant="a2")[0]],
-            "run-b": [_msg(user="new-1", assistant="b1")[0], _msg(user="new-2", assistant="b2")[0]],
+            "run-a": [
+                _msg(user="consumed", assistant="a1")[0],
+                _msg(user="mid", assistant="a2")[0],
+            ],
+            "run-b": [
+                _msg(user="new-1", assistant="b1")[0],
+                _msg(user="new-2", assistant="b2")[0],
+            ],
         },
     )
     source = SnapshotHistorySource(store)
@@ -146,7 +159,9 @@ def test_resolve_unseen_span_skips_consumed_tail_past_watermark(tmp_path: Path) 
     asyncio.run(go())
 
 
-def test_resolve_unseen_span_cross_run_cumulative_no_duplication(tmp_path: Path) -> None:
+def test_resolve_unseen_span_cross_run_cumulative_no_duplication(
+    tmp_path: Path,
+) -> None:
     """A resumed/steered cumulative run must not re-collect the prior run's prefix.
 
     Regression for the resume-duplication bug: run-b is a ``continue_run`` whose
@@ -180,7 +195,9 @@ def test_resolve_unseen_span_cross_run_cumulative_no_duplication(tmp_path: Path)
     asyncio.run(go())
 
 
-def test_resolve_unseen_span_cross_run_three_runs_no_duplication(tmp_path: Path) -> None:
+def test_resolve_unseen_span_cross_run_three_runs_no_duplication(
+    tmp_path: Path,
+) -> None:
     """A 3-run cumulative chain (two steers) also dedupes to one copy each."""
     run_a = [*_msg(user="q1", assistant="a1")]
     run_b = [*_msg(user="q1", assistant="a1"), *_msg(user="q2", assistant="a2")]
@@ -226,7 +243,6 @@ def test_resolve_unseen_span_excludes_in_flight_tip(tmp_path: Path) -> None:
     asyncio.run(go())
 
 
-
 # ---------------------------------------------------------------------------
 # 3. Session hook — combustion of trigger + real-store worker (live wiring)
 # ---------------------------------------------------------------------------
@@ -251,14 +267,18 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
     # Watermark at turn 1; 12 turns -> tip=11, 11-1=10 >= 10 cadence -> fires.
     MemoryWatermark(run_id="run-a", turn_id=1).save(str(memdir))
 
-    async def fence(messages: list[ModelMessage], directory: str, wm: MemoryWatermark) -> int:
+    async def fence(
+        messages: list[ModelMessage], directory: str, wm: MemoryWatermark
+    ) -> int:
         j = JournalStore(directory)
         for m in messages:
             for p in m.parts:
                 if isinstance(p, UserPromptPart):
                     j.append(
                         type="fact",
-                        fact=str(p.content) if isinstance(p.content, str) else str(p.content),
+                        fact=str(p.content)
+                        if isinstance(p.content, str)
+                        else str(p.content),
                         tier="t3",
                         born_on=datetime.now(UTC),
                         source_ref="run-a:0",
@@ -433,7 +453,12 @@ def test_queue_folds_real_store_and_advances_watermark(tmp_path: Path) -> None:
     """Draining a job with a real store folds complete turns, advances, renders."""
     store = _store(
         tmp_path,
-        {"run-a": [*_msg(user="hello", assistant="hey"), *_msg(user="tip", assistant="t")]},
+        {
+            "run-a": [
+                *_msg(user="hello", assistant="hey"),
+                *_msg(user="tip", assistant="t"),
+            ]
+        },
     )
     source = SnapshotHistorySource(store)
     memdir = tmp_path / "mem"
@@ -448,7 +473,9 @@ def test_queue_folds_real_store_and_advances_watermark(tmp_path: Path) -> None:
         wm = MemoryWatermark.load(str(memdir), run_id=run)
         return await resolve_unseen_span(source, wm, tip_run=run, tip_turn=turn)
 
-    async def fake_consolidate(messages: list[ModelMessage], directory: str, watermark: MemoryWatermark) -> int:
+    async def fake_consolidate(
+        messages: list[ModelMessage], directory: str, watermark: MemoryWatermark
+    ) -> int:
         j = JournalStore(directory)
         for m in messages:
             for p in m.parts:
@@ -503,8 +530,11 @@ def _multi_snapshot_store(tmp_path: Path, conversation_id: str = "c1") -> FileSt
     run_id = "run-multi"
     asyncio.run(
         store.register_run(
-            RunRecord(run_id=run_id, conversation_id=conversation_id,
-                      started_at=datetime(2026, 2, 1, tzinfo=UTC))
+            RunRecord(
+                run_id=run_id,
+                conversation_id=conversation_id,
+                started_at=datetime(2026, 2, 1, tzinfo=UTC),
+            )
         )
     )
     turns = [("t0", "a0"), ("t1", "a1"), ("t2", "a2"), ("t3", "a3")]
@@ -536,7 +566,9 @@ def from_harness_run_history(store: FileStepStore, run_id: str) -> bool:
     return len(turns) != len(set(turns))
 
 
-def test_stable_history_source_dedups_within_run_cumulative_snapshots(tmp_path: Path) -> None:
+def test_stable_history_source_dedups_within_run_cumulative_snapshots(
+    tmp_path: Path,
+) -> None:
     """Each turn appears exactly once in ``run_history`` under the stable source.
 
     The harness's own ``SnapshotHistorySource.run_history`` reconciles the
@@ -584,18 +616,24 @@ def test_injected_marker_blocks_do_not_anchor_turns() -> None:
         parts=[
             UserPromptPart(
                 content=[
-                    TextContent(content="\n\n<memory>\n### MEMORY.md\n...", metadata=marker)
+                    TextContent(
+                        content="\n\n<memory>\n### MEMORY.md\n...", metadata=marker
+                    )
                 ]
             )
         ],
         run_id="r",
     )
     # list-wrapped real prompt (the shape test/read fixtures use): still real.
-    listwrapped_req = ModelRequest(parts=[UserPromptPart(content=["real question"])], run_id="r")
+    listwrapped_req = ModelRequest(
+        parts=[UserPromptPart(content=["real question"])], run_id="r"
+    )
 
     assert _is_user_turn(real_req) is True
     assert _is_user_turn(listwrapped_req) is True
-    assert _is_user_turn(injected_req) is False, "injected <memory> block must not anchor"
+    assert _is_user_turn(injected_req) is False, (
+        "injected <memory> block must not anchor"
+    )
 
     msgs = [real_req, injected_req, listwrapped_req]
     # the real prompt appears twice (clean + listwrapped) -> collapses to one

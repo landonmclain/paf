@@ -22,6 +22,7 @@ ranking, budget, and fidelity each hold under the persisted graph + manifest."
 The fixture is gitignored; if absent this gate skips (suite stays green on a clean
 checkout).
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -51,7 +52,9 @@ def scanned(tmp_path_factory) -> tuple[Path, CodebaseMapToolset]:
     like scanning a real external codebase.
     """
     if not _fixture_present():
-        pytest.skip("paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md")
+        pytest.skip(
+            "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
+        )
     import shutil
 
     dst = tmp_path_factory.mktemp("pafcopy") / "paf-src"
@@ -68,7 +71,11 @@ def test_repo_map_center_of_gravity(scanned) -> None:
     lines = out.splitlines()
     # True repo-wide hubs (referenced/called from many different modules) must appear.
     hub_idx = None
-    for hub in ("capabilities/_turns.py:", "config.py:", "capabilities/visual/_store.py:"):
+    for hub in (
+        "capabilities/_turns.py:",
+        "config.py:",
+        "capabilities/visual/_store.py:",
+    ):
         try:
             hub_idx = next(i for i, line in enumerate(lines) if line.startswith(hub))
             break
@@ -77,7 +84,11 @@ def test_repo_map_center_of_gravity(scanned) -> None:
     assert hub_idx is not None, "no cross-module hub (_turns/config/visual) in the map"
     # The first codebase_map file present must rank BELOW a cross-module hub — not dominate.
     cb_idx = next(
-        (i for i, line in enumerate(lines) if line.startswith("capabilities/codebase_map/")),
+        (
+            i
+            for i, line in enumerate(lines)
+            if line.startswith("capabilities/codebase_map/")
+        ),
         len(lines),
     )
     assert hub_idx < cb_idx, (
@@ -103,6 +114,7 @@ def test_repo_map_no_fabrication(scanned) -> None:
     """Every symbol/signature rendered is real manifest data for that file."""
     root, t = scanned
     from paf.capabilities.codebase_map._store import ArtifactKind
+
     payload = t._storage.read(ArtifactKind.MANIFEST, root)
     files = payload["files"]
     out = t.get_repo_map(map_tokens=400)
@@ -141,10 +153,16 @@ def test_repo_map_focus_restricts_subtree(scanned) -> None:
     out = t.get_repo_map(map_tokens=200, focus="capabilities/memory")
     # Every file header lives under capabilities/memory/ — and other top dirs are absent.
     lines = out.splitlines()
-    files = [line[:-1] for line in lines if line.endswith(":") and not line.startswith("    ")]
+    files = [
+        line[:-1]
+        for line in lines
+        if line.endswith(":") and not line.startswith("    ")
+    ]
     assert files, "focus map produced no files"
     for f in files:
-        assert f == "capabilities/memory" or f.startswith("capabilities/memory/"), f"focus leak: {f}"
+        assert f == "capabilities/memory" or f.startswith("capabilities/memory/"), (
+            f"focus leak: {f}"
+        )
     assert all(not f.startswith("capabilities/codebase_map") for f in files)
 
 
@@ -152,6 +170,7 @@ def test_repo_map_stale_index_clear_message(tmp_path: Path) -> None:
     """An index without call_graph.json returns an actionable re-index message, not
     a misleading alphabetical map."""
     import shutil
+
     # Copy the fixture out of the repo (git-ignored paths scan as 0 files), scan it,
     # then delete the graph artifact to simulate a pre-Phase-2 index.
     dst = tmp_path / "paf-src"

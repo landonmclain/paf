@@ -345,9 +345,11 @@ To collapse the same-config variance to near-zero for future runs, the agreed
 change (pending application to `tests/framework.py` model settings):
 
 ```python
-provider={"order": ["DeepInfra", "Parasail", "CoreWeave"],
-          "quantizations": ["fp8"],
-          "allow_fallbacks": True}
+provider = {
+    "order": ["DeepInfra", "Parasail", "CoreWeave"],
+    "quantizations": ["fp8"],
+    "allow_fallbacks": True,
+}
 # + sampler determinism: top_p=1.0, fixed seed (v4-flash-0731 also supports top_k/min_p/repetition_penalty)
 ```
 

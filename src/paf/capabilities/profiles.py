@@ -57,9 +57,7 @@ class AgentProfile:
                 f"{missing}. Known: {sorted(CAPABILITY_TYPES)}"
             )
         types = (CAPABILITY_TYPES[name] for name in self.capability_names)
-        return tuple(
-            t for t in types if t.get_serialization_name() is not None
-        )
+        return tuple(t for t in types if t.get_serialization_name() is not None)
 
 
 # The single real M1 profile. The assistant may enable persistence, lossless

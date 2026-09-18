@@ -125,12 +125,9 @@ def test_inject_on_real_user_turn_only(mem_dir: Path) -> None:
         # appended onto it.
         assert out2.messages[-1] is before.messages[-1]
         tool_parts = out2.messages[-1].parts
-        assert all(
-            p.tool_name == "run_command" for p in tool_parts
-        )
+        assert all(p.tool_name == "run_command" for p in tool_parts)
 
     asyncio.run(_run())
-
 
 
 def test_read_ignores_scoped_path(mem_dir: Path) -> None:

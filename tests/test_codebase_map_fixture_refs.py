@@ -31,6 +31,7 @@ Invariants asserted per fixture:
 
 Fixtures are gitignored; if absent the corresponding tests skip (suite stays green).
 """
+
 from __future__ import annotations
 
 import re
@@ -45,7 +46,16 @@ PAF_FIXTURE = ROOT / "tests" / "fixtures" / "paf-src"
 CB_FIXTURE = ROOT / "tests" / "fixtures" / "chatbot"
 
 # Tokens that can ONLY ever be path segments/keywords, never a legit symbol binding.
-_FORBIDDEN_IMPORT_TOKENS = {"from", "import", "as", "return", "def", "class", "export", "default"}
+_FORBIDDEN_IMPORT_TOKENS = {
+    "from",
+    "import",
+    "as",
+    "return",
+    "def",
+    "class",
+    "export",
+    "default",
+}
 # Dotted module targets and bare identifiers are both legit; this allows `anyio.abc`.
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
@@ -82,7 +92,9 @@ def test_python_import_names_are_plausible(paf_infos) -> None:
     for path, fi in paf_infos.items():
         for name in fi.import_names:
             assert _IDENT_RE.match(name), f"{path}: impossible import name {name!r}"
-            assert name not in _FORBIDDEN_IMPORT_TOKENS, f"{path}: keyword leaked: {name!r}"
+            assert name not in _FORBIDDEN_IMPORT_TOKENS, (
+                f"{path}: keyword leaked: {name!r}"
+            )
 
 
 def test_python__store_cross_package_regression(paf_infos) -> None:
@@ -103,7 +115,9 @@ def test_python__store_cross_package_regression(paf_infos) -> None:
     for path, fi in paf_infos.items():
         if path.startswith("capabilities/visual/"):
             continue
-        assert "_store" not in fi.import_names, f"{path}: leaked cross-package _store basename"
+        assert "_store" not in fi.import_names, (
+            f"{path}: leaked cross-package _store basename"
+        )
 
 
 def test_visual_sibling__store_is_legitimate(paf_infos) -> None:
@@ -111,7 +125,9 @@ def test_visual_sibling__store_is_legitimate(paf_infos) -> None:
     module var) — it must resolve, proving we didn't over-broadly ban common names."""
     cap = paf_infos.get("capabilities/visual/_capability.py")
     assert cap is not None, "fixture missing capabilities/visual/_capability.py"
-    assert "_store" in cap.import_names, "visual/_capability.py legitimately imports sibling _store var"
+    assert "_store" in cap.import_names, (
+        "visual/_capability.py legitimately imports sibling _store var"
+    )
 
 
 def test_store_no_longer_cross_module_hub(tmp_path_factory) -> None:
@@ -125,6 +141,7 @@ def test_store_no_longer_cross_module_hub(tmp_path_factory) -> None:
 
     from paf.capabilities.codebase_map._graph import build_edges
     from paf.capabilities.codebase_map._retrieval import _weighted_in_degree
+
     src = ROOT / "tests" / "fixtures" / "paf-src"
     if not src.exists():
         pytest.skip("paf-src fixture not present (gitignored)")
@@ -150,7 +167,9 @@ def test_ts_representative_modules_clean(cb_infos) -> None:
     for path, fi in cb_infos.items():
         for name in fi.import_names:
             assert _IDENT_RE.match(name), f"{path}: impossible import name {name!r}"
-            assert name not in _FORBIDDEN_IMPORT_TOKENS, f"{path}: keyword leaked: {name!r}"
+            assert name not in _FORBIDDEN_IMPORT_TOKENS, (
+                f"{path}: keyword leaked: {name!r}"
+            )
     # The heavily-importing message.tsx must be clean (regex version leaked lib/db/from).
     cand = next(
         (fi for p, fi in cb_infos.items() if p.endswith("components/chat/message.tsx")),

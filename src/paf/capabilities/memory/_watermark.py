@@ -135,7 +135,9 @@ class MemoryWatermark:
             {
                 "run_id": self.run_id,
                 "turn_id": self.turn_id,
-                "consumed_ts": self.consumed_ts.isoformat() if self.consumed_ts else None,
+                "consumed_ts": self.consumed_ts.isoformat()
+                if self.consumed_ts
+                else None,
             },
             ensure_ascii=False,
         )

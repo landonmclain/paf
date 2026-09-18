@@ -75,7 +75,9 @@ def _mk_store(tmp_path: Path, conversations: dict[str, list[object]]) -> FileSte
     return store
 
 
-def _msg(*, user: str, assistant: str = "", injected: list[str] | None = None) -> list[object]:
+def _msg(
+    *, user: str, assistant: str = "", injected: list[str] | None = None
+) -> list[object]:
     """Build a ModelRequest (UserPromptPart) + optional assistant reply.
 
     `injected` allows carrying marker-tagged TextContent blocks alongside the real
@@ -83,7 +85,9 @@ def _msg(*, user: str, assistant: str = "", injected: list[str] | None = None) -
     """
     content: list[object] = [user]
     for tag in injected or []:
-        content.append(TextContent(f"<turn-index>{tag}</turn-index>", metadata="turn-index.v1"))
+        content.append(
+            TextContent(f"<turn-index>{tag}</turn-index>", metadata="turn-index.v1")
+        )
     req = ModelRequest(parts=[UserPromptPart(content=content)])
     if assistant:
         return [req, ModelResponse(parts=[TextPart(assistant)])]
@@ -95,10 +99,21 @@ def _msg_dated(*, user: str, assistant: str = "", iso: str) -> list[object]:
     provenance (the shape `run_lmem` writes, which the search tool surfaces)."""
     metadata = {"source_date": iso, "source_session_id": "answer_abc_0"}
     req = ModelRequest(
-        parts=[UserPromptPart(content=user)], run_id="run-c1", conversation_id="c1", metadata=metadata
+        parts=[UserPromptPart(content=user)],
+        run_id="run-c1",
+        conversation_id="c1",
+        metadata=metadata,
     )
     if assistant:
-        return [req, ModelResponse(parts=[TextPart(assistant)], run_id="run-c1", conversation_id="c1", metadata=metadata)]
+        return [
+            req,
+            ModelResponse(
+                parts=[TextPart(assistant)],
+                run_id="run-c1",
+                conversation_id="c1",
+                metadata=metadata,
+            ),
+        ]
     return [req]
 
 
@@ -433,7 +448,9 @@ def test_search_hit_carries_source_date(tmp_path: Path) -> None:
         out = await ts.search_conversation_history(_FakeCtx("c1"), "January novel 416")
         # The matched hit carries its ISO source date on the label.
         assert "date: 2023-05-22T10:41:00+00:00" in out, out
-        out = await ts.search_conversation_history(_FakeCtx("c1"), "March 300 page book")
+        out = await ts.search_conversation_history(
+            _FakeCtx("c1"), "March 300 page book"
+        )
         assert "date: 2023-05-24T09:00:00+00:00" in out, out
 
     asyncio.run(go())
@@ -478,7 +495,9 @@ def test_search_presents_newest_first_with_unchanged_scores(tmp_path: Path) -> N
     )
 
     async def go():
-        out = await ts.search_conversation_history(_FakeCtx("c1"), "charity 5K personal best")
+        out = await ts.search_conversation_history(
+            _FakeCtx("c1"), "charity 5K personal best"
+        )
         # Recency presentation: the NEWER (July) hit is presented first.
         assert out.find("2023-07-30") != -1, out
         assert out.find("2023-05-22") != -1, out
@@ -541,7 +560,9 @@ def test_search_presentation_order_same_session_turns(tmp_path: Path) -> None:
         raise AssertionError(f"no turn header in:\n{out}")
 
     async def go():
-        out = await ts.search_conversation_history(_FakeCtx("c1"), "charity 5K personal best")
+        out = await ts.search_conversation_history(
+            _FakeCtx("c1"), "charity 5K personal best"
+        )
         # Same session/date -> within-session order by turn: later turn (tid 2) first.
         assert first_turn_header(out) == "2", (
             "later same-session turn (tid 2) should be presented first:\n" + out
@@ -576,7 +597,12 @@ def test_e66b632c_previous_pb_after_turn_and_recency(tmp_path: Path) -> None:
     store = FileStepStore(directory=tmp_path)
     conv = {}  # conversation_id -> msgs
     for rc, (sid, dt, sess) in enumerate(
-        zip(q["haystack_session_ids"], q["haystack_dates"], q["haystack_sessions"], strict=True)
+        zip(
+            q["haystack_session_ids"],
+            q["haystack_dates"],
+            q["haystack_sessions"],
+            strict=True,
+        )
     ):
         run_id = f"run-{sid}"
         cid = f"conv-{sid}"
@@ -584,30 +610,56 @@ def test_e66b632c_previous_pb_after_turn_and_recency(tmp_path: Path) -> None:
         for m in sess:
             meta = {"source_session_id": sid, "source_date": _iso(dt)}
             if m["role"] == "user":
-                req = ModelRequest(parts=[UserPromptPart(content=m["content"])],
-                                   run_id=run_id, conversation_id=cid, metadata=meta)
+                req = ModelRequest(
+                    parts=[UserPromptPart(content=m["content"])],
+                    run_id=run_id,
+                    conversation_id=cid,
+                    metadata=meta,
+                )
                 msgs.append(req)
             else:
-                msgs.append(ModelResponse(parts=[TextPart(m["content"])],
-                                          run_id=run_id, conversation_id=cid, metadata=meta))
-        asyncio.run(store.register_run(RunRecord(
-            run_id=run_id, conversation_id=cid,
-            started_at=datetime(2026, 1, 1 + rc, tzinfo=UTC),
-        )))
-        asyncio.run(store.save_snapshot(ContinuableSnapshot(
-            run_id=run_id, step_index=0, conversation_id=cid, messages=msgs,
-        )))
+                msgs.append(
+                    ModelResponse(
+                        parts=[TextPart(m["content"])],
+                        run_id=run_id,
+                        conversation_id=cid,
+                        metadata=meta,
+                    )
+                )
+        asyncio.run(
+            store.register_run(
+                RunRecord(
+                    run_id=run_id,
+                    conversation_id=cid,
+                    started_at=datetime(2026, 1, 1 + rc, tzinfo=UTC),
+                )
+            )
+        )
+        asyncio.run(
+            store.save_snapshot(
+                ContinuableSnapshot(
+                    run_id=run_id,
+                    step_index=0,
+                    conversation_id=cid,
+                    messages=msgs,
+                )
+            )
+        )
         conv[cid] = msgs
 
     async def _run() -> str:
         ts = ConversationSearchToolset(
             SnapshotHistorySource(store),
-            tool_id="conversation-search", max_matches=25, context_lines=0,
-            bm25_k1=1.5, bm25_b=0.75,
+            tool_id="conversation-search",
+            max_matches=25,
+            context_lines=0,
+            bm25_k1=1.5,
+            bm25_b=0.75,
             scope="all",
         )
         return await ts.search_conversation_history(
-            _FakeCtx("conv-answer_ac0140ce_1"), "previous personal best time charity 5K run"
+            _FakeCtx("conv-answer_ac0140ce_1"),
+            "previous personal best time charity 5K run",
         )
 
     def pb_turn_rank(out: str, turn: str) -> int | None:
@@ -625,14 +677,20 @@ def test_e66b632c_previous_pb_after_turn_and_recency(tmp_path: Path) -> None:
                 print("   ", line.split("  -> read_turn")[0])
         april_rank = pb_turn_rank(out, "run-answer_ac0140ce_1:1")
         july_rank = pb_turn_rank(out, "run-answer_ac0140ce_2:1")
-        print(f"   -> April previous-PB turn (:1) rank: {april_rank} | July new-PB turn (:1) rank: {july_rank}")
+        print(
+            f"   -> April previous-PB turn (:1) rank: {april_rank} | July new-PB turn (:1) rank: {july_rank}"
+        )
         # The previous-PB message (April turn :1) must be reachable in the hits, and
         # every hit carries a recency rank label.
-        assert april_rank is not None, "April previous-PB turn (:1) missing from hits:\n" + out
+        assert april_rank is not None, (
+            "April previous-PB turn (:1) missing from hits:\n" + out
+        )
         assert "recency: 1" in out, "hits must carry a recency rank label:\n" + out
-        print("\nGRADER NOTE: scores here are raw BM25 (unchanged). Recency only re-orders "
-              "presentation newest-first and labels each hit; the value strings stay "
-              "500-char-truncated so the model must read_turn to recover 27:45.")
+        print(
+            "\nGRADER NOTE: scores here are raw BM25 (unchanged). Recency only re-orders "
+            "presentation newest-first and labels each hit; the value strings stay "
+            "500-char-truncated so the model must read_turn to recover 27:45."
+        )
 
     asyncio.run(go())
 
@@ -729,9 +787,7 @@ def test_search_guard_resets_on_read_turn(tmp_path: Path) -> None:
 def test_read_turn_bad_ref_is_graceful(tmp_path: Path) -> None:
     """`read_turn` on the search toolset degrades gracefully on a bad ref --
     same behavior as the index's read_turn (a shared primitive means one code path)."""
-    store = _mk_store(
-        tmp_path, {"c1": [*_msg(user="hello", assistant="hi there")]}
-    )
+    store = _mk_store(tmp_path, {"c1": [*_msg(user="hello", assistant="hi there")]})
     source = SnapshotHistorySource(store)
     ts = ConversationSearchToolset(
         source,

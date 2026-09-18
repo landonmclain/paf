@@ -21,7 +21,9 @@ from paf.capabilities.memory._render import render_index_memory, write_render
 _SEP = " — "
 
 
-def _mk_record(fact, *, tier="t1", born="2026-08-17T00:00:00Z", src="run:0", typ="fact"):
+def _mk_record(
+    fact, *, tier="t1", born="2026-08-17T00:00:00Z", src="run:0", typ="fact"
+):
     return MemoryRecord(type=typ, fact=fact, tier=tier, born_on=born, source_ref=src)
 
 
@@ -130,7 +132,9 @@ def test_fold_assistant_archive_is_pending(tmp_path):
 def test_fold_reviewer_archive_applies(tmp_path):
     s = OverrideStore(tmp_path)
     s.append(op="archive", target_line=113, by="assistant")  # pending first
-    s.append(op="archive", target_line=113, by="reviewer")   # reviewer resolves -> applied
+    s.append(
+        op="archive", target_line=113, by="reviewer"
+    )  # reviewer resolves -> applied
     state = fold_overrides(s.read_all())
     assert state[113].is_applied_archive
     assert not state[113].is_pending
@@ -147,7 +151,7 @@ def test_fold_reviewer_tier_change_applies(tmp_path):
 def test_fold_reviewer_reject_defeats_pending(tmp_path):
     s = OverrideStore(tmp_path)
     s.append(op="archive", target_line=121, by="assistant")  # pending
-    s.append(op="reject", target_line=121, by="reviewer")    # reviewer vetoes
+    s.append(op="reject", target_line=121, by="reviewer")  # reviewer vetoes
     state = fold_overrides(s.read_all())
     assert state[121].status == "rejected"
     assert not state[121].is_pending
@@ -158,11 +162,15 @@ def test_fold_reviewer_reject_defeats_pending(tmp_path):
 # render hook — applied archive drops the fact
 # ---------------------------------------------------------------------------
 
+
 def test_render_applied_archive_drops_fact(tmp_path):
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers flat-file storage", src="run:0"),
-        _mk_record("User's site has four arcs", src="run:1"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers flat-file storage", src="run:0"),
+            _mk_record("User's site has four arcs", src="run:1"),
+        ],
+    )
     build_index(tmp_path)
     from paf.capabilities.memory._index import MemoryIndex
 
@@ -184,11 +192,15 @@ def test_render_applied_archive_drops_fact(tmp_path):
 
 
 def test_render_pending_archive_marks_line(tmp_path):
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers flat-file storage", src="run:0"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers flat-file storage", src="run:0"),
+        ],
+    )
     build_index(tmp_path)
     from paf.capabilities.memory._index import MemoryIndex
+
     idx = MemoryIndex.load(tmp_path)
     s = OverrideStore(tmp_path)
     s.append(op="archive", target_line=1, by="assistant", reason="rm-gate disproven")
@@ -207,16 +219,19 @@ def test_render_pending_archive_marks_line(tmp_path):
 
 
 def test_render_reject_clears_pending_marker(tmp_path):
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers flat-file storage", src="run:0"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers flat-file storage", src="run:0"),
+        ],
+    )
     build_index(tmp_path)
     from paf.capabilities.memory._index import MemoryIndex
 
     idx = MemoryIndex.load(tmp_path)
     s = OverrideStore(tmp_path)
     s.append(op="archive", target_line=1, by="assistant")  # pending
-    s.append(op="reject", target_line=1, by="reviewer")    # veto
+    s.append(op="reject", target_line=1, by="reviewer")  # veto
     ov = load_overrides(tmp_path)
     md = render_index_memory(store, idx, overrides=ov)
     lines = [ln for ln in md.splitlines() if ln.startswith("- ")]
@@ -231,10 +246,23 @@ def test_render_reject_clears_pending_marker(tmp_path):
 
 
 def test_render_tier_change_moves_fact_to_lower_section(tmp_path):
-    store = _seed_store(tmp_path, [
-        _mk_record("Stable identity fact", tier="t1", born="2026-01-01T00:00:00Z", src="run:0"),
-        _mk_record("Ephemeral goal detail", tier="t3", born="2026-02-01T00:00:00Z", src="run:1"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record(
+                "Stable identity fact",
+                tier="t1",
+                born="2026-01-01T00:00:00Z",
+                src="run:0",
+            ),
+            _mk_record(
+                "Ephemeral goal detail",
+                tier="t3",
+                born="2026-02-01T00:00:00Z",
+                src="run:1",
+            ),
+        ],
+    )
     build_index(tmp_path)
     from paf.capabilities.memory._index import MemoryIndex
 
@@ -257,10 +285,13 @@ def test_render_tier_change_moves_fact_to_lower_section(tmp_path):
 
 
 def test_write_render_end_to_end_applied_archive(tmp_path):
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers flat-file storage", src="run:0"),
-        _mk_record("User's site has four arcs", src="run:1"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers flat-file storage", src="run:0"),
+            _mk_record("User's site has four arcs", src="run:1"),
+        ],
+    )
     build_index(tmp_path)
     s = OverrideStore(tmp_path)
     s.append(op="archive", target_line=2, by="reviewer")
@@ -274,9 +305,12 @@ def test_write_render_end_to_end_applied_archive(tmp_path):
 
 
 def test_write_render_end_to_end_pending_marker(tmp_path):
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers flat-file storage", src="run:0"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers flat-file storage", src="run:0"),
+        ],
+    )
     build_index(tmp_path)
     s = OverrideStore(tmp_path)
     s.append(op="archive", target_line=1, by="assistant")
@@ -343,9 +377,12 @@ def test_tool_refreshes_render_immediately(tmp_path):
     from paf.capabilities.memory._index import build_index
     from paf.capabilities.memory._toolset import OverrideToolset
 
-    _seed_store(tmp_path, [
-        _mk_record("User prefers flat-file storage", src="run:0"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers flat-file storage", src="run:0"),
+        ],
+    )
     build_index(tmp_path)
     ts = OverrideToolset(OverrideStore(tmp_path))
 
@@ -357,5 +394,3 @@ def test_tool_refreshes_render_immediately(tmp_path):
     md = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
     assert "*(archive pending review)*" in md
     assert "flat-file storage" in md
-
-

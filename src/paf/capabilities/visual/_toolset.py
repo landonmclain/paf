@@ -28,11 +28,11 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from ._store import _store
 
-_P = ParamSpec('_P')
+_P = ParamSpec("_P")
 
 # Default vision model for `describe_screenshot` -- a native omnimodal model that
 # accepts image input and returns text. Override via VISION_MODEL / .env.
-_VISION_MODEL_DEFAULT = 'openrouter:xiaomi/mimo-v2.5'
+_VISION_MODEL_DEFAULT = "openrouter:xiaomi/mimo-v2.5"
 
 
 def _recoverable(  # noqa: UP047  # matches fs/shell/web `_recoverable` convention
@@ -51,14 +51,14 @@ def _recoverable(  # noqa: UP047  # matches fs/shell/web `_recoverable` conventi
         try:
             return await fn(self, *args, **kwargs)
         except Exception as e:  # noqa: BLE001  # vision provider may raise arbitrary errors
-            return f'Vision describe failed: {type(e).__name__}: {e}'
+            return f"Vision describe failed: {type(e).__name__}: {e}"
 
     return wrapper
 
 
 def _vision_model() -> str:
     """The vision model slug from `VISION_MODEL` (default Xiaomi MiMo-V2.5)."""
-    return os.getenv('VISION_MODEL', _VISION_MODEL_DEFAULT)
+    return os.getenv("VISION_MODEL", _VISION_MODEL_DEFAULT)
 
 
 async def _run_vision(images: list[bytes], prompt: str) -> str:
@@ -72,10 +72,10 @@ async def _run_vision(images: list[bytes], prompt: str) -> str:
     from pydantic_ai.messages import BinaryContent, TextContent
 
     if not images:
-        return 'Vision describe: no image bytes to describe.'
+        return "Vision describe: no image bytes to describe."
 
     content: list[TextContent | BinaryContent] = [TextContent(prompt)]
-    content.extend(BinaryContent(data=raw, media_type='image/png') for raw in images)
+    content.extend(BinaryContent(data=raw, media_type="image/png") for raw in images)
 
     agent = Agent(_vision_model())
     result = await agent.run(content)
@@ -92,7 +92,7 @@ class VisualToolset(FunctionToolset):
 
     def __init__(self) -> None:
         super().__init__()
-        self.add_function(self.describe_screenshot, name='describe_screenshot')
+        self.add_function(self.describe_screenshot, name="describe_screenshot")
 
     @_recoverable
     async def describe_screenshot(self, ref: str, prompt: str) -> str:
@@ -111,8 +111,8 @@ class VisualToolset(FunctionToolset):
         images = _store.get(ref)
         if images is None:
             return (
-                'describe_screenshot: no screenshot found for ref '
+                "describe_screenshot: no screenshot found for ref "
                 f'"{ref}". Use the ref shown in the [screenshot captured] stub '
-                'text from an earlier browser capture. Do not fabricate a ref.'
+                "text from an earlier browser capture. Do not fabricate a ref."
             )
         return await _run_vision([images], prompt)

@@ -20,7 +20,9 @@ from paf.capabilities.memory._index import (
 from paf.capabilities.memory._journal import JournalStore, MemoryRecord
 
 
-def _mk_record(fact, *, tier="t1", born="2026-08-17T00:00:00Z", src="run:0", typ="fact"):
+def _mk_record(
+    fact, *, tier="t1", born="2026-08-17T00:00:00Z", src="run:0", typ="fact"
+):
     return MemoryRecord(type=typ, fact=fact, tier=tier, born_on=born, source_ref=src)
 
 
@@ -42,6 +44,7 @@ def _index_path(tmp_path) -> str:
 # --------------------------------------------------------------------------
 # fact_keys (the O(1) lookup keys)
 # --------------------------------------------------------------------------
+
 
 def test_fact_keys_exact_normalizes_case_and_whitespace():
     k1 = fact_keys("User prefers mobile-first web design")
@@ -69,11 +72,15 @@ def test_fact_keys_stopwords_dropped():
 # incremental fold
 # --------------------------------------------------------------------------
 
+
 def test_incremental_exact_dup_absorbed(tmp_path):
-    _seed_store(tmp_path, [
-        _mk_record("User prefers mobile-first design", src="run:0"),
-        _mk_record("User prefers mobile-first design", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers mobile-first design", src="run:0"),
+            _mk_record("User prefers mobile-first design", src="run:1"),
+        ],
+    )
     update_index(tmp_path)
     idx = _load(tmp_path)
     assert len(idx.entries) == 1
@@ -84,20 +91,30 @@ def test_incremental_exact_dup_absorbed(tmp_path):
 
 
 def test_incremental_token_reorder_dup_absorbed(tmp_path):
-    _seed_store(tmp_path, [
-        _mk_record("design mobile-first prefers", src="run:0"),
-        _mk_record("prefers mobile-first design", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record("design mobile-first prefers", src="run:0"),
+            _mk_record("prefers mobile-first design", src="run:1"),
+        ],
+    )
     update_index(tmp_path)
     assert len(_load(tmp_path).entries) == 1
 
 
 def test_keep_winner_tier_then_recency_newer_t1_wins(tmp_path):
     # newer t1 beats the older t2 (tier first, then most-recent)
-    _seed_store(tmp_path, [
-        _mk_record("same fact", tier="t2", born="2026-08-17T00:00:00Z", src="run:0"),
-        _mk_record("same fact", tier="t1", born="2026-08-17T00:01:00Z", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record(
+                "same fact", tier="t2", born="2026-08-17T00:00:00Z", src="run:0"
+            ),
+            _mk_record(
+                "same fact", tier="t1", born="2026-08-17T00:01:00Z", src="run:1"
+            ),
+        ],
+    )
     update_index(tmp_path)
     e = _load(tmp_path).entries[0]
     assert e["tier"] == "t1"
@@ -107,20 +124,34 @@ def test_keep_winner_tier_then_recency_newer_t1_wins(tmp_path):
 
 def test_keep_winner_same_tier_recency(tmp_path):
     # same tier -> more-recent born_on wins
-    _seed_store(tmp_path, [
-        _mk_record("same fact", tier="t1", born="2026-08-17T00:00:00Z", src="run:0"),
-        _mk_record("same fact", tier="t1", born="2026-08-17T00:01:00Z", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record(
+                "same fact", tier="t1", born="2026-08-17T00:00:00Z", src="run:0"
+            ),
+            _mk_record(
+                "same fact", tier="t1", born="2026-08-17T00:01:00Z", src="run:1"
+            ),
+        ],
+    )
     update_index(tmp_path)
     assert _load(tmp_path).entries[0]["current_line"] == 2
 
 
 def test_keep_winner_tier_wins_over_recency(tmp_path):
     # much newer lower-tier does NOT beat a stable t1
-    _seed_store(tmp_path, [
-        _mk_record("same fact", tier="t1", born="2026-08-17T00:00:00Z", src="run:0"),
-        _mk_record("same fact", tier="t3", born="2026-09-01T00:00:00Z", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record(
+                "same fact", tier="t1", born="2026-08-17T00:00:00Z", src="run:0"
+            ),
+            _mk_record(
+                "same fact", tier="t3", born="2026-09-01T00:00:00Z", src="run:1"
+            ),
+        ],
+    )
     update_index(tmp_path)
     e = _load(tmp_path).entries[0]
     assert e["tier"] == "t1"
@@ -128,10 +159,13 @@ def test_keep_winner_tier_wins_over_recency(tmp_path):
 
 
 def test_incremental_distinct_facts_separate_winners(tmp_path):
-    _seed_store(tmp_path, [
-        _mk_record("User prefers mobile-first design", src="run:0"),
-        _mk_record("User's site organized into four arcs", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers mobile-first design", src="run:0"),
+            _mk_record("User's site organized into four arcs", src="run:1"),
+        ],
+    )
     update_index(tmp_path)
     assert len(_load(tmp_path).entries) == 2
 
@@ -153,11 +187,16 @@ def test_watermark_advances_incrementally_no_rescan(tmp_path):
 # update_index (top-level incremental entry point)
 # --------------------------------------------------------------------------
 
+
 def test_update_index_builds_then_increments(tmp_path):
-    store = _seed_store(tmp_path, [_mk_record("User prefers mobile-first design", src="run:0")])
+    store = _seed_store(
+        tmp_path, [_mk_record("User prefers mobile-first design", src="run:0")]
+    )
     assert update_index(tmp_path) == 1  # first call -> full build
 
-    store.append_record(_mk_record("User prefers mobile-first design", src="run:1"))  # exact dup
+    store.append_record(
+        _mk_record("User prefers mobile-first design", src="run:1")
+    )  # exact dup
     assert update_index(tmp_path) == 1  # incremental fold, absorbed
     idx = _load(tmp_path)
     assert idx.watermark == 2
@@ -169,19 +208,25 @@ def test_update_index_builds_then_increments(tmp_path):
 # full build (one-time, journal with pre-existing history, fuzzy collapse)
 # --------------------------------------------------------------------------
 
+
 def test_build_index_collapses_fuzzy_cluster(tmp_path):
     # near-verbatim paraphrase of the same fact (different words, not exact)
-    _seed_store(tmp_path, [
-        _mk_record(
-            "User prefers mobile-first design because most readers browse on their phones",
-            tier="t1", src="run:0",
-        ),
-        _mk_record(
-            "User prefers mobile-first web design because about 80 percent of readers "
-            "browse and read on their phone",
-            tier="t2", src="run:1",
-        ),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record(
+                "User prefers mobile-first design because most readers browse on their phones",
+                tier="t1",
+                src="run:0",
+            ),
+            _mk_record(
+                "User prefers mobile-first web design because about 80 percent of readers "
+                "browse and read on their phone",
+                tier="t2",
+                src="run:1",
+            ),
+        ],
+    )
     n = build_index(tmp_path)
     assert n == 1  # fuzzy-clustered to a single living fact (t1 wins)
     e = _load(tmp_path).entries[0]
@@ -190,19 +235,25 @@ def test_build_index_collapses_fuzzy_cluster(tmp_path):
 
 
 def test_build_index_preserves_distinct_facts(tmp_path):
-    _seed_store(tmp_path, [
-        _mk_record("User prefers mobile-first design", src="run:0"),
-        _mk_record("User's site organized into four arcs", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers mobile-first design", src="run:0"),
+            _mk_record("User's site organized into four arcs", src="run:1"),
+        ],
+    )
     build_index(tmp_path)
     assert len(_load(tmp_path).entries) == 2
 
 
 def test_build_index_idempotent_and_persists_schema(tmp_path):
-    _seed_store(tmp_path, [
-        _mk_record("fact one", src="run:0"),
-        _mk_record("fact two", src="run:1"),
-    ])
+    _seed_store(
+        tmp_path,
+        [
+            _mk_record("fact one", src="run:0"),
+            _mk_record("fact two", src="run:1"),
+        ],
+    )
     n1 = build_index(tmp_path)
     n2 = build_index(tmp_path)
     assert n1 == n2 == 2
@@ -221,15 +272,21 @@ def test_build_index_empty_journal(tmp_path):
 # index-aware rendering (write_render emits survivors, agrees with the index)
 # --------------------------------------------------------------------------
 
+
 def test_write_render_emits_index_winners_not_raw_journal(tmp_path):
     """With an index present, MEMORY.md renders only surviving (winner) facts."""
     from paf.capabilities.memory._render import write_render
 
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers mobile-first design", src="run:0"),
-        _mk_record("user prefers mobile-first design", src="run:1"),  # exact dup (case)
-        _mk_record("User prefers mobile-first design", src="run:2"),  # exact dup
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers mobile-first design", src="run:0"),
+            _mk_record(
+                "user prefers mobile-first design", src="run:1"
+            ),  # exact dup (case)
+            _mk_record("User prefers mobile-first design", src="run:2"),  # exact dup
+        ],
+    )
     build_index(tmp_path)  # -> 1 winner
     md_path = tmp_path / "MEMORY.md"
     write_render(store, str(md_path))
@@ -244,10 +301,13 @@ def test_write_render_falls_back_to_raw_without_index(tmp_path):
     """No index file -> raw journal render (unchanged benchmark/unit contract)."""
     from paf.capabilities.memory._render import write_render
 
-    store = _seed_store(tmp_path, [
-        _mk_record("fact one", src="run:0"),
-        _mk_record("fact two", src="run:1"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("fact one", src="run:0"),
+            _mk_record("fact two", src="run:1"),
+        ],
+    )
     md_path = tmp_path / "MEMORY.md"
     write_render(store, str(md_path))
     text = md_path.read_text(encoding="utf-8")
@@ -258,10 +318,13 @@ def test_write_render_falls_back_to_raw_without_index(tmp_path):
 def test_write_render_index_keeps_distinct_facts(tmp_path):
     from paf.capabilities.memory._render import write_render
 
-    store = _seed_store(tmp_path, [
-        _mk_record("User prefers mobile-first design", src="run:0"),
-        _mk_record("User's site organized into four arcs", src="run:1"),
-    ])
+    store = _seed_store(
+        tmp_path,
+        [
+            _mk_record("User prefers mobile-first design", src="run:0"),
+            _mk_record("User's site organized into four arcs", src="run:1"),
+        ],
+    )
     build_index(tmp_path)
     md_path = tmp_path / "MEMORY.md"
     write_render(store, str(md_path))
@@ -283,11 +346,13 @@ def test_index_render_bounds_all_tiers(tmp_path):
     T1, T2, T3 = 100, 40, 30  # all above their caps
     recs = []
     born = "2026-01-01T00:00:00Z"
+
     # fully-disjoint token sets per record (real facts are distinct) — the
     # full-build fuzzy collapse (Jaccard/containment > 0.60) would otherwise
     # merge near-duplicate synthetic facts into one winner per tier.
     def _words():
         return " ".join(uuid.uuid4().hex[:8] for _ in range(4))
+
     for i in range(T1):
         recs.append(_mk_record(_words(), tier="t1", born=born, src=f"t1:{i}"))
     for i in range(T2):
@@ -307,9 +372,9 @@ def test_index_render_bounds_all_tiers(tmp_path):
             cur = ln[3:]
         elif ln.startswith("- ") and cur is not None:
             tiers[cur] = tiers.get(cur, 0) + 1
-    assert tiers.get("t1", 0) == 75        # capped to newest 75
-    assert tiers.get("t2", 0) == 25        # capped to newest 25
-    assert tiers.get("t3", 0) == 15        # capped to newest 15
+    assert tiers.get("t1", 0) == 75  # capped to newest 75
+    assert tiers.get("t2", 0) == 25  # capped to newest 25
+    assert tiers.get("t3", 0) == 15  # capped to newest 15
 
 
 def test_resolve_memory_tier_caps_reads_spec(tmp_path):
@@ -325,16 +390,13 @@ def test_resolve_memory_tier_caps_reads_spec(tmp_path):
     # partial override: t1 bumped, t2 explicitly unbounded
     spec = tmp_path / "capsassist.yaml"
     spec.write_text(
-        "memory:\n"
-        "  tier_caps:\n"
-        "    t1: 3\n"
-        "    t2: null\n",
+        "memory:\n  tier_caps:\n    t1: 3\n    t2: null\n",
         encoding="utf-8",
     )
     caps = resolve_memory_tier_caps("capsassist", spec_directory=tmp_path)
     assert caps["t1"] == 3
-    assert caps["t2"] is None          # explicit unbounded preserved
-    assert "t3" not in caps            # unspecified -> kept out (defaults win)
+    assert caps["t2"] is None  # explicit unbounded preserved
+    assert "t3" not in caps  # unspecified -> kept out (defaults win)
 
 
 def test_resolve_memory_tier_caps_absent_specs(tmp_path):

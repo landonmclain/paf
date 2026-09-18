@@ -94,10 +94,10 @@ class CallExtractor:
                 continue
             if stmt.startswith("import ") and " as " in stmt and alias:
                 # import pkg.mod as A  ->  A -> pkg.mod
-                mod = stmt[len("import "):].split(" as ")[0].strip()
+                mod = stmt[len("import ") :].split(" as ")[0].strip()
                 module_aliases[alias] = mod
             elif stmt.startswith("from "):
-                mod = stmt[len("from "):].split(" ")[0].strip()  # may be relative
+                mod = stmt[len("from ") :].split(" ")[0].strip()  # may be relative
                 for it in items:
                     if it != "*" and it != "as":
                         direct_items[it] = mod
@@ -117,7 +117,9 @@ class CallExtractor:
         for imp in res.imports:
             stmt = (imp.source or "").strip()
             if stmt.startswith("import ") and getattr(imp, "alias", None) is None:
-                out.extend(it for it in (getattr(imp, "items", None) or []) if it != "*")
+                out.extend(
+                    it for it in (getattr(imp, "items", None) or []) if it != "*"
+                )
         return out
 
     # -- call sites ------------------------------------------------------------
@@ -132,7 +134,7 @@ class CallExtractor:
         qry = _CALL_QUERIES.get(self.language, "")
         if qry:
             caps = self._rec._captures(qry)
-            for (s, e) in caps.get("callee", []):
+            for s, e in caps.get("callee", []):
                 text = self._rec._slice(s, e)
                 if "." in text:
                     qualified.append(text)
@@ -141,7 +143,7 @@ class CallExtractor:
         cq = _CONSTRUCT_QUERIES.get(self.language, "")
         if cq:
             caps = self._rec._captures(cq)
-            for (s, e) in caps.get("callee", []):
+            for s, e in caps.get("callee", []):
                 text = self._rec._slice(s, e)
                 if _IDENT_RE.fullmatch(text):
                     direct.append(text)
@@ -210,7 +212,7 @@ def module_to_path(dotted: str, importer_path: str, file_set: set[str]) -> str |
         return None
     rel = dotted
     if rel.startswith("paf."):
-        rel = rel[len("paf."):]
+        rel = rel[len("paf.") :]
     elif rel == "paf":
         rel = ""
     # relative imports: leading dots offset against the importer's directory
@@ -229,8 +231,11 @@ def module_to_path(dotted: str, importer_path: str, file_set: set[str]) -> str |
         return None
     if not rel:
         return None
-    candidates = [f"{rel}.py", f"{rel}/__init__.py", f"{rel.rsplit('/', 1)[0]}.py"] \
-        if "/" in rel and rel.rsplit("/", 1)[0] else [f"{rel}.py", f"{rel}/__init__.py"]
+    candidates = (
+        [f"{rel}.py", f"{rel}/__init__.py", f"{rel.rsplit('/', 1)[0]}.py"]
+        if "/" in rel and rel.rsplit("/", 1)[0]
+        else [f"{rel}.py", f"{rel}/__init__.py"]
+    )
     for cand in candidates:
         if cand in file_set:
             return cand
@@ -271,7 +276,9 @@ def call_edge_set(
             continue
         direct, qualified = ex.call_callees()
         for callee in direct + qualified:
-            target = ex.resolve_callee(callee, defined_by, module_to_path, f.path, file_set)
+            target = ex.resolve_callee(
+                callee, defined_by, module_to_path, f.path, file_set
+            )
             if target is None or target not in file_set or target == f.path:
                 continue
             # symbol is the invoked name (or the callee root's attr / bare name)

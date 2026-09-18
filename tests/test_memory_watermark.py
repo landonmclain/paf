@@ -50,9 +50,7 @@ def test_legacy_file_backcompat_no_ts(tmp_path) -> None:
 
 def test_file_stores_iso_timestamp(tmp_path) -> None:
     MemoryWatermark(run_id="r1", turn_id=5, consumed_ts=TS0).save(tmp_path)
-    data = json.loads(
-        (tmp_path / "memory-watermark.json").read_text(encoding="utf-8")
-    )
+    data = json.loads((tmp_path / "memory-watermark.json").read_text(encoding="utf-8"))
     assert data["consumed_ts"] == TS0.isoformat()
 
 

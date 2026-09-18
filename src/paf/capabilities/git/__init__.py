@@ -10,6 +10,6 @@ from ._capability import Git
 from ._toolset import GitToolset
 
 __all__ = [
-    'Git',
-    'GitToolset',
+    "Git",
+    "GitToolset",
 ]

@@ -73,6 +73,7 @@ def _span_range(turns: list[list]) -> tuple[str, str]:
         return "", ""
     return stamps[0], stamps[-1]
 
+
 #: Turns per narrative block. The trigger fires only when this many COMPLETE
 #: turns have accumulated since the watermark, and the worker summarizes each
 #: 10-turn slice as its own block (one model call + one appended record).
@@ -95,7 +96,9 @@ class ThreadSummarizeJob:
     watermark: MemoryWatermark | None = None
 
 
-ThreadSpanSource = Callable[[str, int, str], Awaitable]  # (tip_run, tip_turn, conversation_id) -> ResolvedSpan
+ThreadSpanSource = Callable[
+    [str, int, str], Awaitable
+]  # (tip_run, tip_turn, conversation_id) -> ResolvedSpan
 
 
 def _span_complete_turns_with_anchors(messages: list) -> list[tuple[list, int]]:
@@ -203,11 +206,14 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                 if self.span_source is None or job.watermark is None:
                     log.error(
                         "thread_summarizer_queue missing span_source/watermark; dropping "
-                        "session=%s", session_id,
+                        "session=%s",
+                        session_id,
                     )
                     return
                 resolved = await self.span_source(
-                    job.watermark.run_id, job.watermark.turn_id or 0, job.conversation_id
+                    job.watermark.run_id,
+                    job.watermark.turn_id or 0,
+                    job.conversation_id,
                 )
                 span_messages = getattr(resolved, "messages", [])
                 span_target = getattr(resolved, "watermark", None)
@@ -287,14 +293,18 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                         log.info(
                             "thread_summarizer_catch_up session=%s block already "
                             "covered at %s:%s — skipping %d turn(s), advancing watermark",
-                            session_id, block_anchor.run_id, block_anchor.turn_id,
+                            session_id,
+                            block_anchor.run_id,
+                            block_anchor.turn_id,
                             len(block),
                         )
                         self._advance(job.conversation_id, block_anchor)
                         covered += len(block)
                         continue
 
-                beats: BeatsRecord = await self.summarize_span_fn(block_msgs, job.conversation_id)
+                beats: BeatsRecord = await self.summarize_span_fn(
+                    block_msgs, job.conversation_id
+                )
                 block_start, block_end = _span_range(block)
                 store.append_summary(
                     summary_from_beats(
@@ -327,7 +337,9 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                 detail = f"{summarized} turns summarized in {n_blocks} block(s)"
             log.info(
                 "thread_summarizer_job session=%s success %s watermark=%s",
-                session_id, detail, span_target,
+                session_id,
+                detail,
+                span_target,
             )
             if self.on_complete is not None:
                 self.on_complete(session_id, True, detail)
@@ -356,7 +368,9 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
         current.save(store.directory, filename=THREAD_WATERMARK_FILENAME)
 
 
-def _block_anchor_from_refs(span_runs: list[str | None], block_refs: list[str]) -> MemoryWatermark | None:
+def _block_anchor_from_refs(
+    span_runs: list[str | None], block_refs: list[str]
+) -> MemoryWatermark | None:
     """``MemoryWatermark`` at the last turn covered by ``block_refs``.
 
     ``block_refs`` are conversation-absolute ``{run_id}:{turn_id}`` refs, so the
@@ -377,9 +391,7 @@ def _block_anchor_from_refs(span_runs: list[str | None], block_refs: list[str]) 
     # Fallback: last message with a run_id stamp.
     for m in reversed(span_runs):
         if m:
-            return MemoryWatermark(
-                run_id=m, turn_id=0, consumed_ts=datetime.now(UTC)
-            )
+            return MemoryWatermark(run_id=m, turn_id=0, consumed_ts=datetime.now(UTC))
     return None
 
 
@@ -420,4 +432,3 @@ def put_watermark_path(capture_root: str, conversation_id: str) -> str:
     """Path of the per-conversation thread watermark file (for tests/docs)."""
     store = ThreadSummaryStore(capture_root, conversation_id)
     return str(store.directory / THREAD_WATERMARK_FILENAME)
-

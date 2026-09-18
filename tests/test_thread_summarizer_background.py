@@ -104,7 +104,11 @@ def test_queue_advances_on_empty_span_without_writing(tmp_path) -> None:
 
     asyncio.run(
         queue.process_job(
-            CID, ThreadSummarizeJob(conversation_id=CID, messages=[], watermark=_target(turn=0)), QueueState()
+            CID,
+            ThreadSummarizeJob(
+                conversation_id=CID, messages=[], watermark=_target(turn=0)
+            ),
+            QueueState(),
         )
     )
 
@@ -125,7 +129,9 @@ def test_queue_failure_does_not_advance_watermark(tmp_path) -> None:
             queue.process_job(
                 CID,
                 ThreadSummarizeJob(
-                    conversation_id=CID, messages=_fake_span(2), watermark=_target(turn=1)
+                    conversation_id=CID,
+                    messages=_fake_span(2),
+                    watermark=_target(turn=1),
                 ),
                 QueueState(),
             )
@@ -185,7 +191,12 @@ def test_queue_status_and_drain_single_worker(tmp_path) -> None:
 
     async def scenario():
         queue = ThreadSummarizerQueue(capture_root=str(root), summarize_span_fn=slow)
-        queue.enqueue(CID, ThreadSummarizeJob(conversation_id=CID, messages=_fake_span(2), watermark=_target()))
+        queue.enqueue(
+            CID,
+            ThreadSummarizeJob(
+                conversation_id=CID, messages=_fake_span(2), watermark=_target()
+            ),
+        )
         await started.wait()
         assert queue.status(CID).running
         release.set()
@@ -341,7 +352,9 @@ def test_queue_catches_up_over_stale_watermark_without_crashing(tmp_path) -> Non
         summarize_calls.append(span)
         return _beats("run-c", 0)
 
-    queue = ThreadSummarizerQueue(capture_root=str(root), summarize_span_fn=tracking_summarize)
+    queue = ThreadSummarizerQueue(
+        capture_root=str(root), summarize_span_fn=tracking_summarize
+    )
 
     # The resolved span is OLD (runs 'run-a'..'run-c') relative to what's
     # persisted (run-b turn 30) — exactly the stale-watermark re-coverage case.
@@ -449,7 +462,10 @@ def test_queue_chunks_span_into_10_turn_blocks(tmp_path) -> None:
     assert len(recs) == 2  # 20 turns -> two 10-turn blocks
     assert seen_turns == [10, 10]  # the summarize fn saw two 10-turn slices
     assert {r.run_id for r in recs} == {"run-a"}
-    assert sorted(r.turn_id for r in recs) == [9, 19]  # anchored at each block's last turn
+    assert sorted(r.turn_id for r in recs) == [
+        9,
+        19,
+    ]  # anchored at each block's last turn
     assert _wm(store).turn_id == 19  # advanced past the final block
 
 
@@ -478,13 +494,19 @@ def test_distinct_turns_collapse_repersisted_and_injected(tmp_path) -> None:
     # The same real prompt, re-persisted at 3 different anchors (clean, with an
     # injected block, and again) — ALL are one distinct turn.
     def _user() -> ModelRequest:
-        return ModelRequest(parts=[UserPromptPart(content="real question")], run_id="run-a")
+        return ModelRequest(
+            parts=[UserPromptPart(content="real question")], run_id="run-a"
+        )
 
     def _injected() -> ModelRequest:
         return ModelRequest(
             parts=[
                 UserPromptPart(
-                    content=[TextContent(content="\n\n<memory>\n### MEMORY.md\n...", metadata=marker)]
+                    content=[
+                        TextContent(
+                            content="\n\n<memory>\n### MEMORY.md\n...", metadata=marker
+                        )
+                    ]
                 )
             ],
             run_id="run-a",
@@ -497,15 +519,18 @@ def test_distinct_turns_collapse_repersisted_and_injected(tmp_path) -> None:
     # A span with one real prompt at 3 addresses + an injected-only request in
     # between. Real answer differs per copy so the slice still carries its turn.
     span = [
-        _user(), _resp("answer0"),          # distinct turn 1 (kept, first addr)
-        _injected(),                        # not a user turn
-        _user(), _resp("answer-b"),         # re-persisted copy -> dropped
-        _user(), _resp("answer-c"),         # re-persisted copy -> dropped
+        _user(),
+        _resp("answer0"),  # distinct turn 1 (kept, first addr)
+        _injected(),  # not a user turn
+        _user(),
+        _resp("answer-b"),  # re-persisted copy -> dropped
+        _user(),
+        _resp("answer-c"),  # re-persisted copy -> dropped
     ]
     turns, anchors = _distinct_complete_turns(span)
-    assert len(turns) == 1, turns          # ONE distinct real turn, not 3
+    assert len(turns) == 1, turns  # ONE distinct real turn, not 3
     assert len(anchors) == 1
-    assert anchors == [0]                  # kept the FIRST address
+    assert anchors == [0]  # kept the FIRST address
 
     # Now 12 distinct real prompts across 24 addresses (each duplicated) must
     # collapse to 12 distinct turns (not 24), so chunking yields blocks of real
@@ -517,10 +542,12 @@ def test_distinct_turns_collapse_repersisted_and_injected(tmp_path) -> None:
         big.append(req)
         big.append(resp)
         # duplicate the prompt address again
-        req2 = ModelRequest(parts=[UserPromptPart(content=f"prompt{i}")], run_id="run-a")
+        req2 = ModelRequest(
+            parts=[UserPromptPart(content=f"prompt{i}")], run_id="run-a"
+        )
         big.append(req2)
     turns2, anchors2 = _distinct_complete_turns(big)
-    assert len(turns2) == 12, len(turns2)   # dedup the 12 duplicate addresses
+    assert len(turns2) == 12, len(turns2)  # dedup the 12 duplicate addresses
     assert len(anchors2) == 12
     # each distinct turn keeps a real user prompt (never an injected block)
     for t in turns2:

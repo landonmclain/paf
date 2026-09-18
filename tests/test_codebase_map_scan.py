@@ -52,9 +52,17 @@ def test_owned_skip_dirs_excluded_without_git(tmp_path: Path) -> None:
     files = walk_all_files(root)
     rels = {p.relative_to(root).as_posix() for p in files}
     # everything that should be excluded stays out; in-scope files are walked
-    for excluded in (".git/config", ".agent-codeindex", "node_modules", "__pycache__",
-                     "History", "archive"):
-        assert not any(r.startswith(excluded) for r in rels), f"{excluded} should be skipped"
+    for excluded in (
+        ".git/config",
+        ".agent-codeindex",
+        "node_modules",
+        "__pycache__",
+        "History",
+        "archive",
+    ):
+        assert not any(r.startswith(excluded) for r in rels), (
+            f"{excluded} should be skipped"
+        )
     assert rels == {"src/a.py", "notes.md", "data.json"}
 
 

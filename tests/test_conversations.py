@@ -34,7 +34,6 @@ def _empty_store(tmp_path=None, monkeypatch=None):
 
     from pydantic_ai_harness.step_persistence import FileStepStore
 
-
     root = tmp_path if tmp_path is not None else tempfile.mkdtemp()
     store = FileStepStore(directory=str(root))
 
@@ -85,7 +84,11 @@ def test_list_conversations_newest_first(tmp_path, monkeypatch) -> None:
     with _empty_store(tmp_path, monkeypatch):
         client = TestClient(sse.app)
         body = client.get("/api/conversations").json()
-        assert [c["conversation_id"] for c in body["conversations"]] == ["new", "mid", "old"]
+        assert [c["conversation_id"] for c in body["conversations"]] == [
+            "new",
+            "mid",
+            "old",
+        ]
 
 
 def test_create_conversation_mints_id_and_registers(tmp_path, monkeypatch) -> None:
@@ -119,7 +122,9 @@ def test_create_conversation_agent_scoped(tmp_path, monkeypatch) -> None:
         ]
 
 
-def test_list_conversations_new_conversation_fallback_title(tmp_path, monkeypatch) -> None:
+def test_list_conversations_new_conversation_fallback_title(
+    tmp_path, monkeypatch
+) -> None:
     _reset_registry()
     # A freshly-minted lane is registered in _sessions_last_used but has no
     # session yet (lazily created on first /api/chat) — title must not be the
@@ -157,6 +162,7 @@ def test_list_conversations_store_backstop_includes_profile_lane(
         await helper("019f0000-0000-7000-8000-000000000000", "run-uuid-1", 3000.0)
 
     import asyncio
+
     asyncio.run(seed())
 
     monkeypatch.setattr("paf.capabilities.persistence._build_store", lambda: store)
@@ -169,7 +175,9 @@ def test_list_conversations_store_backstop_includes_profile_lane(
     assert not any(c.startswith("019f") for c in ids)
     # Store lanes have no live session — the id is shown so the lane is
     # identifiable (not a generic placeholder).
-    lane = next(c for c in body["conversations"] if c["conversation_id"] == "persisted-lane")
+    lane = next(
+        c for c in body["conversations"] if c["conversation_id"] == "persisted-lane"
+    )
     assert lane["title"] == "persisted-lane"
 
 
@@ -240,7 +248,9 @@ def test_patch_title_persists_and_merges_over_derived(tmp_path, monkeypatch) -> 
 
         # Merge: the saved title wins over the derived one.
         body = client.get("/api/conversations").json()
-        lane = next(c for c in body["conversations"] if c["conversation_id"] == "conv-t")
+        lane = next(
+            c for c in body["conversations"] if c["conversation_id"] == "conv-t"
+        )
         assert lane["title"] == "My Rename"
 
 
@@ -255,7 +265,11 @@ def test_patch_title_agent_namespaced(tmp_path, monkeypatch) -> None:
 
     with _empty_store(tmp_path, monkeypatch), _temp_titles_dir(tmp_path):
         client = TestClient(sse.app)
-        client.patch("/api/conversations/share", json={"title": "A's title"}, params={"agent": "agent_a"})
+        client.patch(
+            "/api/conversations/share",
+            json={"title": "A's title"},
+            params={"agent": "agent_a"},
+        )
 
         # agent_a's list shows the rename.
         body_a = client.get("/api/conversations", params={"agent": "agent_a"}).json()
@@ -284,7 +298,9 @@ def test_patch_title_clear_restores_derived(tmp_path, monkeypatch) -> None:
         client.patch("/api/conversations/conv-c", json={"title": "Temp"})
         client.patch("/api/conversations/conv-c", json={"title": ""})
         body = client.get("/api/conversations").json()
-        lane = next(c for c in body["conversations"] if c["conversation_id"] == "conv-c")
+        lane = next(
+            c for c in body["conversations"] if c["conversation_id"] == "conv-c"
+        )
         assert lane["title"] == "origin"  # derived title restored
 
 

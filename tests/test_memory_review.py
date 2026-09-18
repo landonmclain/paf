@@ -54,7 +54,9 @@ class _NullSpan:
 class _FakeCtx:
     def __init__(self):
         self.tracer = type(
-            "T", (), {"start_as_current_span": staticmethod(lambda *a, **k: _NullSpan())}
+            "T",
+            (),
+            {"start_as_current_span": staticmethod(lambda *a, **k: _NullSpan())},
         )()
 
 
@@ -67,7 +69,9 @@ def test_reviewer_toolset_exposes_only_memory_review(tmp_path):
     rt = ReviewerToolset(OverrideStore(tmp_path))
     assert set(rt.tools.keys()) == {"memory_review"}
     assert "append_memory" not in rt.tools
-    assert "memory_archive_suggestion" not in rt.tools  # the reviewer, not the assistant
+    assert (
+        "memory_archive_suggestion" not in rt.tools
+    )  # the reviewer, not the assistant
 
 
 def test_reviewer_toolset_archive_applies_and_drops_fact(tmp_path):
@@ -89,7 +93,11 @@ def test_reviewer_toolset_tier_change_moves_fact(tmp_path):
 
     asyncio.run(
         rt.memory_review(
-            _FakeCtx(), journal_id=1, op="tier_change", tier="t3", reason="deprioritized"
+            _FakeCtx(),
+            journal_id=1,
+            op="tier_change",
+            tier="t3",
+            reason="deprioritized",
         )
     )
     md = read_render(str(tmp_path))
@@ -206,8 +214,7 @@ def _seed_identity_cluster(tmp_path):
     store.append_record(_mk_record("The user is named Landon", typ="identity"))
     store.append_record(_mk_record("Landon is married to Melanie", typ="identity"))
     store.append_record(
-        _mk_record("Landon has three kids: Caleb, Elizabeth, Benjamin",
-                   typ="identity")
+        _mk_record("Landon has three kids: Caleb, Elizabeth, Benjamin", typ="identity")
     )
     build_index(tmp_path)
     return store
@@ -215,8 +222,9 @@ def _seed_identity_cluster(tmp_path):
 
 def test_memory_merge_appends_archives_and_rerenders(tmp_path):
     _seed_identity_cluster(tmp_path)
-    rt = ReviewerToolset(OverrideStore(tmp_path), agent_name="assistant",
-                         journal=JournalStore(tmp_path))
+    rt = ReviewerToolset(
+        OverrideStore(tmp_path), agent_name="assistant", journal=JournalStore(tmp_path)
+    )
 
     result = asyncio.run(
         rt.memory_merge(
@@ -246,8 +254,11 @@ def test_memory_merge_appends_archives_and_rerenders(tmp_path):
     assert merged.type == "identity"
 
     # 2) The three sources were archived through the sidecar.
-    archived = [r["target_line"] for r in OverrideStore(tmp_path).read_all()
-                if r["op"] == "archive"]
+    archived = [
+        r["target_line"]
+        for r in OverrideStore(tmp_path).read_all()
+        if r["op"] == "archive"
+    ]
     assert sorted(archived) == [1, 2, 3]
 
     # 3) Re-render collapsed the cluster: the merged line renders, the sources
@@ -389,12 +400,16 @@ def test_memory_capability_reviewer_with_journal_wires_merge(tmp_path):
         pass
 
     async def run():
-        await q.process_job("sess", ReviewJob(run_id="r1", turn_id=3, watermark=advance), FakeState())
+        await q.process_job(
+            "sess", ReviewJob(run_id="r1", turn_id=3, watermark=advance), FakeState()
+        )
 
     asyncio.run(run())
     assert calls == [str(tmp_path)]
     # Successful pass => the review watermark advanced to the job's target.
-    wm = MemoryWatermark.load(str(tmp_path), run_id="r1", filename="memory-review-watermark.json")
+    wm = MemoryWatermark.load(
+        str(tmp_path), run_id="r1", filename="memory-review-watermark.json"
+    )
     assert wm.consumed_ts is not None
     assert wm.turn_id == 3
 
@@ -450,7 +465,9 @@ def test_review_throw_does_not_advance_watermark(tmp_path):
         raise RuntimeError("review LLM failed")
 
     q = MemoryReviewQueue(
-        memory_directory=str(tmp_path), agent_name="assistant", review_span=failing_review
+        memory_directory=str(tmp_path),
+        agent_name="assistant",
+        review_span=failing_review,
     )
 
     class FakeState:
@@ -562,4 +579,3 @@ def test_session_review_span_publishes_task_done(tmp_path):
     # The in-flight row must transition to done and be visible to subscribers.
     assert task.status == "done", f"expected done, got {task.status!r}"
     assert ("task:Reviewing memory (demo:x)", "done") in seen
-

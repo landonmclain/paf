@@ -36,7 +36,7 @@ from paf.capabilities._sandbox import (
 
 from ._output import truncate_tail
 
-_P = ParamSpec('_P')
+_P = ParamSpec("_P")
 
 
 def _recoverable(  # noqa: UP047  # paf-hardened: also recovers spawn failures (upstream 0.26.0)
@@ -65,12 +65,12 @@ def _recoverable(  # noqa: UP047  # paf-hardened: also recovers spawn failures (
 def _is_interactive_command(command: str) -> bool:
     """Detect commands that typically require interactive input."""
     interactive_patterns = [
-        r'^(vi|vim|nano|emacs|less|more|top|htop|man)\b',
-        r'^sudo\s',
-        r'^passwd\b',
-        r'^ssh\b',
-        r'^telnet\b',
-        r'^ftp\b',
+        r"^(vi|vim|nano|emacs|less|more|top|htop|man)\b",
+        r"^sudo\s",
+        r"^passwd\b",
+        r"^ssh\b",
+        r"^telnet\b",
+        r"^ftp\b",
     ]
     return any(re.match(p, command.strip()) for p in interactive_patterns)
 
@@ -118,14 +118,14 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         self._background: dict[str, BackgroundHandle] = {}
 
         if self._allowed_commands and self._denied_commands:
-            raise ValueError('Specify allowed_commands or denied_commands, not both.')
+            raise ValueError("Specify allowed_commands or denied_commands, not both.")
         if max_output_chars <= 0:
-            raise ValueError('max_output_chars must be a positive integer.')
+            raise ValueError("max_output_chars must be a positive integer.")
 
-        self.add_function(self.run_command, name='run_command')
-        self.add_function(self.start_command, name='start_command')
-        self.add_function(self.check_command, name='check_command')
-        self.add_function(self.stop_command, name='stop_command')
+        self.add_function(self.run_command, name="run_command")
+        self.add_function(self.start_command, name="start_command")
+        self.add_function(self.check_command, name="check_command")
+        self.add_function(self.stop_command, name="stop_command")
 
     async def for_run(self, ctx: RunContext[AgentDepsT]) -> AbstractToolset[AgentDepsT]:
         """Return a fresh instance per run so cwd and background processes are isolated.
@@ -188,7 +188,10 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         return {
             name: value
             for name, value in base.items()
-            if not any(fnmatch.fnmatchcase(name, pattern) for pattern in self._denied_env_patterns)
+            if not any(
+                fnmatch.fnmatchcase(name, pattern)
+                for pattern in self._denied_env_patterns
+            )
         }
 
     async def __aexit__(self, *args: Any) -> None:
@@ -209,11 +212,13 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         (containers, sandboxes) for hard enforcement.
         """
         if not self._allow_interactive and _is_interactive_command(command):
-            raise PermissionError(f'Interactive commands are not allowed. Command: {command!r}')
+            raise PermissionError(
+                f"Interactive commands are not allowed. Command: {command!r}"
+            )
 
         matched_op = self._first_denied_operator(command)
         if matched_op:
-            raise PermissionError(f'Shell operator {matched_op!r} is not allowed.')
+            raise PermissionError(f"Shell operator {matched_op!r} is not allowed.")
 
         try:
             tokens = shlex.split(command)
@@ -224,9 +229,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         executable = tokens[0]
 
         if self._denied_commands and executable in self._denied_commands:
-            raise PermissionError(f'Command {executable!r} is denied.')
+            raise PermissionError(f"Command {executable!r} is denied.")
         if self._allowed_commands and executable not in self._allowed_commands:
-            raise PermissionError(f'Command {executable!r} is not in the allowed list.')
+            raise PermissionError(f"Command {executable!r} is not in the allowed list.")
 
     def _build_cwd_capture(self, command: str) -> tuple[str, Path | None]:
         """Wrap a command to record its final working directory out-of-band.
@@ -240,15 +245,17 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         """
         if not self._persist_cwd:
             return command, None
-        fd, name = tempfile.mkstemp(prefix='harness_cwd_')
+        fd, name = tempfile.mkstemp(prefix="harness_cwd_")
         os.close(fd)
-        wrapped = f'{command}\n__harness_ec=$?\npwd > {shlex.quote(name)}\nexit $__harness_ec'
+        wrapped = (
+            f"{command}\n__harness_ec=$?\npwd > {shlex.quote(name)}\nexit $__harness_ec"
+        )
         return wrapped, Path(name)
 
     def _apply_captured_cwd(self, cwd_file: Path) -> None:
         """Update the persistent cwd from the capture file, ignoring junk."""
         try:
-            recorded = cwd_file.read_text(encoding='utf-8').strip()
+            recorded = cwd_file.read_text(encoding="utf-8").strip()
         except OSError:  # pragma: no cover
             return
         if not recorded:
@@ -258,7 +265,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             self._cwd = candidate
 
     @_recoverable
-    async def run_command(self, command: str, *, timeout_seconds: float | None = None) -> str:
+    async def run_command(
+        self, command: str, *, timeout_seconds: float | None = None
+    ) -> str:
         """Execute a shell command and return its output.
 
         Args:
@@ -269,7 +278,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             Labeled stdout/stderr output with exit code on non-zero exit.
         """
         self._check_command(command)
-        timeout = timeout_seconds if timeout_seconds is not None else self._default_timeout
+        timeout = (
+            timeout_seconds if timeout_seconds is not None else self._default_timeout
+        )
 
         actual_command, cwd_file = self._build_cwd_capture(command)
         try:
@@ -280,20 +291,20 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 timeout=timeout,
             )
             if result.timed_out:
-                return f'[Command timed out after {timeout}s]'
+                return f"[Command timed out after {timeout}s]"
 
             parts: list[str] = []
             if result.stdout:
-                parts.append(f'[stdout]\n{result.stdout}')
+                parts.append(f"[stdout]\n{result.stdout}")
             if result.stderr:
-                parts.append(f'[stderr]\n{result.stderr}')
-            output = '\n'.join(parts) if parts else '(no output)'
+                parts.append(f"[stderr]\n{result.stderr}")
+            output = "\n".join(parts) if parts else "(no output)"
 
             if cwd_file is not None and result.exit_code == 0:
                 self._apply_captured_cwd(cwd_file)
 
             if result.exit_code != 0:
-                output = f'{output}\n[exit code: {result.exit_code}]'
+                output = f"{output}\n[exit code: {result.exit_code}]"
             return output
         finally:
             if cwd_file is not None:
@@ -319,7 +330,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             env=self._resolve_env(),
         )
         self._background[handle.command_id] = handle
-        return f'Started background command: {command!r}\nID: {handle.command_id}'
+        return f"Started background command: {command!r}\nID: {handle.command_id}"
 
     async def check_command(self, command_id: str) -> str:
         """Check the status and recent output of a background command.
@@ -332,19 +343,22 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         """
         handle = self._background.get(command_id)
         if handle is None:
-            return f'[Error: unknown command ID {command_id!r}]'
+            return f"[Error: unknown command ID {command_id!r}]"
 
         status = await self._executor.check(handle)
 
         output_sections: list[str] = []
         if status.stdout:
-            output_sections.append(f'[stdout]\n{status.stdout}')
+            output_sections.append(f"[stdout]\n{status.stdout}")
         if status.stderr:
-            output_sections.append(f'[stderr]\n{status.stderr}')
-        parts = ['\n'.join(output_sections) if output_sections else '(no output yet)', f'[status: {status.status}]']
-        if status.status == 'finished' and status.exit_code is not None:
-            parts.append(f'[exit code: {status.exit_code}]')
-        return '\n'.join(parts)
+            output_sections.append(f"[stderr]\n{status.stderr}")
+        parts = [
+            "\n".join(output_sections) if output_sections else "(no output yet)",
+            f"[status: {status.status}]",
+        ]
+        if status.status == "finished" and status.exit_code is not None:
+            parts.append(f"[exit code: {status.exit_code}]")
+        return "\n".join(parts)
 
     async def stop_command(self, command_id: str) -> str:
         """Stop a background command and return its final output.
@@ -357,17 +371,20 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         """
         handle = self._background.get(command_id)
         if handle is None:
-            return f'[Error: unknown command ID {command_id!r}]'
+            return f"[Error: unknown command ID {command_id!r}]"
 
         status = await self._executor.stop(handle)
         del self._background[command_id]
 
         output_sections: list[str] = []
         if status.stdout:
-            output_sections.append(f'[stdout]\n{status.stdout}')
+            output_sections.append(f"[stdout]\n{status.stdout}")
         if status.stderr:
-            output_sections.append(f'[stderr]\n{status.stderr}')
-        parts = ['\n'.join(output_sections) if output_sections else '(no output)', '[stopped]']
+            output_sections.append(f"[stderr]\n{status.stderr}")
+        parts = [
+            "\n".join(output_sections) if output_sections else "(no output)",
+            "[stopped]",
+        ]
         if status.exit_code is not None:
-            parts.append(f'[exit code: {status.exit_code}]')
-        return '\n'.join(parts)
+            parts.append(f"[exit code: {status.exit_code}]")
+        return "\n".join(parts)

@@ -85,7 +85,9 @@ class CodebaseMap(AbstractCapability):
 
     def get_toolset(self) -> CodebaseMapToolset:
         """Build and return the five-tool codebase-map toolset."""
-        retrieval = self.retrieval or LexicalRetrieval(storage=self.storage, scan_root=self.scan_root)
+        retrieval = self.retrieval or LexicalRetrieval(
+            storage=self.storage, scan_root=self.scan_root
+        )
         return CodebaseMapToolset(
             scan_root=self.scan_root,
             storage=self.storage,

@@ -37,9 +37,9 @@ from ._retrieval import LexicalRetrieval
 from ._schema import Span
 from ._store import ArtifactKind, FlatFileStorage, StorageService
 
-_MAX_SEARCH_HEAD = 200          # chars of module-doc head shown per search hit row
-_MAX_SNIPPET_BYTES = 65536      # read_block hard bound (matches _block limit_bytes)
-_MAX_LOOKUP_SYMBOLS = 120       # cap symbol name lists so a big head stays bounded
+_MAX_SEARCH_HEAD = 200  # chars of module-doc head shown per search hit row
+_MAX_SNIPPET_BYTES = 65536  # read_block hard bound (matches _block limit_bytes)
+_MAX_LOOKUP_SYMBOLS = 120  # cap symbol name lists so a big head stays bounded
 
 # Render-time collapse: dirs whose *name* matches one of these are folded to a
 # single summary line in get_overview (they remain fully indexed -- searchable,
@@ -49,25 +49,75 @@ _MAX_LOOKUP_SYMBOLS = 120       # cap symbol name lists so a big head stays boun
 # Patterns match the last path segment (basename), at any depth. Sourced from
 # surveying 12 corpus repos (tests/docs/changelog/CI/vendored/assets dominate
 # the tree; the actual code lives in a handful of other dirs like src|lib|pkg).
-_COLLAPSE_DIR_PATTERNS = frozenset({
-    # tests
-    "test", "tests", "testing", "js_tests", "unit_tests", "integration_tests",
-    "e2e", "spec", "specs", "__tests__", "fixtures", "bench", "benchmarks",
-    "asv_bench",
-    # docs / examples / meta
-    "docs", "doc", "documentation", "guide", "guides", "tutorial", "tutorials",
-    "examples", "model_cards", "notebooks", "plot_types", "artwork", "logos",
-    "changelog", "changelogs", "news", "releasenotes", "release", "changes",
-    "contrib", "hacking",
-    # CI / dotfiles / tooling
-    ".github", ".gitlab", ".circleci", ".travis", ".gitlab-ci",
-    ".azure-pipelines", ".binder", ".devcontainer", ".vscode", ".idea", ".tx",
-    ".pyinstaller", "kokoro", "ci", ".ci", "build_tools", "maint_tools",
-    "docker",
-    # vendored / generated / assets
-    "vendor", "third_party", "extern", "cextern", "licenses", "dist",
-    "distribution", "images",
-})
+_COLLAPSE_DIR_PATTERNS = frozenset(
+    {
+        # tests
+        "test",
+        "tests",
+        "testing",
+        "js_tests",
+        "unit_tests",
+        "integration_tests",
+        "e2e",
+        "spec",
+        "specs",
+        "__tests__",
+        "fixtures",
+        "bench",
+        "benchmarks",
+        "asv_bench",
+        # docs / examples / meta
+        "docs",
+        "doc",
+        "documentation",
+        "guide",
+        "guides",
+        "tutorial",
+        "tutorials",
+        "examples",
+        "model_cards",
+        "notebooks",
+        "plot_types",
+        "artwork",
+        "logos",
+        "changelog",
+        "changelogs",
+        "news",
+        "releasenotes",
+        "release",
+        "changes",
+        "contrib",
+        "hacking",
+        # CI / dotfiles / tooling
+        ".github",
+        ".gitlab",
+        ".circleci",
+        ".travis",
+        ".gitlab-ci",
+        ".azure-pipelines",
+        ".binder",
+        ".devcontainer",
+        ".vscode",
+        ".idea",
+        ".tx",
+        ".pyinstaller",
+        "kokoro",
+        "ci",
+        ".ci",
+        "build_tools",
+        "maint_tools",
+        "docker",
+        # vendored / generated / assets
+        "vendor",
+        "third_party",
+        "extern",
+        "cextern",
+        "licenses",
+        "dist",
+        "distribution",
+        "images",
+    }
+)
 
 
 def _parent_dir(path: str) -> str:
@@ -165,7 +215,11 @@ class CodebaseMapToolset(FunctionToolset):
     def _head_rows_by_path(self) -> dict[str, dict]:
         payload = self._storage.read(ArtifactKind.INDEX, self._scan_root)
         rows = (payload or {}).get("files", []) if isinstance(payload, dict) else []
-        return {r["path"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("path"), str)}
+        return {
+            r["path"]: r
+            for r in rows
+            if isinstance(r, dict) and isinstance(r.get("path"), str)
+        }
 
     def _manifest_paths(self) -> dict[str, dict]:
         payload = self._storage.read(ArtifactKind.MANIFEST, self._scan_root)
@@ -273,10 +327,12 @@ class CodebaseMapToolset(FunctionToolset):
                     )
                 return f"No directory named {anchor!r} under {overview.get('scan_root', self._scan_root)}."
             ancestors = {
-                "/".join(anchor.split("/")[:i]) for i in range(1, len(anchor.split("/")))
+                "/".join(anchor.split("/")[:i])
+                for i in range(1, len(anchor.split("/")))
             }
             anchored = [
-                e for e in tree
+                e
+                for e in tree
                 if e.get("path") == anchor
                 or e.get("path") in ancestors
                 or e.get("path", "").startswith(prefix)
@@ -295,8 +351,12 @@ class CodebaseMapToolset(FunctionToolset):
             head += f"anchored at: {anchor}/\n"
         head += "file `imp=N` = dependency importance (in+out, call=3, ref=1); "
         head += "dir line: `imp: mean=N max=M` over its files; "
-        head += "`[folded]` = noise dir collapsed (use get_overview(path=<dir>) to open)\n"
-        rendered = self._render_tree(anchored, depth=cap, imp=imp, dir_imp=dir_imp, anchor=anchor)
+        head += (
+            "`[folded]` = noise dir collapsed (use get_overview(path=<dir>) to open)\n"
+        )
+        rendered = self._render_tree(
+            anchored, depth=cap, imp=imp, dir_imp=dir_imp, anchor=anchor
+        )
         return head + rendered if rendered else head + "(empty)"
 
     def _importance_by_path(self) -> dict[str, float]:
@@ -349,7 +409,9 @@ class CodebaseMapToolset(FunctionToolset):
             return ""
         imp = imp or {}
         dir_imp = dir_imp or {}
-        dirs: dict[str, list[dict]] = {}  # dir path -> its child entries (files + subdirs)
+        dirs: dict[
+            str, list[dict]
+        ] = {}  # dir path -> its child entries (files + subdirs)
         for e in tree:
             path = e.get("path", "")
             parent = _parent_dir(path)
@@ -381,22 +443,25 @@ class CodebaseMapToolset(FunctionToolset):
                         lines.append(_folded_dir_line(e, prefix))
                         continue
                     di = dir_imp.get(path)
-                    d_suffix = (
-                        f"  imp: mean={di[0]:.1f} max={di[1]:.0f}" if di else ""
+                    d_suffix = f"  imp: mean={di[0]:.1f} max={di[1]:.0f}" if di else ""
+                    lines.append(
+                        f"{prefix}{name}/  ({e.get('file_count', 0)} files){d_suffix}"
                     )
-                    lines.append(f"{prefix}{name}/  ({e.get('file_count', 0)} files){d_suffix}")
                     _open_dir(path, prefix + "  ")
                 else:
                     r = imp.get(path)
                     suffix = f"  imp={r:g}" if r is not None and r > 0 else ""
-                    lines.append(f"{prefix}{name}  ({e.get('line_count', 0)} lines){suffix}")
+                    lines.append(
+                        f"{prefix}{name}  ({e.get('line_count', 0)} lines){suffix}"
+                    )
 
         # The root's children are the top-level entries (depth 1); start there.
         _open_dir("", "")
         return "\n".join(lines)
 
-
-    def lookup_file(self, path: str, symbol: str | None = None, detail: bool = False) -> str | None:
+    def lookup_file(
+        self, path: str, symbol: str | None = None, detail: bool = False
+    ) -> str | None:
         """Look up a file's head or detail (the bridge between overview and source).
 
         Four forms, least → most detail:
@@ -451,8 +516,10 @@ class CodebaseMapToolset(FunctionToolset):
             try:
                 a, _, b = line_part.partition("-")
                 span = Span(
-                    start_byte=None, end_byte=None,
-                    start_line=int(a), end_line=int(b) if b else int(a),
+                    start_byte=None,
+                    end_byte=None,
+                    start_line=int(a),
+                    end_line=int(b) if b else int(a),
                 )
             except ValueError:
                 span = Span()  # unparseable range -> whole-file read
@@ -503,7 +570,7 @@ class CodebaseMapToolset(FunctionToolset):
         head = self._head_rows_by_path()
         lines = [f"Top {len(hits)} hits for {query!r}:"]
         for h in hits:
-            doc = (head.get(h.file, {}).get("doc") or "")[: _MAX_SEARCH_HEAD]
+            doc = (head.get(h.file, {}).get("doc") or "")[:_MAX_SEARCH_HEAD]
             sym = f"#{h.symbol}" if h.symbol else ""
             # The whole point of the index: the hit collapses to a pointer. Hand it
             # over as a paste-able read_block ref (prefer the resolved BlockRef span,
@@ -527,14 +594,20 @@ class CodebaseMapToolset(FunctionToolset):
             return None
         block = getattr(h, "block", None)
         span = getattr(block, "span", None) if block is not None else None
-        if span is not None and getattr(span, "start_line", None) and getattr(span, "end_line", None):
+        if (
+            span is not None
+            and getattr(span, "start_line", None)
+            and getattr(span, "end_line", None)
+        ):
             return f"{file}:{span.start_line}-{span.end_line}"
         sl, el = getattr(h, "start_line", None), getattr(h, "end_line", None)
         if sl and el:
             return f"{file}:{sl}-{el}"
         return f"{file}"
 
-    def get_repo_map(self, map_tokens: int | None = None, focus: str | None = None) -> str:
+    def get_repo_map(
+        self, map_tokens: int | None = None, focus: str | None = None
+    ) -> str:
         """Orient to the whole codebase in one shot: ranked, zero-LLM distilled map.
 
         Use this when you need the "here's the whole repo" picture — the direct analog
@@ -656,13 +729,15 @@ class CodebaseMapToolset(FunctionToolset):
         syms = manifest.get("symbols") or []
         if not syms:
             out.append("(no symbols)")
-        for s in syms[: _MAX_LOOKUP_SYMBOLS]:
+        for s in syms[:_MAX_LOOKUP_SYMBOLS]:
             out.append(self._symbol_meta(s))
         if len(syms) > _MAX_LOOKUP_SYMBOLS:
             out.append(f"... {len(syms) - _MAX_LOOKUP_SYMBOLS} more symbols")
         return "\n".join(out)
 
-    def _format_symbol_head(self, manifest: dict | None, symbol: str, path: str) -> str | None:
+    def _format_symbol_head(
+        self, manifest: dict | None, symbol: str, path: str
+    ) -> str | None:
         if manifest is None:
             return None
         sym = self._find_symbol(manifest.get("symbols") or [], symbol)
@@ -671,7 +746,9 @@ class CodebaseMapToolset(FunctionToolset):
         span = self._span_str(sym.get("span"))
         return f"{path}#{symbol}  ({sym.get('kind', '?')}{span})"
 
-    def _format_symbol_manifest(self, manifest: dict | None, symbol: str, path: str) -> str | None:
+    def _format_symbol_manifest(
+        self, manifest: dict | None, symbol: str, path: str
+    ) -> str | None:
         """A single symbol's full manifest entry — INCLUDING its body.
 
         The bounded "read one symbol" form: only the requested symbol's source/body is
@@ -743,10 +820,13 @@ class CodebaseMapToolset(FunctionToolset):
         rows: list[str] = []
 
         def walk(items, prefix: str) -> None:
-            for c in sorted(items, key=lambda x: (
-                (x.get("span") or {}).get("start_line") or 0,
-                x.get("name") or "",
-            )):
+            for c in sorted(
+                items,
+                key=lambda x: (
+                    (x.get("span") or {}).get("start_line") or 0,
+                    x.get("name") or "",
+                ),
+            ):
                 cspan = cls._span_str(c.get("span"))
                 cname = c.get("name") or "?"
                 # Disambiguate only when a name recurs at this level.
@@ -768,9 +848,9 @@ class CodebaseMapToolset(FunctionToolset):
     @staticmethod
     def _name_lists(head: dict) -> dict[str, list[str]]:
         return {
-            "classes": list(head.get("classes") or [])[: _MAX_LOOKUP_SYMBOLS],
-            "functions": list(head.get("functions") or [])[: _MAX_LOOKUP_SYMBOLS],
-            "other": list(head.get("symbols") or [])[: _MAX_LOOKUP_SYMBOLS],
+            "classes": list(head.get("classes") or [])[:_MAX_LOOKUP_SYMBOLS],
+            "functions": list(head.get("functions") or [])[:_MAX_LOOKUP_SYMBOLS],
+            "other": list(head.get("symbols") or [])[:_MAX_LOOKUP_SYMBOLS],
         }
 
     @staticmethod

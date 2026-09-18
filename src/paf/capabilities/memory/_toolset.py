@@ -252,7 +252,9 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
             except ValueError as exc:
                 raise ModelRetry(str(exc)) from exc
             if span.is_recording():
-                span.set_attributes({"memory.append.type": type, "memory.append.tier": tier})
+                span.set_attributes(
+                    {"memory.append.type": type, "memory.append.tier": tier}
+                )
             return {
                 "memory": fact,
                 "file": MAIN_FILENAME,
@@ -301,9 +303,7 @@ class _CurationToolset(FunctionToolset[AgentDepsT]):
 
         directory = self._overrides.directory
         md_path = directory.rstrip("/\\") + "/" + MAIN_FILENAME
-        write_render(
-            JournalStore(directory), md_path, agent_name=self._agent_name
-        )
+        write_render(JournalStore(directory), md_path, agent_name=self._agent_name)
 
 
 class OverrideToolset(_CurationToolset[AgentDepsT]):
@@ -319,7 +319,9 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
 
     def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
         super().__init__(overrides, agent_name=agent_name)
-        self.add_function(self.memory_archive_suggestion, name="memory_archive_suggestion")
+        self.add_function(
+            self.memory_archive_suggestion, name="memory_archive_suggestion"
+        )
 
     async def memory_archive_suggestion(
         self,
@@ -368,7 +370,10 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
                 pass
             if span.is_recording():
                 span.set_attributes(
-                    {"memory.override.op": "archive", "memory.override.target": journal_id}
+                    {
+                        "memory.override.op": "archive",
+                        "memory.override.target": journal_id,
+                    }
                 )
             return {
                 "journal_id": journal_id,
@@ -407,7 +412,6 @@ class MemoryMergeResult(TypedDict):
     reason: str | None
 
 
-
 class ReviewerToolset(_CurationToolset[AgentDepsT]):
     """The memory reviewer's curation tools: ``memory_review`` (+ ``memory_merge``).
 
@@ -443,7 +447,6 @@ class ReviewerToolset(_CurationToolset[AgentDepsT]):
         # is registered only when one is provided (the production reviewer path).
         if journal is not None:
             self.add_function(self.memory_merge, name="memory_merge")
-
 
     async def memory_review(
         self,

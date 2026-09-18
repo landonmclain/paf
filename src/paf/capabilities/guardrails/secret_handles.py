@@ -52,7 +52,7 @@ def secret_handle_guard(info: ToolCallInfo) -> GuardrailResult:
     replacement = dict(info.args)
     for key, value in info.args.items():
         if isinstance(value, str) and value.startswith(_HANDLE_PREFIX):
-            name = value[len(_HANDLE_PREFIX):]
+            name = value[len(_HANDLE_PREFIX) :]
             try:
                 replacement[key] = _resolve(name)
             except KeyError:

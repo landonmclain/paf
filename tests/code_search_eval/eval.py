@@ -16,6 +16,7 @@ Not yet wired to a real backend in Phase 0 (search is Phase 3); the scorer is th
 Usage:
     PYTHONPATH= .venv/bin/python -m tests.code_search_eval.eval --queries tests/code_search_eval/queries.jsonl
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,7 +92,9 @@ def evaluate(queries_path: Path, backend, k: int = 10) -> list[dict]:
     queries = load_queries(queries_path)
     rows = []
     for q in queries:
-        hits = backend.search(q["query"], mode=q.get("mode", "keywords"), limit=q.get("k", k))
+        hits = backend.search(
+            q["query"], mode=q.get("mode", "keywords"), limit=q.get("k", k)
+        )
         score = score_query(q, hits, k)
         rows.append({"query": q["query"], **score, "n_hits": len(hits)})
     return rows
@@ -120,14 +123,18 @@ def _fmt_table(rows: list[dict]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Code-search eval: score retrieval against a gold set.")
+    parser = argparse.ArgumentParser(
+        description="Code-search eval: score retrieval against a gold set."
+    )
     parser.add_argument("--queries", default="tests/code_search_eval/queries.jsonl")
     parser.add_argument("--k", type=int, default=10)
     args = parser.parse_args()
 
     if _BACKEND is None:
         print(_fmt_table([]))
-        print("\nNOTE: no RetrievalBackend wired (search is Phase 3). Queries file exists at:")
+        print(
+            "\nNOTE: no RetrievalBackend wired (search is Phase 3). Queries file exists at:"
+        )
         print(f"  {args.queries}")
         return 0
 

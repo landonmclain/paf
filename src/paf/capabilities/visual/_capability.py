@@ -52,27 +52,27 @@ from pydantic_ai.models import ModelRequestContext
 from ._store import _store
 from ._toolset import VisualToolset
 
-_STUB_PREFIX: str = '[screenshot captured: '
+_STUB_PREFIX: str = "[screenshot captured: "
 _STUB_SUFFIX: str = (
-    '] To inspect it, call describe_screenshot with its ref and your own '
+    "] To inspect it, call describe_screenshot with its ref and your own "
     'targeted question (e.g. "is the padding OK?").'
 )
 
 
 def _is_image(binary: BinaryContent) -> bool:
     """True for a binary part we can route to vision (image media types)."""
-    media = (binary.media_type or '').lower()
-    return media == 'image/png' or media in (
-        'image/jpeg',
-        'image/jpg',
-        'image/gif',
-        'image/webp',
+    media = (binary.media_type or "").lower()
+    return media == "image/png" or media in (
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp",
     )
 
 
 def _stub_text(ref: str) -> str:
     """The stub that replaces raw pixels so a text-only model stays safe."""
-    return f'{_STUB_PREFIX}{ref}{_STUB_SUFFIX}'
+    return f"{_STUB_PREFIX}{ref}{_STUB_SUFFIX}"
 
 
 def _walk_and_stash(parts: list[ModelRequestPart]) -> list[ModelRequestPart]:
@@ -88,7 +88,7 @@ def _walk_and_stash(parts: list[ModelRequestPart]) -> list[ModelRequestPart]:
     out: list[ModelRequestPart] = []
     changed = False
     for part in parts:
-        content = getattr(part, 'content', None)
+        content = getattr(part, "content", None)
         if isinstance(part, (ToolReturnPart, UserPromptPart)):
             new_content = _replace_images(content)
             if new_content is not _SENTINEL:
@@ -176,7 +176,7 @@ class Visual(AbstractCapability):
         inspection. When it is unset, images pass through untouched so a
         genuinely multimodal main model sees them natively.
         """
-        if not os.getenv('VISION_MODEL'):
+        if not os.getenv("VISION_MODEL"):
             return request_context
 
         messages = list(request_context.messages)

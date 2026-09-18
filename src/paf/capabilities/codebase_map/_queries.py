@@ -117,9 +117,7 @@ _MODULE_DOCSTRING = "(module . (string) @doc)"
 # `module_assignments`) — robust against the `@type` list not aligning with
 # `@name` when annotated and unannotated assignments are mixed.
 _MODULE_ASSIGN = "(module (assignment) @assign)"
-_MODULE_ASSIGN_SUB = (
-    "(assignment left: (identifier) @name (type (_) @type)?)"
-)
+_MODULE_ASSIGN_SUB = "(assignment left: (identifier) @name (type (_) @type)?)"
 
 # TS/TSX/JS module-level named assignments: `const x = ...` / `let x = ...` /
 # `export const x = ...`. Tree shapes differ from Python (lexical_declaration +
@@ -160,15 +158,28 @@ _MODULE_ASSIGN_JS = (
 # Comment-node type(s) per language (VERIFIED: rust/java use line_comment/block_comment,
 # not `comment`; the rest use `comment`).
 _COMMENT_NODE = {
-    "python": "comment", "typescript": "comment", "tsx": "comment",
-    "javascript": "comment", "php": "comment", "go": "comment", "c": "comment",
-    "rust": "line_comment", "java": "block_comment",
+    "python": "comment",
+    "typescript": "comment",
+    "tsx": "comment",
+    "javascript": "comment",
+    "php": "comment",
+    "go": "comment",
+    "c": "comment",
+    "rust": "line_comment",
+    "java": "block_comment",
 }
 
 # Line-comment syntax per language (used to strip markers for the doc text).
 _LINE_COMMENT_MARKERS = {
-    "python": "#", "typescript": "//", "tsx": "//", "javascript": "//",
-    "php": "// ", "go": "//", "rust": "//", "java": "//", "c": "//",
+    "python": "#",
+    "typescript": "//",
+    "tsx": "//",
+    "javascript": "//",
+    "php": "// ",
+    "go": "//",
+    "rust": "//",
+    "java": "//",
+    "c": "//",
 }
 
 
@@ -252,7 +263,11 @@ class QueryRecovery:
         cfg = _LANG.get(self.language)
         if not cfg or not span or span.start_byte is None:
             return None
-        header_end = body_span.start_byte if body_span and body_span.start_byte else (span.end_byte or span.start_byte)
+        header_end = (
+            body_span.start_byte
+            if body_span and body_span.start_byte
+            else (span.end_byte or span.start_byte)
+        )
         region = (span.start_byte, header_end)
         if header_end <= span.start_byte:  # degenerate — nothing between span and body
             return None
@@ -274,7 +289,7 @@ class QueryRecovery:
         retq = cfg.get("ret") or ""
         if retq:
             rcaps = self._captures(retq, region)
-            for (rs, re_) in rcaps.get("ret", []):
+            for rs, re_ in rcaps.get("ret", []):
                 ret_txt = self._slice(rs, re_).strip(": ").strip()
                 if ret_txt:
                     sig += f"{cfg['retsep']}{ret_txt}"
@@ -297,8 +312,9 @@ class QueryRecovery:
         # --- Python: string-as-direct-child-of-block in the body region ---
         if not body_span or body_span.start_byte is None:
             return None
-        caps = self._captures(_PYTHON_DOCSTRING,
-                              (body_span.start_byte, body_span.end_byte))
+        caps = self._captures(
+            _PYTHON_DOCSTRING, (body_span.start_byte, body_span.end_byte)
+        )
         doc_spans = caps.get("doc", [])
         if not doc_spans:
             return None
@@ -346,7 +362,7 @@ class QueryRecovery:
     def _python_module_assignments(self) -> list[tuple[str, int, int, str | None]]:
         caps = self._captures(_MODULE_ASSIGN)
         out: list[tuple[str, int, int, str | None]] = []
-        for (as_, ae) in caps.get("assign", []):
+        for as_, ae in caps.get("assign", []):
             # scoped sub-query: name + optional annotation within THIS assignment.
             # Scoping avoids list-alignment drift when annotated/unannotated mix.
             sub = self._captures(_MODULE_ASSIGN_SUB, (as_, ae))
@@ -368,14 +384,16 @@ class QueryRecovery:
         # variable_declarator). So index i of @decl ↔ index i of @name (verified:
         # each name[i] is byte-inside decl[i]). Type annotations are mapped to their
         # containing decl by byte span (they follow the name inside the decl).
-        query = _MODULE_ASSIGN_JS if self.language == "javascript" else _MODULE_ASSIGN_TS
+        query = (
+            _MODULE_ASSIGN_JS if self.language == "javascript" else _MODULE_ASSIGN_TS
+        )
         caps = self._captures(query)
         decls = caps.get("decl", [])
         names = caps.get("name", [])
         types = caps.get("type", [])
         # map each type_annotation to the decl whose span contains it (one per decl)
         type_by_decl: dict[int, tuple[int, int]] = {}
-        for (ts_, te) in types:
+        for ts_, te in types:
             containing = [ds for (ds, de) in decls if ds <= ts_ < de]
             if containing:
                 type_by_decl[min(containing)] = (ts_, te)
@@ -407,7 +425,7 @@ class QueryRecovery:
         node_type = _COMMENT_NODE.get(self.language, "comment")
         caps = self._captures(f"({node_type}) @c")
         best: tuple[int, int] | None = None
-        for (cs, ce) in caps.get("c", []):
+        for cs, ce in caps.get("c", []):
             if ce <= start_byte and (best is None or ce > best[1]):
                 best = (cs, ce)
         if best is None:
@@ -429,7 +447,9 @@ class QueryRecovery:
         """
         node_type = _COMMENT_NODE.get(self.language, "comment")
         caps = self._captures(f"({node_type}) @c")
-        comments = sorted((cs, ce) for (cs, ce) in caps.get("c", []) if ce <= start_byte)
+        comments = sorted(
+            (cs, ce) for (cs, ce) in caps.get("c", []) if ce <= start_byte
+        )
         if not comments:
             return None
         # start from the nearest comment; walk backward joining byte-adjacent comment
@@ -437,8 +457,10 @@ class QueryRecovery:
         # sits a byte (the newline) after the previous line's END — i.e. `cs - prev_ce <= 1`.
         best: list[tuple[int, int]] = [comments[-1]]
         cursor = comments[-1][0]  # START of nearest comment
-        for (cs, ce) in reversed(comments[:-1]):
-            if cursor - ce <= 1:  # this comment line ends right where the nearer one begins
+        for cs, ce in reversed(comments[:-1]):
+            if (
+                cursor - ce <= 1
+            ):  # this comment line ends right where the nearer one begins
                 best.append((cs, ce))
                 cursor = cs
             else:
@@ -456,7 +478,7 @@ def _strip_quotes(raw: str) -> str:
     txt = raw.strip()
     for q in ('"""', "'''", '"', "'"):
         if txt.startswith(q) and txt.endswith(q) and len(txt) >= 2 * len(q):
-            return txt[len(q):-len(q)].strip()
+            return txt[len(q) : -len(q)].strip()
     return txt
 
 
@@ -496,7 +518,7 @@ def _strip_comment_markers(raw: str) -> str:
         # line markers, greedy so "///" fully consumed (incl. residual single "/")
         for marker in ("//", "#", "--"):
             while s.startswith(marker):
-                s = s[len(marker):].strip()
+                s = s[len(marker) :].strip()
         while s.startswith("/"):
             s = s[1:].strip()
         lines.append(s)

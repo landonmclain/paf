@@ -68,7 +68,9 @@ def test_build_overview_excludes_owned_skip_and_gitignored(tmp_path: Path) -> No
     paths = {e["path"] for e in tree}
     assert "src/a.py" in paths
     assert "src" in paths
-    assert not any("History" in p or "archive" in p or "__pycache__" in p for p in paths)
+    assert not any(
+        "History" in p or "archive" in p or "__pycache__" in p for p in paths
+    )
 
 
 def test_scan_and_write_writes_overview_artifact(tmp_path: Path) -> None:
@@ -120,7 +122,12 @@ def test_render_tree_annotates_dir_and_file_imp() -> None:
 
     tree = [
         {"path": "capabilities", "type": "dir", "depth": 1, "file_count": 1},
-        {"path": "capabilities/_turns.py", "type": "file", "depth": 2, "line_count": 32},
+        {
+            "path": "capabilities/_turns.py",
+            "type": "file",
+            "depth": 2,
+            "line_count": 32,
+        },
         {"path": "config.py", "type": "file", "depth": 1, "line_count": 117},
     ]
     imp = {"capabilities/_turns.py": 13.0, "config.py": 21.0}

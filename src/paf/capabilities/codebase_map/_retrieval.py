@@ -78,7 +78,9 @@ class RetrievalBackend(Protocol):
         limit: int = 20,
     ) -> list[SearchHit]: ...
 
-    def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry] | None: ...
+    def distilled_map(
+        self, *, map_tokens: int, focus: Any = None
+    ) -> list[DistilledEntry] | None: ...
 
 
 class LexicalRetrieval:
@@ -115,7 +117,9 @@ class LexicalRetrieval:
         tokens = self._tokens_payload()
         return tokens_rank(query, tokens, limit=limit, heads=self._heads_by_path())
 
-    def distilled_map(self, *, map_tokens: int, focus: Any = None) -> list[DistilledEntry] | None:
+    def distilled_map(
+        self, *, map_tokens: int, focus: Any = None
+    ) -> list[DistilledEntry] | None:
         """Zero-LLM synthetic orientation map: the whole repo in `map_tokens` tokens.
 
         Ranks files by **call-weighted in-degree** from the persisted graph artifact:

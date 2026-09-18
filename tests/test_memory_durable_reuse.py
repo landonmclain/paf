@@ -29,9 +29,7 @@ def durable_dir(tmp_path, monkeypatch):
     """Point MEMORY_DURABLE_DIR at a temp dir for the whole test."""
     d = tmp_path / "durable"
     d.mkdir()
-    monkeypatch.setattr(
-        "tests.run_lmem.MEMORY_DURABLE_DIR", d, raising=True
-    )
+    monkeypatch.setattr("tests.run_lmem.MEMORY_DURABLE_DIR", d, raising=True)
     return d
 
 
@@ -41,8 +39,16 @@ def _write_store(base: Path, *, body: str, version: int) -> None:
     (base / "MEMORY.md").write_text(body, encoding="utf-8")
     (base / "facts.md").write_text("# facts\n", encoding="utf-8")
     state = {
-        "MEMORY.md": {"version": version, "fingerprint": "f:1", "last_operation_id": "o1"},
-        "facts.md": {"version": version, "fingerprint": "f:2", "last_operation_id": "o2"},
+        "MEMORY.md": {
+            "version": version,
+            "fingerprint": "f:1",
+            "last_operation_id": "o1",
+        },
+        "facts.md": {
+            "version": version,
+            "fingerprint": "f:2",
+            "last_operation_id": "o2",
+        },
     }
     (base / ".memory-state.json").write_text(
         __import__("json").dumps(state), encoding="utf-8"
@@ -146,7 +152,9 @@ def test_restore_flattens_legacy_assistant_snapshot(durable_dir, tmp_path):
     assert n == 2  # both files flattened out of assistant/
 
     # Memory file lands at the ROOT (what JournalViewStore reads), not in assistant/.
-    assert (live / "MEMORY.md").read_text(encoding="utf-8") == "# Facts\n- legacy sneakers\n"
+    assert (live / "MEMORY.md").read_text(
+        encoding="utf-8"
+    ) == "# Facts\n- legacy sneakers\n"
     assert (live / ".memory-state.json").exists()
     # and no stray assistant/ nesting left behind that the store would miss
     assert not (live / "assistant").exists()
@@ -158,11 +166,13 @@ def test_restore_journal_format_untouched(durable_dir, tmp_path):
     snap = durable_dir / "q7"
     snap.mkdir(parents=True)
     (snap / "MEMORY.md").write_text("# Facts\n- journal fact\n", encoding="utf-8")
-    (snap / "memory-journal.jsonl").write_text("{\"type\":\"fact\"}\n", encoding="utf-8")
+    (snap / "memory-journal.jsonl").write_text('{"type":"fact"}\n', encoding="utf-8")
     # no assistant/ subdir
 
     live = tmp_path / "memory" / "q7"
     n = _restore_durable_memory("q7", live)
     assert n == 2
-    assert (live / "MEMORY.md").read_text(encoding="utf-8") == "# Facts\n- journal fact\n"
+    assert (live / "MEMORY.md").read_text(
+        encoding="utf-8"
+    ) == "# Facts\n- journal fact\n"
     assert (live / "memory-journal.jsonl").exists()

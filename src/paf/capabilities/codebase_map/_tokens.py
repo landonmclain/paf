@@ -49,7 +49,9 @@ _MIN_TOKEN_LEN = 2
 def _tok(text: str) -> list[str]:
     from paf.capabilities.search._ranking import tokenize
 
-    return [t for t in tokenize(text) if len(t) > _MIN_TOKEN_LEN and t not in _STOPWORDS]
+    return [
+        t for t in tokenize(text) if len(t) > _MIN_TOKEN_LEN and t not in _STOPWORDS
+    ]
 
 
 def build_tokens(files: list[FileInfo]) -> dict[str, Any]:
@@ -74,7 +76,9 @@ def build_tokens(files: list[FileInfo]) -> dict[str, Any]:
             if s.doc:
                 fields.append(("doc", s.doc))
             ref = None
-            if s.span is not None and (s.span.start_line is not None or s.span.end_line is not None):
+            if s.span is not None and (
+                s.span.start_line is not None or s.span.end_line is not None
+            ):
                 ref = {
                     "start_line": s.span.start_line,
                     "end_line": s.span.end_line,

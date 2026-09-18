@@ -22,6 +22,7 @@ are answered is ``_retrieval.py``'s job. Swapping storage does not make search s
 - **``read_block`` is "query-the-pointer"** — heavy source is touched only for the exact
   byte span a ``BlockRef`` names.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -50,7 +51,9 @@ class ArtifactKind(StrEnum):
     INDEX = "index"  # index.json       — per-file HEAD (metadata + docstring head + symbol names)
     SEARCH = "search"  # search_index.json — flattened keyword index rows (future/legacy slot, not yet written; superseded by TOKENS)
     TOKENS = "tokens"  # tokens.json     — inverted symbol-scoped search index (the search backend)
-    GRAPH = "graph"  # call_graph.json — caller→callee edges (persisted at scan time, §5.x)
+    GRAPH = (
+        "graph"  # call_graph.json — caller→callee edges (persisted at scan time, §5.x)
+    )
     MAP = "map"  # repo_map.json — ranked zero-LLM orientation map (written by get_repo_map on demand)
 
 
@@ -81,25 +84,27 @@ _CODEDEX_DIR = "codebase_indexes"
 # big tree like data/ or .venv/ is never descended into — that is what keeps the scan
 # fast. Names here are single path parts; multi-segment dirs go in _OWNED_SKIP_PATHS.
 _OWNED_SKIP_DIRS = {
-    _INDEX_SUBDIR,    # our own derived index — never index the index
-    ".git",           # git internals
-    "__pycache__",    # bytecode (also usually gitignored; belt + suspenders)
-    "node_modules",   # vendored js deps (may not be gitignored)
-    "History",        # paf's stale-notes dir — older content, not for the index
-    "archive",        # paf's old-code dir — scratch/stale, not for the index
+    _INDEX_SUBDIR,  # our own derived index — never index the index
+    ".git",  # git internals
+    "__pycache__",  # bytecode (also usually gitignored; belt + suspenders)
+    "node_modules",  # vendored js deps (may not be gitignored)
+    "History",  # paf's stale-notes dir — older content, not for the index
+    "archive",  # paf's old-code dir — scratch/stale, not for the index
     # data/ is TRACKED in git (benchmark durables: generated/*.jsonl, memory-*/,
     # lme_oracle_journal.json) so git won't ignore it — but it's research/harness
     # data, not source. The codebase map indexes CODE; data/ is out of scope here.
     # (In gitignore it's a "runtime persistence" tree; here it's just noise. Owned-skip
     # keeps the walker fast: pure-Python, no need to fight the gitignore re-includes.)
     "data",
-    ".venv",          # virtualenv — huge, never source
+    ".venv",  # virtualenv — huge, never source
 }
 # Multi-segment owned-skip dirs, matched as path prefixes (not single parts).
 _OWNED_SKIP_PATHS = {
     "tests/results",  # generated benchmark run outputs (JSON/log) — not source
 }
-_OWNED_SKIP_FILES = {"__init__.py"}  # docstring-only + __version__; not indexed (open deferred item)
+_OWNED_SKIP_FILES = {
+    "__init__.py"
+}  # docstring-only + __version__; not indexed (open deferred item)
 
 
 class ScanScope:
@@ -125,7 +130,9 @@ class ScanScope:
             try:
                 r = subprocess.run(
                     ["git", "-C", str(self.root), "rev-parse", "--is-inside-work-tree"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 self._git_ok = r.returncode == 0
             except (OSError, subprocess.SubprocessError):
@@ -140,7 +147,10 @@ class ScanScope:
         if p.name in _OWNED_SKIP_FILES:
             return True
         rel_str = rel.as_posix()
-        if any(rel_str == pref or rel_str.startswith(pref + "/") for pref in _OWNED_SKIP_PATHS):
+        if any(
+            rel_str == pref or rel_str.startswith(pref + "/")
+            for pref in _OWNED_SKIP_PATHS
+        ):
             return True
         return False
 
@@ -157,8 +167,17 @@ class ScanScope:
             return True
         try:
             r = subprocess.run(
-                ["git", "-C", str(self.root), "check-ignore", "--no-index", "-q", str(p)],
-                capture_output=True, timeout=5,
+                [
+                    "git",
+                    "-C",
+                    str(self.root),
+                    "check-ignore",
+                    "--no-index",
+                    "-q",
+                    str(p),
+                ],
+                capture_output=True,
+                timeout=5,
             )
             return r.returncode != 0  # 0 = ignored (out of scope)
         except (OSError, subprocess.SubprocessError):
@@ -178,8 +197,7 @@ class ScanScope:
         for dirpath, dirnames, filenames in os.walk(root):
             # Prune owned-skip dirs in place so os.walk does not descend into them.
             dirnames[:] = [
-                d for d in dirnames
-                if not self._owned_skipped(Path(dirpath) / d)
+                d for d in dirnames if not self._owned_skipped(Path(dirpath) / d)
             ]
             for fn in filenames:
                 p = Path(dirpath) / fn
@@ -197,7 +215,10 @@ class ScanScope:
         try:
             r = subprocess.run(
                 ["git", "-C", str(root), "check-ignore", "--no-index", "--stdin"],
-                input=input_data, capture_output=True, text=True, timeout=30,
+                input=input_data,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
         except (OSError, subprocess.SubprocessError):
             return candidates  # git hiccuped -> owned-skip only (safe)
@@ -246,7 +267,9 @@ class FlatFileStorage:
 
     def __init__(self, index_root: str | Path | None = None) -> None:
         # override for tests: point at a fixed temp dir instead of deriving from scan_root
-        self._index_root_override: Path | None = Path(index_root) if index_root else None
+        self._index_root_override: Path | None = (
+            Path(index_root) if index_root else None
+        )
 
     # -- location ------------------------------------------------------------
     def _dir_for(self, scan_root: str | Path) -> Path:
@@ -319,7 +342,11 @@ class FlatFileStorage:
             except OSError:
                 continue
             prev = files.get(rel)
-            if prev is not None and prev.get("size") == st.st_size and prev.get("mtime") == st.st_mtime:
+            if (
+                prev is not None
+                and prev.get("size") == st.st_size
+                and prev.get("mtime") == st.st_mtime
+            ):
                 continue  # stat gate: unchanged → skip hashing
             if self._hash_file(path) != (prev.get("sha256") if prev else None):
                 confirmed.add(rel)

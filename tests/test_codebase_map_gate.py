@@ -12,6 +12,7 @@ are skipped here — call graph is derived on read in Phase 2.
 The gate is intentionally tolerant to repo growth: it runs over whatever is in
 ``src/paf`` today and only asserts the gold entries that point at existing files.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,7 +30,9 @@ SRC = ROOT / "src" / "paf"
 def _gold_entries() -> list[dict]:
     if not QUERIES.exists():
         return []  # empty param set -> parametrized tests are skipped naturally
-    return [json.loads(line) for line in QUERIES.read_text().splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in QUERIES.read_text().splitlines() if line.strip()
+    ]
 
 
 def test_extraction_completeness_zero_errors() -> None:
