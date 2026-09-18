@@ -25,6 +25,7 @@ from paf.capabilities._turns import _real_user_prompt_text, user_anchor_indices
 from paf.capabilities.memory._watermark import MemoryWatermark
 from paf.capabilities.thread_summarizer._store import (
     THREAD_WATERMARK_FILENAME,
+    ThreadSummaryRecord,
     ThreadSummaryStore,
     now_iso,
 )
@@ -403,7 +404,7 @@ def summary_from_beats(
     *,
     started_at: str = "",
     ended_at: str = "",
-) -> object:
+) -> ThreadSummaryRecord:
     """Build the durable per-conversation block record from a BeatsRecord.
 
     The record's ``{run_id, turn_id}`` anchor + ``refs`` identify exactly which
@@ -412,13 +413,11 @@ def summary_from_beats(
     ``started_at``/``ended_at`` are the block's wall-clock range (first/last
     distinct real user prompt) — distinct from ``summarized_at``.
     """
-    from paf.capabilities.thread_summarizer._store import ThreadSummaryRecord
-
     refs = list(dict.fromkeys(block_refs or beats.turns_covered))
     return ThreadSummaryRecord(
         conversation_id=conversation_id,
         run_id=anchor.run_id if anchor else "",
-        turn_id=anchor.turn_id if anchor else -1,
+        turn_id=anchor.turn_id if anchor and anchor.turn_id is not None else -1,
         summarized_at=now_iso(),
         summary=beats.summary,
         refs=refs,

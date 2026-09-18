@@ -319,8 +319,10 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
             if capture_directory is not None
             else None,
             inject_thread_summary=bool(inject_thread_summary),
-            window=int(window),
-            max_chars=int(max_chars),
+            window=int(window) if isinstance(window, (int, str)) else _THREAD_WINDOW,
+            max_chars=int(max_chars)
+            if isinstance(max_chars, (int, str))
+            else _THREAD_MAX_CHARS,
         )
 
     @classmethod

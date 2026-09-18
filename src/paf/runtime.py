@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from opentelemetry import trace as _otel_trace
 from pydantic_ai import (
     Agent,
     AgentRun,
@@ -602,28 +603,6 @@ class Session:
         self._token = CancellationToken()
         await self._ensure_resumed(scoped)
 
-        # Tier A — turn-boundary compaction (routine trim). Run the window trim
-        # over the settled prior-turn history BEFORE request #1, so the first
-        # request of the turn is small and the prompt prefix stays stable for
-        # the whole turn (no mid-turn cache bust). `compact_now` drives the
-        # boundary strategy outside an active run (the harness-sanctioned seam
-        # for between-turn compaction). Turn-bound-bounded: `self.history` here
-        # is only PRIOR turns (the current prompt is added inside agent.iter),
-        # so the window never touches the active turn. No-op when disabled
-        # (None) or when there's no history to trim. `getattr` default guards
-        # bare-Session test constructions that bypass __init__.
-        boundary_compaction = getattr(self, "_boundary_compaction", None)
-        if boundary_compaction is not None and self.history:
-            boundary_model = getattr(self._agent, "model", None)
-            compacted = await compact_now(
-                boundary_compaction,
-                list(self.history),
-                model=boundary_model,
-                deps=None,
-            )
-            if compacted != self.history:
-                self.history = compacted
-
         # Stamp the current UTC timestamp onto the start of EVERY user message,
         # so the model always has an explicit date+time anchor and the
         # consolidation owner can derive a real ``born_on`` instead of
@@ -640,6 +619,36 @@ class Session:
             f"paf.run.{scoped or 'default'}",
             **({"langfuse.observation.input": _run_input(prompt, scoped)}),
         ) as _span:
+            # Tier A — turn-boundary compaction (routine trim). Run the window
+            # trim over the settled prior-turn history BEFORE request #1 inside
+            # the turn's root span, so the first request of the turn is small and
+            # the prompt prefix stays stable for the whole turn (no mid-turn
+            # cache bust), AND so the `compact_messages` span parents under the
+            # turn's trace (Langfuse) instead of a no-op tracer. `compact_now`
+            # drives the boundary strategy outside an active run (the
+            # harness-sanctioned seam for between-turn compaction).
+            # Turn-bound-bounded: `self.history` here is only PRIOR turns (the
+            # current prompt is added inside agent.iter), so the window never
+            # touches the active turn. The tracer must be an OTel tracer on the
+            # process-wide provider — the root_span is current here, so the
+            # span auto-parents under the turn; without it `compact_now`
+            # defaults to NoOpTracer and the span is invisible in Langfuse.
+            # No-op when disabled (None) or when there's no history to trim.
+            boundary_compaction = getattr(self, "_boundary_compaction", None)
+            if boundary_compaction is not None and self.history:
+                boundary_model = getattr(self._agent, "model", None)
+                if boundary_model is not None:
+                    compacted = await compact_now(
+                        boundary_compaction,
+                        list(self.history),
+                        model=boundary_model,
+                        deps=None,
+                        tracer=_otel_trace.get_tracer("paf"),
+                        tokenizer=getattr(boundary_compaction, "tokenizer", None),
+                    )
+                    if compacted != self.history:
+                        self.history = compacted
+
             try:
                 async with self._agent.iter(
                     prompt,

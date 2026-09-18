@@ -155,13 +155,15 @@ class FlatFileVaultStorage:
         return index_dir_for_root(root)
 
     def read_index(self, root: str | Path) -> dict | None:
-        return read_json(self._dir(root) / "index.json")
+        data = read_json(self._dir(root) / "index.json")
+        return data if isinstance(data, dict) else None
 
     def write_index(self, root: str | Path, payload: dict) -> None:
         write_json_atomic(self._dir(root) / "index.json", payload)
 
     def read_snapshot(self, root: str | Path) -> dict | None:
-        return read_json(self._dir(root) / "snapshot.json")
+        data = read_json(self._dir(root) / "snapshot.json")
+        return data if isinstance(data, dict) else None
 
     def write_snapshot(self, root: str | Path, payload: dict) -> None:
         write_json_atomic(self._dir(root) / "snapshot.json", payload)

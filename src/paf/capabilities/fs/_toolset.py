@@ -759,6 +759,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
                     m = await asyncio.to_thread(_sync_next, it)
                     if m is _SENTINEL:
                         break
+                    assert isinstance(m, Path)
                     try:
                         rel_parts = m.relative_to(real_root).parts
                     except ValueError:  # pragma: no cover
