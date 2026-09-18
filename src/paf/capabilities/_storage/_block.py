@@ -1,6 +1,6 @@
 """``BlockRef`` / ``Span`` + ``read_block`` — the query-the-pointer half of the seam.
 
-The pointer model (generalized from codebase-map's ``_block.py``/``_schema.py``):
+The pointer model:
 
 - A retrieval hit never carries heavy source text. It collapses to a
   lightweight :class:`BlockRef` — a source path plus an optional byte/line

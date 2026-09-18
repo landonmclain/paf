@@ -3,8 +3,7 @@
 A capability that persists artifacts talks to one of these seams — never to a
 concrete path — so the backend (flat file now, SQLite / Postgres / other later)
 can be swapped without touching the capability's analyzers, retrieval, or tool
-surface. Modeled on ``agent-foundation`` (and codebase-map's ``StorageService``,
-which was already on that shape).
+surface.
 
 Two distinct persistence shapes, deliberately separate:
 

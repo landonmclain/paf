@@ -4,12 +4,11 @@ Files are ``<root>/<key>/<kind>.jsonl`` (key scoped into its own subdirectory,
 kind becomes the filename) — the same layout as :class:`FlatFileStorage`, just
 with an append-only-on-JSONL contract instead of whole-artifact JSON.
 
-Append semantics mirror the journal's ``_append_block_atomic`` (generalized to
-the shared package): read current file, append new JSON records, write the
-whole thing back atomically (staging + ``os.replace``). A reader therefore
-sees either the prior complete log or the new complete log — never a torn
-line — which is why a crash can't corrupt an append-only log. Deliberately NOT
-a bare ``open(..., 'a')`` append, which could leave a partial trailing line.
+Append semantics: read current file, append new JSON records, write the whole
+thing back atomically (staging + ``os.replace``). A reader therefore sees
+either the prior complete log or the new complete log — never a torn line —
+which is why a crash can't corrupt an append-only log. Deliberately NOT a bare
+``open(..., 'a')`` append, which could leave a partial trailing line.
 
 A future backend (SQLite) backs ``append`` with an INSERT and ``read_all`` with
 a SELECT — same seam, swappable medium.

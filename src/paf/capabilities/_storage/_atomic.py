@@ -6,24 +6,7 @@ sibling ``.staging`` temp then ``os.replace``-ing it into place makes a write
 all-or-nothing: observers either see the old complete artifact or the new one,
 never a torn write.
 
-**Canonical shared home.** These helpers used to be inlined per-capability; the
-established copies were:
-
-    - ``paf/capabilities/memory/_atomic.py`` — near-verbatim copy (memory keeps
-      its own to stay dependency-free / self-contained).
-    - ``paf/capabilities/vault/_store.py``,
-      ``paf/capabilities/codebase_map/_store.py`` — their own private
-      ``_write_atomic/_write_json_atomic/_read_json`` copies.
-    - ``archive/turn_index/_store.py`` — the one consumer that imported the
-      shared ``agent_foundation.storage`` seam directly (since archived).
-
 New consumers should import FROM HERE (``paf.capabilities._storage._atomic``).
-Migrating the existing capability copies onto this module is a deferred
-clean-up; the conversation-title store is the first consumer of the shared
-module. NOTE: vault's copy uses a **process-unique ``tempfile.mkstemp``** temp
-name (thread-safe for concurrent single-file editors) — the shared helper uses
-the fixed ``.<name>.staging`` name; on unification the shared module should
-adopt vault's mkstemp semantics.
 """
 
 from __future__ import annotations

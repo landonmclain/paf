@@ -6,9 +6,8 @@ raise on a missing/corrupt artifact: ``read`` returns ``None`` so callers treat
 "not present yet" and "corrupt once" the same way. Writes are atomic
 (:func:`.atomic.write_json_atomic`).
 
-This is the flat default of the seam (modeled on codebase-map's
-``FlatFileStorage``). A future backend (SQLite / Postgres) reimplements
-:class:`StorageService` and is dropped in with zero caller changes.
+This is the flat default of the seam. A future backend (SQLite / Postgres)
+reimplements :class:`StorageService` and is dropped in with zero caller changes.
 """
 
 from __future__ import annotations
