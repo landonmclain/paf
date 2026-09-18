@@ -75,6 +75,7 @@ def test_docker_root_read_only(tmp_path):
     _run(scenario())
 
 
+@pytest.mark.live
 def test_docker_workspace_writable(tmp_path):
     """The bind-mounted workspace is the one writable spot, and it maps to the host."""
 
@@ -122,6 +123,7 @@ def test_docker_malicious_command_contained(tmp_path):
     _run(scenario())
 
 
+@pytest.mark.live
 def test_docker_exclude_overlays_env(tmp_path):
     """An excluded .env is empty inside the container; the host file is untouched."""
     (tmp_path / ".env").write_text("SECRET=super-secret-value\n")
@@ -140,6 +142,7 @@ def test_docker_exclude_overlays_env(tmp_path):
     assert (tmp_path / ".env").read_text() == "SECRET=super-secret-value\n"
 
 
+@pytest.mark.live
 def test_docker_exclude_write_hits_overlay(tmp_path):
     """A write to /workspace/.env lands on the overlay, not the host file."""
     (tmp_path / ".env").write_text("SECRET=original\n")
@@ -160,6 +163,7 @@ def test_docker_exclude_write_hits_overlay(tmp_path):
     )
 
 
+@pytest.mark.live
 def test_docker_exclude_overlays_git_dir(tmp_path):
     """A .git directory is shadowed by an empty dir inside the container."""
     (tmp_path / ".git").mkdir()

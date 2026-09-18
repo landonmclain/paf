@@ -20,6 +20,7 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -248,6 +249,7 @@ def test_resolve_unseen_span_excludes_in_flight_tip(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.live
 def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
     """The Session turn hook fires the trigger and folds against a real store.
 
@@ -407,6 +409,7 @@ def test_turn_gate_skips_below_threshold_and_spec_is_readable(tmp_path: Path) ->
     assert bg.memory_queue is None
 
 
+@pytest.mark.live
 def test_session_hook_skips_below_cadence(tmp_path: Path) -> None:
     """Below the cadence threshold the hook enqueues nothing."""
     msgs: list[ModelMessage] = []

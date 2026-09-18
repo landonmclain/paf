@@ -16,7 +16,7 @@ import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Concatenate, ParamSpec, TypeVar
+from typing import Concatenate, ParamSpec
 
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import AgentDepsT
@@ -26,7 +26,6 @@ from paf.capabilities._edit import apply_edits
 from paf.capabilities._storage._atomic import write_atomic
 
 _P = ParamSpec("_P")
-_T = TypeVar("_T")
 
 # Errors that mean "the model asked for something the tool couldn't do" -- a
 # missing file, a denied path, a stale edit. pyai only feeds `ModelRetry` back
@@ -206,7 +205,7 @@ class _Sentinel:
 _SENTINEL = _Sentinel()
 
 
-def _sync_next(it: Iterator[_T]) -> _T | _Sentinel:
+def _sync_next[T](it: Iterator[T]) -> T | _Sentinel:
     """``next(it)`` that returns a sentinel on exhaustion instead of raising.
 
     ``StopIteration`` cannot cross an ``asyncio.to_thread`` boundary (asyncio

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -27,6 +28,7 @@ from pydantic_ai_harness.step_persistence import FileStepStore
 from paf.capabilities.search._reader import TurnFinder
 
 
+@pytest.mark.live
 def test_all_retrieval_tools_exposed_on_built_agent() -> None:
     """The retrieval mechanisms must be reachable from a built agent.
 

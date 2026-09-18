@@ -17,6 +17,7 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -98,6 +99,7 @@ def _wm(store: ThreadSummaryStore) -> MemoryWatermark:
     return MemoryWatermark.load(store.directory, filename=THREAD_WATERMARK_FILENAME)
 
 
+@pytest.mark.live
 def test_trigger_off_does_not_touch_store(tmp_path: Path) -> None:
     """ThreadSummarizer not in the profile -> trigger is a No-Op."""
     store = _store(tmp_path, {"run-a": _msg(user="hi", assistant="hey")}, "profile:cid")
@@ -112,6 +114,7 @@ def test_trigger_off_does_not_touch_store(tmp_path: Path) -> None:
         assert session.background._background_tasks == {}
 
 
+@pytest.mark.live
 def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> None:
     """>= BLOCK_TURNS complete turns -> trigger resolves span, worker folds, advances."""
     msgs: list[ModelMessage] = []
@@ -162,6 +165,7 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
     assert recs[0].summary != ""
 
 
+@pytest.mark.live
 def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
     """Regression: a resolved span with a non-multiple of BLOCK_TURNS leaves a
     trailing partial block that must NOT be summarized as a thin 1-9 turn record.
@@ -218,6 +222,7 @@ def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.live
 def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> None:
     """Regression: a brand-new conversation's WHOLE backlog must be seen as new.
 
@@ -289,6 +294,7 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
     assert len(refs) == 10
 
 
+@pytest.mark.live
 def test_trigger_skips_below_turn_threshold(tmp_path: Path) -> None:
     """< BLOCK_TURNS complete turns since the watermark -> never enqueues."""
     msgs: list[ModelMessage] = []
@@ -346,6 +352,7 @@ def test_two_conversations_never_share_a_watermark(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.live
 def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
     """``task_history`` filters by conversation and keeps terminal error rows.
 

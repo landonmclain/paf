@@ -81,6 +81,7 @@ def test_capability_validates_top_k() -> None:
         Skills(libraries=(FIXTURE_SKILLS,), top_k=-1)
 
 
+@pytest.mark.live
 def test_skills_cataloged_and_wired() -> None:
     """Skills is a cataloged paf icon-capability and resolves on the demo profile."""
     from paf.capabilities.registry import CAPABILITY_TYPES

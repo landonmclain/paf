@@ -166,6 +166,7 @@ def test_repo_map_focus_restricts_subtree(scanned) -> None:
     assert all(not f.startswith("capabilities/codebase_map") for f in files)
 
 
+@pytest.mark.live
 def test_repo_map_stale_index_clear_message(tmp_path: Path) -> None:
     """An index without call_graph.json returns an actionable re-index message, not
     a misleading alphabetical map."""

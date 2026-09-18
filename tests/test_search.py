@@ -16,6 +16,7 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -571,6 +572,7 @@ def test_search_presentation_order_same_session_turns(tmp_path: Path) -> None:
     asyncio.run(go())
 
 
+@pytest.mark.live
 def test_e66b632c_previous_pb_after_turn_and_recency(tmp_path: Path) -> None:
     """Real end-to-end check on the 'previous charity 5K PB' regression question.
 

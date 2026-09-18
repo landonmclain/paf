@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
+import pytest
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -229,6 +230,7 @@ def test_process_job_advances_watermark_on_real_fold(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.live
 def test_owner_trigger_does_not_advance_watermark_before_fold(tmp_path) -> None:
     """THE WATERMARK CONTRACT: a fold that FAILS must NOT advance the owner
     watermark. The worker is the sole owner-watermark writer, advancing only on
@@ -332,6 +334,7 @@ def test_consolidate_always_runs_owner_without_durable_text(monkeypatch) -> None
     assert calls, "owner must be invoked even with no durable text (gate removed)"
 
 
+@pytest.mark.live
 def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
     """THE WATERMARK CONTRACT (worker owns it): triggered + drained with a
     fold that finishes successfully (returns N records, incl. a no-op 0), the
@@ -429,6 +432,7 @@ def test_owner_worker_advances_watermark_on_successful_fold(tmp_path) -> None:
     assert len(journal.read_all()) == 2, "the fold's records must have landed"
 
 
+@pytest.mark.live
 def test_owner_worker_advances_watermark_on_zero_record_fold(tmp_path) -> None:
     """THE WATERMARK CONTRACT, the key distinction: a fold that COMPLETES but
     writes no records ("found nothing durable") STILL advances the watermark —
