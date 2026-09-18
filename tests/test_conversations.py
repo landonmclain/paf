@@ -13,7 +13,6 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from paf.capabilities._storage import FlatFileStorage
-
 from ui import sse
 
 

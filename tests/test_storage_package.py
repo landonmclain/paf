@@ -8,11 +8,7 @@ pointer model.
 
 import json
 
-import pytest
-
 from paf.capabilities._storage import (
-    AppendOnlyStore,
-    BlockRef,
     FlatFileStorage,
     FlatJsonlStore,
     Span,

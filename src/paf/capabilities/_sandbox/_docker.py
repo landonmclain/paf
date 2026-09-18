@@ -25,16 +25,16 @@ from pathlib import Path
 
 import anyio
 
-# The host Docker daemon socket. A sandboxed ``docker`` command must never reach
-# the host daemon, so this path is never mounted into the container (see
-# ``_overlay_mounts``).
-_HOST_DOCKER_SOCKET = "/var/run/docker.sock"
-
 from paf.capabilities._sandbox._protocol import (
     BackgroundHandle,
     BackgroundStatus,
     ExecResult,
 )
+
+# The host Docker daemon socket. A sandboxed ``docker`` command must never reach
+# the host daemon, so this path is never mounted into the container (see
+# ``_overlay_mounts``).
+_HOST_DOCKER_SOCKET = "/var/run/docker.sock"
 
 
 def docker_available() -> bool:

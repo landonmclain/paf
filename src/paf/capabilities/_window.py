@@ -39,10 +39,12 @@ from pydantic_ai_harness.compaction import SlidingWindowCompaction
 from pydantic_ai_harness.compaction._shared import find_safe_cutoff
 
 from paf.capabilities._turns import (
-    _user_prompt_text,
     _is_user_turn as _turns_is_user_turn,
 )
-from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities._turns import (
+    _user_prompt_text,
+    user_anchor_indices,
+)
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext

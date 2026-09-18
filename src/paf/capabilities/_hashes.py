@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
 
 
-def _content_hash(message: "ModelMessage") -> str:
+def _content_hash(message: ModelMessage) -> str:
     """Content-stable hash of a message's durable parts, in order."""
     toks: list[str] = []
     for part in getattr(message, "parts", ()):

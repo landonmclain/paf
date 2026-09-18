@@ -32,14 +32,14 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
-from ._schema import BlockRef
-
 # --- Atomic-write helpers: shared canonical import ---------------------------
 # These were inlined per-capability (verbatim from ``memory._atomic``); the
 # canonical copies now live in ``paf.capabilities._storage._atomic`` and this
 # capability conforms to them. Behavior is byte-identical (staging + ``os.replace``);
 # the storage seam stays self-contained without coupling to any other capability.
 from paf.capabilities._storage._atomic import read_json, write_json_atomic
+
+from ._schema import BlockRef
 
 
 class ArtifactKind(StrEnum):

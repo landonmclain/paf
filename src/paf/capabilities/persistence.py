@@ -75,8 +75,8 @@ class StableSnapshotHistorySource(SnapshotHistorySource):
     ``run_history`` returns each turn exactly once.
     """
 
-    async def run_history(self, *, run_id: str) -> list["ModelMessage"]:
-        history: list["ModelMessage"] = []
+    async def run_history(self, *, run_id: str) -> list[ModelMessage]:
+        history: list[ModelMessage] = []
         history_keys: set[str] = set()
         for snapshot in await self._store.list_snapshots(run_id=run_id):
             messages = [
@@ -84,7 +84,7 @@ class StableSnapshotHistorySource(SnapshotHistorySource):
                 for message in snapshot.messages
                 if not is_summary_artifact(message)
             ]
-            uniq: list["ModelMessage"] = []
+            uniq: list[ModelMessage] = []
             for message in messages:
                 key = _content_hash(message)
                 if key in history_keys:

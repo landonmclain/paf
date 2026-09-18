@@ -18,7 +18,6 @@ from pathlib import Path
 
 from paf.capabilities._storage._atomic import read_json, write_json_atomic
 from paf.capabilities._storage._block import BlockRef
-from paf.capabilities._storage._protocol import StorageService
 
 
 def _safe_key_segment(key: str | Path) -> str:
@@ -52,7 +51,7 @@ class FlatFileStorage:
         self.root.mkdir(parents=True, exist_ok=True)
 
     @classmethod
-    def in_temp(cls) -> "FlatFileStorage":
+    def in_temp(cls) -> FlatFileStorage:
         """A throwaway instance rooted in a fresh temp dir (tests / sandboxes)."""
         import tempfile
 
