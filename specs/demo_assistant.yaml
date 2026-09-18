@@ -124,6 +124,12 @@ instructions: |
 model_settings:
   temperature: 0
 
+  # Benchmark-matching determinism (tests/framework.py): temp 0, top_p 1.0, and a
+  # fixed sampler seed give reproducible outputs.
+  # temperature: 0
+  # top_p: 1.0
+  # seed: 20260815
+
   # OpenRouter prompt caching — same defaults as the assistant spec. See
   # specs/assistant.yaml for the full comments.
   openrouter_cache_instructions: true

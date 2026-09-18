@@ -60,25 +60,30 @@ class AgentProfile:
         return tuple(t for t in types if t.get_serialization_name() is not None)
 
 
-# The single real M1 profile. The assistant may enable persistence, lossless
-# recall of that persisted history (ConversationSearch), and context compaction
-# (all harness capabilities).
 ASSISTANT_PROFILE = AgentProfile(
     name="assistant",
     capability_names=(
         "StepPersistence",
         "ConversationSearch",
-        # Durable-facts notebook (MEMORY.md + topic files). Recall-ladder OWNER
-        # for the assistant: its composite guidance (durable-fact -> past-turn ->
-        # history) is the single recall ladder (BEAM+gated benchmark showed
-        # memory + BM25 search is the proven stack over the retired turn-index
-        # summaries). No turn index exists anymore.
         "Memory",
-        # Context compaction WITHOUT the summarizing tier (the LLM rewrite is
-        # mutually exclusive with the recall-ladder injection). Clamp /
-        # clear-tool-results / sliding-window are pure context management and
-        # stay; see compaction.py.
         "Compaction",
+        "FileSystem",
+        "Shell",
+        "Git",
+        "CodebaseMap",
+        "Vault",
+        "Web",
+        "Visual",
+        "Browser",
+        "Skills",
+        "ToolOutputLimits",
+        "WarnOnCacheBusts",
+        "Subagents",
+        "Planning",
+        "ThreadSummarizer",
+        "Secrets",
+        # "Guardrails",
+        # "ToolGating",
     ),
 )
 

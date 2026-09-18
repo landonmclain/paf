@@ -263,7 +263,7 @@ def test_session2_init_injects_spec_profile_for_keyword_agent_name(
 
     This guards the bug where the constructor read ``agent_name`` from
     positional args only, so a keyword ``agent_name="runtime2_test"`` silently
-    fell back to ASSISTANT_PROFILE (building an assistant-profile agent under a
+    fell back to the default profile (building a default-profile agent under a
     test-agent name instead of the lean Shell-only toolset).
     """
     monkeypatch.setattr(runtime, "resolve_profile_name", lambda name: "runtime2_test")
@@ -275,7 +275,7 @@ def test_session2_init_injects_spec_profile_for_keyword_agent_name(
 
     s = runtime.Session(agent_name="runtime2_test", trace=False)
     # Session.__init__ must have injected the Shell-only profile for the
-    # keyword agent_name (not ASSISTANT_PROFILE).
+    # keyword agent_name (not the default profile).
     assert s.profile == _FAKE_SHELL_PROFILE
 
 
