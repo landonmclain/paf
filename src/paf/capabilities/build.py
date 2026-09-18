@@ -27,7 +27,12 @@ from pathlib import Path
 
 from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
-from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
+from pydantic_ai_harness.tool_output_limits import (
+    Band,
+    Spill,
+    ToolOutputLimits,
+    Truncate,
+)
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities._sandbox import (
@@ -551,8 +556,8 @@ def _build_tool_output_limits(store) -> ToolOutputLimits:
     payload is offloaded to the flat-file store instead of being retained in
     history, then paged back on demand via the builtin `read_tool_result`.
 
-    By default, returns over `_DEFAULT_THRESHOLD` (10_000 chars) are LOSS LESSLY
-    SPILLED to a `LocalFileStore` with a bounded truncation fallback — zero LLM
+    By default, returns over 20_000 chars are LOSS LESSLY SPILLED to a
+    `LocalFileStore` with a bounded truncation fallback — zero LLM
     cost, no silent drop. `read_tool_result` is registered by the capability's
     own toolset.
 
@@ -560,7 +565,7 @@ def _build_tool_output_limits(store) -> ToolOutputLimits:
     signature but unused — ToolOutputLimits uses its own `LocalFileStore` spill
     backend by default (swap via `store=` for a custom OverflowStore).
     """
-    return ToolOutputLimits()
+    return ToolOutputLimits(bands=[Band(over=20_000, action=Spill(then=Truncate()))])
 
 
 def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
