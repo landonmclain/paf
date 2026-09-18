@@ -115,6 +115,7 @@ def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterat
     from opentelemetry import trace
 
     tracer = tracer or trace.get_tracer("paf")
+    assert tracer is not None  # OTel SDK returns a no-op tracer, never None
     with tracer.start_as_current_span(name) as span:
         for key, value in attributes.items():
             # Only the langfuse.observation.* keys feed Langfuse's structured
