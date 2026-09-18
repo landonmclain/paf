@@ -42,3 +42,20 @@ class RunEventStore:
     def read_all(self) -> list[dict[str, Any]]:
         """All events in append order (file line order is the source of truth)."""
         return self._store.read_all(self._kind, self._agent)
+
+    def recent(self, process_id: str, conversation_id: str) -> dict[str, Any] | None:
+        """The newest run record for one process + conversation (or None).
+
+        Lines are append order = chronological order (each publish is stamped
+        with a microsecond-stripped ``now``, so two publishes in the same
+        second collide on timestamp; file line order disambiguates the winner,
+        same rule the coordinator's journal mandates). Returned as the raw
+        record dict so callers can derive status/detail/progress from it.
+        """
+        for record in reversed(self.read_all()):
+            if record.get("process_id") != process_id:
+                continue
+            if record.get("conversation_id") != conversation_id:
+                continue
+            return record
+        return None

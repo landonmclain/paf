@@ -364,7 +364,6 @@ def test_reconcile_keeps_active_task_running_past_hold() -> None:
     from paf.background import (
         PROCESSING,
         BackgroundCoordinator,
-        BackgroundTask,
         JobIdleStatus,
     )
     from paf.capabilities import PROFILES
@@ -374,15 +373,24 @@ def test_reconcile_keeps_active_task_running_past_hold() -> None:
         agent_name="demo_assistant",
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",
+        processes_root=mkdtemp(),
     )
 
     # The task was handed to the worker minutes ago and is STILL running (a long
     # LLM fold). updated_at is stamped once at enqueue -> long past the hold.
-    task = BackgroundTask(id="consolidation.cid123.1", label="Consolidating memory")
-    task.status = PROCESSING
-    task.detail = "folding"
-    task.updated_at = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
-    bg._background_tasks[task.id] = task
+    # The durable journal is now the reconciliation source.
+    bg._run_events.append(
+        {
+            "run_id": "consolidation.cid123.1",
+            "process_id": "consolidation",
+            "status": PROCESSING,
+            "detail": "folding",
+            "progress": None,
+            "agent": "demo_assistant",
+            "conversation_id": "cid123",
+            "timestamp": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+        }
+    )
 
     idle_row = JobIdleStatus(
         id="consolidation.cid123",
@@ -416,7 +424,6 @@ def test_reconcile_running_task_never_shows_idle_cadence_detail() -> None:
     from paf.background import (
         PROCESSING,
         BackgroundCoordinator,
-        BackgroundTask,
         JobIdleStatus,
     )
     from paf.capabilities import PROFILES
@@ -426,15 +433,23 @@ def test_reconcile_running_task_never_shows_idle_cadence_detail() -> None:
         agent_name="demo_assistant",
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",
+        processes_root=mkdtemp(),
     )
 
     # A fold is running mid-work; the worker has NOT reported progress, so the
-    # task carries NO detail of its own yet.
-    task = BackgroundTask(id="consolidation.cid123.3", label="Consolidating memory")
-    task.status = PROCESSING
-    task.detail = ""
-    task.updated_at = datetime.now(UTC).isoformat()
-    bg._background_tasks[task.id] = task
+    # run carries NO detail of its own yet. Durable journal is the source.
+    bg._run_events.append(
+        {
+            "run_id": "consolidation.cid123.3",
+            "process_id": "consolidation",
+            "status": PROCESSING,
+            "detail": "",
+            "progress": None,
+            "agent": "demo_assistant",
+            "conversation_id": "cid123",
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
 
     idle_row = JobIdleStatus(
         id="consolidation.cid123",
@@ -472,7 +487,6 @@ def test_reconcile_prefers_newer_seq_over_stale_skip_on_timestamp_tie() -> None:
         PROCESSING,
         SKIPPED,
         BackgroundCoordinator,
-        BackgroundTask,
         JobIdleStatus,
     )
     from paf.capabilities import PROFILES
@@ -482,28 +496,46 @@ def test_reconcile_prefers_newer_seq_over_stale_skip_on_timestamp_tie() -> None:
         agent_name="demo_assistant",
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",
+        processes_root=mkdtemp(),
     )
     now = datetime.now(UTC).replace(microsecond=0).isoformat()
 
     # seq 1: gated below 5 -> SKIPPED with the familiar message.
-    skipped = BackgroundTask(id="consolidation.cid123.1", label="Consolidating memory")
-    skipped.status = SKIPPED
-    skipped.detail = "only 4 unsettled turn(s); need >= 5"
     # seq 2: threshold reached -> fold now running, no progress detail yet.
-    run = BackgroundTask(id="consolidation.cid123.2", label="Consolidating memory")
-    run.status = PROCESSING
-    run.detail = ""
-    # Force the EXACT tie that bit us: both published in the same second.
-    skipped.updated_at = run.updated_at = now
-    # Deliberately iterate the stale one first to prove selection is seq-based,
-    # not dict order.
-    bg._background_tasks = {skipped.id: skipped, run.id: run}
+    # Both published in the same second (the norm: skip then fold in moments).
+    # The durable journal resolves the tie by FILE LINE ORDER (append order):
+    # the running fold is appended LAST, so it is the newest line and wins —
+    # no (seq, timestamp) tie-break scan is needed anymore.
+    bg._run_events.append(
+        {
+            "run_id": "consolidation.cid123.1",
+            "process_id": "consolidation",
+            "status": SKIPPED,
+            "detail": "only 4 unsettled turn(s); need >= 5",
+            "progress": None,
+            "agent": "demo_assistant",
+            "conversation_id": "cid123",
+            "timestamp": now,
+        }
+    )
+    bg._run_events.append(
+        {
+            "run_id": "consolidation.cid123.2",
+            "process_id": "consolidation",
+            "status": PROCESSING,
+            "detail": "",
+            "progress": None,
+            "agent": "demo_assistant",
+            "conversation_id": "cid123",
+            "timestamp": now,
+        }
+    )
 
     idle_row = JobIdleStatus(
         id="consolidation.cid123", label="Consolidating memory", status="idle"
     )
     out = bg._reconcile_status(idle_row, "consolidation", "cid123")
 
-    # Higher seq wins the tie: running, no stale skip text.
+    # The running fold (last line) wins: no stale skip text.
     assert out.status == PROCESSING
     assert out.detail == ""

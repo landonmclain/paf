@@ -541,52 +541,31 @@ class BackgroundCoordinator:
         row reverts to the freshly-computed idle state (the caller rebuilds it
         every heartbeat anyway), so a stale outcome never lingers.
 
-        ``prefix`` is the task-id namespace (``consolidation``, ``review``,
-        ``thread_summarize``); we only match tasks scoped to THIS conversation
-        via the ``.{cid}.`` segment so one agent's run never leaks onto another.
-        Read-only: never enqueues, mutates the registry, or advances state.
+        The recent-outcome source is the DURABLE run journal (``_run_events``,
+        ``runs.jsonl``), not the in-memory task registry: the last line
+        written for ``{prefix}.{conversation_id}`` is authoritative (file line
+        order is truth, so no (seq, timestamp) tie-break is needed). ``prefix``
+        is the task-id namespace (``consolidation``, ``review``,
+        ``thread_summarize``). Read-only: never enqueues, mutates the
+        registry, or advances state.
         """
-        needle = f".{conversation_id}."
-        recent: BackgroundTask | None = None
-
-        # Select the *authoritative* task row. Task ids end in ``.{seq}``, a
-        # per-(kind,conversation) monotonic counter, so a HIGHER seq is always
-        # the newer trigger — even when two publishes land in the same
-        # microsecond-stripped second (the norm: a skip and the fold that
-        # follows it fire within moments, and _publish_task stamps both with
-        # the same `now`). Comparing only `updated_at` then picks the FIRST
-        # dict-iteration task on a tie — which can resurrect a STALE skipped
-        # row ("only 4 unsettled turn(s); need >= 5") over the genuinely newer
-        # running fold. Compare (seq, updated_at): a newer seq wins; fall back
-        # to timestamp only within the same seq.
-        def _key(t: BackgroundTask) -> tuple[int, str]:
-            seg = t.id.rsplit(".", 1)[-1]
-            try:
-                return (int(seg), t.updated_at)
-            except ValueError:
-                return (-1, t.updated_at)  # unparsable -> oldest bucket
-
-        for task in self._background_tasks.values():
-            if (
-                task.id.startswith(f"{prefix}.")
-                and needle in task.id
-                and task.status in (QUEUED, PROCESSING, DONE, SKIPPED, ERROR)
-            ):
-                if recent is None or _key(task) > _key(recent):
-                    recent = task
-        if recent is None:
+        if self._run_events is None:
+            return row
+        rec = self._run_events.recent(prefix, conversation_id)
+        if rec is None:
             return row
         try:
-            updated = datetime.fromisoformat(recent.updated_at)
-        except (TypeError, ValueError):
+            updated = datetime.fromisoformat(rec["timestamp"])
+        except (TypeError, ValueError, KeyError):
             return row
+        status = rec.get("status")
         # An ACTIVE task (queued/running) is live: its last publish timestamp
         # only records when the job was handed off, not its progress, so a long
         # fold (minutes on an LLM) must NEVER decay to "idle" just because the
         # heartbeat lands past the hold window. Surface it as running regardless
         # of age. Only TERMINAL outcomes obey the hold window, so a finished
         # run still reverts its row to idle once the outcome is stale.
-        is_active = recent.status in (QUEUED, PROCESSING)
+        is_active = status in (QUEUED, PROCESSING)
         if (
             not is_active
             and (datetime.now(UTC) - updated).total_seconds() > _PROCESS_STATUS_HOLD_S
@@ -597,22 +576,22 @@ class BackgroundCoordinator:
             # "n/N turns to a fold/review" countdown describes how far the
             # NEXT cadence has progressed since the last done watermark — it is
             # unrelated to the job currently running and would mislead under a
-            # `running` status. Use the task's own detail (empty while the
+            # `running` status. Use the record's own detail (empty while the
             # worker hasn't reported progress); never fall back to the idle
             # row's detail.
             return JobIdleStatus(
                 id=row.id,
                 label=row.label,
-                status=recent.status,
-                progress=recent.progress,
-                detail=recent.detail,
+                status=status,
+                progress=rec.get("progress"),
+                detail=rec.get("detail") or "",
             )
         return JobIdleStatus(
             id=row.id,
             label=row.label,
-            status=recent.status,
-            progress=recent.progress,
-            detail=recent.detail or row.detail,
+            status=status,
+            progress=rec.get("progress"),
+            detail=rec.get("detail") or row.detail,
         )
 
     async def job_status_summary(self, conversation_id: str) -> list[JobIdleStatus]:
@@ -845,6 +824,7 @@ class BackgroundCoordinator:
             "process_id": parts[0],
             "status": task.status,
             "detail": task.detail,
+            "progress": task.progress,
             "agent": self.agent_name,
             "conversation_id": parts[1] if len(parts) >= 3 else None,
             "timestamp": task.updated_at,
