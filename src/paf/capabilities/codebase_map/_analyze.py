@@ -1,14 +1,14 @@
-"""Tree-sitter → normalized records (the "own the value" layer, Phase 1).
+"""Tree-sitter → normalized records (the "own the value" layer).
 
 Delegates parsing to ``tree-sitter-language-pack.process()`` (for structure,
 symbols, imports, comments, metrics) and maps those onto our own ``SymbolInfo`` /
 ``FileInfo`` records in ``_schema.py``.  On 1.15.7 (the version paf declares + runs),
 ``process()`` fills ``structure[].signature`` natively; we prefer it (normalized bare
 by ``_native_signature``) and fall back to the custom-query recovery in ``_queries.py``
-(see the ``tree-sitter-language-pack`` skill, FILL THE BLANKS) only where native is
+(see the ``tree-sitter-language-pack`` skill) only where native is
 empty (classes → ``signature=None``; grammars 1.15.7 still blanks).
 
-Honest gaps handled here (all documented in the Archive note + skill):
+Honest gaps handled here:
 - ``process()`` never fills ``docstrings`` (``doc``/``doc_comment``) even on 1.15.7 —
   we recover ``doc`` per symbol via QueryCursor queries. ``signature`` *is* native now
   (1.15.7); recovery is the fallback only.
@@ -31,9 +31,8 @@ from ._queries import QueryRecovery
 from ._schema import FileInfo, Span, SymbolInfo, path_rel_to_scan_root
 
 # DDOS/runaway guard for third-party repos: files over this size are skipped.
-# (1.15.7 ProcessConfig DOES now expose max_source_bytes/parse_timeout_ms — earlier
-#  1.14.3 comment noted they were missing — but we still enforce the bound ourselves by
-#  reading + pre-checking size so the skip is explicit before we spend a parse.)
+# We enforce the bound ourselves by reading + pre-checking size so the skip is
+# explicit before we spend a parse.
 _MAX_SOURCE_BYTES = 1_000_000  # 1 MB per file
 
 # Language names paf passes to tree-sitter-language-pack — the "available_languages"
@@ -77,15 +76,14 @@ _FUNCTION_LIKE_KINDS = {"Function", "Method"}
 
 
 def _native_signature(it) -> str | None:
-    """Native 1.15.7 ``structure[].signature`` normalized to our bare-signature contract.
+    """Native ``structure[].signature`` normalized to our bare-signature contract.
 
-    1.15.7 populates ``structure[].signature`` natively (1.14.3 left it empty, which is
-    why ``_queries.py`` ``QueryRecovery.signature_for`` exists). The native field emits
-    the full header (``def f(a) -> b:`` / ``async def f(a):``), but the documented and
-    tested contract (``test_signature_*``) is the **bare** ``f(a) -> b`` form, and
-    classes carry no signature. So: adopt native only for function-like kinds, and strip
-    the leading keyword + trailing colon back down to the bare form. Returns ``None``
-    when there is nothing to adopt (class, or native left it empty).
+    The native field emits the full header (``def f(a) -> b:`` / ``async def f(a):``),
+    but the documented and tested contract (``test_signature_*``) is the **bare**
+    ``f(a) -> b`` form, and classes carry no signature. So: adopt native only for
+    function-like kinds, and strip the leading keyword + trailing colon back down to
+    the bare form. Returns ``None`` when there is nothing to adopt (class, or native
+    left it empty).
     """
     if _kind_value(it.kind) not in _FUNCTION_LIKE_KINDS:
         return None
@@ -127,9 +125,8 @@ def analyze_file(
 
     recovery = QueryRecovery(language=language, source=source)
     try:
-        # NOTE: 1.15.7 ProcessConfig DOES have max_source_bytes/parse_timeout_ms, but the
-        # pre-read size guard in `analyze_file` still covers runaway input with an explicit,
-        # parse-free skip (see comment at `_MAX_SOURCE_BYTES`).
+        # The pre-read size guard in `analyze_file` covers runaway input with an
+        # explicit, parse-free skip (see comment at `_MAX_SOURCE_BYTES`).
         res = process(
             source,
             ProcessConfig(
@@ -150,7 +147,7 @@ def analyze_file(
     # class of symbols tree-sitter's `structure` never emits (registry.py's
     # `CAPABILITY_TYPES` is the poster child: an 8KB file whose only substance is
     # one module-level assignment). Captured as Constant/Variable symbols so they
-    # are searchable, per the Phase-1 "every ... reference present" gate.
+    # are searchable.
     assign_searchable = _module_assignments(recovery)
     symbols = symbols + assign_searchable
 
@@ -243,9 +240,9 @@ def _walk_with_children(items, recovery: QueryRecovery):
             span = _to_span(it.span)
             body_span = _to_span(it.body_span)
             qualified = f"{parent_name}.{it.name}" if parent_name else it.name
-            # Prefer a normalized native signature (1.15.7 populates
-            # structure[].signature); fall back to our hand recovery (QueryRecovery)
-            # only when native has nothing (class, or a grammar 1.15.7 leaves blank).
+            # Prefer a normalized native signature (structure[].signature); fall back
+            # to our hand recovery (QueryRecovery) only when native has nothing (class,
+            # or a grammar leaves it blank).
             sig = _native_signature(it) or recovery.signature_for(span, body_span)
             doc = recovery.docstring_for(span, body_span)
             symbol = SymbolInfo(
@@ -300,7 +297,7 @@ def _map_import_names(imports) -> list[str]:
     ``import m`` brings a MODULE into scope (``m``), not a symbol — and resolving
     a module name globally is exactly the false-collision trap (``. _store`` vs the
     ``_store`` module var), so it is DELIBERATELY excluded here: module references
-    are the graph phase's import-resolution job, not name-matched symbol references.
+    are the graph's import-resolution job, not name-matched symbol references.
 
     This is language-agnostic because tree-sitter fills ``ImportInfo.items`` for
     every language (Python + JS/TS confirmed; other languages yield items only when
