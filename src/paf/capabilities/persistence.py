@@ -2,20 +2,14 @@
 
 Like :mod:`paf.capabilities.compaction`, this owns capabilities that can't cleanly
 resolve from YAML because they need real Python objects as arguments (see
-``build.py`` for the full rationale on the ``capabilities=`` seam). For M1 that is
+``build.py`` for the full rationale on the ``capabilities=`` seam). For now that is
 `ConversationSearch`: its ``source: HistorySource`` needs
 a real ``SnapshotHistorySource(store)`` object, and no recall class overrides
 ``from_spec`` — so it is assembled here, in Python.
 
 ``ConversationSearch`` is the paf-owned search capability
-(``paf.capabilities.search``), a drop-in for the harness's of the same name — so the
-recall surface shares the marker-strip that keeps injected ``<memory>``
-blocks out of the corpus.
-
-(The original ``TurnIndex`` recall capability — one-line-per-turn index + ``read_turn``
-resolver — was retired as a failed experiment and archived; see the codebase History
-notes. It was built in ``paf.capabilities.turn_index`` and is no longer part of this
-module.)
+(``paf.capabilities.search``), so the recall surface shares the marker-strip that
+keeps injected ``<memory>`` blocks out of the corpus.
 
 `StepPersistence` *could* resolve from YAML (it overrides ``from_spec``), but it is
 built here too so it shares ONE ``FileStepStore`` with `ConversationSearch`.
@@ -46,7 +40,7 @@ from paf.config import PROJECT_ROOT, settings
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
 
-# Canonical store root for M1 persistence + recall. A directory of flat files
+# Canonical store root for persistence + recall. A directory of flat files
 # (JSONL events, JSON snapshots per run) — greppable/inspectable, no DB to
 # administer. One instance, handed to both StepPersistence (writer) and
 # ConversationSearch (reader), so the search corpus is exactly the persisted
@@ -125,11 +119,8 @@ def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
     return ConversationSearch(source=SnapshotHistorySource(store), scope="conversation")
 
 
-# Name -> builder, keyed by the SAME names a profile allowlists (registry.py).
-# The profile is the gatekeeper: `build_runtime_capabilities(profile)` selects
-# builders by profile.capability_names, so *only* what the profile allows is
-# constructed — one shared store handed to whichever are selected. There is no
-# separate hardcoded list; this IS the resolution of the allowlist names.
+# Name -> builder, keyed by the same names a profile allowlists. The profile is
+# the gatekeeper: only what it allows is constructed, over one shared store.
 #
 PERSISTENCE_BUILDERS: dict[str, Callable[[FileStepStore], Any]] = {
     "StepPersistence": _build_step_persistence,
