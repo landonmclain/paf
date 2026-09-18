@@ -4,11 +4,7 @@ Small pure helpers over a pydantic-ai ``list[ModelMessage]`` that several
 capabilities need (recall/consolidation) but that do not belong to any single
 capability's internals. Lives at the shared ``capabilities`` package level (like
 ``_markers``) so ``search`` and ``memory`` can both use it without depending on
-one another or on the archived ``turn_index`` capability.
-
-These came out of the retired ``turn_index`` experiment: ``user_anchor_indices``
-was the genuinely reusable idea (turn-aware pointer addressing), kept here while
-the turn-index feature itself was archived.
+one another.
 """
 
 from __future__ import annotations

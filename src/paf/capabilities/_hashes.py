@@ -6,8 +6,7 @@ byte-identical conversation messages that get re-instantiated across runs
 (replay / ``continue_run`` / steer / snapshot round-trip) therefore hash
 DIFFERENTLY, which silently defeats every overlap-reconciliation that keys on
 message identity — both within a run's snapshot union and across cumulative
-runs — re-collecting already-consumed history (the resume/many-run duplication
-bug seen in real conversations).
+runs — re-collecting already-consumed history.
 
 :func:`_content_hash` hashes durable content (part kind + text) in order, so
 identical content is recognizable across re-instantiation while repeated

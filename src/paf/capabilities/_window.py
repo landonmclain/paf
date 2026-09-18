@@ -50,14 +50,12 @@ if TYPE_CHECKING:
     from pydantic_ai import RunContext
 
 
-# Mid-turn eviction gate (Landon 2026-09-02, Option A): the eviction tier must
-# never consume the ACTIVE user turn. `compact()` is driven by
-# TieredCompaction._escalate before every model request, so it fires mid-turn —
-# exactly when the active prompt is vulnerable to find_safe_cutoff's back-walk
-# (run 01a05ff8: the live "implement it" prompt was evicted while its response
-# survived). The gate bounds every eviction decision to the completed prefix
-# strictly BEFORE the most recent real user prompt, so the current turn is
-# structurally unreachable by the window tier.
+# Mid-turn eviction gate: the eviction tier must never consume the ACTIVE user
+# turn. `compact()` is driven by TieredCompaction._escalate before every model
+# request, so it fires mid-turn — exactly when the active prompt is vulnerable
+# to find_safe_cutoff's back-walk. The gate bounds every eviction decision to
+# the completed prefix strictly BEFORE the most recent real user prompt, so the
+# current turn is structurally unreachable by the window tier.
 #
 # The "<memory>" injected context parts carry a non-str `content` (a list), so
 # they are deliberately NOT turn starts — the gate and the resume_window
@@ -188,14 +186,13 @@ class TurnBoundSlidingWindow(SlidingWindowCompaction):
     ) -> list[ModelMessage]:
         """Trim only the settled prefix, never consuming the active turn.
 
-        **Mid-turn gate (2026-09-02, Option A):** ``compact`` is driven by
-        ``TieredCompaction._escalate`` *before every model request*, so it fires
-        mid-turn. To forbid eviction of the ACTIVE user turn, every decision is
-        bounded to the completed prefix before the most recent real user prompt:
-        the base window is invoked on that prefix alone, with the active turn
-        re-appended verbatim. A history that is entirely a live turn (or has
-        nothing evictable in completed turns) is returned untouched — the window
-        tier never touches it.
+        **Mid-turn gate:** ``compact`` is driven by ``TieredCompaction._escalate``
+        *before every model request*, so it fires mid-turn. To forbid eviction of
+        the ACTIVE user turn, every decision is bounded to the completed prefix
+        before the most recent real user prompt: the base window is invoked on
+        that prefix alone, with the active turn re-appended verbatim. A history
+        that is entirely a live turn (or has nothing evictable in completed
+        turns) is returned untouched — the window tier never touches it.
 
         ClearToolResults / ClampOversizedMessages are separate tiers and
         continue to run mid-turn.
