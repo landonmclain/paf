@@ -63,7 +63,6 @@ _VAULT_TOOL_RETRIES = 5
 
 _MAX_HEAD_LINES = 15   # lines of note body shown in lookup_note at default
 _MAX_SEARCH_HITS = 20  # note_search cap
-_MAX_READ_LINES = 2000  # read_note default block size (mirrors fs _max_read_lines)
 
 _INSERT = "  "  # tree indent
 
@@ -137,11 +136,13 @@ class VaultToolset(FunctionToolset):
         storage: FlatFileVaultStorage | None = None,
         allow: list[str] | None = None,
         deny: list[str] | None = None,
+        max_read_lines: int = 1000,
     ) -> None:
         super().__init__()
         self._root = Path(vault_root).resolve()
         self._storage = storage or FlatFileVaultStorage()
         self._scope = ScanScope(root=self._root, allow=allow or [], deny=deny or [])
+        self._max_read_lines = max_read_lines
 
         self.add_function(self.vault_overview, name="vault_overview")
         self.add_function(self.lookup_note, name="lookup_note")
@@ -311,7 +312,7 @@ class VaultToolset(FunctionToolset):
         even after a partial (paged) read.
 
         ``offset`` is the zero-based line to start at; ``limit`` caps how many
-        lines are returned (default 2000). A continuation hint reports how many
+        lines are returned (default 1000). A continuation hint reports how many
         lines remain and the next ``offset`` to continue reading, so large notes
         are read in blocks instead of spilling. Returns ``None`` for an unknown
         note or one outside the vault root.
@@ -329,7 +330,7 @@ class VaultToolset(FunctionToolset):
         version = _content_hash(body)
         lines = body.splitlines(keepends=True)
         if limit is None:
-            limit = _MAX_READ_LINES
+            limit = self._max_read_lines
         return (
             f"[path: {rel} | {len(lines)} lines | version: {version}]\n"
             + _format_lines(lines, offset, limit)

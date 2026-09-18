@@ -570,9 +570,9 @@ def test_read_note_default_limit_caps_large_notes(tmp_path: Path) -> None:
     toolset = VaultToolset(vault_root=root, storage=store)
     out = toolset.read_note("Big")
     assert out is not None
-    # default limit caps at 2000 lines and reports the remainder
-    assert "500 more lines" in out
-    assert "offset=2000" in out
+    # default limit caps at 1000 lines and reports the remainder
+    assert "1500 more lines" in out
+    assert "offset=1000" in out
 
 
 # ------------------------------------------------------------------ Tier C: note_edit

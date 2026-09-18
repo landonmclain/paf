@@ -36,7 +36,7 @@ _VAULT_GUIDANCE = (
     "file tools: use `vault_overview` to orient, `lookup_note` / `read_note` to "
     "read, `note_find` / `note_search` to locate, and `note_links` / "
     "`note_backlinks` to follow the note graph. `read_note` returns line numbers "
-    "and pages with `offset`/`limit` (default 2000 lines) — for a large note, "
+    "and pages with `offset`/`limit` (default 1000 lines) — for a large note, "
     "read it in blocks instead of relying on a spill. To add or rename a note, use "
     "`note_create` / `note_rename` (these keep inbound wikilinks consistent) "
     "rather than raw file writes. To edit a note, use `note_edit` with "
@@ -71,6 +71,9 @@ class Vault(AbstractCapability):
     deny: list[str] = field(default_factory=list)
     """Subtrees matching these globs are always out of scope (wins over allow)."""
 
+    max_read_lines: int = 1000
+    """Maximum lines returned by a single `read_note` call (spec-overridable)."""
+
     def get_toolset(self) -> VaultToolset:
         """Build and return the five-tool vault ladder."""
         return VaultToolset(
@@ -78,6 +81,7 @@ class Vault(AbstractCapability):
             storage=self.storage,
             allow=self.allow,
             deny=self.deny,
+            max_read_lines=self.max_read_lines,
         )
 
     def get_instructions(self) -> list[str] | None:
