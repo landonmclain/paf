@@ -1,18 +1,19 @@
-"""Same REPL as ui/cli.py, but streamed inside Rich panels (mirrors the
-coding_agent CLI's Live layout): tool activity in a fit-width "tools" box above
-the Markdown-rendered assistant answer, both redrawn per token via `Live`.
+"""Interactive paf CLI — streams agent turns inside Rich panels (tool activity
+in a fit-width "tools" box above the Markdown-rendered assistant answer, both
+redrawn per token via `Live`), with a persistent right-hand sidebar showing
+background processes and the model's current plan.
 
-This is a drop-in alternative until it's liked, then it becomes cli.py. Resume
-is surfaced as a banner (no viewing of old sessions) — use `/history`,
+Resume is surfaced as a banner (no viewing of old sessions) — use `/history`,
 `/memory`, `/debug` to inspect the session and durable memory at runtime.
 
 Usage:
-    python ui/cli2.py [agent_name]
-    # default agent_name "demo_assistant" (specs/demo_assistant.yaml) — the
-    # lean demo profile; pass "assistant" (specs/assistant.yaml) explicitly to
-    # run the full M1 profile instead.
-    # conversation_id defaults to cli-{agent_name}. Slash commands (/help) are
-    # handled locally and never sent to the model.
+    python ui/cli.py [agent_name] [profile]
+    # default agent_name "demo_assistant" (specs/demo_assistant.yaml); pass
+    # "assistant" (specs/assistant.yaml) for the full M1 profile, or
+    # "contextbench" for the codebase-map eval profile. profile defaults to the
+    # spec's declared `profile:` key when omitted.
+    # conversation_id defaults to cli-{agent_name}-e{CONV_EPOCH}. Slash commands
+    # (/help) are handled locally and never sent to the model.
 
 Needs OPENAI_API_KEY (live model). Run twice with the same conversation_id to
 see the "resumed N prior messages" banner.
@@ -25,8 +26,10 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console, Group, RenderableType
+from rich.layout import Layout
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -35,6 +38,9 @@ from rich.table import Table
 from rich.text import Text
 
 from paf.capabilities import PROFILES
+from paf.capabilities.planning import FilePlanStore, PlanItem
+from paf.capabilities.planning._events import PlanEventType
+from paf.capabilities.planning._registry import get_plan_emitter
 from paf.config import PROJECT_ROOT
 from paf.runtime import Session, StreamEvent
 from paf.specs import resolve_profile_name
@@ -133,6 +139,132 @@ class TurnStream:
             if isinstance(block, ToolBlock) and block.status != "done":
                 block.status = "done"
                 return
+
+
+# --- persistent right sidebar: background processes + the model's plan ---------
+#
+# The CLI shares the exact surfaces the web frontend's ProcessesPanel / PlanPanel
+# render via ui/sse.py — no bespoke plumbing. Processes come from the
+# BackgroundCoordinator the Session already attaches (attach_background):
+# job_status_summary() for the always-on idle rows + subscribe_tasks() for live
+# transitions, coalescing over the stable row ids. The plan comes from the
+# per-conversation FilePlanStore (PROJECT_ROOT/data/plans/<cid>/plan.json) — a
+# snapshot via get_items() plus live mutations via the shared PlanEventEmitter
+# (get_plan_emitter(scoped_cid)), exactly as sse.py does.
+
+_PLAN_ROOT = PROJECT_ROOT / "data" / "plans"
+
+# TaskStatus -> per-status marker/color
+_PLAN_STATUS_STYLE: dict[str, tuple[str, str]] = {
+    "pending": ("○", "dim"),
+    "in_progress": ("◐", "cyan"),
+    "completed": ("●", "green"),
+    "cancelled": ("x", "red"),
+    "blocked": ("⊘", "yellow"),
+}
+
+# Background StepStatus -> marker/color (subset of StepStatus used by tasks)
+_TASK_STATUS_STYLE: dict[str, tuple[str, str]] = {
+    "queued": ("…", "yellow"),
+    "running": ("◐", "cyan"),
+    "processing": ("◐", "cyan"),
+    "done": ("●", "green"),
+    "error": ("x", "red"),
+    "skipped": ("-", "dim"),
+    "idle": ("·", "dim"),
+}
+
+
+@dataclass
+class SidebarState:
+    """Accumulates the right-hand sidebar (processes + active plan)."""
+
+    processes: dict[str, tuple[str, str, float | None, str]] = field(
+        default_factory=dict
+    )  # id -> (label, status, progress, detail)
+    plan_items: list[PlanItem] = field(default_factory=list)
+    plan_title: str = ""
+
+
+def _plan_store(session: Session, scoped: str | None) -> FilePlanStore:
+    """The per-conversation plan store for this session (mirrors build.py)."""
+    return FilePlanStore(
+        root=_PLAN_ROOT,
+        conversation_id=scoped or "default",
+        event_emitter=get_plan_emitter(scoped or "default"),
+    )
+
+
+async def _load_plan_snapshot(session: Session, scoped: str | None) -> list[PlanItem]:
+    """Read the current plan steps (best-effort; a plan may not exist yet)."""
+    try:
+        return await _plan_store(session, scoped).get_items()
+    except Exception:  # noqa: BLE001 - sidebar must never break the turn
+        return []
+
+
+def _render_plan(plan_items: list[PlanItem]) -> RenderableType:
+    """Render the plan step list (or an empty placeholder)."""
+    if not plan_items:
+        return Text("no active plan", style="dim")
+    lines: list[RenderableType] = []
+    for item in plan_items:
+        status = getattr(item, "status", "pending")
+        # status is a TaskStatus enum; use its .value (the plain string) so the
+        # marker map hits (str(TaskStatus.in_progress) == 'TaskStatus.in_progress').
+        key = getattr(status, "value", str(status))
+        mark, color = _PLAN_STATUS_STYLE.get(key, ("○", "dim"))
+        content = getattr(item, "content", "")
+        lines.append(Text(f"{mark} {content}", style=color))
+    return Group(*lines)
+
+
+def _render_sidebar(state: SidebarState) -> RenderableType:
+    """The full right-hand sidebar: processes panel + plan panel."""
+    proc_lines: list[RenderableType] = []
+    for label, status, _progress, detail in state.processes.values():
+        mark, color = _TASK_STATUS_STYLE.get(status, ("·", "dim"))
+        row = Text(f"{mark} {label}", style=color)
+        if detail:
+            row.append(f"  {detail}", style="dim")
+        proc_lines.append(row)
+    if not proc_lines:
+        proc_lines.append(Text("no background work", style="dim"))
+    return Group(
+        Panel(
+            Group(*proc_lines),
+            title="processes",
+            border_style="cyan",
+            padding=(0, 1),
+        ),
+        Panel(
+            _render_plan(state.plan_items),
+            title=state.plan_title or "plan",
+            border_style="magenta",
+            padding=(0, 1),
+        ),
+    )
+
+
+async def refresh_sidebar(
+    session: Session,
+    state: SidebarState,
+    scoped: str | None,
+) -> None:
+    """Re-read the process idle rows + plan snapshot into ``state``.
+
+    Called once before streaming and on each plan/process event so the sidebar
+    stays live. Processes are refresh-by-idle; live transitions are handled by
+    the subscribers wired in ``_run_streamed``.
+    """
+    state.plan_items = await _load_plan_snapshot(session, scoped)
+    if session.background is not None:
+        try:
+            idle = await session.background.job_status_summary(scoped)
+            for st in idle:
+                state.processes[st.id] = (st.label, st.status, st.progress, st.detail)
+        except Exception:  # noqa: BLE001 - sidebar must not break the turn
+            pass
 
 
 def _tool_line(block: ToolBlock) -> Text:
@@ -308,58 +440,107 @@ def render(event: StreamEvent, out: TurnStream) -> None:
         out.finish_latest_tool()
 
 
-async def _run_streamed(session: Session, prompt: str) -> None:
+async def _run_streamed(
+    session: Session, prompt: str, sidebar: SidebarState | None = None
+) -> None:
     """Stream one turn in an alternate-screen, bottom-following viewport.
 
     `screen=True` is retained so redraws never pollute normal scrollback. While
     streaming, only a compact tail of activity and the newest visual rows of the
     answer are rendered. When the turn completes, the full activity + full answer
-    are committed exactly once to the main terminal buffer.
+    are committed exactly once to the main terminal buffer. A persistent
+    right-hand sidebar (processes + plan) is shown when one is provided and the
+    terminal is wide enough.
     """
 
-    def build(out: TurnStream, streaming: bool = False) -> Group:
+    scoped = session._scoped_cid(session.conversation_id)
+    if sidebar is not None:
+        await refresh_sidebar(session, sidebar, scoped)
+
+    def build(out: TurnStream, streaming: bool = False) -> RenderableType:
+        # --- conversation (left) ------------------------------------------
         if not streaming:
             parts: list[RenderableType] = []
             activity = _activity_strip(out)
             if activity:
                 parts.extend([*activity, Text("")])
             parts.append(_answer_panel(out))
-            return Group(*parts)
+            conv: RenderableType = Group(*parts)
+        else:
+            # Keep only the newest few activity events in the live view. The
+            # complete versions are still printed after streaming finishes.
+            activity = _live_activity_strip(out, max_blocks=5)
 
-        # Keep only the newest few activity events in the live view. The complete
-        # versions are still printed after streaming finishes.
-        activity = _live_activity_strip(out, max_blocks=5)
-
-        # Measure the activity at the current terminal width so wrapped tool args
-        # don't accidentally steal the answer viewport.
-        activity_rows = 0
-        if activity:
-            activity_rows = len(
-                console.render_lines(
-                    Group(*activity),
-                    options=console.options.update(width=console.size.width),
-                    pad=False,
+            # Measure the activity at the current terminal width so wrapped tool
+            # args don't accidentally steal the answer viewport.
+            activity_rows = 0
+            if activity:
+                activity_rows = len(
+                    console.render_lines(
+                        Group(*activity),
+                        options=console.options.update(width=console.size.width),
+                        pad=False,
+                    )
                 )
-            )
 
-        # Budget terminal rows. The panel itself costs two rows (top/bottom), the
-        # status group costs three, and spacing costs another row or two. A small
-        # floor keeps the answer useful in short terminals.
-        reserved = activity_rows + 7
-        answer_rows = max(3, console.size.height - reserved)
+            reserved = activity_rows + 7
+            answer_rows = max(3, console.size.height - reserved)
 
-        parts: list[RenderableType] = []
-        if activity:
-            parts.extend([*activity, Text("")])
-        parts.append(_answer_panel(out, max_body_lines=answer_rows))
+            parts = []
+            if activity:
+                parts.extend([*activity, Text("")])
+            parts.append(_answer_panel(out, max_body_lines=answer_rows))
 
-        # Status belongs at the bottom in a chat UI: the newest content and current
-        # phase stay together near the user's eye line.
-        word, color = _phase(out)
-        parts.append(_status_line(word, color))
-        return Group(*parts)
+            word, color = _phase(out)
+            parts.append(_status_line(word, color))
+            conv = Group(*parts)
+
+        if sidebar is None:
+            return conv
+
+        # --- right sidebar --------------------------------------------------
+        # Only split the layout when there's room; on narrow terminals the
+        # sidebar would crowd the conversation, so drop it rather than break.
+        if console.size.width < 100:
+            return conv
+        layout = Layout()
+        layout.split_row(
+            Layout(conv, name="conversation", ratio=3),
+            Layout(_render_sidebar(sidebar), name="sidebar", size=36),
+        )
+        return layout
 
     out = TurnStream()
+    sidebar_dirty = False
+
+    # Mid-turn liveness: subscribe to the conversation's shared plan emitter and
+    # the background task stream (the same surfaces sse.py uses) so plan edits /
+    # process transitions made by THIS turn appear in the sidebar as they happen
+    # (mirrors sse.py `_on_plan` + `subscribe_tasks`). Refs kept for teardown.
+    plan_registrations: list[tuple[PlanEventType, Any]] = []
+    task_sub: Any = None
+    if sidebar is not None:
+        emitter = get_plan_emitter(scoped)
+
+        def _on_plan(_event=None) -> None:
+            nonlocal sidebar_dirty
+            sidebar_dirty = True
+
+        for t in PlanEventType:
+            plan_registrations.append((t, emitter.on(t, _on_plan)))
+
+        if session.background is not None:
+
+            def _on_task(ev=None) -> None:
+                nonlocal sidebar_dirty
+                sidebar_dirty = True
+
+            try:
+                task_sub = session.background.subscribe_tasks(_on_task)
+            except Exception:  # noqa: BLE001 - sidebar subscription is best-effort
+                task_sub = None
+    else:
+        emitter = None  # type: ignore[assignment]
 
     with Live(
         build(out, streaming=True),
@@ -371,8 +552,23 @@ async def _run_streamed(session: Session, prompt: str) -> None:
         try:
             async for event in session.stream(prompt, conversation_id=session.conversation_id):
                 render(event, out)
+                if sidebar_dirty:
+                    await refresh_sidebar(session, sidebar, scoped)
+                    sidebar_dirty = False
                 live.update(build(out, streaming=True))
         finally:
+            # Unsubscribe so a long-lived REPL doesn't leak listeners across turns.
+            if sidebar is not None:
+                for t, cb in plan_registrations:
+                    try:
+                        emitter.off(t, cb)
+                    except Exception:  # noqa: BLE001 - teardown is best-effort
+                        pass
+                if task_sub is not None and session.background is not None:
+                    try:
+                        session.background.unsubscribe_tasks(task_sub)
+                    except Exception:  # noqa: BLE001
+                        pass
             # Clear the transient status before leaving the alternate buffer.
             live.update(build(out, streaming=False))
 
@@ -589,7 +785,7 @@ def main() -> int:
         console.print("  export OPENAI_API_KEY=sk-...")
         return 2
 
-    # Usage: python ui/cli2.py [agent_name] [profile]
+    # Usage: python ui/cli.py [agent_name] [profile]
     #   agent_name — spec base name (default "assistant" → specs/assistant.yaml);
     #                "demo_assistant" → specs/demo_assistant.yaml (lean demo).
     #   profile    — profile name (default: the agent's own profile by convention;
@@ -615,6 +811,8 @@ def main() -> int:
 
     with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15) as session:
         session.attach_background()
+        # Persistent right sidebar (processes + the model's plan) shown while wide.
+        sidebar = SidebarState()
         _startup_banner(session)
         console.print("type a message (blank line sends; paste multi-line freely), or \"quit\" to exit")
 
@@ -661,7 +859,7 @@ def main() -> int:
             show_prompt_box(prompt, n_lines=len(lines))
             console.print()
 
-            asyncio.run(_run_streamed(session, prompt))
+            asyncio.run(_run_streamed(session, prompt, sidebar))
             console.print()  # blank line before the next prompt
             continue
 
