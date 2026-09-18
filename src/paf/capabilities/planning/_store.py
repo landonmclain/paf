@@ -12,7 +12,8 @@ import os
 import re
 import sqlite3
 import threading
-from typing import Protocol, runtime_checkable
+from pathlib import Path
+from typing import Any, Protocol, cast, runtime_checkable
 
 import anyio.to_thread
 
@@ -114,7 +115,7 @@ def _snapshot(item: PlanItem) -> PlanItem:
 async def emit_created(emitter: PlanEventEmitter | None, item: PlanItem) -> None:
     """Emit a `created` event when an emitter is attached."""
     if emitter is not None:
-        await emitter.emit(
+        await emitter.emit_plan(
             PlanEvent(event_type=PlanEventType.created, item=_snapshot(item))
         )
 
@@ -122,7 +123,7 @@ async def emit_created(emitter: PlanEventEmitter | None, item: PlanItem) -> None
 async def emit_deleted(emitter: PlanEventEmitter | None, item: PlanItem) -> None:
     """Emit a `deleted` event when an emitter is attached."""
     if emitter is not None:
-        await emitter.emit(
+        await emitter.emit_plan(
             PlanEvent(event_type=PlanEventType.deleted, item=_snapshot(item))
         )
 
@@ -133,7 +134,7 @@ async def emit_mutation(
     """Emit `updated`, then `status_changed`/`completed` if the status moved."""
     if emitter is None or previous is None:
         return
-    await emitter.emit(
+    await emitter.emit_plan(
         PlanEvent(
             event_type=PlanEventType.updated,
             item=_snapshot(updated),
@@ -141,7 +142,7 @@ async def emit_mutation(
         )
     )
     if updated.status != previous.status:
-        await emitter.emit(
+        await emitter.emit_plan(
             PlanEvent(
                 event_type=PlanEventType.status_changed,
                 item=_snapshot(updated),
@@ -149,7 +150,7 @@ async def emit_mutation(
             )
         )
         if updated.status is TaskStatus.completed:
-            await emitter.emit(
+            await emitter.emit_plan(
                 PlanEvent(
                     event_type=PlanEventType.completed,
                     item=_snapshot(updated),
@@ -498,7 +499,7 @@ class FilePlanStore:
         self._conversation_id = conversation_id
         # Default backend is the flat-file StorageService; an alternate backend can be
         # dropped in (tests / future SQLite) via `storage`.
-        self._storage = storage if storage is not None else FlatFileStorage(root)
+        self._storage = storage if storage is not None else FlatFileStorage(Path(root))
         self._emitter = event_emitter
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -510,7 +511,11 @@ class FilePlanStore:
         payload = self._storage.read(self.KIND, self._conversation_id)
         if payload is None:
             return []
-        rows = payload.get("items", []) if isinstance(payload, dict) else payload
+        rows = (
+            payload.get("items", [])
+            if isinstance(payload, dict)
+            else cast(list[Any], payload)
+        )
         return [PlanItem.model_validate(row) for row in rows]
 
     def _save_sync(self, items: list[PlanItem]) -> None:

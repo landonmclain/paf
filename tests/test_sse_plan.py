@@ -91,7 +91,7 @@ def test_turn_frames_emits_plan_snapshot_on_mutation_and_unsubscribes() -> None:
             sse, "_plan_snapshot", new=mock.AsyncMock(return_value=plan_frame["items"])
         ):
             emitter = get_plan_emitter("conv-1")
-            await emitter.emit(
+            await emitter.emit_plan(
                 PlanEvent(
                     event_type=PlanEventType.status_changed,
                     item=PlanItem(

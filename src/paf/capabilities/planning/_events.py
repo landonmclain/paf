@@ -76,12 +76,12 @@ class PlanEventEmitter(GenericEventEmitter[PlanEventType, PlanEvent]):
     ```
     """
 
-    async def emit(self, event: PlanEvent) -> None:
+    async def emit_plan(self, event: PlanEvent) -> None:
         """Invoke every listener for ``event.event_type``, awaiting async ones.
 
         The key is derived from the event itself (unlike the generic's
-        explicit-key ``emit(event, event_type)``); this keeps the store's
-        ``emitter.emit(PlanEvent(...))`` call sites unchanged.
+        explicit-key ``emit(event, event_type)``); the store calls
+        ``emitter.emit_plan(PlanEvent(...))``.
         """
         await super().emit(event, event.event_type)
 
