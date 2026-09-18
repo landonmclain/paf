@@ -423,7 +423,7 @@ def get_session(agent_name: str, profile_name: str | None = None) -> Session:
             agent_name,
             profile=profile,
             conversation_id=f"web-{agent_name}-e{CONV_EPOCH}",
-            resume_window=15,
+            resume_window=50,
         )
         session.attach_background()
         _sessions[agent_name] = session
