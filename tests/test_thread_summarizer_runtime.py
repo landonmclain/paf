@@ -106,9 +106,7 @@ def test_trigger_off_does_not_touch_store(tmp_path: Path) -> None:
     with Session(
         "test", profile=TEST_PROFILE, trace=False, resume=False, store=store
     ) as session:
-        session.background = BackgroundCoordinator(
-            store=store, agent_name="runtime2_test"
-        )
+        session.background = BackgroundCoordinator(store=store, agent_name="test")
         session.background._thread_summarizer_enabled = False
         asyncio.run(session.background._maybe_trigger_thread_summarize("profile:cid"))
         assert session.background.thread_summarizer_queue is None
@@ -135,7 +133,7 @@ def test_trigger_enqueues_when_block_and_advances_watermark(tmp_path: Path) -> N
     ) as session:
         session.background = BackgroundCoordinator(
             store=store,
-            agent_name="runtime2_test",
+            agent_name="test",
             thread_summarize_span=_beats_from_span,
         )
         session.background._thread_capture_root = capture_root
@@ -194,7 +192,7 @@ def test_trailing_partial_block_is_not_summarized(tmp_path: Path) -> None:
     ) as session:
         session.background = BackgroundCoordinator(
             store=store,
-            agent_name="runtime2_test",
+            agent_name="test",
             thread_summarize_span=_beats_from_span,
         )
         session.background._thread_capture_root = capture_root
@@ -262,7 +260,7 @@ def test_fresh_watermark_enqueues_across_multi_run_backlog(tmp_path: Path) -> No
     ) as session:
         session.background = BackgroundCoordinator(
             store=store,
-            agent_name="runtime2_test",
+            agent_name="test",
             thread_summarize_span=_beats_from_span,
         )
         session.background._thread_capture_root = capture_root
@@ -318,7 +316,7 @@ def test_trigger_skips_below_turn_threshold(tmp_path: Path) -> None:
     ) as session:
         session.background = BackgroundCoordinator(
             store=store,
-            agent_name="runtime2_test",
+            agent_name="test",
             thread_summarize_span=_beats_from_span,
         )
         session.background._thread_capture_root = capture_root
@@ -366,9 +364,7 @@ def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
     with Session(
         "test", profile=TEST_PROFILE, trace=False, resume=False, store=store
     ) as session:
-        session.background = BackgroundCoordinator(
-            store=store, agent_name="runtime2_test"
-        )
+        session.background = BackgroundCoordinator(store=store, agent_name="test")
         session.background._thread_summarizer_enabled = True
         # Simulate a failed thread summarizer task for conversation cA.
         session.background._thread_summarizer_seq = 1

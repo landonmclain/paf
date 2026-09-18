@@ -220,14 +220,14 @@ def test_scoped_cid_returns_cid_when_no_profile() -> None:
 
 def test_scoped_cid_handles_bare_name_profile() -> None:
     s = object.__new__(runtime.Session)
-    s.profile = "runtime2_test"  # raw string profile fallback
-    assert s._scoped_cid("web-1") == "runtime2_test:web-1"
+    s.profile = "test"  # raw string profile fallback
+    assert s._scoped_cid("web-1") == "test:web-1"
 
 
 def test_two_profiles_same_cid_do_not_collide() -> None:
     """The namespace invariant: identical plain cids scope apart by profile."""
     a = _FakeProfile("assistant")
-    b = _FakeProfile("runtime2_test")
+    b = _FakeProfile("demo")
     sa, sb = object.__new__(runtime.Session), object.__new__(runtime.Session)
     sa.profile, sb.profile = a, b
     assert sa._scoped_cid("conv-9") != sb._scoped_cid("conv-9")
@@ -236,44 +236,25 @@ def test_two_profiles_same_cid_do_not_collide() -> None:
 # --- profile wiring --------------------------------------------------------
 
 
-def test_runtime2_test_profile_is_shell_only() -> None:
-    from paf.capabilities import PROFILES
-
-    prof = PROFILES["runtime2_test"]
-    # StepPersistence is PURELY additive (writes steps to disk, no extra tools)
-    # so the web history render can read lanes; Shell is the only tool surface.
-    assert prof.capability_names == ("StepPersistence", "Shell")
-    # Capability resolves to the Shell type (buildable without a model).
-    types = prof.capability_types()
-    assert len(types) == 2
-    assert {t.__name__ for t in types} == {"StepPersistence", "Shell"}
-
-
-def test_runtime2_test_spec_resolves_to_profile() -> None:
-    from paf.specs import resolve_profile_name
-
-    assert resolve_profile_name("runtime2_test") == "runtime2_test"
-
-
-def test_session2_init_injects_spec_profile_for_keyword_agent_name(
+def test_session_init_injects_spec_profile_for_keyword_agent_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression: Session(agent_name=...) must resolve+inject the spec's
     declared profile when none is passed.
 
     This guards the bug where the constructor read ``agent_name`` from
-    positional args only, so a keyword ``agent_name="runtime2_test"`` silently
-    fell back to the default profile (building a default-profile agent under a
-    test-agent name instead of the lean Shell-only toolset).
+    positional args only, so a keyword ``agent_name="test"`` silently fell back
+    to the default profile (building a default-profile agent under a test-agent
+    name instead of the lean Shell-only toolset).
     """
-    monkeypatch.setattr(runtime, "resolve_profile_name", lambda name: "runtime2_test")
-    monkeypatch.setattr(runtime, "PROFILES", {"runtime2_test": _FAKE_SHELL_PROFILE})
+    monkeypatch.setattr(runtime, "resolve_profile_name", lambda name: "test")
+    monkeypatch.setattr(runtime, "PROFILES", {"test": _FAKE_SHELL_PROFILE})
     # Stub the heavy build paths so constructing Session needs no API key.
     monkeypatch.setattr(runtime, "build_agent", lambda name, profile=None: object())
     monkeypatch.setattr(runtime, "_build_store", lambda: object())
     monkeypatch.setattr(runtime, "setup_observability", lambda: None)
 
-    s = runtime.Session(agent_name="runtime2_test", trace=False)
+    s = runtime.Session(agent_name="test", trace=False)
     # Session.__init__ must have injected the Shell-only profile for the
     # keyword agent_name (not the default profile).
     assert s.profile == _FAKE_SHELL_PROFILE
@@ -499,4 +480,4 @@ def test_stream_propagates_real_cancellation(monkeypatch) -> None:
         )
 
 
-_FAKE_SHELL_PROFILE = _FakeProfile(name="runtime2_test")
+_FAKE_SHELL_PROFILE = _FakeProfile(name="test")

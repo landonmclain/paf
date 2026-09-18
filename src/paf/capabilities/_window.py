@@ -60,8 +60,8 @@ if TYPE_CHECKING:
 # structurally unreachable by the window tier.
 #
 # The "<memory>" injected context parts carry a non-str `content` (a list), so
-# they are deliberately NOT turn starts — this mirrors runtime2._is_turn_start
-# so the gate and the resume_window renderer see the same turns.
+# they are deliberately NOT turn starts — the gate and the resume_window
+# renderer must see the same turns.
 def _is_real_user_prompt(message: ModelMessage) -> bool:
     """Whether `message` is a real (non-injected) user-turn anchor.
 
