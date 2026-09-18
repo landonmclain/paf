@@ -108,7 +108,7 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
             agent,
             profile=_profile_for(agent),
             conversation_id=conversation_id,
-            resume_window=15,
+            resume_window=50,
         )
         session.attach_background()
         _sessions[key] = session
