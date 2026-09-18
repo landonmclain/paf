@@ -22,12 +22,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from opentelemetry import trace
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import RunContext
 from stackone_defender import DefenseResult
 
 # Span name for a prompt-injection detection. Convention: paf.<domain>.<event>.
 _SPAN_NAME = "paf.guardrail.prompt_injection"
+
+# Tracer used to emit detection spans. Module-level so tests can point it at an
+# in-memory exporter without touching the process-global OTel provider (which
+# can only be set once).
+_TRACER = trace.get_tracer("paf")
 
 # The verdict fields worth surfacing in the trace. Kept to plain-JSON scalars so
 # the span attributes stay small and Langfuse-friendly.
@@ -69,10 +75,7 @@ def prompt_injection_on_detection(
     failure is swallowed.
     """
     try:
-        from opentelemetry import trace
-
-        tracer = trace.get_tracer("paf")
-        with tracer.start_as_current_span(_SPAN_NAME) as span:
+        with _TRACER.start_as_current_span(_SPAN_NAME) as span:
             span.set_attribute("tool", call.tool_name)
             span.set_attribute("risk_level", verdict.risk_level)
             for key, value in _diagnostics(verdict).items():

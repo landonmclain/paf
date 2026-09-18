@@ -18,7 +18,6 @@ import pytest
 
 pytest.importorskip("stackone_defender")
 
-from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -27,6 +26,7 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness import PromptInjectionDefender
 from stackone_defender import DefenseResult
 
+from paf.capabilities.guardrails import prompt_injection
 from paf.capabilities.guardrails.prompt_injection import (
     _SPAN_NAME,
     prompt_injection_on_detection,
@@ -41,16 +41,18 @@ _INJECTION = (
 )
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _global_tracer() -> InMemorySpanExporter:
-    """Point the process-global tracer at an in-memory exporter (set once)."""
+@pytest.fixture
+def _tracer(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
+    """Point the handler's tracer at a fresh in-memory exporter.
+
+    The handler reads a module-level ``_TRACER`` (not the process-global OTel
+    provider, which can only be set once), so each test monkeypatches it to a
+    tracer bound to its own exporter. Order-independent.
+    """
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    try:
-        trace.set_tracer_provider(provider)
-    except Exception:  # noqa: BLE001 - OTel only allows setting the provider once
-        pass
+    monkeypatch.setattr(prompt_injection, "_TRACER", provider.get_tracer("paf"))
     return exporter
 
 
@@ -73,21 +75,20 @@ def _span_names(exporter: InMemorySpanExporter) -> list[str]:
 
 
 def test_on_detection_emits_prompt_injection_span(
-    _global_tracer: InMemorySpanExporter,
+    _tracer: InMemorySpanExporter,
 ) -> None:
     """The handler emits a ``paf.guardrail.prompt_injection`` span with the tool
     name, risk level, and verdict diagnostics."""
-    _global_tracer.clear()
 
     class _Call:
         tool_name = "fetch_doc"
 
     prompt_injection_on_detection(None, _Call(), _verdict())
 
-    names = _span_names(_global_tracer)
+    names = _span_names(_tracer)
     assert _SPAN_NAME in names, names
 
-    span = next(s for s in _global_tracer.get_finished_spans() if s.name == _SPAN_NAME)
+    span = next(s for s in _tracer.get_finished_spans() if s.name == _SPAN_NAME)
     attrs = dict(span.attributes)
     assert attrs["tool"] == "fetch_doc"
     assert attrs["risk_level"] == "high"
@@ -95,9 +96,8 @@ def test_on_detection_emits_prompt_injection_span(
     assert "ignore_previous" in attrs["verdict.detections"]
 
 
-def test_on_detection_never_raises(_global_tracer: InMemorySpanExporter) -> None:
+def test_on_detection_never_raises(_tracer: InMemorySpanExporter) -> None:
     """A trace failure must never break the run (the builtin's contract)."""
-    _global_tracer.clear()
 
     class _Call:
         tool_name = "fetch_doc"
@@ -111,11 +111,10 @@ def test_on_detection_never_raises(_global_tracer: InMemorySpanExporter) -> None
 
 
 def test_integration_withheld_result_is_catchable_and_traced(
-    _global_tracer: InMemorySpanExporter,
+    _tracer: InMemorySpanExporter,
 ) -> None:
     """A crafted injection is withheld (catchable blocked_message, run continues)
     AND the paf on_detection handler traces it."""
-    _global_tracer.clear()
 
     async def fetch_doc() -> str:
         return _INJECTION
@@ -139,5 +138,5 @@ def test_integration_withheld_result_is_catchable_and_traced(
     assert "withheld" in result.output
 
     # Traced: the paf on_detection handler emitted a span for the hit.
-    names = _span_names(_global_tracer)
+    names = _span_names(_tracer)
     assert _SPAN_NAME in names, names
