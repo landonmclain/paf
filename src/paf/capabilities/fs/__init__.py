@@ -1,4 +1,4 @@
-"""paf-owned filesystem capability (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned filesystem capability (originally copied from pydantic-ai-harness, MIT).
 
 Scoped file access rooted at a directory: read/write/edit with `expected_hash`
 optimistic-concurrency (stale-write) guarding, listing, content regex search,
