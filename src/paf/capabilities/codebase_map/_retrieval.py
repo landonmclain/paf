@@ -1,10 +1,10 @@
-"""Retrieval seam — the search-method extension point (tokens-backed now live).
+"""Retrieval seam — the search-method extension point.
 
 This is the *how queries are answered* seam (vs `_store.py`'s *where artifacts are
 stored* seam). ``RetrievalBackend`` is the designated drop point for a future
 semantic/vector backend; ``LexicalRetrieval`` is the default implementation.
 
-Under the LOCKED read-model (2026-08-23), ``search`` scores over **``tokens.json``**
+Under the LOCKED read-model, ``search`` scores over **``tokens.json``**
 (the inverted, symbol-scoped search backend — name+sig+doc postings), presents the
 **``index`` HEAD** row for each surfaced file (path, language, module docstring,
 matched name lists), and dereferences ``manifest`` only on pick — progressive
@@ -25,7 +25,7 @@ from ._store import ArtifactKind, FlatFileStorage, StorageService
 from ._tokens import tokens_rank
 
 # Weightings for the zero-LLM distilled-map ranking (call-weighted in-degree).
-# A PROVEN call edge (Phase 1.2, kind="call") counts for CALL_WEIGHT; a mere
+# A PROVEN call edge (kind="call") counts for CALL_WEIGHT; a mere
 # reference/type-import edge counts for REFERENCE_WEIGHT. Chose 3:1 so files the
 # agent actually invokes outrank files it merely annotates — without drowning the
 # reference signal entirely (focus on the *hub* files, not the noise).
@@ -110,8 +110,8 @@ class LexicalRetrieval:
         """Token-scored search over the search backend, presented as index heads.
 
         ``mode`` is accepted for API compatibility; broad token ranking is the
-        Phase-3-adjacent first pass (exact/`callers`/graph modes come with the graph
-        phase). Scores ``tokens.json`` (the search backend) and presents each
+        first pass (exact/`callers`/graph modes are not yet built). Scores
+        ``tokens.json`` (the search backend) and presents each
         surfaced file's lean ``index`` HEAD row (module docstring + matched names).
         """
         tokens = self._tokens_payload()
@@ -124,10 +124,10 @@ class LexicalRetrieval:
 
         Ranks files by **call-weighted in-degree** from the persisted graph artifact:
         an incoming edge contributes ``CALL_WEIGHT`` (3.0) when it is a provable call
-        (Phase 1.2 ``kind: "call"``) and ``REFERENCE_WEIGHT`` (1.0) otherwise. Files the
+        (``kind: "call"``) and ``REFERENCE_WEIGHT`` (1.0) otherwise. Files the
         agent actually *invokes* (orchestrators, helpers, constructors) therefore outrank
-        files that are merely *type-annotated / imported* — the ARB-adjacent structural
-        signal, no tokens spent on embeddings.
+        files that are merely *type-annotated / imported* — no tokens spent on
+        embeddings.
 
         Within the budget it walks files in descending score and emits one
         ``DistilledEntry`` per searchable symbol, pulling the real ``signature`` from the
@@ -139,7 +139,7 @@ class LexicalRetrieval:
         graph = self.storage.read(ArtifactKind.GRAPH, self._scan_root()) or {}
         edges = graph.get("edges", []) if isinstance(graph, dict) else []
         if graph is None or not isinstance(graph, dict) or "edges" not in graph:
-            # No persisted call graph — the index predates Phase 2 (or was never
+            # No persisted call graph — the index predates the graph artifact (or was never
             # scanned). Ranking needs edges; refuse to emit a misleading
             # alphabetical "map" instead of the real in-degree order. Caller
             # (get_repo_map) surfaces this as "reindex needed".
@@ -205,7 +205,7 @@ class LexicalRetrieval:
         return heads
 
     def _scan_root(self) -> Path:
-        """The scan root we search. v1 is single-repo: explicit scan_root wins,
+        """The scan root we search. Explicit scan_root wins,
         else derive from the storage override dir, else cwd (tests pass a storage
         with a fixed index_root, so ``list_scan_roots`` reports the override)."""
         if self._scan_root_value is not None:
