@@ -1,12 +1,11 @@
-"""Inverted, symbol-scoped token index — the search backend (spec §3.4).
+"""Inverted, symbol-scoped token index — the search backend.
 
-Builds ``tokens.json`` from the extraction and ranks queries against it. Under the
-LOCKED read-model, ``search_codebase`` scores HERE (field-tagged, symbol-scoped
-postings), presents the ``index`` HEAD row for surfaced files, and dereferences
-``manifest`` on pick (progressive disclosure). Body text is deliberately **not**
-tokenized — name + signature + doc only, per Landon 2026-08-23 (grep-on-manifest /
-``read_block`` covers in-body searches). The ``field`` tag lets the ranker weight
-where a match landed: name > signature > doc.
+Builds ``tokens.json`` from the extraction and ranks queries against it.
+``search_codebase`` scores HERE (field-tagged, symbol-scoped postings), presents
+the ``index`` HEAD row for surfaced files, and dereferences ``manifest`` on pick
+(progressive disclosure). Body text is deliberately **not** tokenized — name +
+signature + doc only (grep-on-manifest / ``read_block`` covers in-body searches).
+The ``field`` tag lets the ranker weight where a match landed: name > signature > doc.
 
 Invariants:
 - **Symbol-scoped**: every posting collapses to a symbol's ``manifest_ref`` block,
@@ -23,7 +22,7 @@ from typing import Any
 
 from ._schema import BlockRef, FileInfo, SearchHit, Span
 
-# Weight a query token by how load-bearing the field it hits in is (§3.7.2):
+# Weight a query token by how load-bearing the field it hits in is:
 # a plain name match beats a docstring mention.
 _FIELD_WEIGHTS: dict[str, float] = {
     "name": 6.0,
@@ -31,8 +30,7 @@ _FIELD_WEIGHTS: dict[str, float] = {
     "doc": 2.0,
 }
 
-# High-frequency English function words that carry no search signal (Landon
-# 2026-08-23: tokens were "too verbose" — postings counted 25% stopwords).
+# High-frequency English function words that carry no search signal.
 # Filtered at tokenize time in ``_tok`` so index BUILD and QUERY see the same
 # vocabulary (a stopword-only query must not match the same stopword in the
 # index). Curated conservatively: only unambiguous envelope words, never
@@ -59,8 +57,8 @@ def build_tokens(files: list[FileInfo]) -> dict[str, Any]:
 
     Returns ``{"version": 1, "files": {path: {token: [posting, ...]}}}`` where each
     posting is ``{symbol, kind, field, manifest_ref: {start_line, end_line}}``.
-    Only fields {name, signature, doc} are tokenized (body is excluded, per the
-    locked read-model). Unparsed files contribute nothing (no symbols to search).
+    Only fields {name, signature, doc} are tokenized (body is excluded). Unparsed
+    files contribute nothing (no symbols to search).
     """
     out: dict[str, Any] = {"version": 1, "files": {}}
     for fi in files:
@@ -111,8 +109,8 @@ def tokens_rank(
     surfaces the top ``limit`` as ``SearchHit``s. Each hit's ``block`` collapses to
     the best-matched symbol's ``manifest_ref`` (a ``BlockRef`` into ``manifest``).
     ``snippet`` carries the file's ``index`` HEAD row doc head when ``heads`` (a
-    path → index head row map) is supplied — the ``present the head`` step of the
-    locked read-model — so the caller can dereference ``manifest`` on pick.
+    path → index head row map) is supplied — the ``present the head`` step — so
+    the caller can dereference ``manifest`` on pick.
     """
     qtokens = _tok(query)
     if not qtokens:
