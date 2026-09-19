@@ -1,20 +1,14 @@
-"""Memory tools over the append-only journal (live M2 surface).
+"""Memory tools over the append-only journal.
 
-This module carries the LIVE memory tool surface after the legacy rehomed
-pydantic-ai builtin was removed:
+This module carries the memory tool surface:
 
-- :class:`JournalAppendToolset` — the M2 owner's ONLY tool (``append_memory``).
-- :class:`MemoryWriteResult` — the result shape both ``append_memory`` and the
-  organizer's ``finalize_index`` emit.
+- :class:`JournalAppendToolset` — the owner's ONLY tool (``append_memory``).
+- :class:`OverrideToolset` — the assistant's ``memory_archive_suggestion``.
+- :class:`ReviewerToolset` — the reviewer's ``memory_review`` + ``memory_merge``.
+- :class:`MemoryWriteResult` — the result shape ``append_memory`` emits.
 - shared helpers ``MAIN_FILENAME`` / ``normalize_filename`` / ``list_subfiles`` /
   ``injection_listing_limit`` / ``render_memory_prompt`` used by the
   :class:`~paf.capabilities.memory.Memory` capability's injection + guidance.
-
-The legacy 4-tool ``MemoryToolset`` (``read_memory`` / ``search_memory`` /
-``write_memory`` / ``delete_memory``) and its result types /
-`_OWNER_*` no-progress read guards were removed — the assistant is inject-only
-(``expose_tools=False``) and the owner appends through the journal. The full
-original source is archived at ``tests/retired/memory_toolset_reference.py``.
 """
 
 from __future__ import annotations
@@ -51,8 +45,7 @@ class MemoryWriteResult(TypedDict):
     """Result from a memory append — echoes the recorded fact back so the model
     can confirm its append landed.
 
-    ``memory`` is the appended fact text (used by ``append_memory`` and the
-    organizer's ``finalize_index`` to echo what was recorded).
+    ``memory`` is the appended fact text.
     """
 
     memory: NotRequired[str | None]
@@ -189,7 +182,7 @@ def _render_sections(
 
 
 class JournalAppendToolset(FunctionToolset[AgentDepsT]):
-    """The M2 owner's ONLY tool: ``append_memory`` -> :class:`JournalStore`.
+    """The owner's ONLY tool: ``append_memory`` -> :class:`JournalStore`.
 
     The three-layer memory model makes the owner a pure *appender*: it reads
     nothing through tools and edits nothing in place. It inspects the labeled

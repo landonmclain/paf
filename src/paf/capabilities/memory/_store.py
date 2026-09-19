@@ -1,7 +1,7 @@
 """Shared typed memory records, protocols, and validation for the memory capability.
 
-This module retains the load-bearing shared types the live M2 memory
-spine needs (``_journal``, ``_render``, ``_view``, the owner's
+This module holds the load-bearing shared types the memory spine needs
+(``_journal``, ``_index``, ``_render``, ``_view``, the owner's
 ``JournalAppendToolset``):
 
 - ``MemoryFile`` / ``MemoryOperation`` / ``MemoryMutation`` / ``MemorySearchMatch``
@@ -10,20 +10,9 @@ spine needs (``_journal``, ``_render``, ``_view``, the owner's
 - ``validate_store_path`` / ``validate_store_prefix`` / ``lexical_search`` —
   shared helpers
 
-There is no process-lifetime placeholder store: ``Memory.store`` is required and
-the M2 path always supplies the read-only ``JournalViewStore`` of the rendered
-journal. The retired ``InMemoryStore`` (legacy ``Memory`` field-default / inert
-owner handle) was removed with the rest of the rehomed builtin surface.
-
-The heavy legacy rehomed backends grew out of here and were removed with the
-rest of the rehomed pydantic-ai builtin surface: ``FileStore`` (flat ``.md`` +
-hidden SQLite journal + a bespoke ``_atomic_write``) and ``MarkdownStorage``
-(in the retired ``_markdown.py``). None is used by the M2 journal model — the
-owner appends to ``JournalStore`` (JSONL) and ``JournalViewStore`` renders
-``MEMORY.md`` deterministically. The curated ``IndexStore`` / organizer /
-consolidation second pass were **unhooked 2026-08-25 and archived** to
-``archive/organizer/``. Atomic writes now come from the single shared
-``_atomic.py`` (the port of ``agent-foundation``).
+``Memory.store`` is required: the read path always supplies the read-only
+``JournalViewStore`` of the rendered journal. Atomic writes come from the shared
+``_storage._atomic``.
 """
 
 from __future__ import annotations

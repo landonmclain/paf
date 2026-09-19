@@ -84,9 +84,9 @@ class Memory(AbstractCapability[AgentDepsT]):
     """
 
     store: MemoryStore
-    """Storage backend (required). The M2 path supplies a read-only
-    ``JournalViewStore`` of the journal-rendered ``MEMORY.md``; there is no
-    legacy process-lifetime default."""
+    """Storage backend (required). The read path supplies a read-only
+    ``JournalViewStore`` of the rendered ``MEMORY.md``; there is no
+    process-lifetime default."""
 
     store_resolver: Callable[[RunContext[AgentDepsT]], MemoryStore] | None = None
     """Optional per-run store resolver. Resolver failures always propagate."""
@@ -133,26 +133,23 @@ class Memory(AbstractCapability[AgentDepsT]):
     """Whether store failures during automatic injection are ignored or raised."""
 
     writable: bool = True
-    """Whether the memory toolset exposes write/delete.
+    """Whether this capability may write memory.
 
-    ``False`` ⇒ the toolset registers ``read_memory`` / ``search_memory`` only
-    (read-only surface). The assistant carries ``writable=False`` so it can
-    never contaminate durable memory; the consolidation owner
-    (:mod:`paf.capabilities.memory._consolidate`) carries ``writable=True``
-    and is the sole writer.
+    ``False`` ⇒ the assistant can never contaminate durable memory. The
+    consolidation owner (:mod:`paf.capabilities.memory._consolidate`) carries
+    ``writable=True`` and is the sole writer.
     """
 
     expose_tools: bool = True
     """Whether this capability registers ANY memory tools.
 
-    ``False`` ⇒ :meth:`get_toolset` returns ``None``: no ``read_memory`` /
-    ``search_memory`` / ``write_memory`` / ``delete_memory`` / ``append_memory``
-    surface at all. This is the M2 recall (assistant) side: the journal-rendered
-    notebook is injected in-context via :meth:`before_model_request` and the
-    recall ladder is ``search_conversation_history`` / ``read_turn``
-    (ConversationSearch) — NOT memory tools. Memory here is injection-only.
-    The consolidation owner keeps ``expose_tools=True`` (its only tool is
-    ``append_memory`` via the journal toolset).
+    ``False`` ⇒ :meth:`get_toolset` returns ``None``: no memory tool surface at
+    all. This is the recall (assistant) side: the rendered notebook is injected
+    in-context via :meth:`before_model_request` and the recall ladder is
+    ``search_conversation_history`` / ``read_turn`` (ConversationSearch) — NOT
+    memory tools. Memory here is injection-only. The consolidation owner keeps
+    ``expose_tools=True`` (its only tool is ``append_memory`` via the journal
+    toolset).
     """
 
     consolidate_every: int = 10
@@ -173,10 +170,9 @@ class Memory(AbstractCapability[AgentDepsT]):
 
     When set (with ``writable=True``), :meth:`get_toolset` returns a
     journal-append toolset exposing ONLY ``append_memory`` (which appends to
-    this journal). This is the M2 three-layer model: the owner never edits,
-    moves, or deletes memory — it appends immutable facts to the journal, and
-    the render pass (``_render.write_render``) produces ``MEMORY.md`` from it
-    at recall time.
+    this journal). The owner never edits, moves, or deletes memory — it appends
+    immutable facts to the journal, and the render pass
+    (``_render.write_render``) produces ``MEMORY.md`` from it at recall time.
     """
 
     overrides: OverrideStore | None = field(default=None, kw_only=True)
@@ -239,13 +235,11 @@ class Memory(AbstractCapability[AgentDepsT]):
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:
         """Provide the stable `memory` toolset.
 
-        Three M2 surfaces exist:
+        Three surfaces exist:
           - ``overrides`` set (the ASSISTANT's curation channel) -> an override
             toolset exposing ONLY ``memory_archive_suggestion`` (pending archive).
           - ``journal`` set (the OWNER) -> ``append_memory`` only.
           - otherwise ``expose_tools=False`` (inject-only, no memory tools).
-        The legacy ``writable``-gated ``MemoryToolset`` (read/search/write/delete)
-        was removed.
         """
         if self.overrides is not None:
             # Assistant curation: ONE narrow modify-only tool. It never touches
@@ -261,8 +255,8 @@ class Memory(AbstractCapability[AgentDepsT]):
             return OverrideToolset(self.overrides, agent_name=self.agent_name)
         if not self.expose_tools:
             # Injection-only memory: the assistant carries NO memory tools. The
-            # journal-rendered notebook is injected in-context and the recall
-            # ladder is ConversationSearch (search_conversation_history/read_turn).
+            # rendered notebook is injected in-context and the recall ladder is
+            # ConversationSearch (search_conversation_history/read_turn).
             return None
         if self.journal is not None:
             return JournalAppendToolset(self.journal)
@@ -464,12 +458,10 @@ class Memory(AbstractCapability[AgentDepsT]):
         """Construct a memory capability from serializable options.
 
         ``backend`` is accepted for spec compatibility only: the legacy
-        ``'file'`` (``FileStore``, SQLite journal) and ``'markdown'``
-        (``MarkdownStorage``) backends were removed, and there is no
-        process-lifetime default. The M2 model always reads the journal-rendered
+        ``'file'`` and ``'markdown'`` backends were removed, and there is no
+        process-lifetime default. The read path always reads the rendered
         ``MEMORY.md``, so ``store`` is the read-only ``JournalViewStore`` rooted
-        at ``directory`` (previously accepted but ignored; now the concrete
-        backend). ``writable``/``expose_tools`` still gate the tool surface.
+        at ``directory``. ``writable``/``expose_tools`` gate the tool surface.
         """
         return cls(
             store=JournalViewStore(directory),

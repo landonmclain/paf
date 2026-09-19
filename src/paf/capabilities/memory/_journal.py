@@ -1,31 +1,28 @@
-"""Append-only durable-facts journal, sitting beside ``MEMORY.md`` (the M2 journal).
+"""Append-only durable-facts journal, sitting beside ``MEMORY.md``.
 
-This is the **dump** layer of the three-layer memory design (journal ->
-(render) -> ``MEMORY.md``): a write-once, append-only JSONL log of *what was
-seen and when*, each record a durable fact extracted from a chunk of source
+This is the **source of truth** of the three-layer memory design (journal ->
+index -> render): a write-once, append-only JSONL log of *what was seen and
+when*, each record a durable fact extracted from a chunk of source
 conversation. The relational concerns — dedup, recency-supersession, stale
-soft-archive, section assignment — deliberately live in the *render* pass, NOT
-here. The journal never edits, compacts, dedups, or reorders history; a fact
-seen again (possibly updated) in a later chunk legitimately appends a second
-record with a later ``born_on``, and "newest wins" is decided downstream.
+soft-archive, tier assignment — deliberately live downstream (the index and the
+render pass), NOT here. The journal never edits, compacts, dedups, or reorders
+history; a fact seen again (possibly updated) in a later chunk legitimately
+appends a second record with a later ``born_on``, and "newest wins" is decided
+downstream.
 
-Design decisions (all LOCKED with Landon, 2026-08-17):
+Design decisions:
 
-- **Record shape** — immutable ``{type, fact, born_on, source_ref}``. ``id`` is
-  the 1-based JSONL line number (stable forever because the journal is never
-  rewritten; no stored id field, no counter -- just position).
+- **Record shape** — immutable ``{type, fact, tier, born_on, source_ref}``.
+  ``id`` is the 1-based JSONL line number (stable forever because the journal is
+  never rewritten; no stored id field, no counter -- just position).
 - **No ``entity`` field** — the subject lives inline in ``fact`` prose; ``fact``
   is the sole searchable axis (BM25 search over fact text at render/query).
-- **Dump semantics, no write-time dedup** — the journal "just extracts what it
-  sees in that chunk no matter of what is already there." The ONLY write-side
-  safety is atomicity (a chunk's records are appended as one block; a crash
-  mid-block never leaves a half-written line).
-- **Deliberately free of ``agent-foundation``** — we mirror the *structure* of the
-  turn-index store (append-only JSONL, `{run_id}:{turn_id}` ref model) but NOT its
-  ``StorageService`` seam. Like ``_atomic`` before it, this module is
-  self-contained: atomic line-writes via the local ``_atomic.write_atomic``.
-  ``agent-foundation`` was an idea that didn't sit well after the fact; no new
-  dependency.
+- **Dump semantics, no write-time dedup** — the journal extracts what it sees in
+  a chunk regardless of what is already there. The ONLY write-side safety is
+  atomicity (a chunk's records are appended as one block; a crash mid-block
+  never leaves a half-written line).
+- **Self-contained** — atomic line-writes via the shared
+  ``_storage._atomic.write_atomic``; no storage-service seam of its own.
 - **Sits beside ``MEMORY.md``** — same directory, same flat-file role. The journal
   is the append-only source; ``MEMORY.md`` (the render) is the presentation the
   answerer reads.
@@ -52,15 +49,15 @@ from paf.capabilities._storage._atomic import write_atomic
 
 _JOURNAL_FILENAME = "memory-journal.jsonl"
 
-# Semantic memory types (LOCKED). These are NOT the benchmark's 4 render sections;
-# section assignment happens at render time from `type`.
+# Semantic memory types. These are NOT the render's tier sections; the render
+# groups by `tier`, and `type` is a search tag only.
 MEMORY_TYPES: frozenset[str] = frozenset(
     {"identity", "preference", "fact", "event", "task", "current"}
 )
 
-# Permanence tiers (added 2026-08-25 for the owner importance rubric). Perpendicular
-# to `type`: type says *what kind of thing* a fact is (for search), tier says *how
-# permanent / how central to knowing the user* (for bounded, tier-sorted injection).
+# Permanence tiers, set by the owner's importance rubric. Perpendicular to `type`:
+# type says *what kind of thing* a fact is (for search), tier says *how permanent /
+# how central to knowing the user* (for bounded, tier-sorted injection).
 # t1 = stable person (identity/preferences/constraints/skills/milestones; supersede-only)
 # t2 = goals / current work (active projects, current objective; superseded when it shifts)
 # t3 = ephemeral (one-off events, transient details, technical minutiae; ages out of inject)
@@ -70,11 +67,11 @@ MEMORY_TIERS: frozenset[str] = frozenset({"t1", "t2", "t3"})
 class MemoryRecord:
     """One immutable journal record: a durable fact, append-only.
 
-    Fields (LOCKED 2026-08-17; ``tier`` added 2026-08-25):
+    Fields:
       type       -- one of ``MEMORY_TYPES`` (identity|preference|fact|event|task|current)
       fact       -- the durable statement; subject lives inline (no entity field)
       tier       -- one of ``MEMORY_TIERS`` (t1|t2|t3); permanence for bounded injection.
-                    REQUIRED (we start fresh — no legacy rows without a tier).
+                    REQUIRED.
       born_on    -- ISO datetime of the source message (corpus clock, not wall-clock)
       source_ref -- ``{run_id}:{turn_id}`` turn addressing, read_turn-resolvable
 

@@ -1,29 +1,25 @@
-"""Deterministic render: journal -> MEMORY.md (the presentation view).
+"""Deterministic render: journal/index -> MEMORY.md (the presentation view).
 
-The three-layer memory design: **journal** (append-only fact stream, M2) ->
-**[render]** (this module) -> **MEMORY.md** (what the answerer reads). The
-render is the "database" step: it takes the journal's write-once records and
-produces the organized markdown notebook — ordering by **tier then recency**
-(most-recent-first within a tier), and attaching date + source per memory. It
-is **pure and deterministic**: no model, no state, no I/O beyond reading the
-journal and writing the file. LLM curation may come later; "if it doesn't have
-to be [LLM], that is better" — and it doesn't here.
+The three-layer memory design: **journal** (append-only fact stream) ->
+**index** (derived dedup winners) -> **[render]** (this module) ->
+**MEMORY.md** (what the answerer reads). The render is the "database" step: it
+takes the journal's write-once records and produces the organized markdown
+notebook — ordering by **tier then recency** (most-recent-first within a tier),
+and attaching date + source per memory. It is **pure and deterministic**: no
+model, no state, no I/O beyond reading the journal and writing the file.
 
-Format (LOCKED with Landon, 2026-08-25): the old type-grouped render (one
-``## <type>`` section per memory type) is **thrown out in favor of the
-3-tier ladder** — t1 (stable "who they are", supersede-only), t2 (goals /
-current work), t3 (ephemeral, recency tail). One ``## t1``/``## t2``/``## t3``
-section per tier present, records sorted by ``born_on`` **descending** within
-each tier (most-recent-first), each line carrying **at least fact, date
-(born_on), and source (source_ref)**:
+Format: the 3-tier ladder — t1 (stable "who they are", supersede-only), t2
+(goals / current work), t3 (ephemeral, recency tail). One ``## t1``/``## t2``/
+``## t3`` section per tier present, records sorted by ``born_on``
+**descending** within each tier (most-recent-first), each line carrying **at
+least fact, date (born_on), and source (source_ref)**:
 
     ## t1
     - user prefers flat-file storage — 2026-08-17 — seed-a1b2:12
 
 Type grouping is gone — type remains a journal search tag only, not a render
-axis. The render is deliberately **unbound** (emits every record) so a
-benchmark can compare tier-ordered vs. the flat full dump; bounding/capping is
-a future, separate concern.
+axis. The raw-journal render is deliberately **unbound** (emits every record);
+the index render bounds each tier by count (see :data:`_TIER_CAPS`).
 
 Determinism: tiers iterate in fixed order (t1 -> t2 -> t3); records within a
 tier sort by born_on descending (lexical ISO == chronological, reversed for
@@ -51,14 +47,11 @@ _PENDING_MARKER = " *(archive pending review)*"
 # Fixed render order for the 3-tier ladder; tiers not present are omitted.
 _TIER_ORDER = ("t1", "t2", "t3")
 
-# Bounded-presentation caps (per tier) for the LIVE index render — Gap A of
-# Global-Durable-Memory-Maintenance. Each tier is capped to the most-recent N
-# winners so the injected MEMORY.md stays small and current instead of a growing
-# wall that a small model misreads as corruption (trace cfe9030e,
-# web-demo_assistant): t1 (stable identity/prefs) 75, t2 (goals/current) 25,
-# t3 (ephemeral) 15. Old facts fall out of the injected view but stay in the
-# journal/index — never lost. (t1 was previously unbounded; capping it is what
-# keeps a reviewer's usual accumulation from bloating every request.)
+# Bounded-presentation caps (per tier) for the index render. Each tier is capped
+# to the most-recent N winners so the injected MEMORY.md stays small and current
+# instead of a growing wall that a small model misreads as corruption: t1 (stable
+# identity/prefs) 75, t2 (goals/current) 25, t3 (ephemeral) 15. Old facts fall out
+# of the injected view but stay in the journal/index — never lost.
 _TIER_CAPS: dict[str, int | None] = {"t1": 75, "t2": 25, "t3": 15}
 
 
@@ -91,7 +84,7 @@ def _apply_overrides(
     """Filter / re-tier / mark ``(journal_line, record)`` pairs per the sidecar.
 
     ``overrides`` is the folded per-target map (``None``/empty -> no-op). Returns
-    ``(kept_pairs, pending_lines)`` where ``pending_lines`` arethe journal
+    ``(kept_pairs, pending_lines)`` where ``pending_lines`` are the journal
     line ids with an assistant archive awaiting review (those lines render with a
     ``*(archive pending review)*`` marker). Applied archives are dropped; applied tier
     changes rebuild the record at the new tier.
@@ -108,7 +101,7 @@ def _apply_overrides(
         if st.is_applied_archive:
             continue  # reviewer archived — drop from injection
         if st.is_applied_tier and st.tier and st.tier != rec.tier:
-            # reviewer demoted — rebuildthe record at the new tier
+            # reviewer demoted — rebuild the record at the new tier
             rec = MemoryRecord(
                 type=rec.type,
                 fact=rec.fact,
@@ -204,7 +197,7 @@ def render_index_memory(
     Dedup is meaningless if it doesn't shrink what the answerer reads, and this
     is the render the live write path uses when an index exists.
 
-    **Bounded (Gap A):** each tier is capped to the most-recent N winners
+    **Bounded:** each tier is capped to the most-recent N winners
     (``tier_caps``, default :data:`_TIER_CAPS`) — t1 capped, t2 capped, t3
     capped. Winners are already deduped and sorted by recency, so the cap keeps
     the newest facts and lets old ephemeral/goal entries fall out of the
@@ -251,12 +244,12 @@ def render_index_memory(
 def _resolve_tier_caps(agent_name: str | None) -> dict[str, int | None]:
     """Resolve the per-tier injection caps for an agent from its spec.
 
-    The render owns its own caps — Option B: it reads ``memory.tier_caps``
-    from the agent's spec directly (via ``paf.specs.resolve_memory_tier_caps``),
-    merging any partial overrides over the built-in :data:`_TIER_CAPS`. When
-    ``agent_name`` is ``None``, or the spec is absent / declares no
-    ``tier_caps``, the built-in caps apply unchanged. Neither the runtime
-    Session nor the background queue carries ``tier_caps`` anywhere.
+    The render owns its own caps: it reads ``memory.tier_caps`` from the agent's
+    spec directly (via ``paf.specs.resolve_memory_tier_caps``), merging any
+    partial overrides over the built-in :data:`_TIER_CAPS`. When ``agent_name``
+    is ``None``, or the spec is absent / declares no ``tier_caps``, the built-in
+    caps apply unchanged. Neither the runtime Session nor the background queue
+    carries ``tier_caps`` anywhere.
     """
     if not agent_name:
         return dict(_TIER_CAPS)

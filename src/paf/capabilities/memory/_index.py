@@ -1,37 +1,35 @@
 """Derived, deterministic memory index: journal -> index-of-surviving-facts.
 
 The three-layer memory design has the append-only journal (source of truth),
-the render (``MEMORY.md``, what the answerer reads), and now this **index** —
-a third projection that answers *"which journal line is the live copy of each
-fact, and which lines are its deduped predecessors"* without re-scanning the
-whole journal every time.
+the render (``MEMORY.md``, what the answerer reads), and this **index** — a
+projection that answers *"which journal line is the live copy of each fact, and
+which lines are its deduped predecessors"* without re-scanning the whole
+journal every time.
 
-Why it exists (the user's ask): the journal is write-once with dump semantics
-("no write-time dedup"), so repeated facts legitimately append N copies. There
-was no way to say "these 6 lines are really one fact; line 48 is the live one"
-short of re-reading every record. This index is that verdict, and it is:
+Why it exists: the journal is write-once with dump semantics ("no write-time
+dedup"), so repeated facts legitimately append N copies. There was no way to
+say "these 6 lines are really one fact; line 48 is the live one" short of
+re-reading every record. This index is that verdict, and it is:
 
 - **Derived** — regenerable from the journal alone, so it can't drift into a
-  parallel source of truth the way the old LLM-managed ``IndexStore`` did.
-  If you delete it, the next fold regenerates it.
-- **Deterministic** — pure code, no model, no LLM pass (the user explicitly
-  rejected LLM dedup: "never an LLM pass").
+  parallel source of truth. If you delete it, the next fold regenerates it.
+- **Deterministic** — pure code, no model, no LLM pass.
 - **Incremental** — a watermark records the last journal line folded in. Each
   fold processes only the newly-appended lines, each via an O(1) lookup keyed
   on the normalized fact, NOT a re-scan of all history. The one exception is
   the very first build over a journal that already has history, which is a
-  full pass (::func:`build_index`) — and that full pass ALSO runs the fuzzy
+  full pass (:func:`build_index`) — and that full pass ALSO runs the fuzzy
   (token-overlap) dedup-cluster collapse once, to clean up existing bloat.
 
-Keep-winner rule (LOCKED with Landon, 2026-09-01): within a dedup group, the
-winner is the record with the **highest tier** (t1 > t2 > t3), breaking ties
-by **most-recent ``born_on``**, finally by append order (higher line# = newer).
+Keep-winner rule: within a dedup group, the winner is the record with the
+**highest tier** (t1 > t2 > t3), breaking ties by **most-recent ``born_on``**,
+finally by append order (higher line# = newer).
 
-v1 dedup scoping (explicit decision): incremental folds dedup on **exact** and
+Dedup scoping: incremental folds dedup on **exact** and
 **normalized-token-set** equality (catches verbatim + re-ordered repeats at
 O(1)), NOT fuzzy paraphrase. Fuzzy paraphrase collapse requires the O(n^2)
 overlap scan, which is only cheap as a one-time full build; it is intentionally
-NOT run per-fold to preserve the incremental promise. Documented future step.
+NOT run per-fold to preserve the incremental promise.
 
 Layout: the index lives beside ``MEMORY.md`` and the journal::
 
@@ -59,8 +57,8 @@ _SCHEMA = 1
 # Tier priority for the keep-winner rule: higher index = "wins" a dedup group.
 _TIER_PRIORITY = {"t1": 3, "t2": 2, "t3": 1}
 
-# Stopwords reused from the recovered 6b8f315 dedup helper — too generic to
-# discriminate facts. Anything below 3 chars is also dropped.
+# Stopwords too generic to discriminate facts. Anything below 3 chars is also
+# dropped.
 _STOP = frozenset(
     "a an the and or but of to in for on with is are was were be been "
     "has have had do does did it its this that these those about into from "
@@ -68,10 +66,10 @@ _STOP = frozenset(
 )
 
 # Fuzzy-match threshold for the one-time full-build cluster collapse (build_index).
-# Zero overlap Max(Jaccard, containment) above this = "same statement" even when
-# worded slightly differently (e.g. "browse/read on phones" vs "use their phones").
-# Used ONLY by the full build (which already scans everything); incremental folds never
-# run the fuzzy scan (exact + token-set only) to preserve the O(1) promise.
+# Max(Jaccard, containment) above this = "same statement" even when worded
+# slightly differently (e.g. "browse/read on phones" vs "use their phones").
+# Used ONLY by the full build (which already scans everything); incremental folds
+# never run the fuzzy scan (exact + token-set only) to preserve the O(1) promise.
 _NEAR_MATCH_THRESHOLD = 0.60
 
 
@@ -367,7 +365,7 @@ def _find_entry_by_line(idx: MemoryIndex, line: int) -> dict | None:
 
 
 def _overlap(a: set[str], b: set[str]) -> float:
-    """Max of Jaccard and containment — the recovered full dedup signal."""
+    """Max of Jaccard and containment — the full-build dedup signal."""
     if not a or not b:
         return 0.0
     return max(_jaccard(a, b), _containment(a, b))

@@ -137,9 +137,8 @@ Here are messages from a conversation. Remember anything durable from them:
 {evicted_text}
 """
 
-# Imported lazily to avoid a circular import at module load: _consolidate
-# imports Memory (for the owner's writable=True construct). Resolve lazily
-# inside the function.
+# Resolved lazily to avoid a circular import at module load: _consolidate
+# imports Memory (for the owner's writable=True construct).
 _MODULE_MEMORY: Memory | None = None
 
 
@@ -185,16 +184,16 @@ def _build_owner_memory(
     """Build the single-writer Memory capability the owner carries.
 
     ``writable=True`` (sole writer). ``inject_memory`` defaults to ``False`` —
-    the existing eviction-slice owner reads the store through tools (never via
-    injected context); pass ``inject_memory=True`` for the chunked seed variant
+    the eviction-slice owner reads the store through tools (never via injected
+    context); pass ``inject_memory=True`` for the chunked seed variant
     (:func:`consolidate_conversation_chunked`) so each chunk pass sees the
     cumulative rendered notebook in-context (the machinery in
     ``Memory.before_model_request`` re-reads the store every request), enabling
     later chunks to append instead of re-derive. ``journal`` is an optional
-    :class:`JournalStore` (M2 three-layer model): when set, the owner's toolset
-    exposes ONLY ``append_memory`` (append-only, no in-place edits) and the
-    rendered ``MEMORY.md`` is derived from the journal at recall time.
-    Fixed ``CONSOLIDATION_GUIDANCE``. Extracted so the ownership invariants are
+    :class:`JournalStore`: when set, the owner's toolset exposes ONLY
+    ``append_memory`` (append-only, no in-place edits) and the rendered
+    ``MEMORY.md`` is derived from the journal at recall time. Fixed
+    ``CONSOLIDATION_GUIDANCE``. Extracted so the ownership invariants are
     testable WITHOUT constructing an ``Agent`` (which resolves the model/provider
     and requires an API key).
     """
@@ -378,7 +377,7 @@ async def consolidate(
     drop, so consolidation is always *on* the eviction boundary. When nothing
     is about to be evicted, this is a no-op.
 
-    ``journal`` (optional :class:`JournalStore`) switches the owner to the M2
+    ``journal`` (optional :class:`JournalStore`) switches the owner to the
     append-only model (``append_memory`` only); ``MEMORY.md`` is rendered from
     the journal at recall time. When set, ``store`` is still required (the
     owner's ``Memory`` holds it) but the owner writes through the journal, not
@@ -434,7 +433,7 @@ async def consolidate_conversation(
     content (honest-memory guard) — this function folds exactly what it is
     handed.
 
-    ``journal`` (optional :class:`JournalStore`) switches the owner to the M2
+    ``journal`` (optional :class:`JournalStore`) switches the owner to the
     append-only model (``append_memory`` only); ``MEMORY.md`` is rendered from
     the journal at recall time.
     """
@@ -600,7 +599,7 @@ async def consolidate_conversation_chunked(
     ``inject_memory=True`` only for this path; the live/eviction ``consolidate``
     keeps its tool-only owner unchanged.
 
-    ``journal`` (optional :class:`JournalStore`) switches the owner to the M2
+    ``journal`` (optional :class:`JournalStore`) switches the owner to the
     three-layer model: it appends immutable facts via ``append_memory`` (its
     ONLY tool) instead of in-place editing, and ``MEMORY.md`` is rendered from
     the journal later (at recall time), not here.

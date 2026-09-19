@@ -1,8 +1,8 @@
 """Background memory-consolidation consumer — the ``MemoryConsolidationQueue``.
 
-Wires the framework-level work-queue engine (:class:`paf.background.BackgroundQueueService`,
-committed ``29faa67``) to the M2 memory store, fired by the *watermark* trigger
-(:mod:`._watermark`) instead of eviction.
+Wires the framework-level work-queue engine (:class:`paf.background.BackgroundQueueService`)
+to the memory store, fired by the *watermark* trigger (:mod:`._watermark`)
+instead of eviction.
 
 This queue runs the owner **out-of-band** — the turn returns immediately and a
 background worker drains the job. The turn never blocks on the owner's LLM work.

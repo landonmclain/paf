@@ -1,7 +1,7 @@
-"""Isolated view reader: journal-rendered MEMORY.md inserted into context.
+"""Isolated view reader: rendered MEMORY.md inserted into context.
 
-The M2 three-layer design (see `_journal.py` / `_render.py`) makes the
-append-only JSONL journal the *source of truth* and `MEMORY.md` a *pure
+The three-layer design (see `_journal.py` / `_index.py` / `_render.py`) makes
+the append-only JSONL journal the *source of truth* and `MEMORY.md` a *pure
 presentation view* rendered from it. The recall/answerer is READ-ONLY: it
 never touches the journal and never writes memory. Its job is simply to have
 the current rendered notebook inserted into `<memory>` on every request.
@@ -25,7 +25,7 @@ from ._store import MemoryFile
 
 
 class JournalViewStore:
-    """Read-only view of a journal-rendered ``MEMORY.md`` file.
+    """Read-only view of a rendered ``MEMORY.md`` file.
 
     Implements just the read side of the :class:`MemoryStore` protocol that
     injection needs:

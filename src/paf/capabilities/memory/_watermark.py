@@ -8,7 +8,7 @@ by a flat-file watermark.
 
 This module holds the pure, testable pieces — the watermark record and the
 ``should_fire`` trigger predicate — with **no model and no persistence calls**.
-The queue consumer that uses them lives in :mod:`. _background`.
+The queue consumer that uses them lives in :mod:`._background`.
 
 Ref model (see ``_journal.py``): a turn's durable address is anchored on the
 run's persisted ``started_at`` (a native UTC timestamp, index-sorted on the
@@ -17,14 +17,14 @@ which resets when a session forks/continues and therefore can't anchor
 cross-run cadence. The watermark is a single ``consumed_ts`` timestamp: the
 last time the owner folded durable turns.
 
-Design notes from ``Designs/Background-Memory-Watermark-Spec.md``:
+Design notes:
 - Flat-file-first — ``memory-watermark.json`` sits beside the journal /
   ``MEMORY.md``, diffable and swappable (no opaque DB).
 - The cadence is a **time** metric: ``should_fire`` fires once at least
-  ``consolidate_every`` **minutes** have elapsed since ``consumed_ts`` (and
-  immediately on a fresh/legacy watermark with no anchor). This is decoupled
-  from context eviction — eviction is trim-only and never calls memory — so
-  eviction is just a safety net, not a trigger or dependency.
+  ``every`` (a :class:`datetime.timedelta`) has elapsed since ``consumed_ts``
+  (and immediately on a fresh/legacy watermark with no anchor). This is
+  decoupled from context eviction — eviction is trim-only and never calls
+  memory — so eviction is just a safety net, not a trigger or dependency.
 - The trigger predicate here is deliberately time-anchored; the queue
   consumer's window selection handles which turns were new since the anchor.
 
@@ -52,11 +52,11 @@ _EMPTY = ""
 class MemoryWatermark:
     """The position the owner has consumed, as a persistent flat file.
 
-    ``consumed_ts`` is the **time anchor** (monotonic across runs — the fix from
-    ``Designs/Background-Memory-Watermark-Spec.md``): the watermark's ordering
-    key is the persisted ``started_at`` of the last foldable material, not a
-    per-run ``turn_id`` ordinal (which is only monotonic within one run and rots
-    as sessions fork/continue). ``run_id`` / ``turn_id`` mirror the
+    ``consumed_ts`` is the **time anchor** (monotonic across runs): the
+    watermark's ordering key is the persisted ``started_at`` of the last
+    foldable material, not a per-run ``turn_id`` ordinal (which is only monotonic
+    within one run and rots as sessions fork/continue). ``run_id`` / ``turn_id``
+    mirror the
     ``{run_id}:{turn_id}`` ref model of ``_journal.py`` and are kept as the
     precise ``source_ref`` address, no longer as the ordering key.
 
