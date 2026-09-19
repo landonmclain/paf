@@ -179,7 +179,13 @@ def _consolidation_model_settings() -> ModelSettings:
 
 
 def _build_owner_memory(
-    store, *, agent_name: str, namespace: str, inject_memory: bool = False, journal=None
+    store,
+    *,
+    agent_name: str,
+    namespace: str,
+    inject_memory: bool = False,
+    journal=None,
+    guidance: str = CONSOLIDATION_GUIDANCE,
 ) -> Memory:
     """Build the single-writer Memory capability the owner carries.
 
@@ -192,8 +198,9 @@ def _build_owner_memory(
     later chunks to append instead of re-derive. ``journal`` is an optional
     :class:`JournalStore`: when set, the owner's toolset exposes ONLY
     ``append_memory`` (append-only, no in-place edits) and the rendered
-    ``MEMORY.md`` is derived from the journal at recall time. Fixed
-    ``CONSOLIDATION_GUIDANCE``. Extracted so the ownership invariants are
+    ``MEMORY.md`` is derived from the journal at recall time. ``guidance`` is the
+    operating manual (defaults to the fixed ``CONSOLIDATION_GUIDANCE``; a caller
+    may pass spec-resolved instructions). Extracted so the ownership invariants are
     testable WITHOUT constructing an ``Agent`` (which resolves the model/provider
     and requires an API key).
     """
@@ -204,9 +211,43 @@ def _build_owner_memory(
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=inject_memory,
-        guidance=CONSOLIDATION_GUIDANCE,
+        guidance=guidance,
         writable=True,
         journal=journal,
+    )
+
+
+def _owner_spec_config() -> tuple[str, ModelSettings, str] | None:
+    """Resolve the extractor leaf spec (model, model_settings, guidance).
+
+    Returns None when the ``memory_extractor`` spec is absent/unreadable so
+    callers fall back to :func:`consolidate_model` + ``CONSOLIDATION_GUIDANCE``
+    (keeps unit tests and non-spec deployments working). When present, it is the
+    source of truth (Spec-Driven-Background-Agents), including the operating
+    guidance moved out of code.
+    """
+    try:
+        from paf.specs import resolve_background_spec
+    except Exception:  # noqa: BLE001 - best-effort sugar
+        return None
+    try:
+        spec, raw = resolve_background_spec("memory_extractor")
+    except Exception:  # noqa: BLE001 - absent/unreadable spec
+        return None
+    model = spec.model or consolidate_model()
+    settings = spec.model_settings or _consolidation_model_settings()
+    guidance = spec.instructions or CONSOLIDATION_GUIDANCE
+    # Narrow the loosely-typed AgentSpec fields (TemplateStr/dict) — the same
+    # cast pattern the writer sub-agent uses; these are plain str/ModelSettings
+    # in practice (YAML block scalar + model_settings dict).
+    from typing import cast as _cast
+
+    from pydantic_ai import ModelSettings as _MS
+
+    return (
+        model,
+        _cast(_MS, settings),
+        _cast(str, guidance) if not isinstance(guidance, list) else str(guidance),
     )
 
 
@@ -233,11 +274,29 @@ def _build_owner(
         inject_memory=inject_memory,
         journal=journal,
     )
+    # Spec-driven (Spec-Driven-Background-Agents): the extractor leaf spec
+    # (`specs/background_agents/memory_extractor.yaml`) is the source of truth for
+    # model, model_settings, and the operating guidance. Falls back to
+    # `consolidate_model()` + `CONSOLIDATION_GUIDANCE` when the spec is absent.
+    spec_cfg = _owner_spec_config()
+    if spec_cfg is not None:
+        model, model_settings, owner_guidance = spec_cfg
+        # rebuild owner_memory with the spec-resolved guidance
+        owner_memory = _build_owner_memory(
+            store,
+            agent_name=agent_name,
+            namespace=namespace,
+            inject_memory=inject_memory,
+            journal=journal,
+            guidance=owner_guidance,
+        )
+    else:
+        model, model_settings = consolidate_model(), _consolidation_model_settings()
     owner = Agent(
-        consolidate_model(),
+        model,
         name="memory-owner",
         capabilities=[owner_memory],
-        model_settings=_consolidation_model_settings(),
+        model_settings=model_settings,
         retries=3,
     )
     return owner, owner_memory

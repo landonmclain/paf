@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelSettings
 
 from ._consolidate import _consolidation_model_settings, consolidate_model
 
@@ -77,6 +77,61 @@ def _build_reviewer_memory(
     )
 
 
+def _reviewer_spec_config() -> tuple[str, ModelSettings, int, int] | None:
+    """Resolve the reviewer leaf spec (model, model_settings, retries, max_item_chars).
+
+    Returns None when the ``memory_reviewer`` spec is absent/unreadable so callers
+    fall back to :func:`review_model` + shared consolidation settings + hardcoded
+    retries (keeps unit tests and non-spec deployments working). When present it
+    is the source of truth (Spec-Driven-Background-Agents).
+    """
+    try:
+        from paf.specs import resolve_background_spec
+    except Exception:  # noqa: BLE001 - best-effort sugar
+        return None
+    try:
+        spec, raw = resolve_background_spec("memory_reviewer")
+    except Exception:  # noqa: BLE001 - absent/unreadable spec
+        return None
+    model = spec.model or review_model()
+    settings = spec.model_settings or _consolidation_model_settings()
+    retries = raw.get("retries")
+    if not isinstance(retries, int) or isinstance(retries, bool) or retries < 1:
+        retries = 2  # DEFAULT_REVIEWER_RETRIES
+    max_chars = raw.get("max_item_chars")
+    if not isinstance(max_chars, int) or isinstance(max_chars, bool) or max_chars < 1:
+        max_chars = DEFAULT_MAX_ITEM_CHARS
+    from typing import cast as _cast
+
+    from pydantic_ai import ModelSettings as _MS
+
+    return model, _cast(_MS, settings), retries, max_chars
+
+
+DEFAULT_MAX_ITEM_CHARS = 1200
+
+
+def _reviewer_prompt() -> str:
+    """The reviewer's operating prompt — spec `instructions` or REVIEW_PROMPT.
+
+    The reviewer's guidance carries a ``{rendered}`` placeholder (the current
+    memory render), formatted at run time by :func:`review`. When the spec
+    declares ``instructions`` it is the source of truth; falls back to the
+    constant :data:`REVIEW_PROMPT`.
+    """
+    try:
+        from paf.specs import resolve_background_spec
+
+        spec, _raw = resolve_background_spec("memory_reviewer")
+        if spec.instructions:
+            from typing import cast as _cast
+
+            return _cast(str, spec.instructions)
+    except Exception:  # noqa: BLE001 - best-effort sugar
+        pass
+    return REVIEW_PROMPT
+
+
 def _build_reviewer(
     store,
     overrides,
@@ -93,12 +148,21 @@ def _build_reviewer(
         namespace=namespace,
         journal=journal,
     )
+    spec_cfg = _reviewer_spec_config()
+    if spec_cfg is not None:
+        model, model_settings, retries, _max_chars = spec_cfg
+    else:
+        model, model_settings, retries = (
+            review_model(),
+            _consolidation_model_settings(),
+            2,
+        )
     reviewer = Agent(
-        review_model(),
+        model,
         name="memory-reviewer",
         capabilities=[reviewer_memory],
-        model_settings=_consolidation_model_settings(),
-        retries=2,
+        model_settings=model_settings,
+        retries=retries,
     )
     return reviewer, reviewer_memory
 
@@ -197,7 +261,7 @@ async def review(
         # can append the canonical consolidated record before archiving sources.
         journal=JournalStore(directory),
     )
-    result = await reviewer.run(REVIEW_PROMPT.format(rendered=rendered))
+    result = await reviewer.run(_reviewer_prompt().format(rendered=rendered))
     return reviewer_verdict_count(result)
 
 

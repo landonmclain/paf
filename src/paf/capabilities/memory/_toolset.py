@@ -28,6 +28,30 @@ from ._store import MemoryStore
 MAIN_FILENAME = "MEMORY.md"
 """The main notebook file injected as bounded user-role context."""
 
+DEFAULT_MAX_ITEM_CHARS = 1200
+
+
+def _merge_item_char_cap() -> int:
+    """The reviewer spec's per-item char cap (``max_item_chars``), default 1200.
+
+    Lazy + best-effort: reads the ``memory_reviewer`` leaf spec's top-level
+    ``max_item_chars`` knob; falls back to :data:`DEFAULT_MAX_ITEM_CHARS` when the
+    spec is absent/unreadable (so non-spec deployments and unit tests keep a
+    sane bound). Imported lazily to avoid a specs ↔ memory circular import.
+    """
+    try:
+        from paf.specs import _spec_scalar, get_spec_path
+    except Exception:  # noqa: BLE001 - best-effort sugar
+        return DEFAULT_MAX_ITEM_CHARS
+    try:
+        value = _spec_scalar(get_spec_path("memory_reviewer"), "max_item_chars")
+    except Exception:  # noqa: BLE001 - absent/unreadable
+        return DEFAULT_MAX_ITEM_CHARS
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return DEFAULT_MAX_ITEM_CHARS
+
+
 _FILENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
 _CHARS_PER_TOKEN = 4
 _MAX_SEARCH_QUERY_CHARS = 1_000
@@ -561,6 +585,16 @@ class ReviewerToolset(_CurationToolset[AgentDepsT]):
             fact = (fact or "").strip()
             if not fact:
                 raise ModelRetry("fact must be non-empty")
+            # Per-item size cap (Spec-Driven-Background-Agents): a merged fact
+            # must not exceed the reviewer spec's `max_item_chars` (default 1200,
+            # all tiers). A merge that would produce a longer line is too big —
+            # the model must split it into 2-3 shorter facts instead.
+            if len(fact) > _merge_item_char_cap():
+                raise ModelRetry(
+                    f"merged fact exceeds the {_merge_item_char_cap()}-char per-item "
+                    "cap — split it into 2-3 smaller facts instead of merging into "
+                    "an over-long line"
+                )
             if tier not in MEMORY_TIERS:
                 raise ModelRetry(
                     f"invalid memory tier {tier!r}; expected one of {sorted(MEMORY_TIERS)}"

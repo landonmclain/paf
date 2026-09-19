@@ -396,6 +396,47 @@ def resolve_memory_tier_caps(
     return out or None
 
 
+def _spec_scalar(spec_path: Path, key: str) -> int | str | None:
+    """Read one top-level scalar (e.g. ``max_item_chars``) from a spec.
+
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so background-agent
+    builders read paf-specific scalars (``retries``, ``max_item_chars``) from the
+    raw YAML via the same best-effort pattern ``_spec_memory_config`` uses.
+    Returns the raw value, or ``None`` when absent/unreadable.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get(key)
+
+
+def resolve_background_spec(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> tuple[AgentSpec, dict[str, Any]]:
+    """Resolve a background-agent leaf spec into ``(agent_spec, raw_dict)``.
+
+    Background agents (``memory_extractor`` / ``memory_reviewer`` / …) are
+    leaf-agent specs under ``specs/background_agents/``, resolved by bare name
+    via the recursive ``get_spec_path``. The returned ``AgentSpec`` carries the
+    pydantic-ai fields (``model`` / ``model_settings`` / ``instructions``); the
+    raw dict additionally carries paf-specific top-level knobs that ``AgentSpec``
+    would drop (``retries``, ``max_item_chars``). Builders read both.
+
+    Raises :class:`AgentSpecNotFoundError` when no spec resolves.
+    """
+    spec_path = get_spec_path(agent_name, spec_directory)
+    with spec_path.open("r", encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh)
+    if not isinstance(raw, dict):
+        raw = {}
+    return load_agent_spec(agent_name, spec_directory), raw
+
+
 def resolve_profile_name(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
