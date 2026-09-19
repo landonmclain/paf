@@ -5,17 +5,17 @@ JSON files under ``<scan_root>/.agent-codeindex/codebase_indexes/<sha256(scan_ro
 today; SQLite / object-store / MCP later). It is **not** a search seam — *how* queries
 are answered is ``_retrieval.py``'s job. Swapping storage does not make search semantic.
 
-``FlatFileStorage`` is the default impl. Requirements locked 2026-08-22:
+``FlatFileStorage`` is the default impl. Requirements:
 
 - **Root = scan_root, co-located** — the index lives under the scanned repo root at
-  ``.agent-codeindex/`` (like ``.git/``), NOT in a separate paf ``directory``. Decided.
+  ``.agent-codeindex/`` (like ``.git/``), NOT in a separate paf ``directory``.
 - **Hash lives ONLY in ``snapshot.json``** — per-file ``{mtime, size, sha256}``; the
-  per-file records in structure/manifest/tokens carry no ``content_hash``. Decided.
+  per-file records in structure/manifest/tokens carry no ``content_hash``.
 - **Freshness: on-query lazy** — ``sync_changed`` does a cheap ``stat`` walk, sha256's
   only the files whose mtime/size differ (stat = gate, hash = confirm).
 - **Graph persisted at scan time** — ``_scan.py`` writes the symbol-bearing edge
   set as the GRAPH artifact (``call_graph.json``) when it scans, and stamps
-  ``references_count`` into the manifest/index HEAD rows. (This supersedes §5.x's
+  ``references_count`` into the manifest/index HEAD rows. (This supersedes the
   original "derive on read": recomputing the graph on every read would require a
   re-parse, so the edges are materialized once at scan and read as a first-class
   artifact by ``get_repo_map`` / ``distilled_map``.)
@@ -33,8 +33,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 # --- Atomic-write helpers: shared canonical import ---------------------------
-# These were inlined per-capability (verbatim from ``memory._atomic``); the
-# canonical copies now live in ``paf.capabilities._storage._atomic`` and this
+# The canonical copies live in ``paf.capabilities._storage._atomic`` and this
 # capability conforms to them. Behavior is byte-identical (staging + ``os.replace``);
 # the storage seam stays self-contained without coupling to any other capability.
 from paf.capabilities._storage._atomic import read_json, write_json_atomic
@@ -73,9 +72,9 @@ _INDEX_SUBDIR = ".agent-codeindex"
 _CODEDEX_DIR = "codebase_indexes"
 
 # --- Scan scope: the single source of truth for "what is part of the codebase". ---
-# Per §5.y of the spec (LOCKED 2026-08-22): the corpus = every file under the scan
-# root minus (gitignore ∪ owned-skip). The walker never hardcodes a language; language
-# is an orthogonal extractor axis. `_scan.py` and `sync_changed` BOTH derive from this.
+# The corpus = every file under the scan root minus (gitignore ∪ owned-skip). The
+# walker never hardcodes a language; language is an orthogonal extractor axis.
+# `_scan.py` and `sync_changed` BOTH derive from this.
 
 # Owned skip set — *domain* exclusions that are NOT (and arguably shouldn't be) gitignore
 # concerns: older content we still don't want indexed, plus safety nets for common junk
@@ -102,9 +101,7 @@ _OWNED_SKIP_DIRS = {
 _OWNED_SKIP_PATHS = {
     "tests/results",  # generated benchmark run outputs (JSON/log) — not source
 }
-_OWNED_SKIP_FILES = {
-    "__init__.py"
-}  # docstring-only + __version__; not indexed (open deferred item)
+_OWNED_SKIP_FILES = {"__init__.py"}  # docstring-only + __version__; not indexed
 
 
 class ScanScope:
@@ -291,9 +288,8 @@ class FlatFileStorage:
         """List scan roots that have at least one artifact in their co-located index dir.
 
         NOTE: with a purely co-located (non-central) index there is no single registry
-        to enumerate from — discovery would require walking every candidate repo. v1 is
-        single-repo nav, so this returns the override/empty set and is mainly exercised
-        by tests. A cross-repo ``~/projects`` discovery pass is future work.
+        to enumerate from — discovery would require walking every candidate repo. So
+        this returns the override/empty set and is mainly exercised by tests.
         """
         if self._index_root_override is not None:
             return [self._index_root_override]
