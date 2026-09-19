@@ -1,20 +1,19 @@
 """Call graph + references — symbol-bearing file→file edges and their counts.
 
-Two layers, both implemented (the ``build_edges`` deliverable landed, replacing
-the original "count first, edges come next" plan):
+Two layers, both implemented:
 
 - ``build_edges``  — the real graph. Resolve every identifier a file references
   (imports + its own symbol bodies/signatures/docs) to the file that *defines*
   it; emit one ``{source, target, kind, symbols, call_symbols}`` edge per
   distinct (file A → defining-file) pair. ``kind`` is ``"call"`` for edges whose
-  reachability is *provable* (Phase 1.2 refinement via ``_calls.call_edge_set``,
-  re-parsing source), else ``"reference"``. Persisted by ``_scan.py`` as the
+  reachability is *provable* (via ``_calls.call_edge_set``, re-parsing source),
+  else ``"reference"``. Persisted by ``_scan.py`` as the
   GRAPH artifact (``call_graph.json``) at scan time.
 - ``reference_counts``  — inbound-reference counts per FILE, derived from
   ``build_edges``'s resolution: how many DISTINCT other files reference at least
   one symbol the file defines. Computed at scan time and stamped into each
   ``FileInfo.references_count`` / manifest record / index HEAD row. At full-scan
-  scale this is free and never stale; recomputed-at-scan beats §5.x's original
+  scale this is free and never stale; recomputed-at-scan beats the original
   "derive on read" (which was written for a file-watcher/incremental future we
   don't have).
 
@@ -57,7 +56,7 @@ def _defined_name_map(files: list[FileInfo]) -> dict[str, str]:
 
     First-writer wins (a name defined in multiple files resolves to the first
     alphabetical file that defines it — an honest approximation for the count;
-    true disambiguation is the graph phase's job).
+    true disambiguation is not done here).
     """
     defined_by: dict[str, str] = {}
     for f in files:
@@ -77,7 +76,7 @@ def _file_referenced_names(f: FileInfo) -> set[str]:
     populated from tree-sitter ``ImportInfo.items``/``alias`` at analyze time) — NOT a
     regex over the raw import string. Regex over the string leaks module-path basenames
     (``. _store``, ``./lib``) as if they were symbols, which then false-collide with any
-    file that happens to define a symbol of that name (Phase-1.1 bug, fixed here). Module
+    file that happens to define a symbol of that name. Module
     references proper are the import-resolution job; this name-match layer only claims
     *symbol* references, so it stays language-agnostic and honest.
 
@@ -212,17 +211,17 @@ def build_edges(
     pair, where ``symbols`` is the set of names carried across that edge.
     Self-edges (``A`` → ``A``) are excluded, as are dunder names.
 
-    Call refinement (Phase 1.2): when ``sources`` (repo-relative path → raw
+    Call refinement: when ``sources`` (repo-relative path → raw
     source) is supplied, ``_calls.call_edge_set`` re-parses each file and finds
     which edges are *provable* call reachability (a call site resolved through
     an import to a defining symbol). Those edges are marked ``kind: "call"``
     with ``call_symbols`` = the subset of ``symbols`` that are verified calls.
     Edges that resolve—or files whose source is absent—stay ``kind: "reference"``
-    (``call_symbols`` empty). This is the honest B1 carve: never guess a call;
-    uncertain resolution remains reference.
+    (``call_symbols`` empty). Never guess a call; uncertain resolution remains
+    reference.
 
     With no ``sources``, every edge is ``kind: "reference"`` and the output is
-    byte-identical to the pre-Phase-1.2 build_edges (graceful degradation).
+    byte-identical to the reference-only build_edges (graceful degradation).
 
     Determinism: iteration order is the input file order; per-file names are
     sorted at emission. Callers must sort the result for a stable global order
