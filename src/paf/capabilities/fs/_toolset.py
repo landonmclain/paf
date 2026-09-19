@@ -1,4 +1,4 @@
-"""paf-owned filesystem toolset (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned filesystem toolset (originally copied from pydantic-ai-harness, MIT).
 
 Sandboxed file operations scoped to a root directory. Copy of the harness
 `FileSystemToolset` so paf owns the surface. Security model (root confinement,
@@ -97,8 +97,8 @@ def _iter_walk_files(
     """Lazily yield ``(absolute_path, rel_str)`` for files under ``root``.
 
     Replaces ``sorted(rglob('*'))`` — the eager, order-materializing walk that
-    enumerated *every* path in a 25GB tree before any guard ran (the PAF-UI
-    stall). This generator streams files top-down with ``os.walk``, pruning
+    enumerated *every* path in a 25GB tree before any guard ran (a stall). This
+    generator streams files top-down with ``os.walk``, pruning
     dot-directories at the directory level, and abides by a visit budget so the
     caller can stop early. ``rel_str`` is relative to ``real_root`` (the
     canonical root), matching the existing walkers' dot/access filtering.
@@ -229,7 +229,7 @@ async def _aiter_single(
     yield resolved, rel_str
 
 
-def _recoverable(  # noqa: UP047  # verbatim harness copy; keep byte-identical to upstream
+def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate decorator — PEP 695 inline params can't express this signature
     fn: Callable[Concatenate[FileSystemToolset, _P], Awaitable[str]],
 ) -> Callable[Concatenate[FileSystemToolset, _P], Awaitable[str]]:
     """Surface model-correctable tool errors as `ModelRetry`."""
@@ -671,7 +671,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
                     # snapshots are huge single-line JSON). A content search rarely
                     # wants a multi-MB blob; read_file is the tool for that. Reading
                     # every giant file in a walked tree is what turned a simple search
-                    # into a minutes-long, megabyte-result stall (PAF-UI issue).
+                    # into a minutes-long, megabyte-result stall.
                     try:
                         size = file_path.stat().st_size
                     except OSError:  # pragma: no cover

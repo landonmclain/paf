@@ -1,4 +1,4 @@
-"""paf-owned filesystem capability (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned filesystem capability (originally copied from pydantic-ai-harness, MIT).
 
 Provides sandboxed file system access scoped to a root directory. Copy of the
 harness `FileSystem` capability so paf owns the surface; imported and wired
@@ -63,10 +63,10 @@ class FileSystem(AbstractCapability[AgentDepsT]):
     max_find_results: int = 1000
     """Maximum number of matches returned by `find_files`."""
 
-    # search_files result-bound guards (PAF-UI: a content search for a common
-    # string walked the whole ~/ tree, read multi-MB JSON journals/snapshots in
-    # full, and returned a 13MB / 6-minute result). Bounds below are the
-    # "sensible defaults" agreed with Landon.
+    # search_files result-bound guards: a content search for a common string
+    # walked the whole ~/ tree, read multi-MB JSON journals/snapshots in full,
+    # and returned a 13MB / 6-minute result. Bounds below are the sensible
+    # defaults.
     max_search_file_bytes: int = 200 * 1024
     """Skip files larger than this in `search_files` (read via read_file instead)."""
 
