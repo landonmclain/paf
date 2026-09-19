@@ -11,10 +11,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, model_validator
 
 from paf.capabilities._turns import user_anchor_indices
+
+if TYPE_CHECKING:
+    from pydantic_ai import ModelSettings
 
 
 class Beat(BaseModel):
@@ -111,6 +115,39 @@ class SummarizerPrompt:
         )
 
 
+def _summarizer_spec_config() -> tuple[str, ModelSettings, int] | None:
+    """Resolve the summarizer leaf spec (model, model_settings, retries).
+
+    Returns None when the ``thread_summarizer`` spec is absent/unreadable so
+    callers fall back to :func:`consolidate_model` + shared settings (keeps unit
+    tests and non-spec deployments working). When present it is the source of
+    truth (Spec-Driven-Background-Agents).
+    """
+    try:
+        from paf.specs import resolve_background_spec
+    except Exception:  # noqa: BLE001 - best-effort sugar
+        return None
+    try:
+        spec, raw = resolve_background_spec("thread_summarizer")
+    except Exception:  # noqa: BLE001 - absent/unreadable spec
+        return None
+    from typing import cast
+
+    from pydantic_ai import ModelSettings as _MS
+
+    from paf.capabilities.memory._consolidate import (
+        _consolidation_model_settings,
+        consolidate_model,
+    )
+
+    model = spec.model or consolidate_model()
+    settings = spec.model_settings or _consolidation_model_settings()
+    retries = raw.get("retries")
+    if not isinstance(retries, int) or isinstance(retries, bool) or retries < 1:
+        retries = 5
+    return model, cast(_MS, settings), retries
+
+
 async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord:
     """Run the real structured summarizer agent over one conversation block."""
     from pydantic_ai import Agent
@@ -120,12 +157,21 @@ async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord
         consolidate_model,
     )
 
+    cfg = _summarizer_spec_config()
+    if cfg is not None:
+        model, model_settings, retries = cfg
+    else:
+        model, model_settings, retries = (
+            consolidate_model(),
+            _consolidation_model_settings(),
+            5,
+        )
     agent = Agent(
-        consolidate_model(),
+        model,
         name="thread-summarizer",
         output_type=BeatsRecord,
-        model_settings=_consolidation_model_settings(),
-        retries=5,
+        model_settings=model_settings,
+        retries=retries,
     )
     result = await agent.run(SummarizerPrompt(span, conversation_id).render())
     return result.output

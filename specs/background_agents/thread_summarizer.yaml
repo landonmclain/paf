@@ -1,0 +1,28 @@
+# Leaf-agent spec for the `thread_summarizer` background agent.
+#
+# Spec-Driven-Background-Agents: the thread summarizer's model, model_settings
+# (deterministic sampler + OpenRouter provider pin), and retries live here rather
+# than in code/env (`consolidate_model()` + `_consolidation_model_settings()`).
+#
+# Unlike the extractor/reviewer, this agent is a pure structured-output leaf: a
+# single pass emits a `BeatsRecord` (sparse {at, what} beats + one dense summary)
+# per ~10-turn block. Its `output_type` (`BeatsRecord`) is a Python pydantic model
+# and cannot be expressed in YAML, so it stays wired in `_summarize.py`; only the
+# model/settings/retries are spec-declared. The per-pass prompt (which carries the
+# live conversation span) is built dynamically by `SummarizerPrompt.render()`.
+#
+# Resolved by bare name `thread_summarizer` via the recursive get_spec_path.
+name: thread_summarizer
+model: openrouter:deepseek/deepseek-v4-flash-0731
+model_settings:
+  temperature: 0
+  top_p: 1.0
+  extra_body:
+    provider:
+      order:
+        - deepinfra
+        - parasail
+        - coreweave
+      quantizations:
+        - fp8
+retries: 5
