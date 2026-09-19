@@ -1,7 +1,7 @@
-"""Scan driver — walk a repo and write the codebase-map artifacts (Phase 1→2 bridge).
+"""Scan driver — walk a repo and write the codebase-map artifacts.
 
 This is the missing orchestration that ties the two existing pieces together:
-``analyze_file`` (extraction, Phase 1) + ``FlatFileStorage`` (storage seam, Phase 0).
+``analyze_file`` (extraction) + ``FlatFileStorage`` (storage seam).
 It walks a scan root, extracts every supported file, and persists the results to the
 co-located index dir so the artifact files exist **on disk** and are inspectable
 (``index.json`` = per-file lean HEAD, ``manifest.json`` = full detail,
@@ -9,7 +9,7 @@ co-located index dir so the artifact files exist **on disk** and are inspectable
 freshness fingerprint ``sync_changed`` keys off, ``overview.json`` = the navigation
 tree).
 
-**Scope model (spec §5.y, LOCKED 2026-08-22):** the walker covers EVERYTHING that
+**Scope model:** the walker covers EVERYTHING that
 isn't ignored — the corpus = files under the scan root minus (gitignore ∪ owned-skip),
 via ``ScanScope``. It is deliberately *language-agnostic*: the walk never hardcodes an
 extension. Language is an orthogonal extractor axis handled by ``analyze_file`` (per-file
@@ -18,7 +18,7 @@ symbols (unknown/oversized/unparseable) are still **recorded** as ``unparsed: tr
 records and snapshotted as *seen*, so the corpus is complete and they stay stable rather
 than reading as "changed" on every freshness pass.
 
-**Artifact split (LOCKED read-model, 2026-08-23):** one extraction is fanned out into
+**Artifact split:** one extraction is fanned out into
 three layers so the model climbs the ladder instead of paying for detail it doesn't use:
   - ``index.json``   — the **lean HEAD**: per-file metadata + module-docstring head +
     symbol NAME LISTS only. Never carries per-symbol body/signature/doc/span.
@@ -27,8 +27,7 @@ three layers so the model climbs the ladder instead of paying for detail it does
   - ``tokens.json``   — the **search backend**: inverted, symbol-scoped postings
     (name+sig+doc only). What ``search_codebase`` scores.
 The driver is deliberately *dumb*: it does not rank, search, or build a graph. It exists
-so the data lands on disk and can be eyeballed before any search logic is built on top
-(spec ordering: extraction completeness is the gate for search tuning).
+so the data lands on disk and can be eyeballed before any search logic is built on top.
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ from ._tokens import build_tokens
 # per-language extractor wiring); unknown extensions get None, recorded as unparsed.
 _INDEX_SUBDIR = ".agent-codeindex"
 
-# Kind buckets for the lean HEAD's name lists (spec §3.2: classes + functions split).
+# Kind buckets for the lean HEAD's name lists (classes + functions split).
 # Everything else (Constant/Variable/module-level assignments) still appears in the
 # combined `symbols` name list; these are just the two name lists the head carries.
 _CLASS_KINDS = {"CLASS", "Class"}
@@ -64,7 +63,7 @@ def walk_all_files(root: str | Path) -> list[Path]:
 
 
 def head_record(fi: FileInfo) -> dict[str, Any]:
-    """The LEAN ``index.json`` head row for one rich ``FileInfo`` (spec §3.2).
+    """The LEAN ``index.json`` head row for one rich ``FileInfo``.
 
     Metadata + module-docstring head + symbol NAME LISTS only. No body, no signature,
     no per-symbol doc, no span, no ``role``/``tags`` — those live in ``manifest.json``
@@ -190,7 +189,7 @@ def scan_and_write(
     storage.write(ArtifactKind.TOKENS, root, build_tokens(rich))
     storage.write(ArtifactKind.OVERVIEW, root, build_overview(root))
 
-    # Persist the symbol-bearing edge set (reference + Phase-1.2 call refinement) so
+    # Persist the symbol-bearing edge set (reference + call refinement) so
     # get_repo_map / distilled_map read it as a first-class artifact instead of re-parsing.
     from ._graph import build_edges
 
