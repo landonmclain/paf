@@ -1,7 +1,7 @@
 """Background worker for conversation-scoped thread beats (cadence + watermark).
 
 Mirrors the Memory **owner** workflow (:class:`paf.capabilities.memory._background.MemoryConsolidationQueue`)
-verbatim: the trigger resolves the unseen conversation turn-span, the worker
+exactly: the trigger resolves the unseen conversation turn-span, the worker
 summarizes it with the curated summarizer, and advances a per-conversation
 ``MemoryWatermark`` ONLY on a completed (non-error) pass — the identical
 advance-on-normal-return contract. The worker is the sole watermark writer.
@@ -286,9 +286,8 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                 # one store). Re-summarizing them is wasted work and re-crashes
                 # on "anchor must increase". Instead: skip the model call, treat
                 # the block as converged, and advance the watermark past it so
-                # the worker resumes at the genuinely-new tail. Errors are
-                # expected/messy during development — this recovers instead of
-                # deadlocking the conversation's summarizer forever.
+                # the worker resumes at the genuinely-new tail. This recovers
+                # instead of deadlocking the conversation's summarizer forever.
                 if last_anchor is not None and block_anchor is not None:
                     if (block_anchor.run_id, block_anchor.turn_id or 0) <= last_anchor:
                         log.info(
@@ -318,8 +317,8 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                     )
                 )
                 # Advance positionally past THIS block (idempotent on retry; a
-                # later block failing stops here, so only completed blocks are
-                # never re-summarized).
+                # later block failing stops here, so completed blocks are never
+                # re-summarized).
                 if block_anchor is not None:
                     self._advance(job.conversation_id, block_anchor)
                 summarized += len(block)

@@ -70,9 +70,8 @@ class ThreadSummaryRecord:
     # ISO timestamps of the summarized span's first and last distinct real user
     # prompt (started_at .. ended_at). Wall-clock range of the turns this block
     # covers — distinct from ``summarized_at`` (when the worker ran). Used by the
-    # Phase-3 in-context renderer to give the model + a human a recency/span
-    # signal. Backward-compatible: absent on legacy records (``from_row``
-    # defaults to "").
+    # in-context renderer to give the model + a human a recency/span signal.
+    # Backward-compatible: absent on legacy records (``from_row`` defaults to "").
     started_at: str = ""
     ended_at: str = ""
 
@@ -115,9 +114,9 @@ class ThreadSummaryStore:
     """Read/write one conversation's thread beats + watermark (no eviction WAL).
 
     The conversation-scoped directory holds both the appended ``summaries.jsonl``
-    and the per-conversation ``MemoryWatermark``. The shared eviction WAL is no
-    longer consumed — the trigger resolves the unsummarized span directly from
-    the persisted step store via ``resolve_unseen_span(conversation_id=...)``.
+    and the per-conversation ``MemoryWatermark``. The shared eviction WAL is not
+    consumed — the trigger resolves the unsummarized span directly from the
+    persisted step store via ``resolve_unseen_span(conversation_id=...)``.
     """
 
     def __init__(self, root: str | os.PathLike, conversation_id: str) -> None:

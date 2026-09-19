@@ -13,16 +13,15 @@ owner, but keyed by conversation. There is no eviction WAL here: the trigger
 resolves the unsummarized turn-span directly from the persisted step store
 (``resolve_unseen_span(conversation_id=...)``), the worker summarizes the
 curated user-prompt + final-answer span, and advances a per-conversation
-``MemoryWatermark`` on success. See the spec's re-architecture note (2026-09-08).
+``MemoryWatermark`` on success.
 
-Phase 3 (2026-09-09): **in-context present surface.** ``before_model_request``
-now mirrors ``Memory``'s injection — once per real user turn, strip any prior
-``<thread-summary>`` block (matched by a scope-qualified ``TextContent``
-metadata marker), re-inject a bounded render of the per-conversation summaries
-(oldest -> newest, each with a relative+absolute recency header + turn count).
-Injection is free every turn; the *model call* that produced the content lives
-only in the background worker, on its cadence — fully decoupled, exactly like
-``<memory>``.
+**In-context present surface.** ``before_model_request`` mirrors ``Memory``'s
+injection — once per real user turn, strip any prior ``<thread-summary>`` block
+(matched by a scope-qualified ``TextContent`` metadata marker), re-inject a
+bounded render of the per-conversation summaries (oldest -> newest, each with a
+relative+absolute recency header + turn count). Injection is free every turn;
+the *model call* that produced the content lives only in the background worker,
+on its cadence — fully decoupled, exactly like ``<memory>``.
 """
 
 from __future__ import annotations
@@ -59,7 +58,7 @@ _THREAD_PART_METADATA = "paf.thread-summary.v1"
 #: How many summary blocks the injected window shows at most (oldest -> newest).
 _THREAD_WINDOW = 5
 #: Caps the rendered block's size so `<thread-summary>` + `<memory>` coexist
-#: within the turn's context budget (see design D#9).
+#: within the turn's context budget.
 _THREAD_MAX_CHARS = 4000
 
 
@@ -182,13 +181,11 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
     ``_validate_capability``), and ``init=False`` keeps this type's hand-written
     ``__init__`` intact.
 
-    Phase 1/2 rework (2026-09-08): the capture WAL is gone. This capability is
-    the allowlist/on-off surface; the runtime trigger + worker own the cadence
-    and per-conversation watermarks.
+    The capture WAL is gone. This capability is the allowlist/on-off surface; the
+    runtime trigger + worker own the cadence and per-conversation watermarks.
 
-    Phase 3 (2026-09-09): ``before_model_request`` renders + injects the
-    per-conversation `<thread-summary>` block once per real user turn (mirrors
-    ``Memory``).
+    ``before_model_request`` renders + injects the per-conversation
+    `<thread-summary>` block once per real user turn (mirrors ``Memory``).
     """
 
     def __init__(

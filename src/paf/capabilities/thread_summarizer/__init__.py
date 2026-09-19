@@ -11,8 +11,7 @@ same cadence + watermark machinery as Memory's owner, but keyed by
 the unsummarized turn-span directly from the persisted step store
 (``resolve_unseen_span(conversation_id=...)``), the worker summarizes the
 curated user-prompt + final-answer span, and advances a per-conversation
-``MemoryWatermark`` on success. There is no eviction WAL (re-architecture note,
-2026-09-08).
+``MemoryWatermark`` on success. There is no eviction WAL.
 """
 
 from __future__ import annotations
