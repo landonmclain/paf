@@ -1,10 +1,9 @@
 """Web capability -- Tavily-backed web search and page extraction.
 
-paf-owned web capability. Adapted from
-`coding_agent/app/tools/web_search_tools.py` into the paf capability seam
-(`AbstractCapability` + `WebToolset`). Reads `TAVILY_API_KEY` from the
-environment at call time; without it (or without `tavily-python`) the tools
-degrade to clear, model-visible messages.
+paf-owned web capability in the standard seam (`AbstractCapability` +
+`WebToolset`). Reads `TAVILY_API_KEY` from the environment at call time; without
+it (or without `tavily-python`) the tools degrade to clear, model-visible
+messages.
 """
 
 from __future__ import annotations
