@@ -1,6 +1,5 @@
-# Leaf-agent spec for the `writer` sub-agent (demo profile).
+# Leaf-agent spec for the `writer` sub-agent.
 #
-# Spec-driven leaf (Spec-Driven-Background-Agents plan): the model, model
 # settings, system prompt, and an optional shared-FileSystem root move from code
 # (`build.py` `_WRITER_MODEL` + inline prompt) into this file, so they are
 # declarative and per-agent tunable. `_build_subagents` reads it via
