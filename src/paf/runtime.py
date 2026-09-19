@@ -66,6 +66,7 @@ from paf.background import (
 from paf.capabilities import PROFILES
 from paf.capabilities.compaction import build_boundary_compaction_for_agent
 from paf.capabilities.persistence import _build_store
+from paf.degeneration_guard import DegenerationGuard
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -75,6 +76,24 @@ from paf.observability.instrumentation import (
 from paf.specs import build_agent, resolve_profile_name, spec_usage_limits
 
 log = logging.getLogger(__name__)
+
+
+class DegenerationError(UnexpectedModelBehavior):
+    """Raised when the degeneration guard detects a thinking-narration loop mid-stream.
+
+    Subclasses :class:`UnexpectedModelBehavior` so the existing mid-stream failure
+    handler (``except (ModelHTTPError, UnexpectedModelBehavior)`` in ``Session.stream``)
+    preserves the partial messages and surfaces a clean error+retry instead of a
+    runaway generation consuming the remaining token budget.
+    """
+
+    def __init__(self, result) -> None:
+        self.result = result
+        super().__init__(
+            f"degeneration guard: thinking repeated {result.repeat_count}x "
+            f"({result.reason!r}: {result.line!r})"
+        )
+
 
 __all__ = [
     "Session",
@@ -662,11 +681,30 @@ class Session:
                 ) as run:
                     self._run = run
                     _active_run = run
+                    # Per-turn degeneration guard (thinking-repeat loop detector).
+                    # New for each turn; sees only THIS turn's thinking stream.
+                    # On detection a DegenerationError is raised -> the
+                    # except (ModelHTTPError, UnexpectedModelBehavior) handler
+                    # below preserves the partial and surfaces a clean retry.
+                    guard = DegenerationGuard()
                     try:
                         async for node in run:
                             if isinstance(node, (ModelRequestNode, CallToolsNode)):
                                 async with node.stream(run.ctx) as stream:
                                     async for event in stream:
+                                        # Guard hook: feed THINKING-only stream to
+                                        # the degeneration detector and abort if it
+                                        # trips (a thinking-narration repeat-loop).
+                                        if isinstance(
+                                            event, PartDeltaEvent
+                                        ) and isinstance(
+                                            event.delta, ThinkingPartDelta
+                                        ):
+                                            guard_result = guard.stream_thinking(
+                                                event.delta.content_delta or ""
+                                            )
+                                            if guard_result is not None:
+                                                raise DegenerationError(guard_result)
                                         for ev in _dispatch_stream_event(event):
                                             yield ev
                             elif isinstance(node, End):
