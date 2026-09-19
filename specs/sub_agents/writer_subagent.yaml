@@ -1,15 +1,12 @@
 # Leaf-agent spec for the `writer` sub-agent.
 #
-# settings, system prompt, and an optional shared-FileSystem root move from code
-# (`build.py` `_WRITER_MODEL` + inline prompt) into this file, so they are
-# declarative and per-agent tunable. `_build_subagents` reads it via
-# `load_agent_spec("writer_subagent")` — `get_spec_path` resolves the bare name
-# into this `specs/sub_agents/` subfolder.
+# Declarative config for the `writer` leaf agent: model, model_settings
+# (temperature), description, and system prompt live here rather than in code.
+# `_build_subagents` reads this via `load_agent_spec("writer_subagent")` —
+# `get_spec_path` resolves the bare name into this `specs/sub_agents/` folder.
 #
-# This is a LEAF spec, not a profile spec: no `profile:` capability allowlist
-# and no full profile/capability resolution on build. The runtime agent is still
-# named `writer` (what `delegate_task(agent_name)` matches); the file/loader
-# identity is `writer_subagent` for a clear name.
+# The runtime agent name is `writer` (what `delegate_task(agent_name)` matches);
+# the file/loader identity is `writer_subagent` for a clear name.
 
 name: writer_subagent
 model: openrouter:openai/gpt-5.6-luna
