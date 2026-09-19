@@ -341,7 +341,7 @@ class BackgroundCoordinator:
         self.agent_name = agent_name
         self.profile = profile
 
-        # Dumb append-only run-event store (Phase 3): every task status
+        # Dumb append-only run-event store: every task status
         # transition is recorded losslessly, scoped by agent. Root is
         # injectable so tests point at a tmp dir.
         from paf.background_processes._store import RunEventStore

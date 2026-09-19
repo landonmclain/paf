@@ -242,7 +242,7 @@ DEFAULT_EXCLUDE: tuple[str, ...] = (
 def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
     """Resolve a spec ``executor`` block into a backend instance.
 
-    Shared by shell and fs. ``None`` or ``backend: local`` ->
+    Used by the shell capability. ``None`` or ``backend: local`` ->
     :class:`LocalProcessExecutor` (host, no sandbox). ``backend: docker`` ->
     :class:`DockerExecutor` with the block's options (``mode`` / ``image`` /
     ``network`` / ``user`` / ``read_only`` / ``memory`` / ``cpus`` /
