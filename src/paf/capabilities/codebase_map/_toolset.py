@@ -1,4 +1,4 @@
-"""CodebaseMapToolset — the navigation-first 5-tool ladder (LOCKED read-model).
+"""CodebaseMapToolset — the navigation-first 5-tool ladder.
 
 The model climbs a ladder instead of brute-forcing keyword scans:
 
@@ -13,7 +13,7 @@ The model climbs a ladder instead of brute-forcing keyword scans:
 - ``run_codebase_map()``        — (re)build the index artifacts for the rooted repo
 
 ``get_repo_map`` (ranked zero-LLM orient map) is a registered tool — see below.
-``callers``/``with_graph`` defer to the graph phase (YAGNI). A
+``callers``/``with_graph`` are not built (YAGNI). A
 future ``semantic`` backend is an alternative ``RetrievalBackend``, never a ``mode``.
 All hits collapse to the universal ``SearchHit``/``BlockRef`` shape.
 
@@ -615,7 +615,7 @@ class CodebaseMapToolset(FunctionToolset):
         Higher-level than ``get_overview`` (which is a bare navigation tree): this ranks
         the most load-bearing files/symbols and gives each a one-line signature.
 
-        Ranking is **call-weighted** (Phase 1.2): files that other code *provably
+        Ranking is **call-weighted**: files that other code *provably
         invokes* (orchestrators, helpers, constructors) outrank files that are merely
         imported as types. Everything rendered is **real** data pulled from the manifest
         (signatures) and the persisted graph (in-degree) — never LLM prose — so it cannot
