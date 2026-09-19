@@ -16,7 +16,7 @@ This storage **delegates to the shared ``FlatFileStorage`` seam**
 (``paf.capabilities._storage``) — it does NOT carry its own atomic-write /
 JSON helpers. The shared seam owns the mkstemp-safe atomic write that
 concurrent single-file editors need, and the same ``StorageService`` backend
-(flat file today, SQLite/Postgres later) swaps in with zero vault changes.
+swaps in with zero vault changes.
 
 The index is keyed by the vault root's normalized absolute path and lives in the
 paf repo (NOT co-located inside the vault), so pointing ``vault.root`` at a real
@@ -119,7 +119,7 @@ class ScanScope:
 def index_dir_for_root(root: str | Path) -> Path:
     """Index dir for a vault root: repo-owned, keyed by the root's hash.
 
-    Lives under ``<data/vault_index_dir>/<sha256(root)>/`` in the paf repo —
+    Lives under ``data/.paf-vault-index/<sha256(root)>/`` in the paf repo —
     NOT co-located inside the vault tree — so pointing a vault at a real
     Obsidian vault or any per-project/temp tree never drops artifacts into it.
     ``FlatFileVaultStorage(index_root=...)`` overrides this default.
@@ -146,9 +146,9 @@ class FlatFileVaultStorage:
     def _dir(self, root: str | Path) -> Path:
         """The directory holding this vault's index/snapshot artifacts.
 
-        An explicit ``index_root`` is used verbatim (flat ``index.json`` /
-        ``snapshot.json`` at its root, matching the original behavior);
-        otherwise the repo-owned, hash-keyed ``index_dir_for_root(root)``.
+        An explicit ``index_root`` is used as-is (flat ``index.json`` /
+        ``snapshot.json`` at its root); otherwise the repo-owned, hash-keyed
+        ``index_dir_for_root(root)``.
         """
         if self._base is not None:
             return self._base

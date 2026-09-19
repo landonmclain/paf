@@ -1,7 +1,7 @@
 """Vault capability — navigation-first note ladder over an Obsidian-style markdown vault.
 
 Wraps the vault note index behind the navigation-first read-model (mirrors the
-codebase-map ladder LOCKED 2026-08-23, applied to *notes* instead of *symbols*):
+codebase-map ladder, applied to *notes* instead of *symbols*):
 
     vault_overview() → lookup_note(path, detail) → read_note(path)
                               ↕
@@ -9,14 +9,13 @@ codebase-map ladder LOCKED 2026-08-23, applied to *notes* instead of *symbols*):
 
 - ``vault_root``  : the vault directory (required). All reads confined to it.
 - ``allow``/``deny`` : optional glob subtree patterns (allow = only these when
-  non-empty; deny = always excluded, wins over allow) — expresses Landon's
+  non-empty; deny = always excluded, wins over allow) — expresses the
   workspace-vs-personal boundary inside a root.
 - ``storage``     : the flat-file seam (``FlatFileVaultStorage`` default).
 
-Search is the *secondary* escape hatch; navigation is primary. Tier B (the
-note graph: ``note_links``/``note_backlinks``/``note_create``/``note_rename``)
-is built. Tier C (raw content writes) and shared machinery with codebase_map
-are later phases — not built here (YAGNI).
+Search is the *secondary* escape hatch; navigation is primary. The note graph
+(``note_links``/``note_backlinks``/``note_create``/``note_rename``) is built;
+raw content writes and shared machinery with codebase_map are not (YAGNI).
 """
 
 from __future__ import annotations
@@ -53,10 +52,11 @@ _VAULT_GUIDANCE = (
 class Vault(AbstractCapability):
     """Navigation-first vault: overview → lookup → read + find/search + note graph.
 
-    Exposes the nine-tool ladder (`vault_overview`, `lookup_note`, `read_note`,
+    Exposes the eleven-tool ladder (`vault_overview`, `lookup_note`, `read_note`,
     `note_find`, `note_search`, `note_links`, `note_backlinks`, `note_create`,
-    `note_rename`). Reads go through the flat-file index and are confined to
-    ``vault_root``; writes (create/rename) are scope-guarded and atomic.
+    `note_rename`, `note_edit`, `note_append`). Reads go through the flat-file
+    index and are confined to ``vault_root``; writes (create/rename/edit/append)
+    are scope-guarded and atomic.
     """
 
     vault_root: str | Path
@@ -75,7 +75,7 @@ class Vault(AbstractCapability):
     """Maximum lines returned by a single `read_note` call (spec-overridable)."""
 
     def get_toolset(self) -> VaultToolset:
-        """Build and return the five-tool vault ladder."""
+        """Build and return the vault toolset."""
         return VaultToolset(
             vault_root=self.vault_root,
             storage=self.storage,

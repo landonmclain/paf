@@ -1,4 +1,4 @@
-"""VaultToolset — the navigation-first note ladder (Tier A read tools).
+"""VaultToolset — the navigation-first note ladder.
 
 The model navigates a vault the way a human does — climb down from the overview,
 rather than brute-forcing keyword scans:
@@ -25,9 +25,9 @@ rather than brute-forcing keyword scans:
   structural/insertion cases stay with ``note_edit`` / the deferred ``note_patch``.
 
 Content writes beyond ``note_edit`` / ``note_append`` (full-content
-``note_write`` / structural ``note_patch``) stay a later phase — deliberately
-NOT registered here (YAGNI). Tools are agent-facing: every method returns a
-bounded, readable ``str``, never raw dicts.
+``note_write`` / structural ``note_patch``) are deliberately NOT registered here
+(YAGNI). Tools are agent-facing: every method returns a bounded, readable
+``str``, never raw dicts.
 
 Index freshness is lazy: before a read, we ``sync_changed`` against the snapshot
 and rebuild the index rows for any changed/added notes (stat gate, hash confirm),
@@ -87,7 +87,7 @@ def _content_hash(content: str) -> str:
 def _format_lines(lines: Sequence[str], offset: int, limit: int) -> str:
     """Format pre-split lines with line numbers and continuation hint.
 
-    Copied from ``fs._format_lines`` so ``read_note`` mirrors ``read_file``:
+    Mirrors ``fs._format_lines`` so ``read_note`` mirrors ``read_file``:
     right-aligned 6-wide line numbers, then a hint when lines remain.
     """
     total = len(lines)
@@ -418,7 +418,7 @@ class VaultToolset(FunctionToolset):
             out.append(f"- {path}\n    …{snip}…")
         return "\n".join(out)
 
-    # -- Tier B: note graph ----------------------------------------------------
+    # -- note graph ------------------------------------------------------------
     # These are the graph-aware operations: they read or maintain the links
     # between notes, not just raw bytes. note_create/note_rename are scope-
     # guarded (confined to the root and to allow/deny) and written atomically.
@@ -626,12 +626,12 @@ class VaultToolset(FunctionToolset):
             head += " No inbound links to rewrite."
         return head
 
-    # -- Tier C: content write --------------------------------------------------
+    # -- content write ----------------------------------------------------------
     # note_edit is the single content-write tool. It mirrors fs.edit_file: an
     # exact-once string replacement guarded by an optimistic-concurrency
     # ``expected_version`` (the note's content hash, reported by read_note).
-    # note_write / note_patch (full-content CAS & structural patches) remain
-    # deferred (YAGNI) — note_create covers new notes.
+    # note_write / note_patch (full-content CAS & structural patches) are not
+    # built (YAGNI) — note_create covers new notes.
 
     def note_edit(
         self,

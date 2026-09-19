@@ -12,7 +12,7 @@ build the note index and ladder — NOT a full parser:
   target, or None. Solves ``[[Note Name]]`` -> path in a vault, so the model never
   has to guess a vault path.
 - ``section_after``            -> the body text of a note's section under a heading
-  (for future vault_patch block targeting).
+  (for block-level targeting).
 
 No wikilink *interpretation* (Obsidian rendering), no AST, no embeddings. This is
 exactly enough to index and navigate a vault of notes.
@@ -81,7 +81,7 @@ def rewrite_wikilink_target(text: str, old_target: str, new_target: str) -> str:
     resolves links by note name, case-insensitive). ``[[Old|alias]]`` keeps its
     ``|alias`` (only the target half changes). Used by ``note_rename`` to update
     inbound wikilinks when a note is moved. The plain ``[[old_target]]`` (no
-    alias) is rewritten to ``[[new_target]]`` verbatim.
+    alias) becomes ``[[new_target]]``.
     """
     if not old_target or old_target == new_target:
         return text
@@ -147,7 +147,7 @@ def section_after(body: str, heading: str) -> str | None:
 
     Looks for the first heading whose text contains ``heading`` (case-insensitive)
     and returns everything up to the next same-or-lower-level heading. ``None`` when
-    the heading isn't found. Used by vault_patch for block-level targeting.
+    the heading isn't found. Used for block-level targeting.
     """
     lines = body.splitlines()
     start: int | None = None
