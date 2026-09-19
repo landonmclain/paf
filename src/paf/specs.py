@@ -589,7 +589,6 @@ def get_spec_path(
 _SPEC_SUFFIXES = (".yaml", ".yml", ".json")
 
 
-
 def load_agent_spec(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
