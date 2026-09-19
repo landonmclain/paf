@@ -25,6 +25,9 @@ model_settings:
   # writer has no tool calls to destabilize, so a little variance costs nothing
   # agentically.
   temperature: 0.6
+  max_tokens: 12288
+  # Runaway safety valve (output-token ceiling). Same value the benchmark
+  # harness pins (tests/framework.py max_tokens=12288).
 
 instructions: |
   You are a writing sub-agent producing technical-education prose about AI

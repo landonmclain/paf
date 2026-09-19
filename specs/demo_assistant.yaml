@@ -82,6 +82,9 @@ instructions: |
 
 model_settings:
   temperature: 0
+  max_tokens: 12288
+  # Runaway safety valve (output-token ceiling, incl. reasoning). Same value the
+  # benchmark harness pins for this model (tests/framework.py max_tokens=12288).
 
   # Benchmark-matching determinism (tests/framework.py): temp 0, top_p 1.0, and a
   # fixed sampler seed give reproducible outputs.
@@ -108,15 +111,12 @@ model_settings:
     # per token already emitted (OpenAI-style).
     frequency_penalty: 1.0
 
-  # DeepSeek V4 Flash reasoning effort — drop the OpenRouter default (high) to
-  # `low`. DeepSeek V4 Flash supports low/medium/high/none-style effort
-  # (OpenRouter clamps unsupported levels to the closest available). Setting
-  # `low` sharply cuts the long re-derivation "thinking forever" loops on
-  # discussion/direct turns. Uses pydantic-ai's first-class
-  # OpenRouterModelSettings.openrouter_reasoning (forwards verbatim to the
-  # OpenRouter `reasoning` body). Floor is `low` for this model (can't go none).
+  # Reasoning effort for DeepSeek V4.1 Flash. `medium` measured best on this
+  # model (real thinking without the 'thinking forever' loops on simple turns);
+  # v4.0/older flash stays at `low`. OpenRouterModelSettings.openrouter_reasoning
+  # forwards verbatim to the OpenRouter `reasoning` body.
   openrouter_reasoning:
-    effort: low
+    effort: medium
 
 # ---------------------------------------------------------------------------
 # Web trust boundary (option B — lives in the spec, not in Python). Read by
