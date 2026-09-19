@@ -1,28 +1,22 @@
 """Per-language tree-sitter query recovery for what ``process()`` leaves empty.
 
 ``tree-sitter-language-pack.process()`` never fills ``docstrings`` (``doc``/
-``doc_comment``) even on 1.15.7 (the version paf declares + runs) — and until the
-1.15.7 upgrade also left ``signature`` empty (on 1.14.3, the only installable wheel back
-then) — see the ``tree-sitter-language-pack`` skill (FILL THE BLANKS) and the Archive
-note *Tree-Sitter-Empty-Fields-and-Custom-Query-Recovery*. We verified (2026-08-22)
-that these ARE recoverable with ``tree_sitter.Query``+``QueryCursor`` against the
-REAL bundled grammar. This module is that thin per-language recovery layer: ONE small
-query per language per piece (node vocab differs per language), NOT a general walker.
+``doc_comment``) and leaves ``signature`` empty for some grammars. These ARE
+recoverable with ``tree_sitter.Query``+``QueryCursor`` against the REAL bundled
+grammar. This module is that thin per-language recovery layer: ONE small query
+per language per piece (node vocab differs per language), NOT a general walker.
 
-Since the 1.15.7 upgrade (2026-08-23) ``signature``/``module-signature`` recovery here is
-FALLBACK ONLY — ``_analyze.py`` prefers native ``StructureItem.signature``; this recovery
-kicks in where native is empty (classes → ``signature=None``, grammars 1.15.7 still blanks).
-Docstring + body recovery remain the primary path (native still leaves them empty).
+``signature``/``module-signature`` recovery here is FALLBACK ONLY —
+``_analyze.py`` prefers native ``StructureItem.signature``; this recovery kicks
+in where native is empty (classes → ``signature=None``). Docstring + body
+recovery remain the primary path (native still leaves them empty).
 
-Read-model philosophy (memory): captured nodes are cheap byte-offset pointers into
-``source``; value cleaning (strip quotes/``*``) and comment→declaration association we
-do here in Python, not via ``#strip!``/``#select-adjacent!`` predicates (unsupported
-in tree-sitter 0.26). Swap-ready: when a wheel with working native
-``process().signature`` / ``.docstrings`` ships, ``_analyze.py`` flips to the native
-fields and this module's per-language tables become unnecessary (schema keeps the
-``signature``/``doc`` fields regardless).
+Captured nodes are cheap byte-offset pointers into ``source``; value cleaning
+(strip quotes/``*``) and comment→declaration association we do here in Python,
+not via ``#strip!``/``#select-adjacent!`` predicates (unsupported in
+tree-sitter 0.26).
 
-Verified gotchas (both tripped us — see skill):
+Verified gotchas:
 - ``Query.captures`` does NOT exist in tree-sitter 0.26.0; use ``QueryCursor(q).captures``.
 - ``QueryCursor(q).captures(root)`` returns a **dict** ``{capture_name: [node,...]}``.
 """
@@ -35,7 +29,7 @@ from tree_sitter import Query, QueryCursor, Tree
 from tree_sitter_language_pack import get_language, get_parser
 
 # ---------------------------------------------------------------------------
-# Per-language grammar vocabulary (VERIFIED against bundled grammar, 2026-08-22)
+# Per-language grammar vocabulary (VERIFIED against bundled grammar)
 # ---------------------------------------------------------------------------
 # Each entry: a `header` query that captures `@name` and `@params` for ONE function
 # declaration (matched, then filtered to the symbol's header byte-region), a `ret`
@@ -84,14 +78,14 @@ _LANG = {
     "java": {
         "header": "(method_declaration name: (identifier) @name parameters: (formal_parameters) @params)",
         # Java return type is inline before the name (no `return_type` field, like C).
-        # Capture it would need a fragile leading-type query; omit for v1 (honest).
+        # Capture it would need a fragile leading-type query; omit (honest).
         "ret": "",
         "retsep": " ",
     },
     "c": {
         # C's name + params live inside a `function_declarator`, not direct fields.
         "header": "(function_definition declarator: (function_declarator name: (identifier) @name parameter_list: (parameter_list) @params))",
-        "ret": "",  # leading return type is a separate `type:` field; we skip for v1
+        "ret": "",  # leading return type is a separate `type:` field; we skip it
         "retsep": " ",
     },
 }
@@ -107,7 +101,7 @@ _PYTHON_DOCSTRING = (
 )
 
 # Module-level docstring: the leading `string` node that is a direct child of the
-# `module` root (old grammar — no `expression_statement` wrapper, verified 2026-08-22).
+# `module` root (old grammar — no `expression_statement` wrapper).
 _MODULE_DOCSTRING = "(module . (string) @doc)"
 
 # Module-level named assignments (NAME = ... / NAME: Type = ...). Enumerate every
@@ -138,7 +132,7 @@ _MODULE_ASSIGN_SUB = "(assignment left: (identifier) @name (type (_) @type)?)"
 # declarations match — without the anchor, `(lexical_declaration)` also matches
 # locals inside function/arrow bodies. `export default defineConfig(...)` has no
 # `variable_declarator`/identifier -> correctly excluded (not named). `export
-# type X = ...` is a `type_alias_declaration` -> excluded (v2 concern). NOTE: with
+# type X = ...` is a `type_alias_declaration` -> excluded. NOTE: with
 # tree-sitter 0.26 QueryCursor, a node type captured in multiple disjuncts must be
 # in a single combined pattern (not separate queries) or it dedupes to nothing.
 _MODULE_ASSIGN_TS = (
@@ -202,7 +196,7 @@ class QueryRecovery:
     def __post_init__(self) -> None:
         # Byte offsets from tree-sitter MUST be sliced against a bytes copy, never the
         # decoded str (char-indexed) — any non-ASCII char before the offset drifts the
-        # slice. See skill Pitfall #8 / vault History "BYTE OFFSETS vs CHAR INDICES".
+        # slice.
         self._bsrc = self.source.encode("utf-8")
 
     def _slice(self, start_byte: int, end_byte: int) -> str:
@@ -210,7 +204,7 @@ class QueryRecovery:
         return self._bsrc[start_byte:end_byte].decode("utf-8", errors="replace")
 
     def body_for(self, body_span, *, max_bytes: int = 16_384) -> str | None:
-        """Slice a symbol's body source bytes (weight-1 searchable field, §3.7.2).
+        """Slice a symbol's body source bytes (weight-1 searchable field).
 
         ``body_span`` is our ``Span`` (byte offsets from ``process().structure``;
         sliced against ``self._bsrc`` bytes for the byte-offset-vs-char rule). Bodies
@@ -253,12 +247,11 @@ class QueryRecovery:
         capture a function header whose name+params fall inside the symbol's header
         byte-region (span.start → body start) and reassemble ``name(params)
         [retsep ret]``. All byte offsets are sliced against ``self._bsrc`` (a bytes
-        copy) — NEVER against the decoded str (see skill Pitfall #8 / vault History
-        note: byte offsets ≠ char indices). Uses the per-language ``header``/``ret``
-        queries in ``_LANG``. FALLBACK ONLY since the 1.15.7 upgrade — ``_analyze.py``
-        prefers native ``StructureItem.signature`` (normalized bare by ``_native_signature``)
-        and calls this only for symbols/grammars where native is empty (e.g. classes,
-        which stay ``signature=None``, and languages 1.15.7 still blanks).
+        copy) — NEVER against the decoded str. Uses the per-language ``header``/``ret``
+        queries in ``_LANG``. FALLBACK ONLY — ``_analyze.py`` prefers native
+        ``StructureItem.signature`` (normalized bare by ``_native_signature``) and
+        calls this only for symbols/grammars where native is empty (e.g. classes,
+        which stay ``signature=None``).
         """
         cfg = _LANG.get(self.language)
         if not cfg or not span or span.start_byte is None:
@@ -325,7 +318,7 @@ class QueryRecovery:
         """Recover the module-level docstring (python) or None.
 
         Python: the leading ``string`` direct child of ``module``. Non-python: no
-        module-level doc extraction in v1 (the module doc is carried on the file via
+        module-level doc extraction (the module doc is carried on the file via
         ``FileInfo.doc`` where supported).
         """
         if self.language != "python":
