@@ -1,6 +1,6 @@
 """Typed storage/search records for the codebase-map capability.
 
-Every artifact in the storage seam (§3 of the spec) maps to a record here, plus the
+Every artifact in the storage seam maps to a record here, plus the
 one universal **search result shape** (`SearchHit` + `BlockRef`) that every
 `RetrievalBackend` returns. Records live here (not in ``_store.py`` / ``_retrieval.py``)
 so the result type sits next to the records it references and both modules import it
@@ -54,7 +54,7 @@ class SymbolInfo:
     kind: str = "OTHER"  # StructureKind/SymbolKind string, e.g. "CLASS"/"FUNCTION"
     signature: str | None = None
     doc: str | None = None  # our docstring extraction (tree-sitter's is empty)
-    body: str | None = None  # symbol body source text (weight-1 field in §3.7.2)
+    body: str | None = None  # symbol body source text (weight-1 field)
     span: Span | None = None
     visibility: str | None = None  # pub/public/private
     children: list[SymbolInfo] = field(default_factory=list)
@@ -84,10 +84,9 @@ class FileInfo:
 
 
 # The on-disk `index.json` HEAD is a LEAN serialization of a FileInfo — metadata +
-# module-docstring head + symbol NAME LISTS only (spec §3.2). The rich per-symbol
+# module-docstring head + symbol NAME LISTS only. The rich per-symbol
 # detail (body/signature/doc/span) lives in `manifest.json` (detail) and is
-# tokenized into `tokens.json` (search). `role`/`tags` were dropped from the design
-# (overview role_guess taxonomy removed); they are never populated.
+# tokenized into `tokens.json` (search). `role`/`tags` are never populated.
 # We keep `FileInfo` rich in-memory (used by _analyze/_rank/_graph/tests) and emit
 # the lean head only at serialization time via `head_record()` (in _scan.py).
 
