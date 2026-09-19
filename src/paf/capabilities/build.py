@@ -780,6 +780,8 @@ def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     (it does not vary with whatever markdown agent files happen to exist in
     `~/.agents/` or the project). `store` unused (uniform builder signature).
     """
+    from typing import Any, cast
+
     from pydantic_ai import Agent
 
     # Spec-driven leaf (Spec-Driven-Background-Agents plan): model, model
@@ -796,13 +798,21 @@ def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
 
     spec_path = get_spec_path("writer_subagent")
     wspec = load_agent_spec("writer_subagent")
-    writer = Agent(
-        wspec.model,
+    # Build via Agent.from_spec: its single flexible signature takes the spec
+    # directly and narrows the loosely-typed AgentSpec fields internally — the
+    # strict __init__ overloads reject TemplateStr/dict[str,Any]/None values,
+    # which is what Pylance complained about. The writer is still a leaf: no
+    # profile/capability resolution runs here. The writer's `instructions` is a
+    # plain YAML block scalar (guaranteed str) and `model_settings` a dict that
+    # pydantic-ai accepts as a ModelSettings, so we narrow both explicitly.
+    writer = Agent.from_spec(
+        wspec,
+        model=wspec.model,
         name="writer",  # runtime name stays `writer` (delegate_task key); the
         # spec/loader identity is the clearer `writer_subagent`.
         description=wspec.description,
-        system_prompt=wspec.instructions,
-        model_settings=wspec.model_settings,
+        system_prompt=cast(str, wspec.instructions),
+        model_settings=cast(Any, wspec.model_settings),
     )
     # Optional per-leaf FileSystem root override: if the writer spec declares a
     # `filesystem.root_dir`, the shared FS roots there; otherwise it inherits
