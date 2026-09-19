@@ -1,6 +1,6 @@
 """Shell capability that provides command execution for agents.
 
-paf-owned shell capability (copied verbatim from pydantic-ai-harness, MIT).
+Originally copied from pydantic-ai-harness, MIT.
 """
 
 from __future__ import annotations

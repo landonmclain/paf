@@ -1,6 +1,6 @@
 """Shell toolset -- gives agents the ability to run commands.
 
-paf-owned shell toolset (copied verbatim from pydantic-ai-harness, MIT).
+Originally copied from pydantic-ai-harness, MIT.
 
 The toolset is a thin execution seam: it owns the model-facing tools
 (``run_command`` / ``start_command`` / ``check_command`` / ``stop_command``),
@@ -39,17 +39,17 @@ from ._output import truncate_tail
 _P = ParamSpec("_P")
 
 
-def _recoverable(  # noqa: UP047  # paf-hardened: also recovers spawn failures (upstream 0.26.0)
+def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate signature-preserving decorator; PEP 695 inline type params can't express it
     fn: Callable[Concatenate[ShellToolset, _P], Awaitable[str]],
 ) -> Callable[Concatenate[ShellToolset, _P], Awaitable[str]]:
     """Convert model-correctable errors into `ModelRetry`.
 
-    pyai only feeds `ModelRetry` back to the model as a retry prompt; any other
-    exception propagates and aborts the whole run. A denied command is something
-    the model can recover from (pick an allowed one), so surface it as a retry
-    instead of crashing the agent. paf also recovers spawn failures (a missing
-    command binary raises `FileNotFoundError`/`OSError`), so a typo'd command
-    returns to the model instead of aborting the run.
+    pydantic-ai only feeds `ModelRetry` back to the model as a retry prompt; any
+    other exception propagates and aborts the whole run. A denied command is
+    something the model can recover from (pick an allowed one), so surface it as
+    a retry instead of crashing the agent. paf also recovers spawn failures (a
+    missing command binary raises `FileNotFoundError`/`OSError`), so a typo'd
+    command returns to the model instead of aborting the run.
     """
 
     @functools.wraps(fn)
