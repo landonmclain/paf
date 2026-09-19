@@ -1,7 +1,7 @@
-"""overview.json — the navigation tree (spec §3.1, the STARTING POINT).
+"""overview.json — the navigation tree (the STARTING POINT).
 
 The model's first read: a folder/file tree with counts, collapsed from the
-combined ignore list. No roles, no per-file summaries (both DEFERRED). Filename
+combined ignore list. No roles, no per-file summaries. Filename
 is the key — the model reads the tree top-down, then drills via ``lookup_file``.
 
 We build it from the SAME walker as the scan (``ScanScope.iter_files``) so the
@@ -11,7 +11,7 @@ Directories are derived from the walked files (a dir with no in-scope files is
 not emitted, because it has no indexed children).
 
 Each tree entry is ``{path, type: dir|file, depth, file_count? | line_count?}``
-(byte-lean per the spec): dirs carry ``file_count``; files carry ``line_count``
+(byte-lean): dirs carry ``file_count``; files carry ``line_count``
 (the count of source lines, cheaply read byte-by-byte — no parse needed).
 """
 
