@@ -1,8 +1,7 @@
 """CodebaseMap capability — navigation-first codebase browser (5-tool ladder).
 
-Wraps the codebase-map artifacts behind the locked navigation-first read-model
-(LOCKED 2026-08-23): the model climbs a ladder instead of brute-forcing keyword
-scans.
+Wraps the codebase-map artifacts behind the locked navigation-first read-model:
+the model climbs a ladder instead of brute-forcing keyword scans.
 
     get_overview() → lookup_file(path, symbol, detail) → read_block(block_ref)
                                     ↕                        ↑
@@ -11,11 +10,11 @@ scans.
 - storage: ``StorageService`` — the byte-medium seam (default ``FlatFileStorage``)
 - retrieval: ``RetrievalBackend`` — the search-method seam (default
   ``LexicalRetrieval``; a future semantic backend slots in here without touching tools)
-- scan_root: required — v1 is single-repo navigation
+- scan_root: required — single-repo navigation
 
 Search is the *secondary* escape hatch; navigation (overview → lookup → read_block)
-is primary. ``get_repo_map`` (distilled map) is Phase 4. ``callers``/``with_graph``
-defer to the graph phase.
+is primary. ``get_repo_map`` (distilled map) is built; ``callers``/``with_graph``
+are not yet built.
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ class CodebaseMap(AbstractCapability):
     """
 
     scan_root: str | Path
-    """Project root to index/navigate. v1 is single-repo navigation."""
+    """Project root to index/navigate. Single-repo navigation."""
 
     storage: StorageService = field(default_factory=FlatFileStorage)
     """Byte-medium seam (flat JSON now; SQLite/object-store later)."""
