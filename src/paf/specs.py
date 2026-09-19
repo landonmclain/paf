@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic_ai import Agent, AgentSpec
+from pydantic_ai import Agent, AgentSpec, UsageLimits
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
@@ -40,6 +40,36 @@ def _spec_compaction_config(spec_path: Path) -> CompactionConfig:
     if not isinstance(block, dict):
         return CompactionConfig()
     return CompactionConfig.from_mapping(block)
+
+
+def _spec_usage_limits(spec_path: Path) -> UsageLimits | None:
+    """Read the spec's top-level ``usage_limits:`` block into a ``UsageLimits``.
+
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. The block shape:
+
+        usage_limits:
+          request_limit: 75
+
+    Absent/unreadable block -> None, which makes the Session fall back to
+    pydantic-ai's default ``UsageLimits()`` (request_limit=50). Only
+    ``request_limit`` is read today; unknown keys are ignored so the schema can
+    grow without breaking older spec files.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("usage_limits")
+    if not isinstance(block, dict):
+        return None
+    request_limit = block.get("request_limit")
+    if not isinstance(request_limit, int):
+        return None
+    return UsageLimits(request_limit=request_limit)
 
 
 def _spec_web_config(spec_path: Path) -> list[str] | None:
@@ -543,6 +573,18 @@ def load_agent_spec(
     """Load and validate an agent specification from disk."""
     path = get_spec_path(agent_name, spec_directory)
     return AgentSpec.from_file(path)
+
+
+def spec_usage_limits(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> UsageLimits | None:
+    """Read a named agent's spec ``usage_limits:`` block.
+
+    Returns ``None`` when the spec has no ``usage_limits:`` block, so the
+    Session falls back to pydantic-ai's default ``UsageLimits()``.
+    """
+    return _spec_usage_limits(get_spec_path(agent_name, spec_directory))
 
 
 def build_agent(

@@ -72,7 +72,7 @@ from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
-from paf.specs import build_agent, resolve_profile_name
+from paf.specs import build_agent, resolve_profile_name, spec_usage_limits
 
 log = logging.getLogger(__name__)
 
@@ -376,6 +376,9 @@ class Session:
         # NOT be added to agent.capabilities or its before_model_request hook would
         # fire mid-turn and recreate cache busts.
         self._boundary_compaction = build_boundary_compaction_for_agent(agent_name)
+        # Per-run usage limits from the spec's `usage_limits:` block (None when
+        # absent -> pydantic-ai's default UsageLimits()). Passed to iter() below.
+        self._usage_limits = spec_usage_limits(agent_name)
         self.history: list = []
         # Background orchestrator — BARE by default. The app/CLI attaches a
         # :class:`paf.background.BackgroundCoordinator` (via
@@ -655,6 +658,7 @@ class Session:
                     message_history=self.history,
                     conversation_id=scoped,
                     cancellation_token=self._token,
+                    usage_limits=getattr(self, "_usage_limits", None),
                 ) as run:
                     self._run = run
                     _active_run = run
