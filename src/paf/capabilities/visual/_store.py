@@ -16,9 +16,9 @@ This store is intentionally trivial and transient:
   - it is the ONLY coupling between the capture side (hook) and the consume
     side (``describe_screenshot`` tool), both in the same capability.
 
-Refs survive for the lifetime of the process. The demo keeps a handful of
-screenshots per turn, so a simple bound on total entries is plenty; once
-consumed or dropped the bytes can be released by ``drop``.
+Refs survive for the lifetime of the process. A turn keeps a handful of
+screenshots, so a simple bound on total entries is plenty; once consumed or
+dropped the bytes can be released by ``drop``.
 """
 
 from __future__ import annotations
@@ -71,6 +71,6 @@ class ScreenshotStore:
             return len(self._images)
 
 
-# Shared per-process store. One instance is enough: the ability survives
-# (optionally) separately may not, but the store is just process-scoped scratch.
+# Shared per-process store. One instance is enough — the store is just
+# process-scoped scratch.
 _store = ScreenshotStore()

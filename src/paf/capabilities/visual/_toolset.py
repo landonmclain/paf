@@ -35,7 +35,7 @@ _P = ParamSpec("_P")
 _VISION_MODEL_DEFAULT = "openrouter:xiaomi/mimo-v2.5"
 
 
-def _recoverable(  # noqa: UP047  # matches fs/shell/web `_recoverable` convention
+def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate signature-preserving decorator; PEP 695 inline type params can't express it
     fn: Callable[Concatenate[VisualToolset, _P], Awaitable[str]],
 ) -> Callable[Concatenate[VisualToolset, _P], Awaitable[str]]:
     """Let the model retry on transient, correctable vision failures.
@@ -64,9 +64,9 @@ def _vision_model() -> str:
 async def _run_vision(images: list[bytes], prompt: str) -> str:
     """Send `images` + `prompt` to the vision model and return its text.
 
-    Shared by the `describe_screenshot` tool and (kept here so the capability
-    and toolset never duplicate the one vision side-call). The `Agent` and
-    message types are imported lazily so this module imports without a live key.
+    The one vision side-call, kept here so the capability and toolset never
+    duplicate it. The `Agent` and message types are imported lazily so this
+    module imports without a live key.
     """
     from pydantic_ai import Agent
     from pydantic_ai.messages import BinaryContent, TextContent
