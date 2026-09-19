@@ -1,9 +1,7 @@
-"""Corpus ingestion for the paf Skills capability (v2 — tree-aware).
+"""Corpus ingestion for the paf Skills capability (tree-aware).
 
-Adapted from `skill_note_hint.corpus` (MIT) so the pointer engine lives inside
-paf as a first-class capability. v2 reworks the corpus to model **skills as a
-tree** (the Hermes/Claude shape) instead of a flat skill/note dump (Landon
-2026-09-08; see vault `Skills-Capability-Spec.md`):
+Adapted from `skill_note_hint.corpus` (MIT). The corpus models **skills as a
+tree** (the Hermes/Claude shape) rather than a flat skill/note dump:
 
 - A **skill** is a directory containing a `SKILL.md`, optionally under a
   *category* directory: `<root>/<category>/<skill>/SKILL.md` (or flat
@@ -12,8 +10,8 @@ tree** (the Hermes/Claude shape) instead of a flat skill/note dump (Landon
   `assets/` — are attached to that skill, NOT indexed as standalone notes.
 - The corpus indexes **skills only**. ``rank()`` BM25s over skill vocabulary
   (name + description + tags), so the pointer engine (`point_skills`) never
-  scores against a polluted note dump (the v1 failure mode: pointed at a real
-  tree it indexed 480 docs — 130 skills + 350 junk notes).
+  scores against a polluted note dump (a flat dump over a real tree indexed 480
+  docs — 130 skills + 350 junk notes).
 
 Ranking reuses paf's own dependency-free BM25 core
 (`paf.capabilities.search._ranking`) — paf owns exactly one BM25.
@@ -173,8 +171,7 @@ class HintCorpus:
 
     Indexes **skills only** (SKILL.md files), each with its category, canonical
     id, and attached resources. Plain .md files are NOT indexed — the
-    standalone-note pointer is a vault-capability concern, not Skills (see the
-    vault spec).
+    standalone-note pointer is a vault-capability concern, not Skills.
     """
 
     def __init__(

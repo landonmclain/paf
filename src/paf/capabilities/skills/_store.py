@@ -17,8 +17,7 @@ under the paf repo's ``data/.skills-index/`` (mirroring the vault's
 This storage **delegates to the shared ``FlatFileStorage`` seam**
 (``paf.capabilities._storage``) — it does NOT carry its own atomic-write / JSON
 helpers. The shared seam owns the mkstemp-safe atomic write and the same
-``StorageService`` backend (flat file today, SQLite/Postgres later) swaps in
-with zero skills changes.
+``StorageService`` backend swaps in with zero skills changes.
 
 The index is keyed by the library root's normalized absolute path and lives in
 the paf repo (NOT co-located inside the skill library), so pointing ``skills``
@@ -48,7 +47,7 @@ _DEFAULT_SKILLS_INDEX_DIR = "data/.skills-index"
 def index_dir_for_root(root: str | Path) -> Path:
     """Index dir for a skill library root: repo-owned, keyed by the root's hash.
 
-    Lives under ``<data/skills_index_dir>/<sha256(root)>/`` in the paf repo —
+    Lives under ``data/.skills-index/<sha256(root)>/`` in the paf repo —
     NOT co-located inside the skill library — so pointing skills at a real
     skill tree never drops artifacts into it.
     ``FlatFileSkillsStorage(index_root=...)`` overrides this default.

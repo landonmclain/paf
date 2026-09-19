@@ -1,10 +1,9 @@
-"""The paf-owned Skills toolset (v2) — list, load, and read skill resources.
+"""The paf-owned Skills toolset — list, load, and read skill resources.
 
-v2 rework (Landon 2026-09-08) makes the Skills capability handle
-**Hermes/Claude-style skill trees**: skills grouped by category, with
-skill-scoped resources (`references/`, `scripts/`, `templates/`, `assets/`)
-that belong to their skill rather than polluting a flat note corpus. See the
-vault `Skills-Capability-Spec.md`.
+The Skills capability handles **Hermes/Claude-style skill trees**: skills
+grouped by category, with skill-scoped resources (`references/`, `scripts/`,
+`templates/`, `assets/`) that belong to their skill rather than polluting a flat
+note corpus.
 
 Tools (agent-facing):
   - ``list_skills``    — the skill tree: category-grouped names + descriptions.
@@ -86,8 +85,7 @@ class SkillToolset(FunctionToolset[object]):
         # from `add_function`, not from plain subclass methods — same pattern as
         # the FileSystem toolset). Note: `point_skills` (the BM25 pointer engine)
         # is deliberately NOT registered — it is an internal capability
-        # primitive for the auto per-turn hint layer, not an agent-facing tool
-        # (see vault Skills-Capability-Spec §6).
+        # primitive for the auto per-turn hint layer, not an agent-facing tool.
         self.add_function(self.list_skills, name="list_skills")
         self.add_function(self.load_skill, name="load_skill")
         self.add_function(self.list_skill_files, name="list_skill_files")
@@ -403,10 +401,9 @@ class SkillToolset(FunctionToolset[object]):
         (name/description/tags) — zero LLM cost. Returns one line per hit like
         `consider: <skill_id>` (canonical, category-qualified), most relevant
         first. A pointer names *where to look*, not the answer; the auto per-turn
-        hint layer (Skills-Capability-Spec §6) calls this and injects
-        `consider:` lines into turn context; the agent then follows up with
-        load_skill / read_skill_file. Deliberately NOT in `.tools` — it is not a
-        tool the model should call on its own volition.
+        hint layer calls this and injects `consider:` lines into turn context; the
+        agent then follows up with load_skill / read_skill_file. Deliberately NOT
+        in `.tools` — it is not a tool the model should call on its own volition.
         """
         k = top_k if top_k is not None else self.top_k
         hits = self._corpus.rank(query, k=k)

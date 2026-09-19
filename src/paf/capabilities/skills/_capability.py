@@ -1,20 +1,19 @@
 """paf-owned Skills capability — one capability for all skill functionality.
 
-Unifies two layers (Landon 2026-08-19):
+Unifies two layers:
   1. Load-on-demand — `list_skills`/`load_skill`/`list_skill_files`/
-     `read_skill_file` (the load mechanism idea from the harness `Skills` /
-     pydantic-ai deferred-capability catalog), so the prompt stays thin and
-     only the skills the model actually needs get pulled.
-  2. The hint pointer engine — `point_skills` re-homing the skill-note-hint
-     pointer, so the agent is **pre-armed** with which skill a message needs.
-     This is an **internal primitive** for the auto per-turn hint layer, NOT an
-     agent-facing tool (Skills-Capability-Spec §6) — the initial v1 shipped it
-     as a tool, which we reversed because a volitional search the model must
-     remember to call never fires reliably.
+     `read_skill_file` (the load mechanism idea from pydantic-ai-harness's
+     `Skills` / pydantic-ai deferred-capability catalog), so the prompt stays
+     thin and only the skills the model actually needs get pulled.
+  2. The hint pointer engine — `point_skills` (the skill-note-hint pointer), so
+     the agent is **pre-armed** with which skill a message needs. This is an
+     **internal primitive** for the auto per-turn hint layer, NOT an
+     agent-facing tool — a volitional search the model must remember to call
+     never fires reliably.
 
 Indexes a skill-library directory at construction; re-reads SKILL.md bodies on
-demand. Kept paf-native (AbstractCapability wrapping a FunctionToolset) in the
-same shape as FileSystem/Shell/Git/Web.
+demand. paf-native (AbstractCapability wrapping a FunctionToolset), in the same
+shape as FileSystem/Shell/Git/Web.
 """
 
 from __future__ import annotations
