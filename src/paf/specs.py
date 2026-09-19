@@ -555,15 +555,39 @@ def get_spec_path(
 ) -> Path:
     """Resolve an agent name to a YAML/JSON specification path.
 
-    Tries ``{name}.yaml``, ``{name}.yml``, then ``{name}.json`` in order.
+    Tries ``{name}.yaml``, then ``{name}.yml``, then ``{name}.json`` in order
+    (a root spec and a subfolder spec of the SAME suffix still resolve by that
+    suffix precedence). Within each suffix it looks first at the spec root (the
+    historical flat contract), then recursively beneath it, so leaf-agent specs
+    can live in subfolders (``specs/sub_agents/writer_subagent.yaml``,
+    ``specs/background_agents/memory_extractor.yaml``) and still resolve by bare
+    name — no per-kind loader needed.
+
+    Two specs of the SAME suffix in DIFFERENT directories (e.g. a root spec plus
+    a same-named subfolder spec, or two subfolders sharing a name) is a genuine
+    collision: we raise rather than silently pick, preserving determinism.
+    Distinct suffixes in the same directory are NOT a collision — they follow
+    ``.yaml`` > ``.yml`` > ``.json`` precedence (historical contract).
     """
-    for suffix in (".yaml", ".yml", ".json"):
-        path = spec_directory / f"{agent_name}{suffix}"
-        if path.is_file():
-            return path
+    for suffix in _SPEC_SUFFIXES:
+        matches = list(spec_directory.rglob(f"{agent_name}{suffix}"))
+        if not matches:
+            continue
+        if len(matches) > 1:
+            listed = ", ".join(str(p) for p in sorted(matches))
+            raise AgentSpecNotFoundError(
+                f"Ambiguous agent specification {agent_name!r}: {len(matches)} "
+                f"'{suffix}' matches ({listed}); rename/dedupe so the name "
+                "resolves once"
+            )
+        return matches[0]
     raise AgentSpecNotFoundError(
         f"No agent specification found for {agent_name!r} in {spec_directory}"
     )
+
+
+_SPEC_SUFFIXES = (".yaml", ".yml", ".json")
+
 
 
 def load_agent_spec(
