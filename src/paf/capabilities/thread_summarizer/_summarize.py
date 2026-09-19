@@ -104,24 +104,86 @@ class SummarizerPrompt:
             ref = stamped or _ref_for(self.span, i)
             lines.append(f"[{ref or 'unanchored'}] {role}: {text}")
         messages = "\n".join(lines)
-        return (
-            "Summarize this block of conversation turns as a short narrative thread. "
-            "Do not infer facts beyond these messages. Output: a compact set of "
-            "{at, what} beats (at = the exact source ref, what = a few words) and one "
-            "dense `summary` sentence capturing the arc — started on X, hit Y, landed on Z. "
-            "Every `at` must be one of the refs this block covers.\n\n"
-            f"Conversation: {self.conversation_id}\n"
-            f"Messages:\n{messages}"
+        # The operating instruction comes from the `thread_summarizer` spec's
+        # `instructions:` template (Spec-Driven-Background-Agents); falls back to
+        # the inline default when the spec is absent. The template carries
+        # `{conversation_id}` + `{rendered}` placeholders filled here.
+        template = _summarizer_instructions()
+        return template.format(
+            conversation_id=self.conversation_id,
+            rendered=messages,
         )
+
+
+DEFAULT_SUMMARIZER_INSTRUCTIONS = (
+    "Summarize this block of conversation turns as a short narrative thread. "
+    "Do not infer facts beyond these messages. Output: a compact set of "
+    "{{at, what}} beats (at = the exact source ref, what = a few words) and one "
+    "dense `summary` sentence capturing the arc — started on X, hit Y, landed on Z. "
+    "Every `at` must be one of the refs this block covers.\n\n"
+    "Conversation: {conversation_id}\n"
+    "Messages:\n{rendered}"
+)
+
+
+def _summarizer_instructions() -> str:
+    """The summarizer's operating instruction template — spec `instructions` or
+    :data:`DEFAULT_SUMMARIZER_INSTRUCTIONS`.
+
+    Only used for its ``{conversation_id}`` + ``{rendered}`` placeholders (the
+    live conversation span), filled at render time.
+    """
+    try:
+        from paf.specs import resolve_background_spec
+
+        spec, _raw = resolve_background_spec("thread_summarizer")
+        if spec.instructions:
+            from typing import cast
+
+            return cast(str, spec.instructions)
+    except Exception:  # noqa: BLE001 - best-effort sugar
+        pass
+    return DEFAULT_SUMMARIZER_INSTRUCTIONS
+
+
+DEFAULT_SUMMARIZER_MODEL = "openrouter:deepseek/deepseek-v4-flash-0731"
+"""Default model when the ``thread_summarizer`` spec is absent — independent of
+the memory consolidation system (the summarizer is its own capability, not a
+memory agent; it should not inherit the memory owner's sampler/provider config)."""
+
+
+def _default_summarizer_model_settings() -> ModelSettings:
+    """Default model_settings when the spec is absent: deterministic sampler +
+    the OpenRouter provider pin, matching what the spec declares. Independent of
+    the memory consolidation defaults."""
+    from typing import cast
+
+    from pydantic_ai import ModelSettings as _MS
+    from pydantic_ai.settings import ModelSettings as _PMS
+
+    return cast(
+        _MS,
+        _PMS(
+            temperature=0,
+            top_p=1.0,
+            extra_body={
+                "provider": {
+                    "order": ["deepinfra", "parasail", "coreweave"],
+                    "quantizations": ["fp8"],
+                }
+            },
+        ),
+    )
 
 
 def _summarizer_spec_config() -> tuple[str, ModelSettings, int] | None:
     """Resolve the summarizer leaf spec (model, model_settings, retries).
 
     Returns None when the ``thread_summarizer`` spec is absent/unreadable so
-    callers fall back to :func:`consolidate_model` + shared settings (keeps unit
-    tests and non-spec deployments working). When present it is the source of
-    truth (Spec-Driven-Background-Agents).
+    callers fall back to the summarizer-specific :data:`DEFAULT_SUMMARIZER_MODEL`
+    + :func:`_default_summarizer_model_settings` (keeps unit tests and non-spec
+    deployments working). When present it is the source of truth
+    (Spec-Driven-Background-Agents).
     """
     try:
         from paf.specs import resolve_background_spec
@@ -135,13 +197,8 @@ def _summarizer_spec_config() -> tuple[str, ModelSettings, int] | None:
 
     from pydantic_ai import ModelSettings as _MS
 
-    from paf.capabilities.memory._consolidate import (
-        _consolidation_model_settings,
-        consolidate_model,
-    )
-
-    model = spec.model or consolidate_model()
-    settings = spec.model_settings or _consolidation_model_settings()
+    model = spec.model or DEFAULT_SUMMARIZER_MODEL
+    settings = spec.model_settings or _default_summarizer_model_settings()
     retries = raw.get("retries")
     if not isinstance(retries, int) or isinstance(retries, bool) or retries < 1:
         retries = 5
@@ -152,18 +209,13 @@ async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord
     """Run the real structured summarizer agent over one conversation block."""
     from pydantic_ai import Agent
 
-    from paf.capabilities.memory._consolidate import (
-        _consolidation_model_settings,
-        consolidate_model,
-    )
-
     cfg = _summarizer_spec_config()
     if cfg is not None:
         model, model_settings, retries = cfg
     else:
         model, model_settings, retries = (
-            consolidate_model(),
-            _consolidation_model_settings(),
+            DEFAULT_SUMMARIZER_MODEL,
+            _default_summarizer_model_settings(),
             5,
         )
     agent = Agent(
