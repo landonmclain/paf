@@ -1,7 +1,6 @@
 """The shared `read_turn` primitive — full-content read of a persisted turn.
 
-Owned by `search` because search is the permanent retrieval layer; the retired
-turn index was an optional *producer* of refs on top of it. A
+Owned by `search` because search is the permanent retrieval layer. A
 `run_id:turn_id` ref (or bare `run_id`) is resolved through the `HistorySource`
 seam back to the original `ModelMessage` span — whether the ref came from a
 recalled one-liner or from raw search (`search_conversation_history`).
@@ -81,12 +80,11 @@ def _source_session_id(message: ModelMessage) -> str | None:
     """The source-session id a persisted message carries, if any.
 
     Read from the generic `metadata['source_session_id']` provenance key (set
-    at persist time, see `tests/run_lmem.py::_transcript_messages`). Surfacing
-    it on `read_turn` output lets a retrieval be scored by LongMemEval
-    ID-membership (did the surfaced evidence's session id appear in
-    `answer_session_ids`) -- the same convention `search_index` and
-    `search_conversation_history` already use. Returns None when absent so the
-    turn renders unchanged for untagged pipelines.
+    at persist time). Surfacing it on `read_turn` output lets a retrieval be
+    scored by LongMemEval ID-membership (did the surfaced evidence's session id
+    appear in `answer_session_ids`) -- the same convention
+    `search_conversation_history` uses. Returns None when absent so the turn
+    renders unchanged for untagged pipelines.
     """
     md = getattr(message, "metadata", None)
     if isinstance(md, dict):
@@ -99,9 +97,9 @@ def _source_session_id(message: ModelMessage) -> str | None:
 def _is_injected_text(text: TextContent) -> bool:
     """Return whether a `TextContent` is an injected artifact (not durable user content).
 
-    Matches the metadata marker set shared with the turn-index `_capability`
-    and the harness `Memory` capability. The marker is scope-qualified for the
-    memory family (`...v1:<scope_hash>`), so we match on the stable base prefix.
+    Matches the metadata marker set shared with the other injected-artifact
+    producers. The marker is scope-qualified for the memory family
+    (`...v1:<scope_hash>`), so we match on the stable base prefix.
     """
     return getattr(text, "metadata", None) is not None and any(
         text.metadata.startswith(marker) for marker in injected_artifact_markers()

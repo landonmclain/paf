@@ -1,18 +1,16 @@
 """Message rendering for the paf full-context search corpus.
 
 Renders a persisted `ModelMessage` to searchable text with the SAME
-injected-artifact strip convention (see
-`paf.capabilities._markers`). This is the read-side hygiene that
-`pydantic_ai_harness.conversation_search` lacks: its corpus renders marker-tagged
-`UserPromptPart` blocks verbatim, so `<memory>` artifacts leak
-into the BM25 index and can surface as matches. Owning the search here lets us
-apply one consistent strip to the entire recall surface.
+injected-artifact strip convention (see `paf.capabilities._markers`). This is
+the read-side hygiene that `pydantic_ai_harness.conversation_search` lacks: its
+corpus renders marker-tagged `UserPromptPart` blocks verbatim, so `<memory>`
+artifacts leak into the BM25 index and can surface as matches. Owning the search
+here applies one consistent strip to the entire recall surface.
 
-Mirrors `pydantic_ai_harness.conversation_search._toolset._format_message`, but:
+Rendering contract:
 - strips marker-tagged `TextContent` (via `_markers.injected_artifact_markers()`)
-- keeps the same BM25-index rendering contract: `truncate=False` for the ranked
-  corpus (terms past the display cutoff stay findable), `truncate=True` for the
-  model-facing excerpt.
+- `truncate=False` for the ranked corpus (terms past the display cutoff stay
+  findable), `truncate=True` for the model-facing excerpt.
 """
 
 from __future__ import annotations
@@ -36,9 +34,8 @@ from paf.capabilities._markers import injected_artifact_markers
 def is_summary_artifact(message: ModelMessage) -> bool:
     """Return whether a message is a compaction summary artifact (never indexed).
 
-    Byte-for-byte mirror of the harness `SnapshotHistorySource.is_summary_artifact`
-    (see `_source.py` for rationale). Compaction summaries are derived transcripts,
-    not original prompts, so they stay out of the corpus.
+    Compaction summaries are derived transcripts, not original prompts, so they
+    stay out of the corpus.
     """
     if not isinstance(message, ModelRequest):
         return False
@@ -48,7 +45,7 @@ def is_summary_artifact(message: ModelMessage) -> bool:
     )
 
 
-# Literal mirror of `pydantic_ai_harness.compaction._summarizing_compaction._SUMMARY_PREFIX`.
+# The compaction summary prefix (matches the harness compaction's `_SUMMARY_PREFIX`).
 _SUMMARY_PREFIX = "Summary of previous conversation:\n\n"
 
 

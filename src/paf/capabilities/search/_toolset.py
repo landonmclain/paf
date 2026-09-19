@@ -1,13 +1,13 @@
 """The paf-owned `search_conversation_history` toolset (BM25 over persisted history).
 
-This is the wide last-resort rung of the recall ladder. It reads the SAME
-`HistorySource` seam as the harness `ConversationSearch` used, but is fully owned
-by paf: the corpus is built with the injected-artifact strip (see `_render`), so
-marker-tagged `<turn-index>` / `<memory>` blocks never leak into the BM25 index.
+This is the wide last-resort rung of the recall ladder. It reads the
+`HistorySource` seam and is fully owned by paf: the corpus is built with the
+injected-artifact strip (see `_render`), so marker-tagged `<turn-index>` /
+`<memory>` blocks never leak into the BM25 index.
 
-Ranking is the dependency-free BM25 core in `_ranking` (re-homed from the harness,
-MIT). The tool is a drop-in replacement for the harness `ConversationSearchToolset`:
-same `search_conversation_history(query, run_id=None)` signature and same
+Ranking is the dependency-free BM25 core in `_ranking` (MIT). The tool is a
+drop-in replacement for the harness `ConversationSearchToolset`: same
+`search_conversation_history(query, run_id=None)` signature and same
 `scope='conversation'` fail-closed semantics.
 """
 
@@ -29,7 +29,7 @@ from ._reader import READ_TURN_DESCRIPTION, TurnFinder
 from ._render import display_lines, format_messages, is_summary_artifact
 
 SearchScope = Literal["all", "conversation"]
-"""How much of the store one search may reach (mirrors the harness type)."""
+"""How much of the store one search may reach."""
 
 SEARCH_HISTORY_DESCRIPTION = """\
 Search all persisted conversation history: earlier turns of this conversation \
@@ -110,20 +110,18 @@ class _RunSection:
     # `metadata['source_date']` surfaces it here.
     dates: list[str | None] | None = None
     # Parallel to `display_lines`: the `{run_id}:{turn_id}` ref of the TURN each
-    # line belongs to (turn_id = ordinal of the message's user-prompt anchor, the
-    # same stable ref the turn index emits). Lets a search hit hand `read_turn`
-    # the same pointer format the index uses, so a hit can be expanded to its
-    # full turn via the shared read tool.
+    # line belongs to (turn_id = ordinal of the message's user-prompt anchor).
+    # Lets a search hit hand `read_turn` a pointer to the full turn, so a hit can
+    # be expanded via the shared read tool.
     turn_refs: list[str | None] | None = None
 
 
 class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
     """A single `search_conversation_history` tool over a `HistorySource`.
 
-    A paf-owned drop-in for the harness `ConversationSearchToolset`. The corpus
-    is rendered with the injected-artifact strip (`paf.capabilities.search._render`),
-    so it never carries `<turn-index>` / `<memory>` blocks that StepPersistence
-    snapshotted into User messages.
+    The corpus is rendered with the injected-artifact strip
+    (`paf.capabilities.search._render`), so it never carries `<turn-index>` /
+    `<memory>` blocks that StepPersistence snapshotted into User messages.
     """
 
     def __init__(
@@ -177,7 +175,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # Expose the shared full-content read tool (owned by `search`). Because
         # search is the permanent retrieval layer, its search hits can hand the
         # model a `run_id:turn_id` ref to expand -- the model reaches the full
-        # turn without any index. Same tool/ref format as the index uses.
+        # turn directly.
         self.add_function(
             self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION
         )
@@ -280,7 +278,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             conversation_id = ctx.conversation_id
 
         # Durable messages exclude compaction summary artifacts (see `_render`),
-        # so the section lines are the original prompts -- like the harness source.
+        # so the section lines are the original prompts.
         sections = await self._load_sections(run_id, conversation_id)
         if run_id is not None and not sections:
             return f"No persisted history for run '{run_id}'."
@@ -382,10 +380,9 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             )
             label = section.label + (f" | session: {sid}" if sid else "")
             # Surface the matched message's turn ref so the model can expand it to
-            # the FULL turn via `read_turn` -- the same `run_id:turn_id` format the
-            # index emits. This is the "expand a search hit to full content" path
-            # that was missing (and caused non-terminating retrieval loops on
-            # full-content questions like LongMemEval's "children's book" item).
+            # the FULL turn via `read_turn`. This is the "expand a search hit to
+            # full content" path that keeps full-content questions from looping on
+            # re-search.
             tref = (
                 section.turn_refs[line_idx]
                 if section.turn_refs is not None and line_idx < len(section.turn_refs)
@@ -428,7 +425,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 run_id=run.run_id
             )
             # Drop compaction-summary artifacts from the corpus (derived,
-            # not original): mirror the harness `SnapshotHistorySource`.
+            # not original).
             messages = [m for m in messages if not is_summary_artifact(m)]
             if not messages:
                 continue
@@ -448,12 +445,11 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 for m in messages
             ]
             # Map each message to the `{run_id}:{turn_id}` ref of the TURN it
-            # belongs to (turn_id = ordinal of the message's user-prompt anchor,
-            # the SAME stable ref the turn index emits). format_messages is
-            # one-line-per-message and message-aligned, so turn_refs[i] reaches
-            # messages[i]'s turn. Non-user-query messages (assistant responses,
-            # tool traffic) inherit their containing turn. Messages before any
-            # anchor have no turn ref (None).
+            # belongs to (turn_id = ordinal of the message's user-prompt anchor).
+            # format_messages is one-line-per-message and message-aligned, so
+            # turn_refs[i] reaches messages[i]'s turn. Non-user-query messages
+            # (assistant responses, tool traffic) inherit their containing turn.
+            # Messages before any anchor have no turn ref (None).
             run_ref = run.run_id
             anchors = user_anchor_indices(messages)
             turn_refs: list[str | None] = []

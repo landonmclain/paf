@@ -8,10 +8,9 @@ the injected-artifact strip (see `_render`), so marker-tagged `<turn-index>` /
 `<memory>` blocks never leak into the BM25 index.
 
 The harness's `ConversationSearch` renders `UserPromptPart` blocks verbatim and
-has no marker-aware `TextContent` exclusion -- a known gap (see
-`References/Pydantic-AI-Harness.md`). This capability is the record-owning version:
-the whole recall surface (index search, read_turn, wide search) now shares one
-strip convention.
+has no marker-aware `TextContent` exclusion. This capability is the record-owning
+version: the whole recall surface (index search, read_turn, wide search) shares
+one strip convention.
 """
 
 from __future__ import annotations
@@ -42,8 +41,6 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
     already stores, through a `HistorySource`. Pair it with `StepPersistence`
     sharing the same store, and the model can recall what compaction dropped
     from the live context as well as anything from past runs.
-
-    This is the paf-owned version of the harness capability of the same name.
 
     ```python
     store = FileStepStore(directory="data/persist")

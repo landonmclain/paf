@@ -1,10 +1,9 @@
 """Dependency-free BM25 ranking core for the paf record-owning full-context search.
 
-This is the ranking heart of ``search_conversation_history``. It is a **paf-local
-copy** of the core from `pydantic_ai_harness.conversation_search._toolset`
-(MIT licensed), deliberately re-homed here so the whole recall surface -- index
-search, read_turn, and wide conversation search -- is owned by paf with a single
-marker-strip convention, rather than partially borrowed from the harness.
+This is the ranking heart of ``search_conversation_history``: a paf-local copy of
+the core from `pydantic_ai_harness.conversation_search._toolset` (MIT licensed),
+so the whole recall surface -- index search, read_turn, and wide conversation
+search -- is owned by paf with a single marker-strip convention.
 
 Only the pure ranking math lives here (`_tokenize`, `_compute_idf`, `_bm25_score`,
 `_bm25_rank`). The corpus construction (what text gets searched) lives in the
@@ -24,7 +23,7 @@ _TOKENIZE_RE = re.compile(r"\w+")
 
 @dataclass(frozen=True)
 class Bm25Params:
-    """BM25 tuning. Mirrors the harness defaults (Lucene/Elasticsearch-inspired)."""
+    """BM25 tuning (Lucene/Elasticsearch-inspired defaults)."""
 
     k1: float = 1.5
     """Term-frequency saturation, non-negative. Lucene's `BM25Similarity` uses 1.2."""
