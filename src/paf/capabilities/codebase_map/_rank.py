@@ -1,9 +1,6 @@
-"""Ranking: BM25 first-pass search over the manifest (Phase 2, quick start).
+"""Ranking: BM25 first-pass search over the manifest.
 
-Implemented now (per Landon, 2026-08-23): **BM25 first-pass broad search** — the
-quick start. Deliberately NOT the primary long-term engine (that's the resolved
-symbol graph + relationships, which is the key deliverable and comes next); this
-is the "broad search is important for a quick start" layer.
+**BM25 first-pass broad search** — the quick start.
 
 Design:
   - Shares the repo's dependency-free BM25 tokenizer and tuning constants
@@ -12,11 +9,11 @@ Design:
     The codebase-map field-weighting (per-record field tokens, reference tiebreak)
     differs enough from the search module's that shared scoring isn't worth the
     coupling. No retrieval framework (no Rank-BM25 / whoosh / LlamaIndex).
-  - Field-weighted per spec §3.7.2: name > qualified > file_path > signature >
+  - Field-weighted: name > qualified > file_path > signature >
     doc > imports > body. Each ``FileInfo`` record is scored as a bag of weighted
     field tokens so a hit in a high-weight field (name/file_path) beats one in a
     low-weight field (body).
-  - Reference count is a *harmless weak* signal (per Landon): added as a tiny
+  - Reference count is a *harmless weak* signal: added as a tiny
     fractional tiebreak so a widely-referenced symbol edges out an equal-scoring
     obscure one — but it does NOT dominate (broad search runs on text; the count
     "won't move the needle much, but as long as it doesn't hurt").
@@ -30,7 +27,7 @@ import math
 
 from ._schema import BlockRef, FileInfo, SearchHit, Span
 
-# Weight a query token by how load-bearing the field it hits in is (§3.7.2):
+# Weight a query token by how load-bearing the field it hits in is:
 # ranking text is more meaningful in an exact field than in prose body text.
 _FIELD_WEIGHTS: dict[str, float] = {
     "name": 6.0,
