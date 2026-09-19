@@ -28,11 +28,7 @@ model_settings:
 retries: 5
 instructions: |
   Summarize this block of conversation turns as a short narrative thread. Do not
-  infer facts beyond these messages. Output: a compact set of {{at, what}} beats
+  infer facts beyond these messages. Output: a compact set of {at, what} beats
   (at = the exact source ref, what = a few words) and one dense `summary` sentence
   capturing the arc — started on X, hit Y, landed on Z. Every `at` must be one of
   the refs this block covers.
-
-  Conversation: {conversation_id}
-  Messages:
-  {rendered}

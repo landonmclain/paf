@@ -105,33 +105,32 @@ class SummarizerPrompt:
             lines.append(f"[{ref or 'unanchored'}] {role}: {text}")
         messages = "\n".join(lines)
         # The operating instruction comes from the `thread_summarizer` spec's
-        # `instructions:` template (Spec-Driven-Background-Agents); falls back to
-        # the inline default when the spec is absent. The template carries
-        # `{conversation_id}` + `{rendered}` placeholders filled here.
-        template = _summarizer_instructions()
-        return template.format(
-            conversation_id=self.conversation_id,
-            rendered=messages,
+        # `instructions:` block (Spec-Driven-Background-Agents) — static prose
+        # only, like the owner's CONSOLIDATION_GUIDANCE. The live conversation
+        # span is appended here in code (Conversation:/Messages:), the same
+        # split the extractor uses (guidance vs CONSOLIDATION_PROMPT). Falls
+        # back to DEFAULT_SUMMARIZER_INSTRUCTIONS when the spec is absent.
+        return (
+            f"{_summarizer_instructions().rstrip()}\n\n"
+            f"Conversation: {self.conversation_id}\n"
+            f"Messages:\n{messages}"
         )
 
 
 DEFAULT_SUMMARIZER_INSTRUCTIONS = (
     "Summarize this block of conversation turns as a short narrative thread. "
     "Do not infer facts beyond these messages. Output: a compact set of "
-    "{{at, what}} beats (at = the exact source ref, what = a few words) and one "
+    "{at, what} beats (at = the exact source ref, what = a few words) and one "
     "dense `summary` sentence capturing the arc — started on X, hit Y, landed on Z. "
-    "Every `at` must be one of the refs this block covers.\n\n"
-    "Conversation: {conversation_id}\n"
-    "Messages:\n{rendered}"
+    "Every `at` must be one of the refs this block covers."
 )
 
 
 def _summarizer_instructions() -> str:
-    """The summarizer's operating instruction template — spec `instructions` or
+    """The summarizer's operating instruction — spec `instructions` or
     :data:`DEFAULT_SUMMARIZER_INSTRUCTIONS`.
 
-    Only used for its ``{conversation_id}`` + ``{rendered}`` placeholders (the
-    live conversation span), filled at render time.
+    Static prose only; the conversation span is appended by ``render()``.
     """
     try:
         from paf.specs import resolve_background_spec
