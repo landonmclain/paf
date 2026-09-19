@@ -1,8 +1,7 @@
 """Git capability that provides safe repository inspection and checkpoints.
 
-paf-owned git capability. Adapted from `coding_agent/app/tools/git_tools.py`
-into the paf capability seam (`AbstractCapability` + `GitToolset`), rooted at a
-workspace directory so all git commands and path validation are confined there.
+Rooted at a workspace directory so all git commands and path validation are
+confined there.
 """
 
 from __future__ import annotations

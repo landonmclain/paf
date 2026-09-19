@@ -1,10 +1,8 @@
 """paf-owned git toolset -- safe repository inspection and checkpointing.
 
-Adapted from `coding_agent/app/tools/git_tools.py` (personal codebase) into the
-paf capability idiom (AsyncFunctionToolset over anyio, root-confined paths).
-Semantics of the five tools are preserved verbatim from the source; session
-logging is dropped (not paf's pattern) and `ModelRetry` is used for
-model-correctable errors.
+Root-confined git tools (AsyncFunctionToolset over anyio). Session logging is
+dropped (not paf's pattern) and `ModelRetry` is used for model-correctable
+errors.
 
 Safety rules encoded in the tool docstrings for the agent:
 - Prefer git_status and git_changed_files before git_diff.
@@ -45,7 +43,7 @@ _DEFAULT_TIMEOUT = 60.0
 _GIT_TOOL_RETRIES = 5
 
 
-def _recoverable(  # noqa: UP047  # matches fs/shell `_recoverable` convention
+def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate decorator — PEP 695 inline params can't express this signature
     fn: Callable[Concatenate[GitToolset, _P], Awaitable[str]],
 ) -> Callable[Concatenate[GitToolset, _P], Awaitable[str]]:
     """Surface model-correctable git errors as `ModelRetry`.
