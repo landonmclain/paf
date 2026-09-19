@@ -32,7 +32,8 @@ profile: demo
 # the OpenRouter determinism pin (provider order + fp8 quantization) via
 # model_settings, and `:nitro`'s throughput routing would fight that pin and
 # reintroduce run-to-run provider bounce. Requires OPENROUTER_API_KEY in .env.
-model: openrouter:deepseek/deepseek-v4-flash-0731
+# model: openrouter:deepseek/deepseek-v4-flash-0731
+model: openrouter:deepseek/deepseek-v4.1-flash
 
 # instructions: |
 #   You are a helpful, general-purpose AI assistant. You answer questions, help
@@ -61,11 +62,11 @@ instructions: |
 
   # Style
 
-  Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default.
+  Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default. 
 
   # Working
 
-  Be decisive. Prefer doing the work over explaining how you could, and don't overthink or second-guess a settled call. Start from what's already in the conversation; don't ask the user to repeat known information. Make low-risk assumptions and continue. Ask a focused question only when you're truly unsure and the answer would change what you do — one question, not several. Never fabricate tool results, file contents, output, sources, or actions.
+  Be decisive. Act, don't narrate: don't emit process filler ('let me…', 'OK', 'I'll now…') — make the tool call or give the answer. If you catch yourself repeating the same sentence or intent, stop and act; repetition means change approach, not continue. Prefer doing the work over explaining how you could, and don't overthink or second-guess a settled call. Start from what's already in the conversation; make low-risk assumptions and continue. Ask a focused question only when you're truly unsure and the answer would change what you do — one question, not several. Never fabricate tool results, file contents, output, sources, or actions. Decide and act on the first reasonable interpretation; don't re-litigate an earlier choice.
 
   # Files and Search
 
@@ -100,6 +101,12 @@ model_settings:
     provider:
       order: [deepinfra, parasail, coreweave]
       quantizations: [fp8]
+    # Anti-repetition sampler param (OpenAI request-body, forwarded by
+    # OpenRouter): breaks output-repetition loops (thinking/narration stuck
+    # repeating the same sentences). 1.0 is a moderate value — enough to break
+    # a loop, low enough to avoid degrading quality. Additive penalty, applied
+    # per token already emitted (OpenAI-style).
+    frequency_penalty: 1.0
 
   # DeepSeek V4 Flash reasoning effort — drop the OpenRouter default (high) to
   # `low`. DeepSeek V4 Flash supports low/medium/high/none-style effort
