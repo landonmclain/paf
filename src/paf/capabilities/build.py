@@ -747,22 +747,6 @@ def _build_secrets(store) -> ToolGuardrail:
     )
 
 
-# Default model for the demo sub-agents. Bare deepseek slug (NOT the `:nitro`
-# variant) for determinism — :nitro's `provider.sort: throughput` routing bounces
-# across upstream providers (fp8 vs fp4) and gives run-to-run nondeterminism.
-# Override via SUBAGENT_MODEL / .env.
-_SUBAGENT_MODEL = os.environ.get(
-    "SUBAGENT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
-)
-
-# Model for the `writer` sub-agent — overridable per-profile so the parent
-# assistant stays on its own model while prose drafting runs on a (likely
-# better) writing model. Falls back to SUBAGENT_MODEL, then the demo model.
-_WRITER_MODEL = os.environ.get(
-    "WRITER_MODEL", _SUBAGENT_MODEL or "openrouter:deepseek/deepseek-v4-flash-0731"
-)
-
-
 def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     """Explicit sub-agent delegation (BUILTIN, not a paf port) — demo leaf agent.
 
@@ -772,14 +756,16 @@ def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     everything the task needs). One demo child:
 
     - ``writer`` — drafts prose/format from material the parent passes in (no
-      own tools by default; deterministic leaf). Should be pointed at a better
-      prose model via `WRITER_MODEL` (falls back to `SUBAGENT_MODEL`, then demo
-      model).
+      own tools by default; deterministic leaf). Spec-driven via
+      ``specs/sub_agents/writer_subagent.yaml`` — model, model_settings
+      (temperature), description, system_prompt — so it's declarative and
+      per-agent tunable rather than env/`WRITER_MODEL`-configured.
 
     The writer is given the SAME scoped FileSystem capability as the main model
     via `shared_capabilities`, so it can read its own source notes/files rooted
     at the same dir the parent uses (root from `filesystem_config` / default
-    PROJECT_ROOT). This keeps the parent's context small — the parent passes
+    PROJECT_ROOT), unless the writer spec sets its own `filesystem.root_dir`.
+    This keeps the parent's context small — the parent passes
     file paths in `task` and the child reads the content in its own fresh run.
     `inherit_tools` stays off (child doesn't inherit the parent's toolset;
     capability-owned toolsets can't be inherited anyway — see harness
@@ -796,51 +782,42 @@ def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     """
     from pydantic_ai import Agent
 
+    # Spec-driven leaf (Spec-Driven-Background-Agents plan): model, model
+    # settings (temperature), description, and system prompt come from
+    # `specs/sub_agents/writer_subagent.yaml` — resolved by bare name via
+    # get_spec_path's recursive search — instead of inline code + env vars.
+    # Imported locally to avoid the specs <-> build circular import (specs.py
+    # imports build_runtime_capabilities at module level).
+    from paf.specs import (  # noqa: PLC0415
+        _spec_rooted_config,
+        get_spec_path,
+        load_agent_spec,
+    )
+
+    spec_path = get_spec_path("writer_subagent")
+    wspec = load_agent_spec("writer_subagent")
     writer = Agent(
-        _WRITER_MODEL,
-        name="writer",
-        description="Drafts clear prose from material the delegating agent provides",
-        system_prompt=(
-            "You are a writing sub-agent producing technical-education prose about "
-            "AI agents. You do not see the parent conversation; the task string "
-            "carries all source material. Writing guidelines:\n\n"
-            "Write for an intelligent reader who is deeply interested in AI agents "
-            "but does not necessarily have a software engineering background. Assume "
-            "they want to understand agents well enough to eventually build, "
-            "configure, or intelligently discuss them.\n\n"
-            "Do not remove the real technical concepts. Instead, introduce them in "
-            "layers. For every technical idea:\n"
-            "1. Explain the idea in plain language first.\n"
-            "2. Explain what problem it solves or why it matters.\n"
-            "3. Give a concrete agent example.\n"
-            "4. Introduce the proper engineering term.\n"
-            "5. Include implementation details only when they deepen the mental model.\n\n"
-            "Write like an experienced engineer explaining their field to a smart "
-            "colleague from another profession. The reader should encounter real "
-            "terms such as context, state, tools, orchestration, memory, retrieval, "
-            "harnesses, and evaluation — never assume they already know what those "
-            "terms mean.\n\n"
-            "Prefer: strong mental models, concrete agent behavior, short declarative "
-            "sentences, practical examples, intuition before architecture, "
-            "architecture before implementation, real terminology after the concept "
-            "is understood.\n\n"
-            "Avoid: childish metaphors, ELI5 explanations, unexplained engineering "
-            "shorthand, dense strings of technical terms, code as the primary "
-            "explanation, unnecessary implementation mechanics, academic prose, "
-            "corporate language, excessive summaries.\n\n"
-            "When a sentence contains several software-engineering concepts, slow "
-            "down and unpack them rather than simplifying the underlying idea. The "
-            "goal is not to make the material non-technical. The goal is to make "
-            "technical ideas understandable before they become technical vocabulary.\n\n"
-            "The reader should finish thinking: 'I understand how this works, why it "
-            "was designed this way, and I know the real terms people use when talking "
-            "about it.'"
-        ),
+        wspec.model,
+        name="writer",  # runtime name stays `writer` (delegate_task key); the
+        # spec/loader identity is the clearer `writer_subagent`.
+        description=wspec.description,
+        system_prompt=wspec.instructions,
+        model_settings=wspec.model_settings,
+    )
+    # Optional per-leaf FileSystem root override: if the writer spec declares a
+    # `filesystem.root_dir`, the shared FS roots there; otherwise it inherits
+    # the parent agent's `filesystem_config` / default PROJECT_ROOT (current
+    # behavior). Traversal/protected-pattern gates always apply regardless.
+    leaf_fs_config = _spec_rooted_config(spec_path, "filesystem", "root_dir")
+    shared_fs = (
+        _build_filesystem(store, leaf_fs_config)
+        if leaf_fs_config
+        else _build_filesystem(store, filesystem_config)
     )
     return SubAgents(
         agents=[SubAgent(writer)],
         agent_folders=None,  # purely explicit, deterministic demo (no disk loading)
-        shared_capabilities=[_build_filesystem(store, filesystem_config)],
+        shared_capabilities=[shared_fs],
     )
 
 
