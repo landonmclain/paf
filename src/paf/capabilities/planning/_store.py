@@ -1,7 +1,7 @@
-"""paf-owned plan store protocol (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned plan store protocol (originally copied from pydantic-ai-harness, MIT).
 
 PlanStore protocol plus InMemoryPlanStore and SqlitePlanStore. paf adds a
-flat-file FilePlanStore (Task 3) so plans are inspectable/diffable JSON under
+flat-file FilePlanStore so plans are inspectable/diffable JSON under
 data/plans/<conversation_id>/plan.json.
 """
 
@@ -477,8 +477,8 @@ class FilePlanStore:
     (:class:`FlatFileStorage` backend): plans land at ``<root>/<conversation_id>/plan.json``
     (``kind="plan"`` + ``key=conversation_id``), so they are plain, inspectable,
     diffable artifacts (paf's flat-file-first principle) rather than an opaque
-    database, and the backend stays swappable (SQLite / Postgres later) without
-    changing this store or the toolset.
+    database, and the backend stays swappable without changing this store or the
+    toolset.
 
     Implements the same ``PlanStore`` protocol and ``PlanEventEmitter`` support
     as ``InMemoryPlanStore``/``SqlitePlanStore``. Each blocking ``FlatFileStorage``
@@ -574,8 +574,8 @@ class FilePlanStore:
         """Replace the whole list with `items`.
 
         Emits per-item diff events (`created`/`deleted`/`updated`) through the
-        attached emitter (Task 4), so an event-driven sidebar sees a `write_plan`
-        bulk replace and not just granular edits. No-op when no emitter is set.
+        attached emitter, so an event-driven sidebar sees a `write_plan` bulk
+        replace and not just granular edits. No-op when no emitter is set.
         """
         previous = await self.get_items() if self._emitter is not None else []
         await anyio.to_thread.run_sync(self._set_items_sync, list(items))

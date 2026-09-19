@@ -1,4 +1,4 @@
-"""paf-owned planning toolset (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned planning toolset (originally copied from pydantic-ai-harness, MIT).
 
 PlanningToolset: write_plan, read_plan, add_task, update_task_status,
 update_task_statuses, remove_task. Subtask tools (add_subtask, set_dependency,
@@ -87,8 +87,8 @@ CORE_TOOL_NAMES = (
     "update_task_statuses",
     "remove_task",
 )
-"""Tools registered in every mode. `write_plan` alone was the capability's whole surface before
-the granular tools landed, so `tools=['write_plan']` restores it."""
+"""Tools registered in every mode. `tools=['write_plan']` narrows the surface to
+just the whole-plan tool."""
 
 SUBTASK_TOOL_NAMES = ("add_subtask", "set_dependency", "get_available_tasks")
 """Tools registered only when `enable_subtasks` is set."""
@@ -461,8 +461,7 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         # write, and the store materializes uuids it would otherwise never learn. Rendering
         # them here (matching read_plan's `[id]` format) means a follow-up
         # update_task_status / update_task_statuses can reference the real ids instead of
-        # guessing "1", "2", ... That guessing previously produced "Step with id '1'
-        # not found" and aborted the run. The bracketed ids ARE what the update tools take.
+        # guessing "1", "2", ... The bracketed ids ARE what the update tools take.
         return (
             f"Plan updated: {len(new_items)} step(s).\n\n"
             f"{render_flat(new_items, subtasks=False)}"

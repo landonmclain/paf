@@ -1,4 +1,4 @@
-"""paf-owned planning capability (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned planning capability (originally copied from pydantic-ai-harness, MIT).
 
 Model-owned task planning: a structured, self-updating plan the agent can
 create and edit (``write_plan`` / ``read_plan`` / ``add_task`` /
@@ -12,10 +12,10 @@ in a ``PlanStore``, resolved per-run so the web sidebar can react to changes.
 - ``_events`` — ``PlanEventEmitter`` + ``PlanEvent`` for sidebars/external trackers.
 - ``_types`` — ``PlanItem``, ``TaskStatus``, ``PlanStatusUpdate``.
 
-Ported so paf owns the surface and can wire it through the capability-toolset
-seam (registry + profile + builder) instead of using the harness directly.
-``enable_subtasks`` and the Postgres/Redis stores are deliberately NOT ported
-(per Landon YAGNI); a paf flat-file ``FilePlanStore`` is provided separately.
+paf owns the surface and wires it through the capability-toolset seam (registry
++ profile + builder) instead of using the harness directly. ``enable_subtasks``
+and the Postgres/Redis stores are deliberately NOT ported (YAGNI); a paf
+flat-file ``FilePlanStore`` is provided separately.
 """
 
 from __future__ import annotations

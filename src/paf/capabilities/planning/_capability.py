@@ -1,4 +1,4 @@
-"""paf-owned Planning capability (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned Planning capability (originally copied from pydantic-ai-harness, MIT).
 
 Wraps the PlanningToolset and resolves the PlanStore per-run so the web sidebar
 can react to plan changes. paf owns this so it can wire it through its
@@ -73,7 +73,7 @@ class Planning(AbstractCapability[AgentDepsT]):
 
     By default the plan lives in memory for the duration of a single run (a
     fresh, isolated plan per run). Pass a `store` (or `store_resolver`) to
-    persist it -- e.g. `SqlitePlanStore` or `PostgresPlanStore`.
+    persist it -- e.g. `SqlitePlanStore` or `FilePlanStore`.
 
     ```python
     from pydantic_ai import Agent
@@ -95,16 +95,15 @@ class Planning(AbstractCapability[AgentDepsT]):
 
     A single `str | None` where `None` meant "no guidance" would leave no way to
     ask for the default explicitly, and would turn a config that resolves to
-    `None` into a silent opt-out. This matches `memory`, `exa` and
-    `runtime_authoring`, which read the same way.
+    `None` into a silent opt-out.
     """
 
     cache_ttl: Literal["5m", "1h"] = "5m"
     """TTL for the cache breakpoint placed after the stable plan-reminder opening tag."""
 
     store: PlanStore | None = None
-    """Storage backend. `None` keeps a fresh in-memory plan per run (the original
-    ephemeral behaviour). Pass a store to persist the plan across runs."""
+    """Storage backend. `None` keeps a fresh in-memory plan per run. Pass a store
+    to persist the plan across runs."""
 
     store_resolver: Callable[[RunContext[AgentDepsT]], PlanStore] | None = None
     """Optional per-run store resolver, e.g. `lambda ctx: ctx.deps.plan_store`."""

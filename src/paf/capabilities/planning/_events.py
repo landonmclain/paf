@@ -1,16 +1,16 @@
-"""paf-owned plan event system, now specialized over the generic EventEmitter.
+"""paf-owned plan event system, specialized over the generic EventEmitter.
 
-From pydantic-ai-harness (MIT), but the pub/sub dispatch has been extracted
-into the shared ``GenericEventEmitter`` (``src/paf/events.py``) and this module
-is now a thin domain specialization: the plan-specific event types + payload,
-with ``PlanEventEmitter`` as a ``GenericEventEmitter[PlanEventType, PlanEvent]``
-so applications (e.g. the paf web sidebar) react to plan mutations.
+The pub/sub dispatch lives in the shared ``GenericEventEmitter``
+(``src/paf/events.py``); this module is a thin domain specialization: the
+plan-specific event types + payload, with ``PlanEventEmitter`` as a
+``GenericEventEmitter[PlanEventType, PlanEvent]`` so applications (e.g. the paf
+web sidebar) react to plan mutations.
 
-The public surface is unchanged from the standalone class: ``on``/``off``/
-``emit`` plus the ``on_created``/``on_completed``/... convenience decorators.
-``emit`` accepts a single ``PlanEvent`` and derives the key from
-``event.event_type`` (the generic only needs the explicit-key variant for
-non-payload-keyed events, which planning does not use).
+The public surface is ``on``/``off``/``emit`` plus the
+``on_created``/``on_completed``/... convenience decorators. ``emit`` accepts a
+single ``PlanEvent`` and derives the key from ``event.event_type`` (the generic
+only needs the explicit-key variant for non-payload-keyed events, which planning
+does not use).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from paf.capabilities.planning._types import PlanItem
 from paf.events import GenericEventEmitter, Listener
 
 
-class PlanEventType(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps event_type JSON-serializable (matches harness design)
+class PlanEventType(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps event_type JSON-serializable
     """The kinds of change a store can emit.
 
     Attributes:

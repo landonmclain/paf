@@ -1,4 +1,4 @@
-"""paf-owned planning types (copied verbatim from pydantic-ai-harness, MIT).
+"""paf-owned planning types (originally copied from pydantic-ai-harness, MIT).
 
 PlanItem, TaskStatus, PlanStatusUpdate -- the data model for the model-owned
 task plan.
@@ -12,7 +12,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
-class TaskStatus(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps statuses JSON-serializable as plain strings (matches harness design)
+class TaskStatus(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps statuses JSON-serializable as plain strings
     """Lifecycle status of a single plan step.
 
     `blocked` is only reachable when the capability runs with
