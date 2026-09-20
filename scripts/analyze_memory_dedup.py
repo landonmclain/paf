@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 
 BASE = "data/memory"
 
@@ -33,13 +33,13 @@ def _overlap(a: set[str], b: set[str]) -> float:
 def load(agent: str):
     d = f"{BASE}/{agent}"
     with open(f"{d}/memory-journal.jsonl") as fh:
-        journal_lines = [json.loads(l) for l in fh if l.strip()]
+        journal_lines = [json.loads(line) for line in fh if line.strip()]
     index = json.load(open(f"{d}/memory-index.json"))
     entries = index.get("entries", [])
     # fold overrides last-wins per target_line
     ov = {}
-    for l in open(f"{d}/memory-overrides.jsonl"):
-        s = l.strip()
+    for line in open(f"{d}/memory-overrides.jsonl"):
+        s = line.strip()
         if not s:
             continue
         o = json.loads(s)
@@ -69,14 +69,13 @@ def report(agent: str):
             line_to_src[ln] = len(m.group(1).split(","))
     merge_lines = set(line_to_src)
     per_entry = Counter()
-    n_with_merge = 0
     live_merge_winners = 0
     for e in entries:
         ln = int(e["current_line"])
         if ln in line_to_src:
             per_entry[line_to_src[ln]] += 1
             live_merge_winners += 1
-    print(f"\n[candidate] memory_merge count per INDEX WINNER (from journal source_ref):")
+    print("\n[candidate] memory_merge count per INDEX WINNER (from journal source_ref):")
     print(f"   distinct merge-records: {len(merge_lines)} | live winners that are merges: {live_merge_winners}")
     print(f"   items-merged-per-winner distribution (winner:count): "
           f"{dict(sorted(per_entry.items()))}")
@@ -94,7 +93,6 @@ def report(agent: str):
         dates = [d for d in dates if d]
         maxd = max(dates)
         ages = [(maxd - d).days for d in dates]
-        from collections import Counter as C
         print(f"\n[candidate] recency: newest {maxd}; age (days) distribution:")
         for k in sorted(set(ages)):
             print(f"   {k:>3} days old -> {ages.count(k):>5} entries")
@@ -126,9 +124,8 @@ def report(agent: str):
             if _overlap(ti, toks[j]) >= 0.60:
                 union(i, j)
     roots = Counter(find(i) for i in range(n))
-    clusters = [c for c in roots.values() if c > 1]
-    print(f"\n[dedup potential] NAIVE max(Jaccard,containment)>=0.60 SEGMENTS — "
-          f"this OVER-MERGES (artifact):")
+    print("\n[dedup potential] NAIVE max(Jaccard,containment)>=0.60 SEGMENTS — "
+          "this OVER-MERGES (artifact):")
     print(f"   journal records      : {n}")
     print(f"   would-be distinct    : {len(roots)}")
     print(f"   facts that would merge: {n - len(roots)} records folded")
@@ -157,10 +154,10 @@ def report(agent: str):
                 x = p[x]
             return x
 
-        def union2(a, b):
+        def union2(a, b, parent=parent2):
             ra, rb = find2(a), find2(b)
             if ra != rb:
-                parent2[ra] = rb
+                parent[ra] = rb
 
         for i, j in pairs:
             union2(i, j)
