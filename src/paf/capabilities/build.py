@@ -394,7 +394,7 @@ _DEFAULT_VAULT_ROOT = PROJECT_ROOT / "data" / "vault"
 
 
 def _build_vault(store, vault_config: dict | None = None) -> _Vault:
-    """Navigation-first note ladder over a markdown vault (Tier A read tools).
+    """Navigation-first note ladder over a markdown vault.
 
     `store` is accepted for a uniform builder signature but unused — the vault
     reads/writes its own flat-file index through the ``FlatFileVaultStorage``
@@ -542,8 +542,8 @@ def _build_skills(store, skills_config: dict | None = None) -> _Skills:
     construction; `list_skills`/`load_skill` expose the load mechanism (prompt
     stays thin, bodies pulled on demand) and `point_skills` pre-arms which
     skill a message needs via zero-LLM BM25 over the declared frontmatter vocab
-    (the skill-note-hint pointer engine re-homed into paf). One paf-native
-    capability for all skill functionality.
+    (the skill-note-hint pointer engine). One paf-native capability for all skill
+    functionality.
 
     `skills_config` is the spec's top-level ``skills:`` block (see
     ``specs._spec_skills_config``): ``libraries`` (one or more FULL absolute
@@ -601,9 +601,9 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     prefix fires, so ordinary rounding or partial misses don't warn. Silent when
     caching is off or unreported (cache_read_tokens stays 0), so it never fires
     spuriously in runs that don't cache. Same drop-in pattern as ToolOutputLimits
-    — consumed as a pydantic-ai AbstractCapability, per Landon.
+    — consumed as a pydantic-ai AbstractCapability.
 
-    BUSTS SURFACE AS LANGFUSE ERRORS (wired 2026-09-16, observability/instrumentation.py):
+    BUSTS SURFACE AS LANGFUSE ERRORS (observability/instrumentation.py):
     a ``CacheBustWarning`` is a ``UserWarning`` (suppressed by default), so on its
     own it reaches neither stderr nor a trace. ``paf.observability._install_cache_bust_error_hook``
     installs a ``warnings.showwarning`` hook (at ``setup_observability()``, reached by
@@ -882,8 +882,8 @@ def build_runtime_capabilities(
         # Codebase-map: navigation-first codebase browser rooted at the repo root
         # (overview/lookup_file/read_block/search_codebase + run_codebase_map).
         "CodebaseMap": _build_codebase_map,
-        # Vault: navigation-first note ladder over a markdown vault (Tier A read
-        # tools) — vault_overview/lookup_note/read_note + note_find/note_search.
+        # Vault: navigation-first note ladder over a markdown vault —
+        # vault_overview/lookup_note/read_note + note_find/note_search.
         "Vault": _build_vault,
         # Tavily-backed web search + page extraction tools.
         "Web": _build_web,

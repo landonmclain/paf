@@ -24,8 +24,8 @@ class AgentProfile:
     capability_names: tuple[str, ...]
 
     # Lazily build; frozen dataclass can't set in __post_init__, so cache the
-    # resolved tuple via a class-level memo or rebuild each call. For M1 the
-    # catalog is tiny, so rebuild-per-call is fine and keeps the type honest.
+    # resolved tuple via a class-level memo or rebuild each call. The catalog is
+    # tiny, so rebuild-per-call is fine and keeps the type honest.
     def capability_types(self) -> tuple[type[Any], ...]:
         """Resolve allowlisted names to capability type objects.
 
