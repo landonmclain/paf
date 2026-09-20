@@ -34,6 +34,16 @@ model_settings:
         - coreweave
       quantizations:
         - fp8
+  # Reasoning effort for DeepSeek V4.1 Flash, pinned to `low` (matching the chat
+  # agent's `assistant.yaml`). Without it the reviewer — a deterministic curation
+  # traversal, not an open-ended task — runs at default/high effort: a run burned
+  # ~23k reasoning tokens for 3 curation actions, which made it slow AND blew past
+  # max_tokens (12288/16384 incl. reasoning) before any response. `low` avoids
+  # 'thinking forever' loops (see assistant.yaml:108). `frequency_penalty` breaks
+  # output-repetition/thinking loops (assistant uses 1.0).
+  openrouter_reasoning:
+    effort: low
+  frequency_penalty: 1.0
 max_item_chars: 1200
 retries: 5
 instructions: |

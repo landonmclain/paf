@@ -26,6 +26,15 @@ model_settings:
         - coreweave
       quantizations:
         - fp8
+  # Reasoning effort for DeepSeek V4.1 Flash, pinned to `low` (matching the chat
+  # agent's `assistant.yaml`). Without it the extractor — a deterministic
+  # consolidation pass over large seeds — runs at default/high effort and burns
+  # tens of thousands of reasoning tokens (the reviewer hit ~23k for 3 actions).
+  # `low` avoids 'thinking forever' loops (assistant.yaml:108); frequency_penalty
+  # breaks output/thinking repetition loops.
+  openrouter_reasoning:
+    effort: low
+  frequency_penalty: 1.0
 instructions: |
   You are the consolidation owner for this user's durable memory. You append
   records to an append-only journal — you never edit, move, or delete an existing
