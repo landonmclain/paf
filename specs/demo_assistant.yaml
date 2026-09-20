@@ -1,7 +1,7 @@
-# Demo/live-testing agent spec (M2) — the "EVERYTHING" sandbox.
+# Demo/live-testing agent spec — the "EVERYTHING" sandbox.
 #
 # The surface for building out and tuning the FULL stack in the CLI (`python
-# ui/cli2.py demo_assistant`): persistence, recall, durable memory (journal),
+# ui/cli.py demo_assistant`): persistence, recall, durable memory (journal),
 # and context compaction, PLUS poking at native spec-declarable capabilities.
 #
 # The `demo` profile (src/paf/capabilities/profiles.py) allowlists the harness
@@ -11,14 +11,6 @@
 # pydantic-ai capabilities (WebSearch, WebFetch, XSearch, Thinking, MCP,
 # ToolSearch, ImageGeneration) are declared below in `capabilities:` and need no
 # allowlist row.
-#
-# Once the experiment proves out, demo's tuned values (e.g. the `compact:`
-# block) are promoted to the clean production `assistant` spec.
-#
-# Reference: `building-pydantic-ai-agents` skill → references/ON-DEMAND-
-# CAPABILITIES.md (defer_loading), NATIVE-TOOLS.md (WebSearch/WebFetch),
-# CAPABILITIES-AND-HOOKS.md (Thinking/MCP/ToolSearch). Native capability
-# constructors: pydantic_ai.capabilities (v2.22.0).
 
 name: demo_assistant
 
@@ -32,8 +24,8 @@ profile: demo
 # the OpenRouter determinism pin (provider order + fp8 quantization) via
 # model_settings, and `:nitro`'s throughput routing would fight that pin and
 # reintroduce run-to-run provider bounce. Requires OPENROUTER_API_KEY in .env.
-# model: openrouter:deepseek/deepseek-v4-flash-0731
-model: openrouter:deepseek/deepseek-v4.1-flash
+model: openrouter:deepseek/deepseek-v4-flash-0731
+# model: openrouter:deepseek/deepseek-v4.1-flash
 
 # instructions: |
 #   You are a helpful, general-purpose AI assistant. You answer questions, help
@@ -92,14 +84,12 @@ model_settings:
   # top_p: 1.0
   # seed: 20260815
 
-  # OpenRouter prompt caching — same defaults as the assistant spec. See
-  # specs/assistant.yaml for the full comments.
+  # OpenRouter prompt caching.
   openrouter_cache_instructions: true
   openrouter_cache_messages: true
   openrouter_cache_tool_definitions: true
 
-  # OpenRouter provider routing pin — same chain as the assistant spec. See
-  # specs/assistant.yaml for the full comments.
+  # OpenRouter provider routing pin.
   extra_body:
     provider:
       order: [deepinfra, parasail, coreweave]
@@ -111,15 +101,14 @@ model_settings:
     # per token already emitted (OpenAI-style).
     frequency_penalty: 1.0
 
-  # Reasoning effort for DeepSeek V4.1 Flash. `medium` measured best on this
-  # model (real thinking without the 'thinking forever' loops on simple turns);
-  # v4.0/older flash stays at `low`. OpenRouterModelSettings.openrouter_reasoning
-  # forwards verbatim to the OpenRouter `reasoning` body.
+  # Reasoning effort for DeepSeek V4.1 Flash. `medium` avoids the 'thinking
+  # forever' loops on simple turns. OpenRouterModelSettings.openrouter_reasoning
+  # forwards to the OpenRouter `reasoning` body.
   openrouter_reasoning:
-    effort: medium
+    effort: low
 
 # ---------------------------------------------------------------------------
-# Web trust boundary (option B — lives in the spec, not in Python). Read by
+# Web trust boundary (lives in the spec — the source of truth). Read by
 # `build_agent` -> `_spec_web_config` -> the `fetch_web_page` extract allowlist.
 #
 # `search_domains` gates EXTRACT only (which domains `fetch_web_page` may pull
@@ -152,7 +141,7 @@ web:
     - developers.cloudflare.com
     - example.com
 # ---------------------------------------------------------------------------
-# Browser egress policy (option B — lives in the spec, not in Python). Read by
+# Browser egress policy. Read by
 # `build_agent` -> `_spec_browser_config` -> the Browser capability's egress
 # policy. SECURE BY DEFAULT in code; only what is declared here loosens it, so
 # a published repo gives every agent the locked-down default.
@@ -186,15 +175,14 @@ browser:
   block_private_addresses: false   # local troubleshooting: release the SSRF guard for loopback only
 
 # ---------------------------------------------------------------------------
-# Per-assistant root scoping (option B — lives in the spec, not in Python). Read
+# Per-assistant root scoping. Read
 # by `build_agent` -> `_spec_{filesystem,shell,git,codebase_map}_config` -> the
 # root-bearing builders in build.py. These point each capability at a working
 # directory OTHER than PROJECT_ROOT (the paf repo itself).
 #
 # The demo agent's filesystem + shell are scoped to the user root (`~/`) so it
-# can work across the whole home tree. git/codebase_map stay pointed at the
-# `landonmclain-site` Astro repo (working WITH paf to build it), and vault at
-# the Obsidian vault. Absent block -> the builder's PROJECT_ROOT
+# can work across the whole home tree. git/codebase_map point at the paf repo,
+# and vault at the Obsidian vault. Absent block -> the builder's PROJECT_ROOT
 # (paf repo) default, so a spec block is purely additive and never weakens a
 # secure default.
 #
@@ -225,17 +213,9 @@ shell:
     #   mode: run  -> fresh container per command, strongest isolation (~250ms)
     #   image: python:3.12-slim -> the container image to run commands in
 git:
-  # root: ~/projects/Personal/landonmclain-site
   root: ~/projects/Personal/pydantic-agent-framework/
-  # root: ~/Development/local/futures_stats
-  # root: ~/hermes/strategies/kli-backtest
-  # scan: ~/Development/local/ibkr_retrieval
 codebase_map:
-  # scan_root: ~/projects/Personal/landonmclain-site
   scan_root: ~/projects/Personal/pydantic-agent-framework/
-  # scan_root: ~/Development/local/futures_stats
-  # scan_root: ~/hermes/strategies/kli-backtest
-  # scan_root: ~/Development/local/ibkr_retrieval
 # Vault: the real Obsidian vault. `~` expands via os.path.expanduser. Deliberate
 # departure from the other four roots (which point at the site repo) — the vault
 # cap is a separate navigation-first note ladder over markdown, rooted here.
@@ -245,7 +225,7 @@ vault:
   root: ~/Documents/notes
 
 # ---------------------------------------------------------------------------
-# Skill library (option B — lives in the spec, not in Python). Read by
+# Skill library. Read by
 # `build_agent` -> `_spec_skills_config` -> `_build_skills` -> the Skills
 # capability's `libraries` / `top_k`.
 #
@@ -262,8 +242,8 @@ skills:
   top_k: 3
 
 # ---------------------------------------------------------------------------
-# Per-assistant context-compaction tuning (option B — lives in the spec, not in
-# Python). Read by `build_agent` -> `CompactionConfig` -> the no-summary ladder
+# Per-assistant context-compaction tuning. Read by `build_agent` ->
+# `CompactionConfig` -> the no-summary ladder
 # in `build_compaction()`. The `demo` profile allowlists `Compaction`, so this
 # block is ACTIVE here — the sandbox where we tune compaction for a 300k-context
 # live agent (NOT the benchmark harness, which keeps ~5000 to force-evict
@@ -274,21 +254,20 @@ skills:
 # All keys optional; unset -> the builder's benchmark-tuned defaults.
 #
 # target_tokens: live-history size (tokens) that triggers compaction to start
-#   escalating. 50000 tokens (~200k chars at 4 chars/token) — raised from 20000
-#   on 2026-08-24: at 20k a normal tool-heavy turn sat AT the ceiling and
-#   oscillated across it with every tool result, so `TieredCompaction` (which
-#   fires on `target_tokens` alone, bypassing per-tier triggers) re-ran the
-#   consolidation ladder repeatedly in ONE turn (witnessed 5x). 50k is ~1/6 of
-#   the 300k context — eviction only fires on genuinely huge turns. Can push
-#   further (e.g. ~100k) if heavy turns still oscillate.
+#   escalating. 50000 tokens (~200k chars at 4 chars/token) — at 20k a normal
+#   tool-heavy turn sat AT the ceiling and oscillated across it with every tool
+#   result, so `TieredCompaction` (which fires on `target_tokens` alone,
+#   bypassing per-tier triggers) re-ran the consolidation ladder repeatedly in
+#   ONE turn. 50k is ~1/6 of the 300k context — eviction only fires on genuinely
+#   huge turns. Can push further (e.g. ~100k) if heavy turns still oscillate.
 # window_max_messages / window_keep_messages: window trigger / tail. The
 #   sliding window keeps the 20 most-recent messages (+1 preserved first prompt)
 #   and drops the rest, so eviction trims hard and consolidation replays the
-#   about-to-evict slice into the journal each turn it fires. 20 was raised from
-#   5 on 2026-08-24: a 5-message tail dropped the current user prompt on a long
-#   run, so after eviction the model lost its task anchor and derailed (latched
-#   onto stale build.py facts in injected memory). 20 keeps the live prompt +
-#   recent exchange survivable. Still a probe, not tuned.
+#   about-to-evict slice into the journal each turn it fires. A 5-message tail
+#   dropped the current user prompt on a long run, so after eviction the model
+#   lost its task anchor and derailed (latched onto stale build.py facts in
+#   injected memory). 20 keeps the live prompt + recent exchange survivable.
+#   Still a probe, not tuned.
 # clear_tool_max_tokens: whole-context token trigger for ClearToolResults — when
 #   the entire live context (system + turns + tool results) exceeds this, the
 #   OLDEST tool results get collapsed to a placeholder. NOT per-tool-call. 5000 is
@@ -296,8 +275,7 @@ skills:
 # clear_tool_keep_pairs: always keep the 20 most-recent tool-call/result pairs.
 #   A normal exploration turn runs fewer than 20 tools, so none of its results
 #   get cleared mid-turn — the destructive blanking only kicks in on genuinely
-#   long/huge turns. (Was 4 — too aggressive, nuked read_file results the model
-#   still needed, leaving it blind mid-answer.)
+#   long/huge turns.
 # min_clear_tokens: ClearToolResults CACHE-COST GUARD — do NOT clear a tool
 #   result unless clearing actually reclaims at least this many tokens.
 #   Clearing rewrites message content in place, which busts the provider's
@@ -307,23 +285,23 @@ skills:
 #   reclaim <2k tokens. Meant to sit well below clear_tool_max_tokens so it
 #   stops only the pointless busts, not the real scavenging. (pydantic-ai-harness
 #   `ClearToolResults(min_clear_tokens=...)`; default None = always clear.)
-# Window tier is TurnBoundSlidingWindow — ALWAYS turn-bounded + trim-only. No
-#   `consolidate` option (retired 2026-09-02): the inline eviction fold is gone.
-#   Durable-fact capture is owned SOLELY by the background watermark worker,
+# Window tier is TurnBoundSlidingWindow — ALWAYS turn-bounded + trim-only. There
+#   is no `consolidate` option: the inline eviction fold is gone. Durable-fact
+#   capture is owned SOLELY by the background watermark worker,
 #   which reads from the persisted store (durable, lossless) on
 #   `memory.consolidate_every`. Eviction is pure context management — it never
 #   calls memory, and it can never evict the active user turn.
 compact:
-  turn_boundary: true          # Tier A: run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (today's single mid-turn behavior).
-  turn_boundary_target: 150000 # Tier A routine budget at the turn boundary — keeps each turn small/stable (well under the 300k emergency). 150k for now; tuneable.
-  target_tokens: 300000        # Tier B emergency: 300k = Landon's reliable context ceiling (mid-turn near-limits). deepseek rates 1M but attention degrades; do NOT use 1M. Only fires when a single turn approaches the ceiling.
+  turn_boundary: true          # Run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (single mid-turn behavior).
+  turn_boundary_target: 150000 # Routine budget at the turn boundary — keeps each turn small/stable (well under the 300k emergency). 150k for now; tuneable.
+  target_tokens: 300000        # Emergency ceiling: 300k = the reliable context ceiling (mid-turn near-limits). deepseek rates 1M but attention degrades; do NOT use 1M. Only fires when a single turn approaches the ceiling.
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 20
   min_clear_tokens: 20000
 
-# Per-assistant memory tuning (option B — lives in the spec, not in Python).
+# Per-assistant memory tuning.
 # Read by `build_agent` -> `_spec_memory_config` -> `_build_memory` -> the
 # Memory capability. Memory owns every memory config variable; the background
 # consolidation queue (a framework-level service) never reads the spec itself —
@@ -351,8 +329,8 @@ compact:
 #   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
   consolidate_every: 10
-  # Turn-count cadence (active gate, DECIDED 2026-09-14). Memory is cheap
-  # extract+append -> fold every 5 turns; reviewer is slow archive/merge and
+  # Turn-count cadence (active gate). Memory is cheap extract+append -> fold
+  # every 5 turns; reviewer is slow archive/merge and
   # batches ~2 folds -> every 10 turns. Thread summarizer uses its own 10-turn
   # block. consolidate_every/review_every above are the legacy minute fallback.
   consolidate_turns: 5

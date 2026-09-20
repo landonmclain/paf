@@ -1,8 +1,8 @@
 # Leaf-agent spec for the `thread_summarizer` background agent.
 #
-# Spec-Driven-Background-Agents: the thread summarizer's model, model_settings
-# (deterministic sampler + OpenRouter provider pin), and retries live here rather
-# than in code/env (`consolidate_model()` + `_consolidation_model_settings()`).
+# The thread summarizer's model, model_settings (deterministic sampler +
+# OpenRouter provider pin), and retries live here rather than in code/env
+# (`consolidate_model()` + `_consolidation_model_settings()`).
 #
 # Unlike the extractor/reviewer, this agent is a pure structured-output leaf: a
 # single pass emits a `BeatsRecord` (sparse {at, what} beats + one dense summary)

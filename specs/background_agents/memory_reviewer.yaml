@@ -1,11 +1,11 @@
 # Leaf-agent spec for the `memory_reviewer` background agent.
 #
-# Spec-Driven-Background-Agents: the reviewer's model, model_settings
-# (deterministic sampler + OpenRouter provider pin), retries, and operating
-# guidance live here rather than in code/env (reuses consolidate_model() +
-# _consolidation_model_settings()). The curation/merge write path and Memory
-# capability wiring stay in Python (`_build_reviewer`); this spec parameterizes
-# the model, the per-item size cap, and the operating manual.
+# The reviewer's model, model_settings (deterministic sampler + OpenRouter
+# provider pin), retries, and operating guidance live here rather than in
+# code/env (reuses consolidate_model() + _consolidation_model_settings()). The
+# curation/merge write path and Memory capability wiring stay in Python
+# (`_build_reviewer`); this spec parameterizes the model, the per-item size cap,
+# and the operating manual.
 #
 # `max_item_chars` is a paf-specific knob (NOT forwarded to the model as a
 # model_settings key): the reviewer enforces it in its prompt and via the
@@ -19,9 +19,13 @@ model: openrouter:deepseek/deepseek-v4-flash-0731
 model_settings:
   temperature: 0
   top_p: 1.0
-  max_tokens: 12288
-  # Runaway safety valve (output-token ceiling, incl. reasoning). Same value the
-  # benchmark harness pins for this model (tests/framework.py max_tokens=12288).
+  max_tokens: 32768
+  # Output-token ceiling (incl. reasoning). The reviewer processes the FULL
+  # rendered memory in one pass, so this must be high enough for the largest
+  # staged render — a legitimate per-pass ceiling, not a runaway safety valve.
+  # Bumped 2026-09-19 twice (12288 -> 16384 -> 32768) after clipping both; the
+  # model's traversal (reasoning + merge/archive decisions) keeps outgrowing it.
+  # Verify the actual output size in the trace after a run to set the right level.
   extra_body:
     provider:
       order:
