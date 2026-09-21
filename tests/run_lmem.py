@@ -100,12 +100,7 @@ JUDGE_MODEL = "openrouter:openai/gpt-4o-mini"
 # (evidence-only sessions, ~1.9 sessions / ~22 turns per question). Hardcoded
 # (not env/spec): the renamed copy also forces a fresh durable-memory dir below.
 LME_DATA_FILE = "memory-reviewer-lme_oracle.json"
-DATA = (
-    Path(__file__).parent.parent
-    / "data"
-    / "benchmarks"
-    / LME_DATA_FILE
-)
+DATA = Path(__file__).parent.parent / "data" / "benchmarks" / LME_DATA_FILE
 RESULTS_DIR = Path(__file__).parent / "results"
 
 # Durable per-question MEMORY snapshots (committed, mirroring generated/ so a
@@ -117,9 +112,7 @@ RESULTS_DIR = Path(__file__).parent / "results"
 # never clobber each other's durable memory. PAF_FRESH_MEMORY=1 forces
 # re-consolidation (and re-persists); combining with LME_QIDS narrows the
 # refresh to specific questions.
-MEMORY_DURABLE_DIR = (
-    Path(__file__).parent.parent / "data" / "benchmarks" / DATA.stem
-)
+MEMORY_DURABLE_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / DATA.stem
 
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
 # across all 6 types + some abstention is a good first validation.

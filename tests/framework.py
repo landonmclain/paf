@@ -157,6 +157,7 @@ MEMORY = os.environ.get("MEMORY", "1") == "1"
 # None so the subject defaults to `mem_dir`.
 _CURRENT_MEMORY_DIR: Path | None = None
 
+
 def _build_agent(
     store: FileStepStore,
     *,

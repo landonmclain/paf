@@ -39,7 +39,11 @@ from paf.capabilities.compaction import (
     build_boundary_compaction_for_agent,
     build_compaction,
 )
-from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, LONGMEMEVAL_PROFILE, PROFILES
+from paf.capabilities.profiles import (
+    CONTEXTBENCH_PROFILE,
+    LONGMEMEVAL_PROFILE,
+    PROFILES,
+)
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
 

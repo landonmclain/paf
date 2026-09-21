@@ -39,6 +39,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Settings
 # ---------------------------------------------------------------------------
 
+
 # Token used to authorize restart requests. Read from PAF_OPS_TOKEN (from
 # `.env` in the host process). If unset, the service still starts but refuses
 # every restart (fail-closed) — it must never be open.
@@ -102,7 +103,7 @@ def _authorized(authorization: str | None) -> bool:
         return False
     if not authorization or not authorization.startswith("Bearer "):
         return False
-    provided = authorization[len("Bearer "):].strip()
+    provided = authorization[len("Bearer ") :].strip()
     return hmac.compare_digest(provided, expected)
 
 

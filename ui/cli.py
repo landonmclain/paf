@@ -304,8 +304,6 @@ def _activity_strip(out: TurnStream) -> list[Text]:
     return lines
 
 
-
-
 def _clip_inline(text: str, limit: int = 240) -> str:
     """Collapse whitespace and clip noisy live-only activity text."""
     text = " ".join(text.split())
@@ -327,11 +325,17 @@ def _live_activity_strip(out: TurnStream, max_blocks: int = 5) -> list[Text]:
     for block in out.blocks[-max_blocks:]:
         if isinstance(block, ToolBlock):
             # One visual row: leave room for "✓ tool: name(" + ")".
-            args_limit = max(10, console.size.width - len("\u2713 tool: ") - len(block.name) - 2)
-            compact = ToolBlock(block.name, _clip_inline(block.args, args_limit), block.status)
+            args_limit = max(
+                10, console.size.width - len("\u2713 tool: ") - len(block.name) - 2
+            )
+            compact = ToolBlock(
+                block.name, _clip_inline(block.args, args_limit), block.status
+            )
             lines.append(_tool_line(compact))
         elif isinstance(block, ThinkingBlock) and block.text:
-            lines.append(_thinking_line(_clip_inline(block.text, _one_line_limit("thinking: "))))
+            lines.append(
+                _thinking_line(_clip_inline(block.text, _one_line_limit("thinking: ")))
+            )
     return lines
 
 
@@ -340,8 +344,9 @@ def _one_line_limit(label: str, min_limit: int = 40) -> int:
     return max(min_limit, console.size.width - len(label))
 
 
-
-def _tail_renderable(renderable: RenderableType, *, width: int, max_lines: int) -> RenderableType:
+def _tail_renderable(
+    renderable: RenderableType, *, width: int, max_lines: int
+) -> RenderableType:
     """Render to visual terminal rows and return the NEWEST rows as a re-renderable.
 
     This is the key to chat-style auto-follow: instead of letting `Live` crop
@@ -381,7 +386,9 @@ def _status_line(word: str, color: str) -> Group:
     glyph stays default. ``Spinner`` accepts a `RenderableType` text and uses it
     as-is (no re-parsing), so the per-phase color survives.
     """
-    return Group(Text(""), Spinner("dots", text=Text(f"{word}…", style=color)), Text(""))
+    return Group(
+        Text(""), Spinner("dots", text=Text(f"{word}…", style=color)), Text("")
+    )
 
 
 def _phase(out: TurnStream) -> tuple[str, str]:
@@ -412,9 +419,7 @@ def _phase(out: TurnStream) -> tuple[str, str]:
 def _answer_panel(out: TurnStream, *, max_body_lines: int | None = None) -> Panel:
     """Render the assistant answer, optionally as a bottom-following viewport."""
     body: RenderableType = (
-        Markdown(_safe("".join(out.response)))
-        if out.response
-        else Text("")
+        Markdown(_safe("".join(out.response))) if out.response else Text("")
     )
     if max_body_lines is not None and out.response:
         # Panel consumes two border columns plus padding on both sides.
@@ -550,7 +555,9 @@ async def _run_streamed(
         screen=True,
     ) as live:
         try:
-            async for event in session.stream(prompt, conversation_id=session.conversation_id):
+            async for event in session.stream(
+                prompt, conversation_id=session.conversation_id
+            ):
                 render(event, out)
                 if sidebar_dirty:
                     await refresh_sidebar(session, sidebar, scoped)
@@ -619,9 +626,7 @@ def _render_prior_history(history: list) -> None:
             if isinstance(part, UserPromptPart):
                 content = part.content
                 if isinstance(content, str):
-                    console.print(
-                        Panel(content, title="you", border_style="magenta")
-                    )
+                    console.print(Panel(content, title="you", border_style="magenta"))
             elif isinstance(part, TextPart):
                 console.print(
                     Panel(
@@ -733,8 +738,10 @@ def _slash_help() -> None:
         ("/debug", "show session plumbing: ids, model, spec, store"),
         ("/quit", "exit (alias /q, exit)"),
     ]
-    console.print("[cyan]multi-line input:[/cyan] paste freely; an empty line sends the message "
-                  "(single-line messages: just hit Enter).")
+    console.print(
+        "[cyan]multi-line input:[/cyan] paste freely; an empty line sends the message "
+        "(single-line messages: just hit Enter)."
+    )
     table = Table(title="slash commands (read-only)", box=None)
     table.add_column("cmd", style="cyan", no_wrap=True)
     table.add_column("description", style="default")
@@ -809,12 +816,16 @@ def main() -> int:
         return 2
     conversation_id = f"cli-{agent_name}-e{CONV_EPOCH}"
 
-    with Session(agent_name, profile=profile, conversation_id=conversation_id, resume_window=15) as session:
+    with Session(
+        agent_name, profile=profile, conversation_id=conversation_id, resume_window=15
+    ) as session:
         session.attach_background()
         # Persistent right sidebar (processes + the model's plan) shown while wide.
         sidebar = SidebarState()
         _startup_banner(session)
-        console.print("type a message (blank line sends; paste multi-line freely), or \"quit\" to exit")
+        console.print(
+            'type a message (blank line sends; paste multi-line freely), or "quit" to exit'
+        )
 
         while True:
             try:

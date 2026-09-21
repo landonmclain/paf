@@ -179,7 +179,9 @@ async def _close_idle_loop() -> None:
         cutoff = _now() - IDLE_TTL_SECONDS
         stale = [k for k, t in _sessions_last_used.items() if t < cutoff]
         for key in stale:
-            log.info("closing idle session %s (no activity in %ds)", key, IDLE_TTL_SECONDS)
+            log.info(
+                "closing idle session %s (no activity in %ds)", key, IDLE_TTL_SECONDS
+            )
             _close_session(key)
 
 
@@ -308,7 +310,9 @@ async def _plan_snapshot(scoped_cid: str) -> list[dict[str, Any]]:
     scoped cid + shared emitter key), so this endpoint and the agent's writes
     can never point at different files. Returns empty list when no plan exists.
     """
-    store = FilePlanStore(root=PROJECT_ROOT / "data" / "plans", conversation_id=scoped_cid)
+    store = FilePlanStore(
+        root=PROJECT_ROOT / "data" / "plans", conversation_id=scoped_cid
+    )
     items = await store.get_items()
     return _serialize_plan_items(items)
 
@@ -388,7 +392,9 @@ def _serialize_history(msgs: list[Any]) -> list[dict[str, Any]]:
 
 
 @app.get("/api/conversations/{conversation_id}/plan")
-async def conversation_plan(conversation_id: str, agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+async def conversation_plan(
+    conversation_id: str, agent: str = DEFAULT_AGENT
+) -> dict[str, Any]:
     """Authoritative plan snapshot for a conversation (source of truth).
 
     Reads the per-conversation ``FilePlanStore`` via the same seam the agent's
@@ -411,7 +417,9 @@ async def conversation_plan(conversation_id: str, agent: str = DEFAULT_AGENT) ->
 
 
 @app.get("/api/conversations/{conversation_id}/history")
-async def conversation_history(conversation_id: str, agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+async def conversation_history(
+    conversation_id: str, agent: str = DEFAULT_AGENT
+) -> dict[str, Any]:
     """Return the prior turns for a conversation (server-authoritative history).
 
     Restores the lane's prior messages from the store via the shared session
@@ -421,7 +429,11 @@ async def conversation_history(conversation_id: str, agent: str = DEFAULT_AGENT)
     """
     session = await _get_session(conversation_id, agent)
     restored = await session.restore()
-    return {"conversation_id": conversation_id, "messages": _serialize_history(session.history), "restored": restored}
+    return {
+        "conversation_id": conversation_id,
+        "messages": _serialize_history(session.history),
+        "restored": restored,
+    }
 
 
 def _last_prompt(session: Session) -> str | None:
@@ -430,7 +442,9 @@ def _last_prompt(session: Session) -> str | None:
         for msg in reversed(session.history):
             if isinstance(msg, ModelRequest):
                 for part in msg.parts:
-                    if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                    if isinstance(part, UserPromptPart) and isinstance(
+                        part.content, str
+                    ):
                         return part.content[:120]
     except Exception:  # noqa: BLE001 - title is sugar; never fail a list
         return None
@@ -461,7 +475,7 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     for key, last in _sessions_last_used.items():
         if not key.startswith(agent_prefix):
             continue
-        conversation_id = key[len(agent_prefix):]
+        conversation_id = key[len(agent_prefix) :]
         session = _sessions.get(key)
         by_lane[conversation_id] = {
             "conversation_id": conversation_id,
@@ -473,12 +487,13 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     # 2. Persisted store backstop (durability across restarts).
     try:
         from paf.capabilities.persistence import _build_store
+
         store = _build_store()
         for run in await store.list_runs():
             cid = run.conversation_id
             if not cid or not cid.startswith(store_prefix):
                 continue
-            lane_id = cid[len(store_prefix):]
+            lane_id = cid[len(store_prefix) :]
             started = run.started_at.timestamp() if run.started_at else 0.0
             cur = by_lane.get(lane_id)
             if cur is not None and (cur.get("updated_at") or 0) >= started:
@@ -509,7 +524,6 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     return {"conversations": out}
 
 
-
 @app.post("/api/conversations")
 async def create_conversation(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     """Allocate a fresh conversation lane id for the \"New conversation\" flow.
@@ -536,7 +550,9 @@ async def set_conversation_title(
     """
     raw = body.get("title")
     if raw is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="title required")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="title required"
+        )
     title = str(raw).strip()
 
     titles = _load_titles(agent)
@@ -587,7 +603,6 @@ async def conversation_tasks(
     }
 
 
-
 @app.get("/api/processes/stream")
 async def processes_stream(
     request: Request, conversation_id: str, agent: str = DEFAULT_AGENT
@@ -624,7 +639,9 @@ def _process_response(
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-def _process_feed(session: Session, conversation_id: str, request: Request) -> AsyncIterator[str]:
+def _process_feed(
+    session: Session, conversation_id: str, request: Request
+) -> AsyncIterator[str]:
     """Stream background-process frames for one lane, never tying to a turn.
 
     On connect: restore the conversation's current task history (terminal +
@@ -711,9 +728,11 @@ def _process_feed(session: Session, conversation_id: str, request: Request) -> A
                 if getattr(ev, "status", None) in ("done", "error", "skipped"):
                     task = asyncio.create_task(_publish_idle())
                     task.add_done_callback(
-                        lambda t: t.exception()
-                        if not t.cancelled() and t.exception()
-                        else None
+                        lambda t: (
+                            t.exception()
+                            if not t.cancelled() and t.exception()
+                            else None
+                        )
                     )
 
             sub = bg.subscribe_tasks(_on_task)
@@ -750,13 +769,16 @@ def _process_feed(session: Session, conversation_id: str, request: Request) -> A
                 try:
                     bg.unsubscribe_tasks(sub)  # type: ignore[union-attr]
                 except Exception:  # noqa: BLE001 - best-effort teardown
-                    log.warning("processes_stream subscriber teardown failed", exc_info=True)
+                    log.warning(
+                        "processes_stream subscriber teardown failed", exc_info=True
+                    )
 
     return _inner()
 
 
-
-def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIterator[str]:
+def _turn_frames(
+    session: Session, prompt: str, conversation_id: str
+) -> AsyncIterator[str]:
     """Run one turn, forwarding turn events as SSE.
 
     Background / maintenance work (``task:`` frames) is NOT mixed in here — it
@@ -768,7 +790,9 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
     async def _inner() -> AsyncIterator[str]:
         turn_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
         _scoped = getattr(session, "_scoped_cid", None)
-        scoped_cid = (_scoped(conversation_id) if _scoped is not None else None) or conversation_id
+        scoped_cid = (
+            _scoped(conversation_id) if _scoped is not None else None
+        ) or conversation_id
 
         async def _on_plan(_ev: Any) -> None:
             # Full-snapshot per mutation (Plan-Live-Sidebar-Spec): read the
@@ -820,7 +844,9 @@ def _turn_frames(session: Session, prompt: str, conversation_id: str) -> AsyncIt
             try:
                 await session.cancel()
             except Exception:  # noqa: BLE001 - best-effort; never mask teardown
-                log.warning("session.cancel() during stream teardown failed", exc_info=True)
+                log.warning(
+                    "session.cancel() during stream teardown failed", exc_info=True
+                )
             if not turn.done():
                 turn.cancel()
             await asyncio.gather(turn, return_exceptions=True)
@@ -839,8 +865,12 @@ async def chat(body: dict[str, Any]) -> StreamingResponse:
     conversation_id = body.get("conversation_id")
     prompt = body.get("prompt")
     if not conversation_id or not prompt:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "conversation_id + prompt required")
-    session = await _get_session(str(conversation_id), str(body.get("agent", DEFAULT_AGENT)))
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "conversation_id + prompt required"
+        )
+    session = await _get_session(
+        str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
+    )
 
     frames = _turn_frames(session, str(prompt), str(conversation_id))
     return StreamingResponse(frames, media_type="text/event-stream")
@@ -850,7 +880,9 @@ async def chat(body: dict[str, Any]) -> StreamingResponse:
 async def steer(body: dict[str, Any]) -> dict[str, Any]:
     """Inject a message into a running conversation (``Session.enqueue``)."""
     conversation_id = body.get("conversation_id")
-    session = await _get_session(str(conversation_id), str(body.get("agent", DEFAULT_AGENT)))
+    session = await _get_session(
+        str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
+    )
     enq_id = await session.enqueue(
         str(body.get("content", "")), priority=str(body.get("priority", "asap"))
     )
@@ -861,7 +893,9 @@ async def steer(body: dict[str, Any]) -> dict[str, Any]:
 async def cancel(body: dict[str, Any]) -> dict[str, Any]:
     """Stop the running turn on a conversation (``Session.cancel``)."""
     conversation_id = body.get("conversation_id")
-    session = await _get_session(str(conversation_id), str(body.get("agent", DEFAULT_AGENT)))
+    session = await _get_session(
+        str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
+    )
     await session.cancel()
     return {"cancelled": True}
 

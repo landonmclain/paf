@@ -13,6 +13,7 @@ end without an API call or a service restart. The fake ctx only needs the
 
 Usage: PYTHONPATH= .venv/bin/python scripts/verify_plan_rehome.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,7 +66,10 @@ async def main() -> None:
         print(write_reply)
 
         # 2) The model follows the id-echo: copy the bracketed [id]s verbatim.
-        ids = re.findall(r"\[([0-9a-f]{8})\]|\[([0-9a-f-]{36})\]|\[([0-9A-Fa-f-]{8,36})\]", write_reply)
+        ids = re.findall(
+            r"\[([0-9a-f]{8})\]|\[([0-9a-f-]{36})\]|\[([0-9A-Fa-f-]{8,36})\]",
+            write_reply,
+        )
         echoed = [a or b or c for a, b, c in ids]
         # Fall back to full-uuid tokens if the short form isn't echoed.
         if not echoed:
@@ -73,14 +77,18 @@ async def main() -> None:
         print("=== echoed ids from write_plan ===")
         print(echoed)
         if len(echoed) != 3:
-            raise SystemExit(f"FAIL: expected 3 echoed ids, got {len(echoed)}: {write_reply!r}")
+            raise SystemExit(
+                f"FAIL: expected 3 echoed ids, got {len(echoed)}: {write_reply!r}"
+            )
 
         # 3) update_task_statuses using the REAL echoed ids (the old code guessed "1","2" -> crash).
         updates = [PlanStatusUpdate(task_id=echoed[0], status=TaskStatus.in_progress)]
         update_reply = await toolset.update_task_statuses(ctx, updates=updates)
         print("=== update_task_statuses reply (must not say 'not found') ===")
         print(update_reply)
-        assert "not found" not in update_reply.lower(), f"FAIL: 'not found' in reply: {update_reply!r}"
+        assert "not found" not in update_reply.lower(), (
+            f"FAIL: 'not found' in reply: {update_reply!r}"
+        )
 
         # 4) Verify the FilePlanStore persisted the status change to disk.
         plan_file = root / CONVERSATION_ID / "plan.json"

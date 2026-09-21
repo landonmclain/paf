@@ -3,6 +3,7 @@ much more we could dedup from the journal via bounded fuzzy clustering.
 
 Run from repo root with PYTHONPATH=. Never writes to data/memory.
 """
+
 from __future__ import annotations
 
 import json
@@ -75,20 +76,28 @@ def report(agent: str):
         if ln in line_to_src:
             per_entry[line_to_src[ln]] += 1
             live_merge_winners += 1
-    print("\n[candidate] memory_merge count per INDEX WINNER (from journal source_ref):")
-    print(f"   distinct merge-records: {len(merge_lines)} | live winners that are merges: {live_merge_winners}")
-    print(f"   items-merged-per-winner distribution (winner:count): "
-          f"{dict(sorted(per_entry.items()))}")
+    print(
+        "\n[candidate] memory_merge count per INDEX WINNER (from journal source_ref):"
+    )
+    print(
+        f"   distinct merge-records: {len(merge_lines)} | live winners that are merges: {live_merge_winners}"
+    )
+    print(
+        f"   items-merged-per-winner distribution (winner:count): "
+        f"{dict(sorted(per_entry.items()))}"
+    )
 
     # --- candidate 3: recency (age in days vs newest) ---
     born = [e.get("born_on", "")[:10] for e in entries if e.get("born_on")]
     if born:
         from datetime import date
+
         def parse(s):
             try:
                 return date.fromisoformat(s[:10])
             except ValueError:
                 return None
+
         dates = [parse(b) for b in born]
         dates = [d for d in dates if d]
         maxd = max(dates)
@@ -124,8 +133,10 @@ def report(agent: str):
             if _overlap(ti, toks[j]) >= 0.60:
                 union(i, j)
     roots = Counter(find(i) for i in range(n))
-    print("\n[dedup potential] NAIVE max(Jaccard,containment)>=0.60 SEGMENTS — "
-          "this OVER-MERGES (artifact):")
+    print(
+        "\n[dedup potential] NAIVE max(Jaccard,containment)>=0.60 SEGMENTS — "
+        "this OVER-MERGES (artifact):"
+    )
     print(f"   journal records      : {n}")
     print(f"   would-be distinct    : {len(roots)}")
     print(f"   facts that would merge: {n - len(roots)} records folded")
@@ -163,9 +174,11 @@ def report(agent: str):
             union2(i, j)
         roots2 = Counter(find2(i) for i in range(n))
         cl = [c for c in roots2.values() if c > 1]
-        print(f"   Jaccard>= {TH}: direct-sim pairs={edges} | distinct={len(roots2)} "
-              f"(fold {n - len(roots2)} into {len(cl)} clusters) | "
-              f"largest={max(roots2.values())}")
+        print(
+            f"   Jaccard>= {TH}: direct-sim pairs={edges} | distinct={len(roots2)} "
+            f"(fold {n - len(roots2)} into {len(cl)} clusters) | "
+            f"largest={max(roots2.values())}"
+        )
 
 
 if __name__ == "__main__":
