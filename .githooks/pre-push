@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Pre-push hook: run the same four checks as .github/workflows/ci.yml so CI never
+# surprises us. Runs on every `git push`.
+#
+#   ruff check           (lint)
+#   ruff format --check  (format)
+#   pyright              (typecheck, via npx like CI)
+#   pytest -n auto       (tests)
+#
+# Any failure prints a banner and exits non-zero, which aborts the push.
+# Configure git to use this hooks dir:
+#   git config core.hooksPath .githooks
+set -u
+
+# Run from the repo root regardless of where the hook was invoked.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Quick exit if nothing staged-tracked changed under src/tests? We can't cheaply
+# know what the push touches against a remote; CI checks the whole tree, so we
+# check the whole tree. (Cheap: ruff/pyright are fast; pytest is the slow one.)
+
+fail=0
+
+step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+
+step "ruff check (lint)"
+uv run ruff check src tests --output-format=concise || fail=1
+
+step "ruff format --check (format)"
+uv run ruff format --check src tests || fail=1
+
+step "pyright (typecheck)"
+npx --yes pyright || fail=1
+
+step "pytest -n auto (tests)"
+uv run pytest -n auto -q || fail=1
+
+if [ "$fail" -ne 0 ]; then
+  printf '\n\033[1;31mpre-push checks FAILED — push aborted.\033[0m\n'
+  exit 1
+fi
+
+printf '\n\033[1;32mpre-push checks passed.\033[0m\n'
+exit 0
