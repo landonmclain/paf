@@ -66,7 +66,7 @@ from paf.background import (
 from paf.capabilities import PROFILES
 from paf.capabilities.compaction import build_boundary_compaction_for_agent
 from paf.capabilities.persistence import _build_store
-from paf.degeneration_guard import DegenerationGuard
+from paf.degeneration_guard import DegenerationGuard, ToolCallGuard
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -369,7 +369,7 @@ class Session:
         store=None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
-        # explicitly, matching how the CLIs pick the default profile
+        # explicitly, matching how clients pick the default profile
         # (`resolve_profile_name` -> PROFILES[name]).
         if profile is None:
             profile_name = resolve_profile_name(agent_name)
@@ -681,15 +681,31 @@ class Session:
                 ) as run:
                     self._run = run
                     _active_run = run
-                    # Per-turn degeneration guard (thinking-repeat loop detector).
-                    # New for each turn; sees only THIS turn's thinking stream.
-                    # On detection a DegenerationError is raised -> the
-                    # except (ModelHTTPError, UnexpectedModelBehavior) handler
-                    # below preserves the partial and surfaces a clean retry.
+                    # Per-turn degeneration guards (loop detectors). New for each
+                    # turn; see only THIS turn's stream.
+                    #  - `guard` (DegenerationGuard): thinking-narration repeats.
+                    #  - `tool_guard` (ToolCallGuard): the same tool re-issued
+                    #    with the same UI-identically-rendered args (a stuck
+                    #    tool-call loop). Both raise DegenerationError on
+                    #    detection -> the except (ModelHTTPError,
+                    #    UnexpectedModelBehavior) handler below preserves the
+                    #    partial and surfaces a clean retry.
                     guard = DegenerationGuard()
+                    tool_guard = ToolCallGuard()
                     try:
                         async for node in run:
                             if isinstance(node, (ModelRequestNode, CallToolsNode)):
+                                # Tool-call loop guard: feed each COMPLETED tool
+                                # call (full args from the node's model_response)
+                                # and abort if the same call recurs too many times.
+                                if isinstance(node, CallToolsNode):
+                                    for part in node.model_response.parts:
+                                        if isinstance(part, ToolCallPart):
+                                            tg = tool_guard.add_tool_call(
+                                                part.tool_name, part.args
+                                            )
+                                            if tg is not None:
+                                                raise DegenerationError(tg)
                                 async with node.stream(run.ctx) as stream:
                                     async for event in stream:
                                         # Guard hook: feed THINKING-only stream to

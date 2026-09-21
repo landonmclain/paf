@@ -3,12 +3,14 @@
 Covers the real failure mode (the DeepSeek v4.1 "thinking forever" narration
 loop), the single-phrase false-positive regression (e.g. "hmm let me get the
 exact line first then decide"), near-duplicate variation, normal-thinking
-negative controls, and the streaming (delta) path used by the runtime hook.
+negative controls, the streaming (delta) path used by the runtime hook — and the
+`ToolCallGuard` repeat-tool-call detector (the same tool re-issued with the same
+UI-identically-rendered args).
 """
 
 from __future__ import annotations
 
-from paf.degeneration_guard import DegenerationGuard
+from paf.degeneration_guard import DegenerationGuard, ToolCallGuard, _tool_key
 
 # A real narration loop seen from deepseek-v4.1-flash at medium reasoning effort:
 # a block of SEVERAL DISTINCT phrases cycling, with blank lines rendered between
@@ -152,3 +154,88 @@ def test_stream_thinking_detects_across_delta_boundaries():
             break
     assert result is not None
     assert result.detected
+
+
+# ----------------------------------------------------------------------
+# ToolCallGuard — repeat-tool-call loop detector
+# ----------------------------------------------------------------------
+
+SEARCH_ARGS = {
+    "pattern": "svg",
+    "path": "projects/Personal/landonmclain-site/src",
+    "include_glob": "*.astro",
+}
+
+
+def test_identical_tool_call_loop_detected():
+    """The real observed failure: the SAME search_files call re-issued in a row
+    trips the guard once it recurs 5 times consecutively."""
+    guard = ToolCallGuard()  # max_repeats=5
+    result = None
+    for n in range(1, 11):  # 10 identical calls in a row
+        result = guard.add_tool_call("search_files", SEARCH_ARGS)
+        if n == 5:
+            # First detection on the 5th consecutive call.
+            assert result is not None and result.detected
+            assert result.repeat_count == 5
+    assert result is not None and result.detected
+    assert result.reason == "repeated_tool_call"
+    assert result.repeat_count == 10  # still fires each subsequent repeat
+    assert result.line == _tool_key("search_files", SEARCH_ARGS)
+
+
+def test_exactly_five_trips_four_does_not():
+    """Threshold boundary: 4 consecutive identical calls must NOT trip; the 5th
+    identical call does."""
+    guard = ToolCallGuard()
+    for _ in range(4):
+        assert guard.add_tool_call("search_files", SEARCH_ARGS) is None
+    result = guard.add_tool_call("search_files", SEARCH_ARGS)
+    assert result is not None and result.detected
+
+
+def test_count_resets_when_identity_switches():
+    """Consecutive-only: an intervening different call resets the run, so a call
+    spread across a turn among other calls never accumulates to a false trip."""
+    guard = ToolCallGuard()
+    # 4 identical, then a different call (resets), then 4 more identical => 8
+    # identical total but never 5 in a row -> must NOT trip.
+    for _ in range(4):
+        guard.add_tool_call("search_files", SEARCH_ARGS)
+    guard.add_tool_call("read_file", {"path": "other.md"})
+    result = None
+    for _ in range(4):
+        result = guard.add_tool_call("search_files", SEARCH_ARGS)
+    assert result is None  # reset after the switch; max run is 4
+
+
+def test_arg_key_order_is_canonical():
+    """Same args with dict keys in a different order must collapse to ONE key, so
+    an arg-order-only drift still trips the loop."""
+    guard = ToolCallGuard()
+    reordered = {
+        "include_glob": "*.astro",
+        "path": "projects/Personal/landonmclain-site/src",
+        "pattern": "svg",
+    }
+    result = None
+    for _ in range(5):
+        result = guard.add_tool_call("search_files", reordered)
+    assert result is not None and result.detected
+
+
+def test_tool_key_matches_ui_identity():
+    """The canonical key is `toolName(humanized_args)` — the string the paf-ui
+    ToolBlock trigger renders — so detection matches what the UI would show."""
+    key = _tool_key("search_files", SEARCH_ARGS)
+    assert key.startswith("search_files(")
+    assert "pattern: svg" in key
+    assert "path: projects/Personal/landonmclain-site/src" in key
+
+
+def test_tool_guard_reset_clears_state():
+    guard = ToolCallGuard()
+    for _ in range(5):
+        guard.add_tool_call("search_files", SEARCH_ARGS)
+    guard.reset()
+    assert guard.add_tool_call("search_files", SEARCH_ARGS) is None

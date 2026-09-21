@@ -3,15 +3,17 @@ degeneration_guard.py
 
 Lean guard for detecting repetitive / stuck LLM thinking output.
 
-Intended placement (runtime integration):
-- Feed assistant THINKING text into `guard.stream_thinking(chunk)` as it streams;
-  the guard accumulates chunks and emits whole normalized lines internally.
-- If `stream_thinking` returns a `DegenerationResult`, abort the current
-  generation and retry (see DegenerationError in runtime).
+Two guards live here:
+- :class:`DegenerationGuard` — the original thinking-narration loop detector.
+  Watches assistant THINKING text only.
+- :class:`ToolCallGuard` — a repeat-tool-call detector (the same tool called
+  with the same UI-identically-rendered args N times). Watches completed tool
+  calls; complements the thinking guard because a stuck loop often shows up as
+  the model re-issuing the same tool call rather than narrating in a loop.
 
-Detects the cheap, model-agnostic signal of a thinking loop: several DISTINCT
-phrases each recurring too many times within a small rolling window of recent
-thinking lines — e.g.
+DegenerationGuard detects the cheap, model-agnostic signal of a thinking loop:
+several DISTINCT phrases each recurring too many times within a small rolling
+window of recent thinking lines — e.g.
 
     OK, I'll run it now.
     Let me do it.
@@ -35,6 +37,7 @@ No external dependencies beyond the stdlib.
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter, deque
 from dataclasses import dataclass
@@ -162,13 +165,103 @@ class DegenerationGuard:
 #         if result is not None:
 #             raise DegenerationError(result)   # -> runtime's mid-stream handler
 #
-# Recommended starting values:
-#
-#     DegenerationGuard(window=32, max_repeats=4, min_distinct_lines=3)
-#
-# Rare by design: a single common phrase repeating a few times is normal
-# thinking; only when SEVERAL DISTINCT phrases each cycle >= max_repeats times do
-# we call it a loop. A real narration loop is a block of different phrases
-# cycling (ok i'll run it now / let me do it / let me run the command / let me
-# go). Cost is negligible (tiny-line set ops over a 32-entry window per thinking
-# line); if it false-positives or under-fires, tune thresholds or remove it.
+def _scalar(v):
+    """Render one dict value to a stable string, matching how a UI row would show it."""
+    return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, sort_keys=True)
+
+
+def _humanize_args(args) -> str:
+    """Canonical humanized form of a tool-call args payload.
+
+    Mirrors the paf-ui `ToolBlock` display identity (`humanizeArgs`, PafChat.tsx)
+    so a "repeat" here means "the UI would show N identical tool rows". One
+    deliberate difference from the frontend: object keys are SORTED, whereas the
+    UI preserves insertion order — so two semantically-identical calls whose args
+    keys arrive in a different order still collapse to ONE key server-side (the
+    user would still read them as the same call).
+    """
+    if args is None:
+        return ""
+    obj = args
+    if isinstance(args, str):
+        try:
+            obj = json.loads(args)
+        except Exception:
+            return args  # not JSON — show as-is, like the UI
+    if isinstance(obj, list):
+        return ", ".join(map(str, obj))
+    if isinstance(obj, dict):
+        return ", ".join(f"{k}: {_scalar(v)}" for k, v in sorted(obj.items()))
+    return str(obj)
+
+
+def _tool_key(tool_name: str, args) -> str:
+    """Canonical identity of a tool call = `toolName(humanized_args)`.
+
+    This is exactly the string identity the paf-ui `ToolBlock` trigger renders
+    (`WrenchIcon` + `tool.toolName` + `(humanizeArgs(args))`), so server-side
+    detection and the UI's visible grouping agree by construction.
+    """
+    return f"{tool_name}({_humanize_args(args)})"
+
+
+class ToolCallGuard:
+    """Detect a tool-call repeat loop: the same tool called with the same (UI
+    identically-rendered) args ``max_repeats`` times CONSECUTIVELY.
+
+    Complements :class:`DegenerationGuard` (which watches only THINKING text):
+    a stuck loop very often manifests as the *model re-issuing the same completed
+    tool call* back-to-back (e.g. the same `search_files(path=…, pattern=svg)`
+    ~10x) rather than a thinking-narration loop — and the thinking guard never
+    sees tool calls.
+
+    Consecutive-only by design: the count resets to 1 the moment the
+    `(tool_name, humanized-args)` identity changes, so a call spread across a
+    turn among other calls never accumulates. We count "N identical calls in a
+    row", which is exactly the stuck-loop signature and avoids false positives
+    from legitimately re-using the same call later in a turn.
+    """
+
+    def __init__(self, *, max_repeats: int = 5) -> None:
+        """State for one generation (a fresh guard per turn).
+
+        Args:
+            max_repeats: the SAME tool+args must be issued this many times
+                consecutively before we call it a loop. Default 5 (the observed
+                real loop hit ~10x; a legitimate turn almost never issues the
+                *identical* tool call 5 times back-to-back).
+        """
+        self.max_repeats = max_repeats
+        self._last: str | None = None
+        self._count = 0
+
+    def add_tool_call(self, tool_name: str, args) -> DegenerationResult | None:
+        """Evaluate one COMPLETED tool call; return a result if it's a loop.
+
+        Feed each completed `ToolCallPart` (from a `CallToolsNode.model_response`,
+        not the streaming fragments). The consecutive-run count increments when
+        the call matches the previous identity, else resets to 1. Returns None
+        while below threshold.
+        """
+        key = _tool_key(tool_name, args)
+        if key == self._last:
+            self._count += 1
+        else:
+            self._last = key
+            self._count = 1
+        if self._count >= self.max_repeats:
+            return DegenerationResult(
+                detected=True,
+                reason="repeated_tool_call",
+                line=key,
+                repeat_count=self._count,
+            )
+        return None
+
+    def reset(self) -> None:
+        """Reset all state (start of a fresh generation)."""
+        self._last = None
+        self._count = 0
+
+
+__all__ = ["DegenerationGuard", "ToolCallGuard", "DegenerationResult"]
