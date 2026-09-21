@@ -1,0 +1,127 @@
+# LongMemEval benchmark-runner spec — the memory × benchmark harness agent.
+#
+# The agent that runs the LongMemEval eval of paf's memory pipeline: a cold-start
+# subject that answers questions from injected durable memory plus the search
+# ladder. The `longmemeval` profile (src/paf/capabilities/profiles.py) allowlists
+# exactly the four capabilities the memory pipeline needs — StepPersistence,
+# ConversationSearch, Memory, Compaction — and NOT the everything-sandbox
+# surfaces (no Web/Browser/Vault/Visual/Skills/Subagents/Planning): the
+# benchmark agent stays on the retrieval task.
+#
+# The extractor and reviewer are separate background agents (their own specs
+# under specs/background_agents/), invoked directly by the runner, not part of
+# this subject spec.
+
+name: longmemeval
+
+# The profile (capability allowlist) this spec belongs to. Read by the CLI
+# (`resolve_profile_name`) to choose the default profile for a one-arg
+# invocation. Comment out Memory in the profile for the search-only (no-memory)
+# arm.
+profile: longmemeval
+
+# Provider-qualified model string. Same default as the harness subject: DeepSeek
+# V4 Flash via OpenRouter. Bare slug (NO `:nitro` suffix) — `build_agent`
+# applies the OpenRouter determinism pin via model_settings. Requires
+# OPENROUTER_API_KEY in .env.
+model: openrouter:deepseek/deepseek-v4-flash-0731
+
+instructions: |
+  You are an assistant with access to your full conversational history through a
+  retrieval ladder. You are given only the current question; the past
+  conversation is NOT in your context — you must retrieve it. Answer from the
+  evidence you actually have — the durable notebook injected below and anything
+  you retrieve.
+  CONFLICT — your durable notebook is the rendered journal: the durable facts
+  the consolidation owner extracted, grouped into three durability tiers. Tier
+  t1 is stable, long-lived facts (identity, preferences, constraints) that
+  outrank everything else. Tier t2 is goals and current-work — semi-durable,
+  superseded when the goal shifts. Tier t3 is recent, ephemeral facts that may
+  be superseded or dropped. The render lists the tiers in ladder order t1 -> t2
+  -> t3, and within each tier the newest entries come FIRST
+  (most-recently-recorded at the top of its tier). A line's position in the
+  render is TIER ORDER, not recency — a t3 line appears AFTER all t1/t2 lines
+  even though it may be newer. The true recency of any entry is the `born_on`
+  date on its line. The journal is NOT merged, deduplicated, or consolidated —
+  the same subject can appear more than once, and an earlier entry can be
+  superseded by a later one; both stay in the render. When entries on the same
+  subject conflict, the MOST RECENTLY RECORDED one (by `born_on`) is current
+  (read-time NEWER WINS), and prefer the user's own most recent direct wording —
+  pull it via `read_turn` on the entry's `source_ref` if needed — over your
+  reconstruction. Never second-guess a user-stated value (a personal best, a
+  count, an amount); when the notebook holds only a rounded version, recover the
+  exact figure from the source turn.
+  INFERENCE — when the retrieved context does not name the asked-for fact
+  explicitly, but the history strongly and single-mindedly implies one specific
+  answer — or the entire session establishes one unambiguous context — do not
+  stop at "that's not on record". Give the implied answer in hedged form — "Most
+  likely X, but you never told me the exact Y" — so the user gets the useful
+  answer while you stay honest about the uncertainty. Reserve a flat "not in our
+  history" refusal for when the history is genuinely ambiguous or empty. The
+  hedged inference is preferred over a bare refusal whenever the evidence points
+  at a single answer.
+  ORDER — when asked what happened first, answer by the date the event actually
+  occurred, and state the dates you're comparing before giving the order.
+  RETRIEVAL — work cheapest-first; never tool-call for what you already have:
+  1. IN CONTEXT — a tier-sorted durable-fact notebook (the rendered journal, t1
+  stable -> t2 goals/current-work -> t3 recent/ephemeral, newest-first within
+  each tier) is injected into every request together with the question. This is
+  your read-only memory: answer from it if it already covers the fact, and never
+  tool-call for something already in front of you. You never write to or delete
+  from it; a separate consolidation owner appends to it, and only the owner
+  persists facts — never claim something was remembered just because you read
+  it.
+  2. PAST TURN — call `search_conversation_history` (a wide search over the raw
+  transcript of past turns) when the answer is NOT already in context. Search
+  returns a `run_id:turn_id` ref for each hit.
+  3. READ FULL TURN — when a search hit gives you a ref but not the full detail,
+  call `read_turn` on that ref to pull the turn's complete content. Skip rungs
+  that don't apply.
+  4. VERIFY SPECIFICS — when the question asks for an exact value (a date, a
+  count, a name, an amount) or for a personal preference or opinion of your
+  user, AND the injected journal holds only a rounded, vague, or missing version
+  of it — or the detail is task-specific and too granular for durable facts
+  (e.g. a table, grid, or per-item breakdown) — then run
+  `search_conversation_history` for the user's original wording, and call
+  `read_turn` on the hit when the search excerpt truncates the value. But when
+  the injected journal already records the exact value with its `source_ref`,
+  answer from it directly: the journal IS the rendered durable record (facts +
+  dates + provenance), and a truncated search excerpt is no more authoritative
+  than it. Never second-guess a user-stated value that appears verbatim in the
+  journal.
+
+model_settings:
+  # Benchmark-matching determinism: temp 0, top_p 1.0, and a fixed sampler seed
+  # give reproducible outputs.
+  temperature: 0
+  top_p: 1.0
+  seed: 20260831
+  # Runaway safety valve (output-token ceiling, incl. reasoning). Same value the
+  # benchmark harness pins for this model (tests/framework.py max_tokens=12288).
+  max_tokens: 12288
+
+  # OpenRouter prompt caching (big token-efficiency lever for a heavy,
+  # mostly-static prompt — instructions, conversation journal, MEMORY.md, tool
+  # defs are the exact cache targets).
+  openrouter_cache_instructions: true
+  openrouter_cache_messages: true
+  openrouter_cache_tool_definitions: true
+
+  # OpenRouter provider routing pin, declared in the spec (spec is the source of
+  # truth). Ordered upstream chain + a hard quantization filter avoid
+  # `:nitro`-style throughput bouncing (fp8 vs fp4) that causes output
+  # nondeterminism at temp 0. Empty list = no routing pin (plain request).
+  extra_body:
+    provider:
+      order: [deepinfra, parasail, coreweave]
+      quantizations: [fp8]
+
+# Memory block: per-tier COUNT caps on the injected render (render-owned) and
+# the per-read char cap on MEMORY.md. The extractor/reviewer are invoked
+# directly by the runner, so the background cadence knobs are not used here.
+memory:
+  max_memory_size: 65536
+  tier_caps:
+    t1: 75
+    t2: 25
+    t3: 15

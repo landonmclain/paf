@@ -39,7 +39,7 @@ from paf.capabilities.compaction import (
     build_boundary_compaction_for_agent,
     build_compaction,
 )
-from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, PROFILES
+from paf.capabilities.profiles import CONTEXTBENCH_PROFILE, LONGMEMEVAL_PROFILE, PROFILES
 from paf.capabilities.registry import CAPABILITY_TYPES
 from paf.capabilities.visual import Visual
 
@@ -413,20 +413,25 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
 
 def test_profiles_are_the_complete_intentional_set() -> None:
     """Known profiles: assistant (clean prod), demo (the everything sandbox),
-    and contextbench (the benchmark-runner arm).
+    contextbench (the codebase-map benchmark arm), and longmemeval (the memory
+    benchmark arm).
 
     ``demo`` is the surface where new/experimental capabilities are tried before
     being promoted to the production ``assistant`` spec. ``contextbench`` is the
-    deliberate benchmark arm (CodebaseMap + Shell + FileSystem + Git, NO Memory).
-    This is the complete, intentional set — no further blank profile scaffolding.
+    deliberate codebase-map benchmark arm (CodebaseMap + Shell + FileSystem +
+    Git, NO Memory). ``longmemeval`` is the memory benchmark arm (StepPersistence
+    + ConversationSearch + Memory + Compaction). This is the complete,
+    intentional set — no further blank profile scaffolding.
     """
     assert set(PROFILES) == {
         "assistant",
         "demo",
         "contextbench",
+        "longmemeval",
     }
     assert PROFILES["assistant"] is ASSISTANT_PROFILE
     assert PROFILES["contextbench"] is CONTEXTBENCH_PROFILE
+    assert PROFILES["longmemeval"] is LONGMEMEVAL_PROFILE
 
 
 def test_compaction_builds_real_strategy_objects() -> None:

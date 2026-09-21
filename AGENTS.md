@@ -71,7 +71,9 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
   only, by design). `ui/cli.py` is the base for the streaming StepStream/
   TurnStream lives, and the runner for the **contextbench** profile.
 - **Benchmarks:** `tests/run_lmem.py` (LongMemEval) — **read `tests/AGENTS.md`
-  first**; live LLM, costs real tokens.
+  first**; live LLM, costs real tokens. Run as a module from the repo root
+  (`PYTHONPATH= .venv/bin/python -m tests.run_lmem`) so `tests.framework`
+  imports — bare `python tests/run_lmem.py` fails with `ModuleNotFoundError: tests`.
 - **ContextBench / codebase-map eval** — see the dedicated section below.
 - **Tests:** `PYTHONPATH= .venv/bin/python -m pytest -q` (not bare `pytest`).
 - **Lint:** `PYTHONPATH= .venv/bin/ruff check <path> --output-format=concise`.

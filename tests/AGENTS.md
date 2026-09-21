@@ -236,6 +236,7 @@ PYTHONPATH= .venv/bin/python -m py_compile tests/run_lmem.py tests/framework.py
 
 ```bash
 PYTHONPATH= .venv/bin/python -m pytest -q        # the correct invocation (or `PYTHONPATH= pytest -q`)
+# Full suite: ~50s (751 passed / 21 deselected as of 2026-09-21).
 ```
 
 **Why you can't just rely on `conftest.py` for this.** There IS a root `conftest.py`
@@ -286,6 +287,13 @@ deselected as of 2026-08-13).
 > is the canonical form. Also: even `.venv/bin/python -c "import pydantic_ai"`
 > (no prefix) fails on the leaked 3.11 site-packages — the prefix is required for
 > ANY venv python in this repo, not just pytest.
+
+> **FOOTGUN — adding a profile breaks `test_profiles_are_the_complete_intentional_set`.**
+> `tests/test_capabilities.py` asserts the EXACT set of registered profiles
+> (`{assistant, demo, contextbench, longmemeval}`). Adding a new profile to
+> `PROFILES` in `src/paf/capabilities/profiles.py` requires updating this test
+> (the set + the identity assertions) or the unit suite fails. Check it before
+> adding a profile.
 
 ## Analytical framing (verified 2026-08-10, via the retired Beam-Lite cargo)
 

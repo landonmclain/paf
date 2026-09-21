@@ -13,12 +13,6 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
-from pydantic_ai_harness.compaction import (
-    ClampOversizedMessages,
-    ClearToolResults,
-    SlidingWindowCompaction,
-    TieredCompaction,
-)
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
 from paf.capabilities import AgentProfile
@@ -27,6 +21,7 @@ from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
 )
+from paf.specs import load_agent_spec
 
 # ---------------------------------------------------------------------------
 # Test profile
@@ -52,20 +47,6 @@ SUBJECT_MODEL = os.environ.get(
     "BEAM_LITE_SUBJECT_MODEL",
     "openrouter:deepseek/deepseek-v4-flash-0731",
 )
-
-# --- eviction knobs ---------------------------------------------------------
-# target_tokens bounds the LIVE context window (TieredCompaction prunes messages
-# as the request overflows it). It does NOT touch the on-disk history or the
-# persisted transcript -- so it only throttles in-context recognition, it does
-# not (and cannot) affect `search_conversation_history` recall.
-# 400 was far too tight: it forced compaction to spuriously evict evidence
-# turns mid-run. 5000 is a middle dial: enough to keep ordinary exchanges in
-# context while still evicting early evidence turns -> keeps retrieval pressure
-# on (vs 16000/40 which padded context and suppressed search-tool use -- see
-# the 20260810-202602 run). Override via env for other dials.
-LOCOMO_TARGET_TOKENS = int(os.environ.get("LOCOMO_TARGET_TOKENS", "5000"))
-LOCOMO_SW_MAX_MESSAGES = int(os.environ.get("LOCOMO_SW_MAX_MESSAGES", "6"))
-LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
 
 # Transient network-error retry knobs (bender-adjacent resilience). A single
 # OpenRouter/provider 5xx/429/408 blip should NOT kill a long graded run
@@ -114,19 +95,6 @@ LME_RETRYABLE_STATUSES = frozenset(
 # Env-overridable per-run; defaults are the FINAL chosen set for the DeepSeek
 # subject (DeepInfra primary, Parasail/CoreWeave fp8 fallbacks, Novita EXCLUDED).
 # ---------------------------------------------------------------------------
-# Default subject provider chain (fp8). Empty string disables the pin.
-SUBJECT_PROVIDER_ORDER = [
-    p
-    for p in os.environ.get(
-        "LME_SUBJECT_PROVIDER_ORDER", "deepinfra,parasail,coreweave"
-    ).split(",")
-    if p
-]
-SUBJECT_PROVIDER_QUANTIZATIONS = [
-    q
-    for q in os.environ.get("LME_SUBJECT_PROVIDER_QUANTIZATIONS", "fp8").split(",")
-    if q
-]
 # Judge chain (gpt-4o-mini): OpenAI first-party is the canonical host. Pin keeps
 # the judge from flapping while we measure the subject. Empty disables.
 JUDGE_PROVIDER_ORDER = [
@@ -189,115 +157,6 @@ MEMORY = os.environ.get("MEMORY", "1") == "1"
 # None so the subject defaults to `mem_dir`.
 _CURRENT_MEMORY_DIR: Path | None = None
 
-# Single system prompt owns ALL static guidance — identity, answer rules
-# (CONFLICT/INFERENCE), and the retrieval ladder. Capability `get_instructions`
-# blocks are OFF (ConversationSearch add_instructions=False, Memory
-# guidance="") so this STRING is the one source of recall steering. The only
-# thing outside it is the dynamic `MEMORY.md` body, injected as user-role
-# context per-request by `before_model_request` (can't live in a static
-# system_prompt because it changes per-question).
-#
-# Design rules baked in:
-# - The assistant is asked COLD-START: only the question (with a date prefix)
-#   is in context, plus the injected rendered journal (MEMORY.md). The past
-#   conversation is NOT in context — it must be retrieved (search_conversation
-#   _history / read_turn) from the store.
-# - CONFLICT uses read-time NEWER WINS by `born_on`: the notebook is the RAW
-#   RENDERED JOURNAL (not deduped/consolidated), so conflicting entries resolve
-#   by the MOST RECENTLY RECORDED one (its `born_on` date, NOT its position in
-#   the render), and the user's own recent direct wording (recoverable via
-#   read_turn on source_ref) beats reconstruction.
-# - RENDER LAYOUT (since 64d5f32): grouped by TIER in ladder order t1→t2→t3,
-#   newest-first (`born_on` desc) within each tier. Tier position is NOT
-#   recency — a t3 line appears after all t1/t2 lines even if newer, so the
-#   prompt explicitly tells the model recency = `born_on`, and eases
-#   tier-ladder order t1 stable / t2 goals/current-work / t3 ephemeral.
-# - INFERENCE softens refusing: hedge when context strongly implies one answer.
-# - Ladder is 3 rungs (in-context -> search_conversation_history -> read_turn)
-#   plus a VERIFY-SPECIFICS carve-out (rung 4) that sanctions searching when a
-#   question asks for an exact value memory only holds vaguely/rounded.
-#   `search_memory` is deliberately NOT mentioned: the notebook is always
-#   injected in-context, so pointing at a separate notebook tool only muddies
-#   the waters. IN CONTEXT and MEMORY are consolidated into ONE rule — they
-#   both describe the same injected journal (2026-08-25, Landon).
-# - No UNANSWERABLE rule: INFERENCE already covers the honest-refusal case.
-# VERIFY-SPECIFICS is CONDITIONAL, not mandatory (2026-08-18): the journal
-# render carries exact values + dates + source_refs, so search only when the
-# journal lacks/rounds the asked-for exact value, or the detail is
-# task-specific / too granular for durable facts. Prior HARD (MANDATORY)
-# wording and the search-only variant are archived in the vault at
-# Benchmark/Previous-System-Prompts.md and the tier note
-# Tier-Sorted-Render-Benchmark.md. Kept out of this file to reduce clutter
-# (Landon 2026-08-25).
-SUBJECT_SYSTEM_PROMPT = (
-    "You are an assistant with access to your full conversational history "
-    "through a retrieval ladder. You are given only the current question; the "
-    "past conversation is NOT in your context — you must retrieve it. Answer "
-    "from the evidence you actually have — the durable notebook injected below "
-    "and anything you retrieve.\n"
-    "CONFLICT — your durable notebook is the rendered journal: the durable "
-    "facts the consolidation owner extracted, grouped into three durability "
-    "tiers. Tier t1 is stable, long-lived facts (identity, preferences, "
-    "constraints) that outrank everything else. Tier t2 is goals and "
-    "current-work — semi-durable, superseded when the goal shifts. Tier t3 is "
-    "recent, ephemeral facts that may be superseded or dropped. The render "
-    "lists the tiers in ladder order t1 -> t2 -> t3, and within each tier the "
-    "newest entries come FIRST (most-recently-recorded at the top of its "
-    "tier). A line's position in the render is TIER ORDER, not recency — a t3 "
-    "line appears AFTER all t1/t2 lines even though it may be newer. The true "
-    "recency of any entry is the `born_on` date on its line. The journal is NOT "
-    "merged, deduplicated, or consolidated — the same subject can appear more "
-    "than once, and an earlier entry can be superseded by a later one; both "
-    "stay in the render. When entries on the same subject conflict, the MOST "
-    "RECENTLY RECORDED one (by `born_on`) is current (read-time NEWER WINS), "
-    "and prefer the user's own most recent direct wording — pull it via "
-    "`read_turn` on the entry's `source_ref` if needed — over your "
-    "reconstruction. Never second-guess a user-stated value (a personal best, "
-    "a count, an amount); when the notebook holds only a rounded version, "
-    "recover the exact figure from the source turn.\n"
-    "INFERENCE — when the retrieved context does not name the asked-for fact "
-    "explicitly, but the history strongly and single-mindedly implies one "
-    "specific answer — or the entire session establishes one unambiguous "
-    'context — do not stop at "that\'s not on record". Give the implied answer '
-    'in hedged form — "Most likely X, but you never told me the exact Y" — so '
-    "the user gets the useful answer while you stay honest about the "
-    'uncertainty. Reserve a flat "not in our history" refusal for when the '
-    "history is genuinely ambiguous or empty. The hedged inference is preferred "
-    "over a bare refusal whenever the evidence points at a single answer.\n"
-    "ORDER — when asked what happened first, answer by the date the event "
-    "actually occurred, and state the dates you're comparing before giving "
-    "the order.\n"
-    "RETRIEVAL — work cheapest-first; never tool-call for what you already "
-    "have:\n"
-    "1. IN CONTEXT — a tier-sorted durable-fact notebook (the rendered journal, "
-    "t1 stable -> t2 goals/current-work -> t3 recent/ephemeral, newest-first "
-    "within each tier) is injected into every request together with the "
-    "question. This is your read-only memory: answer from it if it already "
-    "covers the fact, and never tool-call for something already in front of "
-    "you. You never write to or delete from it; a separate consolidation owner "
-    "appends to it, and only the owner persists facts — never claim something "
-    "was remembered just because you read it.\n"
-    "2. PAST TURN — call `search_conversation_history` (a wide search over the "
-    "raw transcript of past turns) when the answer is NOT already in context. "
-    "Search returns a `run_id:turn_id` ref for each hit.\n"
-    "3. READ FULL TURN — when a search hit gives you a ref but not the full "
-    "detail, call `read_turn` on that ref to pull the turn's complete content. "
-    "Skip rungs that don't apply.\n"
-    "4. VERIFY SPECIFICS — when the question asks for an exact value (a date, "
-    "a count, a name, an amount) or for a personal preference or opinion of your "
-    "user, AND the injected journal holds only a rounded, vague, or missing "
-    "version of it — or the detail is task-specific and too granular for durable "
-    "facts (e.g. a table, grid, or per-item breakdown) — then run "
-    "`search_conversation_history` for the user's original wording, and call "
-    "`read_turn` on the hit when the search excerpt truncates the value. But "
-    "when the injected journal already records the exact value with its "
-    "`source_ref`, answer from it directly: the journal IS the rendered durable "
-    "record (facts + dates + provenance), and a truncated search excerpt is no "
-    "more authoritative than it. Never second-guess a user-stated value that "
-    "appears verbatim in the journal."
-)
-
-
 def _build_agent(
     store: FileStepStore,
     *,
@@ -307,17 +166,17 @@ def _build_agent(
 
     The retrieval ladder is ConversationSearch + read_turn (paf-owned, no turn
     index): in-context -> `search_conversation_history` -> `read_turn`, plus
-    the VERIFY-SPECIFICS rung — all steered by the single `SUBJECT_SYSTEM_PROMPT`
-    (capability instruction blocks are off).
+    the VERIFY-SPECIFICS rung — all steered by the single system prompt (the
+    spec's `instructions:`; capability instruction blocks are off).
 
-    The durable `Memory` capability is included by default (`MEMORY=1`), with
-    the turn-bounded, trim-only sliding-window tier, targeting ``memory_dir``
-    (default ``memory_dir``; callers pass a run-scoped dir) so a run never
-    touches repo `data/memory`. Set `MEMORY=0` for a no-memory ablation.
+    The durable `Memory` capability is included by default (`MEMORY=1`),
+    targeting ``memory_dir`` (default ``memory_dir``; callers pass a run-scoped
+    dir) so a run never touches repo `data/memory`. Set `MEMORY=0` for a
+    no-memory ablation.
 
-    Default: a single `system_prompt=` (SUBJECT_SYSTEM_PROMPT) owns ALL static
-    guidance — identity, the CONFLICT/INFERENCE answer rules, and the retrieval
-    ladder. Every capability instruction block is OFF: ConversationSearch has
+    Default: a single `system_prompt=` (the spec's `instructions:`) owns ALL
+    static guidance — identity, the CONFLICT/INFERENCE answer rules, and the
+    retrieval ladder. Every capability instruction block is OFF: ConversationSearch has
     add_instructions=False and Memory uses guidance="" (only the dynamic
     MEMORY.md body still injects), so the prompt IS the one source of recall
     steering. `search_memory` is deliberately not mentioned in the prompt (the
@@ -325,11 +184,10 @@ def _build_agent(
 
     With MEMORY=1: the durable `Memory` capability is loaded (a plain capability,
     subject READ-ONLY / writable=False per the M2 owner model, so the subject
-    can't contaminate durable memory) and the sliding-window tier is the
-    turn-bounded `TurnBoundSlidingWindow` (trim-only — does no memory work). The
-    consolidation owner is run separately by the runner (``run_lmem``) at seed
-    time over the full haystack, never on eviction.
+    can't contaminate durable memory). The consolidation owner is run separately
+    by the runner (``run_lmem``) at seed time over the full haystack.
     """
+    spec = load_agent_spec("longmemeval")
     source = SnapshotHistorySource(store)
     caps = [
         StepPersistence(store=store),
@@ -342,14 +200,12 @@ def _build_agent(
             add_instructions=False,
         ),
     ]
-    sw_tier: SlidingWindowCompaction
     if MEMORY:
         # Memory arm: durable notebook injected every request. Per the M2 owner
         # model (_consolidate.py, design note §2c), the subject is READ-ONLY
         # (writable=False) — it can never contaminate durable memory. The
         # consolidation owner (writable=True) is the sole writer, folding each
         # about-to-evict slice into the store at the eviction boundary.
-        from paf.capabilities._window import TurnBoundSlidingWindow
         from paf.capabilities.memory import Memory
 
         mem_dir = memory_dir or Path("memory")
@@ -388,47 +244,14 @@ def _build_agent(
                 guidance="",
             )
         )
-        # Sliding-window tier: the turn-bounded, trim-only window — never
-        # evicts the active user turn, does no memory work. The consolidation
-        # owner is run at seed time by the runner (run_lmem), not on eviction.
-        sw_tier = TurnBoundSlidingWindow(
-            max_messages=LOCOMO_SW_MAX_MESSAGES,
-            keep_messages=LOCOMO_SW_KEEP,
-        )
-    else:
-        sw_tier = SlidingWindowCompaction(
-            max_messages=LOCOMO_SW_MAX_MESSAGES,
-            keep_messages=LOCOMO_SW_KEEP,
-        )
-    caps.append(
-        # Context compaction: no-summary ladder, LOW target so it trips hard and
-        # evicts early evidence turns out of live context -> forces retrieval.
-        TieredCompaction(
-            target_tokens=LOCOMO_TARGET_TOKENS,
-            tiers=[
-                ClampOversizedMessages(
-                    max_part_tokens=50_000,
-                    keep_head_chars=2_000,
-                    keep_tail_chars=2_000,
-                ),
-                ClearToolResults(max_tokens=1, keep_pairs=4),
-                sw_tier,
-            ],
-        ),
-    )
     return Agent(
-        SUBJECT_MODEL,
+        spec.model,
         name="locomo-subject",
         # Single system prompt owns all retrieval guidance (ladder + answer
         # rules + read-only memory contract). Capability instructions are off.
-        system_prompt=SUBJECT_SYSTEM_PROMPT,
+        system_prompt=spec.instructions,
         capabilities=caps,
-        model_settings=_openrouter_model_settings(
-            SUBJECT_PROVIDER_ORDER,
-            SUBJECT_PROVIDER_QUANTIZATIONS,
-            seed=LME_SAMPLER_SEED,
-            base={"temperature": 0, "max_tokens": 12288},
-        ),
+        model_settings=spec.model_settings,
     )
 
 

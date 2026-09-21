@@ -131,35 +131,6 @@ def test_dot_in_sidecar_and_missing_optional_files(durable_dir, tmp_path):
     assert (durable_dir / "q5" / "MEMORY.md").exists()
 
 
-def test_restore_flattens_legacy_assistant_snapshot(durable_dir, tmp_path):
-    """Legacy pre-journal snapshots nest MEMORY.md under assistant/; restore
-    flat-copies that subdir up to the live root so the journal-view store finds it.
-
-    This is the 2026-08-18 fix: memory-lme_oracle/ legacy durables (committed
-    pre-journal) store <qid>/assistant/MEMORY.md + <qid>/assistant/.memory-state.json,
-    but the current JournalViewStore reads MEMORY.md at <qid>/ root. Restore must
-    normalize the nested layout to the root — reuse verbatim, never re-consolidate.
-    """
-    # Build a legacy-style snapshot: <qid>/assistant/{MEMORY.md, .memory-state.json}
-    snap = durable_dir / "q6"
-    legacy = snap / "assistant"
-    legacy.mkdir(parents=True)
-    (legacy / "MEMORY.md").write_text("# Facts\n- legacy sneakers\n", encoding="utf-8")
-    (legacy / ".memory-state.json").write_text("{}", encoding="utf-8")
-
-    live = tmp_path / "memory" / "q6"
-    n = _restore_durable_memory("q6", live)
-    assert n == 2  # both files flattened out of assistant/
-
-    # Memory file lands at the ROOT (what JournalViewStore reads), not in assistant/.
-    assert (live / "MEMORY.md").read_text(
-        encoding="utf-8"
-    ) == "# Facts\n- legacy sneakers\n"
-    assert (live / ".memory-state.json").exists()
-    # and no stray assistant/ nesting left behind that the store would miss
-    assert not (live / "assistant").exists()
-
-
 def test_restore_journal_format_untouched(durable_dir, tmp_path):
     """Journal-format snapshots (MEMORY.md at root) restore as-is — no flattening,
     so the _s variant's root-level MEMORY.md + memory-journal.jsonl are copied verbatim."""

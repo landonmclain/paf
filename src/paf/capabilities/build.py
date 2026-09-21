@@ -58,7 +58,6 @@ from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.planning import Planning
 from paf.capabilities.profiles import AgentProfile
-from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.thread_summarizer import ThreadSummarizer
@@ -182,22 +181,6 @@ def _build_thread_summarizer(
     capture path.
     """
     return ThreadSummarizer.from_spec(agent_name=agent_name, capture_directory=None)
-
-
-def _conversation_search_suppressed(store):
-    """ConversationSearch with its own instruction scrap disabled.
-
-    Used when Memory owns the composite recall ladder: Memory's composite
-    `_DEFAULT_GUIDANCE` already names `search_conversation_history`'s slot, so this
-    capability's standalone "a search_conversation_history tool can retrieve
-    exact details…" fragment would be duplicative and potentially conflicting.
-    Same shared store either way — this only toggles instruction emission.
-    """
-    return ConversationSearch(
-        source=SnapshotHistorySource(store),
-        scope="conversation",
-        add_instructions=False,
-    )
 
 
 def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSystem:
@@ -853,14 +836,6 @@ def build_runtime_capabilities(
     it. A profile may list fewer — e.g. a minimal agent with only
     ``StepPersistence`` — and that is exactly what it gets. Capability names
     without a Python builder are left for the spec-declared (YAML) path.
-
-    **Recall-instruction ownership:** exactly ONE capability emits the composite
-    recall ladder. When ``Memory`` is allowlisted it owns it (durable-fact +
-    past-turn + last-rung history, in ``_DEFAULT_GUIDANCE``), so
-    ``ConversationSearch`` gets ``add_instructions=False`` here to keep that single
-    ladder the ONLY recall guidance the model sees. The suppression gate lives
-    here (build time) because capabilities cannot see each other;
-    ``add_instructions=False`` never disables tool registration.
     """
     # Both builders are keyed by the SAME names a profile allowlists, so the
     # profile is the gatekeeper for each.
@@ -915,21 +890,11 @@ def build_runtime_capabilities(
         "Secrets": _build_secrets,
     }
     store = _build_store()
-    # Exactly ONE capability owns the composite recall ladder: when ``Memory`` is
-    # allowlisted it owns it (durable-fact + past-turn + last-rung history, in
-    # ``_DEFAULT_GUIDANCE``), so ``ConversationSearch``'s instruction scrap is
-    # suppressed so the model sees one ladder, not two. This gate lives HERE
-    # (build time) because capabilities can't see each other;
-    # ``add_instructions=False`` only toggles instruction TEXT, never the tool
-    # registration (search_conversation_history is still attached).
-    has_memory = "Memory" in profile.capability_names
     capabilities = []
     for name, builder in builders.items():
         if name not in profile.capability_names:
             continue
-        if name == "ConversationSearch" and has_memory:
-            capabilities.append(_conversation_search_suppressed(store))
-        elif name == "Web":
+        if name == "Web":
             capabilities.append(_build_web(store, web_search_domains))
         elif name == "Browser":
             capabilities.append(_build_browser(store, browser_config))

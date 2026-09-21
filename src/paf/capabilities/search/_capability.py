@@ -83,7 +83,7 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
     bm25_b: float = 0.75
     """BM25 length-normalization, between 0.0 and 1.0 (Lucene/Elasticsearch default)."""
 
-    add_instructions: bool = True
+    add_instructions: bool = False
     """Emit a short instruction telling the model the recall tool exists."""
 
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:

@@ -122,6 +122,30 @@ CONTEXTBENCH_PROFILE = AgentProfile(
 )
 
 
+# The LongMemEval benchmark-runner profile — the memory × benchmark harness
+# agent. Deliberately NOT the everything-sandbox: no Web/Browser/Vault/Visual/
+# Skills/Subagents/Planning — the benchmark agent should not wander off to
+# unrelated capability surfaces. It gets exactly the three capabilities the
+# memory pipeline needs: persistence, conversation search, and memory. No
+# Compaction — the subject is cold-started per question (question + injected
+# notebook + on-demand read_turn), so there is no message history to compact.
+#
+# NOTE: the LongMemEval subject is NOT built via build_agent with this profile —
+# the test harness (tests/framework.py) builds it manually, because it needs a
+# per-run store and a per-question memory dir that build_agent can't inject. This
+# profile is registered in PROFILES for completeness (asserted in
+# test_capabilities.py) but its allowlist does not gate the subject's actual
+# build. Comment out Memory for the search-only (no-memory) arm.
+LONGMEMEVAL_PROFILE = AgentProfile(
+    name="longmemeval",
+    capability_names=(
+        "StepPersistence",
+        "ConversationSearch",
+        "Memory",
+    ),
+)
+
+
 # Name lookup so a spec/CLI can reference a profile by a string that resolves
 # to the allowlist. Only used by spec-driven loaders; keep small.
 PROFILES: dict[str, AgentProfile] = {
@@ -130,5 +154,6 @@ PROFILES: dict[str, AgentProfile] = {
         ASSISTANT_PROFILE,
         DEMO_PROFILE,
         CONTEXTBENCH_PROFILE,
+        LONGMEMEVAL_PROFILE,
     )
 }

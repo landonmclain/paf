@@ -180,17 +180,13 @@ def _build_recall_agent():
         _rl.MEMORY = old_mem
 
 
-def test_recall_agent_uses_turn_bounded_trim_only_window() -> None:
-    """The recall agent's compaction ladder uses the turn-bounded, trim-only window.
+def test_recall_agent_has_no_compaction() -> None:
+    """The recall agent has NO compaction.
 
-    Durable memory capture is the background watermark worker's job (and the
-    harness runs the owner at seed time) — the eviction window never folds to
-    memory. The ladder's sliding-window tier must be `TurnBoundSlidingWindow`
-    (turn-bounded: never evicts the active user prompt; trim-only: no memory).
+    The subject is cold-started per question (question + injected notebook +
+    on-demand read_turn) and never receives message history in context, so there
+    is nothing to compact — no TieredCompaction ladder is wired.
     """
-    from paf.capabilities._window import TurnBoundSlidingWindow
-
     root = _build_recall_agent()
     comp = _find_compaction(root)
-    assert comp is not None
-    assert any(type(t) is TurnBoundSlidingWindow for t in comp.tiers)
+    assert comp is None

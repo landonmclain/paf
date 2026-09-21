@@ -67,6 +67,7 @@ from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
+from paf.specs import load_agent_spec
 
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
 from tests.framework import (
@@ -91,43 +92,33 @@ from tests.lme_scoring import (
 # Config
 # ---------------------------------------------------------------------------
 
-SUBJECT_MODEL = os.environ.get(
-    "BEAM_LITE_SUBJECT_MODEL", "openrouter:deepseek/deepseek-v4-flash-0731"
-)
 # Landon's call: gpt-4o-mini on OpenRouter, reuse the repo OPENROUTER_API_KEY.
-JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
+# The subject model comes from the spec (specs/longmemeval.yaml), not here.
+JUDGE_MODEL = "openrouter:openai/gpt-4o-mini"
 
-# Same middle dial as the eviction sweep finding (see tests/framework.py docstring):
-# wide enough to keep ordinary exchanges in-context, tight enough that old
-# evidence sessions are evicted -> retrieval pressure stays ON.
-LOCOMO_TARGET_TOKENS = int(os.environ.get("LOCOMO_TARGET_TOKENS", "5000"))
-LOCOMO_SW_MAX_MESSAGES = int(os.environ.get("LOCOMO_SW_MAX_MESSAGES", "6"))
-LOCOMO_SW_KEEP = int(os.environ.get("LOCOMO_SW_KEEP", "3"))
-
-# Benchmark data file. Default = the oracle variant (evidence-only sessions,
-# ~1.9 sessions / ~22 turns per question). Set `LME_DATA_FILE` to point at a
-# different LongMemEval split (e.g. `longmemeval_s_cleaned.json` for the strict
-# paper configuration — same 500 questions but ~48 sessions / ~493 turns with
-# distractor haystacks mixed in, which actually exercises search/retrieval).
+# Benchmark data file — the reviewer-variant copy of the oracle split
+# (evidence-only sessions, ~1.9 sessions / ~22 turns per question). Hardcoded
+# (not env/spec): the renamed copy also forces a fresh durable-memory dir below.
+LME_DATA_FILE = "memory-reviewer-lme_oracle.json"
 DATA = (
     Path(__file__).parent.parent
     / "data"
     / "benchmarks"
-    / os.environ.get("LME_DATA_FILE", "lme_oracle.json")
+    / LME_DATA_FILE
 )
 RESULTS_DIR = Path(__file__).parent / "results"
 
 # Durable per-question MEMORY snapshots (committed, mirroring generated/ so a
 # fresh clone re-runs with ZERO owner/consolidation tokens). The owner writes
-# <memory-<stem>/<qid>/ at seed time; _persist_durable_memory snapshots the
-# result here and _restore_durable_memory copies it back to skip
-# re-consolidation on later runs. The dir is namespaced by the LME data-file
-# stem (memory-lme_oracle/, memory-longmemeval_s_cleaned/) so separate splits
+# <stem>/<qid>/ at seed time; _persist_durable_memory snapshots the result here
+# and _restore_durable_memory copies it back to skip re-consolidation on later
+# runs. The dir is namespaced by the data-file stem (the filename already
+# carries the `memory-` prefix, so no extra prefix here) so separate splits
 # never clobber each other's durable memory. PAF_FRESH_MEMORY=1 forces
 # re-consolidation (and re-persists); combining with LME_QIDS narrows the
 # refresh to specific questions.
 MEMORY_DURABLE_DIR = (
-    Path(__file__).parent.parent / "data" / "benchmarks" / f"memory-{DATA.stem}"
+    Path(__file__).parent.parent / "data" / "benchmarks" / DATA.stem
 )
 
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
@@ -531,22 +522,11 @@ def _restore_durable_memory(qid: str, live_dir: Path) -> int:
     files (MD bodies + the CAS sidecar) back into ``memory/<qid>/`` so the
     subject's normal ``store_resolver`` path reads the exact consolidated
     notebook — ZERO owner tokens for the question.
-
-    Layout normalization: pre-journal snapshots (committed before the M2 journal,
-    e.g. the `memory-lme_oracle/` legacy snapshot set) stored ``MEMORY.md`` under
-    an agent-scoped ``assistant/`` subdir, but the current journal-view store
-    reads ``MEMORY.md`` at the ``memory/<qid>/`` root. When the snapshot has an
-    ``assistant/`` subdir we flat-copy that subdir up to the live root (reuse the
-    legacy durable verbatim — DO NOT re-consolidate, which would change content
-    and break the comparison). Journal-format snapshots (``MEMORY.md`` +
-    ``memory-journal.jsonl`` at root, e.g. ``memory-longmemeval_s_cleaned/``)
-    copy as-is. Keyed off snapshot shape, not data-stem, so both coexist.
     """
     snap = MEMORY_DURABLE_DIR / qid
     if not snap.is_dir():
         return 0
-    _src = snap / "assistant" if (snap / "assistant").is_dir() else snap
-    n = _copy_tree(_src, live_dir)
+    n = _copy_tree(snap, live_dir)
     if n:
         print(
             f"[lmem]     REUSED {n} durable memory files -> {live_dir} "
@@ -635,32 +615,7 @@ def _retrieval(recall: dict, gold_session_texts: list[str] | None = None) -> dic
 
 
 def main(argv: list[str] | None = None) -> dict:
-    import argparse
-
-    global SUBJECT_MODEL, JUDGE_MODEL
-    # CLI overrides for the live-LLM subjects/judges — mirror of the harness env.
-    # Flags take precedence over env (BEAM_LITE_SUBJECT_MODEL / LME_JUDGE_MODEL);
-    # the module globals are rebound here so the whole run uses them.
-    _ap = argparse.ArgumentParser(
-        description="LongMemEval graded runner (official binary judge + aggregation)."
-    )
-    _ap.add_argument(
-        "--subject-model",
-        default=None,
-        help="Agent model for answering/recall (REQUIRED prefix 'openrouter:', e.g. "
-        "openrouter:openai/gpt-5.6-luna-pro). Default=env BEAM_LITE_SUBJECT_MODEL.",
-    )
-    _ap.add_argument(
-        "--judge-model",
-        default=None,
-        help="Grading model (default env LME_JUDGE_MODEL). "
-        "Note: '--' before later flags guards against model strings starting with '-'.",
-    )
-    _args = _ap.parse_args(argv)
-    if _args.subject_model:
-        SUBJECT_MODEL = _args.subject_model
-    if _args.judge_model:
-        JUDGE_MODEL = _args.judge_model
+    spec = load_agent_spec("longmemeval")
 
     questions = _load_questions()
     if not questions:
@@ -677,12 +632,6 @@ def main(argv: list[str] | None = None) -> dict:
         )
     else:
         print(f"[run_lmem] tracing ON → Langfuse (session={session})", flush=True)
-    print(
-        f"[run_lmem] questions={len(questions)} subject={SUBJECT_MODEL} "
-        f"judge={JUDGE_MODEL} "
-        f"target_tokens={LOCOMO_TARGET_TOKENS}",
-        flush=True,
-    )
 
     all_seed_rows: list[dict] = []
     all_recall_rows: list[dict] = []
@@ -743,14 +692,9 @@ def main(argv: list[str] | None = None) -> dict:
     (artifact_dir / "meta.json").write_text(
         json.dumps(
             {
-                "subject": SUBJECT_MODEL,
+                "subject": spec.model,
                 "judge": JUDGE_MODEL,
                 "data": str(DATA),
-                "eviction": {
-                    "target_tokens": LOCOMO_TARGET_TOKENS,
-                    "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
-                    "sw_keep": LOCOMO_SW_KEEP,
-                },
                 "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             },
             indent=2,
@@ -827,7 +771,6 @@ def main(argv: list[str] | None = None) -> dict:
         fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
         restored = 0
         if MEMORY:
-            from paf.capabilities.memory._consolidate import consolidate_conversation
             from paf.capabilities.memory._view import JournalViewStore
 
             # HONEST-MEMORY GUARD (Landon: owner reads up to the question, not
@@ -868,22 +811,16 @@ def main(argv: list[str] | None = None) -> dict:
                         flush=True,
                     )
                 store_mem = JournalViewStore(mem_dir)
-                # Chunked seed consolidation (default): folds the haystack in
-                # token-bounded, message-boundary-aligned chunks into durable
-                # memory so single-mention thematic clusters survive the owner's
-                # single-shot budget. Opt out with LME_CONSOL_CHUNK=0 to restore
-                # the original one-shot consolidate_conversation.
-                use_chunked = os.environ.get("LME_CONSOL_CHUNK", "1") != "0"
-                if use_chunked:
-                    from paf.capabilities.memory._consolidate import (
-                        consolidate_conversation_chunked,
-                    )
+                # Chunked seed consolidation: folds the haystack in token-bounded,
+                # message-boundary-aligned chunks into durable memory so
+                # single-mention thematic clusters survive the owner's single-shot
+                # budget.
+                from paf.capabilities.memory._consolidate import (
+                    consolidate_conversation_chunked,
+                )
 
-                    consolidation = consolidate_conversation_chunked
-                    chunk_label = "chunked"
-                else:
-                    consolidation = consolidate_conversation
-                    chunk_label = "one-shot"
+                consolidation = consolidate_conversation_chunked
+                chunk_label = "chunked"
                 # M2 three-layer model: the owner appends immutable facts to an
                 # append-only journal (`append_memory` is its ONLY tool), and
                 # MEMORY.md is rendered from the journal AT RECALL (below), not
@@ -913,6 +850,23 @@ def main(argv: list[str] | None = None) -> dict:
                 print(
                     f"[lmem]   q{qi} rendered {journal.count()} journal records "
                     f"-> MEMORY.md ({len(_rendered)} chars) for recall",
+                    flush=True,
+                )
+                # Reviewer pass: curate the rendered memory (archive stale
+                # facts, merge fragments, retier) before recall. Reads the
+                # render just written above; re-renders after each verdict.
+                from paf.capabilities.memory._overrides import OverrideStore
+                from paf.capabilities.memory._review import review
+
+                _verdicts = asyncio.run(
+                    review(
+                        str(mem_dir),
+                        overrides=OverrideStore(mem_dir),
+                        agent_name="assistant",
+                    )
+                )
+                print(
+                    f"[lmem]   q{qi} reviewer issued {_verdicts} verdicts",
                     flush=True,
                 )
                 _persist_durable_memory(q["question_id"], mem_dir)
@@ -1034,16 +988,11 @@ def main(argv: list[str] | None = None) -> dict:
 
     result = {
         "meta": {
-            "subject": SUBJECT_MODEL,
+            "subject": spec.model,
             "judge": JUDGE_MODEL,
             "session": session,
             "n_questions": len(recall_rows),
             "data": str(DATA),
-            "eviction": {
-                "target_tokens": LOCOMO_TARGET_TOKENS,
-                "sw_max_messages": LOCOMO_SW_MAX_MESSAGES,
-                "sw_keep": LOCOMO_SW_KEEP,
-            },
             "traced": traced,
             "run_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         },
