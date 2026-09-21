@@ -408,7 +408,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             # Derived index of surviving facts (dedup winners, incremental, pure
             # derivation from the journal) — regenerated beside MEMORY.md so they
             # can't disagree. First fold on a journal with pre-existing history
-            # builds the full index (incl. one-time fuzzy collapse).
+            # builds the full index.
             from ._index import update_index
 
             update_index(directory)

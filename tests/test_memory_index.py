@@ -2,8 +2,7 @@
 
 Covers the incremental fold (exact + token-set dedup, keep-winner rule),
 the watermark advance (no full re-scan on a second fold), the one-time full
-build with fuzzy cluster collapse, and the on-disk roundtrip. All deterministic,
-no model needed.
+build, and the on-disk roundtrip. All deterministic, no model needed.
 """
 
 from __future__ import annotations
@@ -204,36 +203,6 @@ def test_update_index_builds_then_increments(tmp_path):
     assert idx.entries[0]["deduped_lines"] == [1]
 
 
-# --------------------------------------------------------------------------
-# full build (one-time, journal with pre-existing history, fuzzy collapse)
-# --------------------------------------------------------------------------
-
-
-def test_build_index_collapses_fuzzy_cluster(tmp_path):
-    # near-verbatim paraphrase of the same fact (different words, not exact)
-    _seed_store(
-        tmp_path,
-        [
-            _mk_record(
-                "User prefers mobile-first design because most readers browse on their phones",
-                tier="t1",
-                src="run:0",
-            ),
-            _mk_record(
-                "User prefers mobile-first web design because about 80 percent of readers "
-                "browse and read on their phone",
-                tier="t2",
-                src="run:1",
-            ),
-        ],
-    )
-    n = build_index(tmp_path)
-    assert n == 1  # fuzzy-clustered to a single living fact (t1 wins)
-    e = _load(tmp_path).entries[0]
-    assert e["tier"] == "t1"
-    assert sorted(e["deduped_lines"]) == [2]
-
-
 def test_build_index_preserves_distinct_facts(tmp_path):
     _seed_store(
         tmp_path,
@@ -347,9 +316,8 @@ def test_index_render_bounds_all_tiers(tmp_path):
     recs = []
     born = "2026-01-01T00:00:00Z"
 
-    # fully-disjoint token sets per record (real facts are distinct) — the
-    # full-build fuzzy collapse (Jaccard/containment > 0.60) would otherwise
-    # merge near-duplicate synthetic facts into one winner per tier.
+    # fully-disjoint token sets per record (real facts are distinct) — keeps
+    # the exact/token dedup from merging the synthetic facts into one winner.
     def _words():
         return " ".join(uuid.uuid4().hex[:8] for _ in range(4))
 

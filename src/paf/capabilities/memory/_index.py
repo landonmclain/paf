@@ -18,18 +18,16 @@ re-reading every record. This index is that verdict, and it is:
   fold processes only the newly-appended lines, each via an O(1) lookup keyed
   on the normalized fact, NOT a re-scan of all history. The one exception is
   the very first build over a journal that already has history, which is a
-  full pass (:func:`build_index`) — and that full pass ALSO runs the fuzzy
-  (token-overlap) dedup-cluster collapse once, to clean up existing bloat.
+  full pass (:func:`build_index`).
 
 Keep-winner rule: within a dedup group, the winner is the record with the
 **highest tier** (t1 > t2 > t3), breaking ties by **most-recent ``born_on``**,
 finally by append order (higher line# = newer).
 
-Dedup scoping: incremental folds dedup on **exact** and
-**normalized-token-set** equality (catches verbatim + re-ordered repeats at
-O(1)), NOT fuzzy paraphrase. Fuzzy paraphrase collapse requires the O(n^2)
-overlap scan, which is only cheap as a one-time full build; it is intentionally
-NOT run per-fold to preserve the incremental promise.
+Dedup scoping: folds dedup on **exact** and **normalized-token-set** equality
+(catches verbatim + re-ordered repeats at O(1)). Paraphrase bloat is NOT
+auto-merged here — the reviewer merges duplicates deliberately (see
+``memory_merge``).
 
 Layout: the index lives beside ``MEMORY.md`` and the journal::
 
@@ -64,13 +62,6 @@ _STOP = frozenset(
     "has have had do does did it its this that these those about into from "
     "using uses use used user via by as at not no yes i you we they he she".split()
 )
-
-# Fuzzy-match threshold for the one-time full-build cluster collapse (build_index).
-# Max(Jaccard, containment) above this = "same statement" even when worded
-# slightly differently (e.g. "browse/read on phones" vs "use their phones").
-# Used ONLY by the full build (which already scans everything); incremental folds
-# never run the fuzzy scan (exact + token-set only) to preserve the O(1) promise.
-_NEAR_MATCH_THRESHOLD = 0.60
 
 
 # --------------------------------------------------------------------------
@@ -262,18 +253,16 @@ class MemoryIndex:
 
 
 # --------------------------------------------------------------------------
-# first build (full pass, includes one-time fuzzy cluster collapse)
+# first build (full pass over the whole journal)
 # --------------------------------------------------------------------------
 
 
 def build_index(directory: str | os.PathLike) -> int:
     """Full (re)build of the index from the entire journal. Returns entry count.
 
-    Reads every journal record, folds them in append order, and — because this
-    is a full pass — additionally runs the one-time fuzzy (token-overlap)
-    dedup-cluster collapse so pre-existing paraphrase bloat is folded into a
-    single winning fact per cluster. Idempotent: safe to re-run any time
-    (cheap, deterministic), e.g. to repair a deleted/corrupt index.
+    Reads every journal record and folds them in append order via the
+    exact/token dedup rule. Idempotent: safe to re-run any time (cheap,
+    deterministic), e.g. to repair a deleted/corrupt index.
     """
     journal = JournalStore(directory)
     records = journal.read_all()  # list[(line_no, MemoryRecord)] in append order
@@ -285,99 +274,16 @@ def build_index(directory: str | os.PathLike) -> int:
             line_no, rec, directory
         )  # saves per fold (a bit chatty, fine for a build)
 
-    # --- pass 2: fuzzy cluster collapse over the surviving winners ----------
-    # One-time fuzzy (O(n^2)) collapse over the full record list so
-    # pre-existing paraphrase bloat is folded to a single winning fact per
-    # cluster. Justified only because a full build already scans everything;
-    # incremental folds never run it.
-    _collapse_fuzzy_from_records(idx, records)
+    # Fuzzy cluster collapse (pass 2) was REMOVED (2026-09-21): it conflated
+    # distinct facts that merely share tokens — e.g. two different personal-best
+    # 5K times (27:12 vs 25:50) were treated as one duplicate and the newer value
+    # was dropped from the render, losing the gold answer from injected memory.
+    # Only the exact/token dedup above (pass 1) is kept; paraphrase bloat is left
+    # to the reviewer to merge deliberately.
 
     idx.watermark = records[-1][0] if records else 0
     idx.save(directory)
     return len(idx.entries)
-
-
-def _collapse_fuzzy_from_records(
-    idx: MemoryIndex, records: list[tuple[int, MemoryRecord]]
-) -> None:
-    if len(records) < 2:
-        return
-    toks: dict[int, set[str]] = {ln: _tokens(r.fact) for ln, r in records}
-    parent: dict[int, int] = {}
-
-    def find(x: int) -> int:
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for i in range(len(records)):
-        for j in range(i + 1, len(records)):
-            a_ln, a = records[i]
-            b_ln, b = records[j]
-            ov = _overlap(toks[a_ln], toks[b_ln])
-            if ov > _NEAR_MATCH_THRESHOLD:
-                union(a_ln, b_ln)
-
-    # group journal lines by cluster root
-    clusters: dict[int, list[tuple[int, MemoryRecord]]] = {}
-    for ln, rec in records:
-        clusters.setdefault(find(ln), []).append((ln, rec))
-
-    for lines in clusters.values():
-        if len(lines) < 2:
-            continue
-        winner_ln, winner = max(lines, key=lambda t: _tier_rank(t[1]))
-        # keep the winner in the index (it's already there); fold the others in
-        winner_entry = _find_entry_by_line(idx, winner_ln)
-        if winner_entry is None:
-            continue
-        dedup = winner_entry.setdefault("deduped_lines", [])
-        for ln, _ in lines:
-            if ln != winner_ln and ln not in dedup:
-                dedup.append(ln)
-        # remove the other cluster members' own winning entries from the index
-        idx.entries = [
-            e
-            for e in idx.entries
-            if not any(
-                ln != winner_ln and int(e["current_line"]) == ln for ln, _ in lines
-            )
-        ]
-    idx._rebuild_key_index()
-
-
-def _tier_rank(rec: MemoryRecord) -> int:
-    return _TIER_PRIORITY[rec.tier]
-
-
-def _find_entry_by_line(idx: MemoryIndex, line: int) -> dict | None:
-    for e in idx.entries:
-        if int(e["current_line"]) == line:
-            return e
-    return None
-
-
-def _overlap(a: set[str], b: set[str]) -> float:
-    """Max of Jaccard and containment — the full-build dedup signal."""
-    if not a or not b:
-        return 0.0
-    return max(_jaccard(a, b), _containment(a, b))
-
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    return len(a & b) / len(a | b)
-
-
-def _containment(a: set[str], b: set[str]) -> float:
-    short, long = (a, b) if len(a) <= len(b) else (b, a)
-    return len(short & long) / len(short)
 
 
 # --------------------------------------------------------------------------
@@ -391,8 +297,7 @@ def update_index(directory: str | os.PathLike) -> int:
     Reads the index watermark; if it's behind the journal tail, folds only the
     new lines (no full re-scan). If the index file is absent or corrupt, falls
     back to a full rebuild. Safe to call after every render. First-ever call on
-    a journal that already has history performs the one-time full build
-    (including fuzzy collapse).
+    a journal that already has history performs the one-time full build.
     """
     journal = JournalStore(directory)
     records = journal.read_all()
@@ -400,7 +305,7 @@ def update_index(directory: str | os.PathLike) -> int:
 
     idx = MemoryIndex.load(directory)
     if not idx.entries:
-        # no existing index -> full build (includes once fuzzy cleanup)
+        # no existing index -> full build
         return build_index(directory)
     if idx.watermark >= tail:
         return len(idx.entries)  # nothing new
