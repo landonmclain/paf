@@ -256,20 +256,28 @@ def test_tool_guard_reset_clears_state():
 # ----------------------------------------------------------------------
 
 
-def _fake_agent(thinking_chunks, result_value="ok"):
+def _fake_agent(thinking_chunks, result_value="ok", include_non_stream_node=False):
     """A minimal stand-in for ``agent.iter`` with the contracts run_guarded uses:
     ``iter(prompt)`` -> async CM yielding a ``run`` with ``.ctx`` and async-iterable
-    nodes; each node has ``.stream(ctx)`` -> async CM yielding stream events.
-    ``thinking_chunks`` is an iterable of raw strings emitted as ThinkingPartDelta
-    content."""
+    nodes. The thinking node is a REAL ``pydantic_ai.agent.ModelRequestNode``
+    subclass whose ``.stream()`` is stubbed to yield ThinkingPartDelta events
+    (so ``isinstance(node, ModelRequestNode)`` holds and the guard streams it).
+    ``include_non_stream_node`` prepends a real graph node WITHOUT ``.stream()``
+    to exercise the skip path (mirrors UserPromptNode in the real graph)."""
 
-    class _Node:
-        """Fake graph node: an async context manager yielding stream events."""
+    from pydantic_ai.agent import ModelRequestNode
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+    class _FakeModelNode(ModelRequestNode):
         def __init__(self, chunks):
+            # ModelRequestNode is a dataclass; supply a minimal request. The
+            # real graph machinery is never invoked — only .stream() is used.
+            super().__init__(
+                request=ModelRequest(parts=[UserPromptPart(content="go")])
+            )
             self._chunks = list(chunks)
 
-        def stream(self, ctx):
+        def stream(self, ctx):  # type: ignore[override]  # stubbed for tests
             async def gen():
                 for c in self._chunks:
                     yield PartDeltaEvent(
@@ -284,6 +292,12 @@ def _fake_agent(thinking_chunks, result_value="ok"):
 
         async def __aexit__(self, *a):
             return False
+
+    # A real graph node WITHOUT .stream() (mirrors UserPromptNode) — the guard
+    # must skip it via the ModelRequestNode/CallToolsNode isinstance check. A
+    # bare ModelRequest stands in: it has no .stream() and is not a request/tool
+    # node, so run_guarded `continue`s over it.
+    non_stream = ModelRequest(parts=[UserPromptPart(content="")])
 
     class _NodeIter:
         """async iterator over the fake nodes."""
@@ -303,10 +317,12 @@ def _fake_agent(thinking_chunks, result_value="ok"):
     class _Run:
         ctx = object()
         result = result_value
-        node = _Node(thinking_chunks)
+        nodes: list = [_FakeModelNode(thinking_chunks)]
+        if include_non_stream_node:
+            nodes.insert(0, non_stream)
 
         def __aiter__(self):
-            return _NodeIter([self.node])
+            return _NodeIter(self.nodes)
 
     class _FakeAgent:
         def iter(self, prompt):
@@ -374,6 +390,25 @@ def test_run_guarded_returns_result_when_clean():
     agent = _fake_agent([clean], result_value="the-answer")
     result = asyncio.run(run_guarded(agent, "build it"))
     assert result == "the-answer"
+
+
+def test_run_guarded_skips_non_streamable_nodes():
+    """run_guarded must not call .stream() on graph nodes that lack it (e.g.
+    UserPromptNode) — it continues past them and still detects a loop on the
+    streamable ModelRequestNode that follows. Regression for the live
+    'UserPromptNode' object has no attribute 'stream' crash on the memory
+    owner."""
+    block = "\n".join(
+        ["The user wants me to build the diagram.", "Let me check the structure.",
+         "Let me search for SVG diagrams in the site."]
+    )
+    loop = "\n".join([block] * 5) + "\n"
+    agent = _fake_agent([loop], include_non_stream_node=True)
+    try:
+        asyncio.run(run_guarded(agent, "build it"))
+        raise AssertionError("expected DegenerationError")
+    except DegenerationError:
+        pass
 
 
 def test_run_guarded_thinking_chunks_across_deltas():

@@ -317,7 +317,7 @@ async def run_guarded(
     re-raise), so a guarded abort surfaces as a job failure and the block is
     retried next cadence — it never burns the token budget on the runaway.
     """
-    from pydantic_ai.agent import CallToolsNode
+    from pydantic_ai.agent import CallToolsNode, ModelRequestNode
     from pydantic_ai.messages import (
         PartDeltaEvent,
         ThinkingPartDelta,
@@ -328,6 +328,10 @@ async def run_guarded(
     tool_g = tool_guard or ToolCallGuard()
     async with agent.iter(prompt) as run:
         async for node in run:
+            # Only request/tool nodes stream parts; other graph nodes
+            # (e.g. UserPromptNode) have no .stream() — mirror runtime.py.
+            if not isinstance(node, (ModelRequestNode, CallToolsNode)):
+                continue
             # Completed tool calls -> tool-loop guard (opt-in).
             if isinstance(node, CallToolsNode):
                 for part in node.model_response.parts:
