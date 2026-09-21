@@ -208,6 +208,8 @@ async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord
     """Run the real structured summarizer agent over one conversation block."""
     from pydantic_ai import Agent
 
+    from paf.degeneration_guard import run_guarded
+
     cfg = _summarizer_spec_config()
     if cfg is not None:
         model, model_settings, retries = cfg
@@ -224,5 +226,5 @@ async def summarize_span(span: list, conversation_id: str | None) -> BeatsRecord
         model_settings=model_settings,
         retries=retries,
     )
-    result = await agent.run(SummarizerPrompt(span, conversation_id).render())
+    result = await run_guarded(agent, SummarizerPrompt(span, conversation_id).render())
     return result.output

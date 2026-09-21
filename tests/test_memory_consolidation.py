@@ -277,6 +277,34 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
             fed.append(prompt)
             return type("R", (), {"output": "no changes"})()
 
+        def iter(self, prompt=None, **kwargs):  # noqa: A002 - guard-aware contract
+            from types import SimpleNamespace
+
+            fed.append(str(prompt))
+
+            class _Run:
+                ctx = object()
+                result = SimpleNamespace(output="no changes")
+
+                def __aiter__(self):
+                    return _NodeIter()
+
+            class _NodeIter:
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    raise StopAsyncIteration
+
+            class _CM:
+                async def __aenter__(self):
+                    return _Run()
+
+                async def __aexit__(self, *a):
+                    return False
+
+            return _CM()
+
     def _fake_build_owner(
         store, *, agent_name, namespace, inject_memory=False, journal=None
     ):

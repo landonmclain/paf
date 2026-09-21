@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai import Agent, ModelSettings
 
+from paf.degeneration_guard import run_guarded
+
 from ._consolidate import _consolidation_model_settings, consolidate_model
 
 if TYPE_CHECKING:
@@ -261,7 +263,7 @@ async def review(
         # can append the canonical consolidated record before archiving sources.
         journal=JournalStore(directory),
     )
-    result = await reviewer.run(_reviewer_prompt().format(rendered=rendered))
+    result = await run_guarded(reviewer, _reviewer_prompt().format(rendered=rendered))
     return reviewer_verdict_count(result)
 
 

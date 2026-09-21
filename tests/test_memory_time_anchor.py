@@ -304,6 +304,34 @@ def test_consolidate_always_runs_owner_without_durable_text(monkeypatch) -> None
 
             return SimpleNamespace(output="ok")
 
+        def iter(self, prompt=None, **kwargs):  # noqa: A002 - guard-aware contract
+            from types import SimpleNamespace
+
+            calls.append(prompt)
+
+            class _Run:
+                ctx = object()
+                result = SimpleNamespace(output="ok")
+
+                def __aiter__(self):
+                    return _NodeIter()
+
+            class _NodeIter:
+                def __aiter__(self):
+                    return self
+
+                async def __anext__(self):
+                    raise StopAsyncIteration
+
+            class _CM:
+                async def __aenter__(self):
+                    return _Run()
+
+                async def __aexit__(self, *a):
+                    return False
+
+            return _CM()
+
     def _fake_build_owner(*args, **kwargs):
         return _FakeOwner(), None
 

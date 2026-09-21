@@ -39,6 +39,7 @@ from pydantic_ai.exceptions import (
 )
 
 from paf.config import settings
+from paf.degeneration_guard import run_guarded
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
@@ -468,7 +469,8 @@ async def consolidate(
         evicted_text = (
             "No new durable user or assistant text was captured in this span."
         )
-    result = await owner.run(
+    result = await run_guarded(
+        owner,
         CONSOLIDATION_PROMPT.format(evicted_text=evicted_text),
     )
     logger.info("consolidated %d evicted msgs: %s", len(evicted), result.output)
@@ -505,7 +507,8 @@ async def consolidate_conversation(
     text = await resident_consolidate_text(messages)
     if not text:
         return
-    result = await owner.run(
+    result = await run_guarded(
+        owner,
         CONSOLIDATION_PROMPT.format(evicted_text=text),
     )
     logger.info(
@@ -677,7 +680,8 @@ async def consolidate_conversation_chunked(
     chunks = _split_chunks(text, max_tokens=budget)
     for i, chunk in enumerate(chunks, start=1):
         try:
-            result = await owner.run(
+            result = await run_guarded(
+                owner,
                 CONSOLIDATION_PROMPT.format(evicted_text=chunk),
             )
         except (UsageLimitExceeded, UnexpectedModelBehavior, ModelHTTPError) as exc:

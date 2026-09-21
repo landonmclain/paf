@@ -66,7 +66,11 @@ from paf.background import (
 from paf.capabilities import PROFILES
 from paf.capabilities.compaction import build_boundary_compaction_for_agent
 from paf.capabilities.persistence import _build_store
-from paf.degeneration_guard import DegenerationGuard, ToolCallGuard
+from paf.degeneration_guard import (
+    DegenerationError,
+    DegenerationGuard,
+    ToolCallGuard,
+)
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
@@ -76,23 +80,6 @@ from paf.observability.instrumentation import (
 from paf.specs import build_agent, resolve_profile_name, spec_usage_limits
 
 log = logging.getLogger(__name__)
-
-
-class DegenerationError(UnexpectedModelBehavior):
-    """Raised when the degeneration guard detects a thinking-narration loop mid-stream.
-
-    Subclasses :class:`UnexpectedModelBehavior` so the existing mid-stream failure
-    handler (``except (ModelHTTPError, UnexpectedModelBehavior)`` in ``Session.stream``)
-    preserves the partial messages and surfaces a clean error+retry instead of a
-    runaway generation consuming the remaining token budget.
-    """
-
-    def __init__(self, result) -> None:
-        self.result = result
-        super().__init__(
-            f"degeneration guard: thinking repeated {result.repeat_count}x "
-            f"({result.reason!r}: {result.line!r})"
-        )
 
 
 __all__ = [

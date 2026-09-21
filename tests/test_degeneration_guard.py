@@ -10,7 +10,17 @@ UI-identically-rendered args).
 
 from __future__ import annotations
 
-from paf.degeneration_guard import DegenerationGuard, ToolCallGuard, _tool_key
+import asyncio
+
+from pydantic_ai.messages import PartDeltaEvent, ThinkingPartDelta
+
+from paf.degeneration_guard import (
+    DegenerationError,
+    DegenerationGuard,
+    ToolCallGuard,
+    _tool_key,
+    run_guarded,
+)
 
 # A real narration loop seen from deepseek-v4.1-flash at medium reasoning effort:
 # a block of SEVERAL DISTINCT phrases cycling, with blank lines rendered between
@@ -239,3 +249,141 @@ def test_tool_guard_reset_clears_state():
         guard.add_tool_call("search_files", SEARCH_ARGS)
     guard.reset()
     assert guard.add_tool_call("search_files", SEARCH_ARGS) is None
+
+
+# ----------------------------------------------------------------------
+# run_guarded — shared guarded-run seam for background agent.run call sites
+# ----------------------------------------------------------------------
+
+
+def _fake_agent(thinking_chunks, result_value="ok"):
+    """A minimal stand-in for ``agent.iter`` with the contracts run_guarded uses:
+    ``iter(prompt)`` -> async CM yielding a ``run`` with ``.ctx`` and async-iterable
+    nodes; each node has ``.stream(ctx)`` -> async CM yielding stream events.
+    ``thinking_chunks`` is an iterable of raw strings emitted as ThinkingPartDelta
+    content."""
+
+    class _Node:
+        """Fake graph node: an async context manager yielding stream events."""
+
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def stream(self, ctx):
+            async def gen():
+                for c in self._chunks:
+                    yield PartDeltaEvent(
+                        index=0,
+                        delta=ThinkingPartDelta(content_delta=c),
+                        event_kind="part_delta",
+                    )
+            return _AsyncGen(gen())
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _NodeIter:
+        """async iterator over the fake nodes."""
+
+        def __init__(self, nodes):
+            self._nodes = iter(nodes)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._nodes)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class _Run:
+        ctx = object()
+        result = result_value
+        node = _Node(thinking_chunks)
+
+        def __aiter__(self):
+            return _NodeIter([self.node])
+
+    class _FakeAgent:
+        def iter(self, prompt):
+            self.prompt = prompt
+
+            class _CM:
+                async def __aenter__(self):
+                    return _Run()
+
+                async def __aexit__(self, *a):
+                    return False
+
+            return _CM()
+
+    return _FakeAgent()
+
+
+class _AsyncGen:
+    """Async iterator + context manager adapter over a sync generator, matching
+    pydantic-ai's streamed-response contract (used as ``async with ... as stream``)."""
+
+    def __init__(self, gen):
+        self._gen = gen
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return await self._gen.__anext__()
+        except StopAsyncIteration:
+            raise
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+
+def test_run_guarded_detects_thinking_loop():
+    """A background agent streaming a thinking-narration loop through run_guarded
+    raises DegenerationError (the thread-summarizer failure mode). Uses 4 distinct
+    lines (the observed loop shape), each recurring 5x -> needs max_repeats=4."""
+    block = "\n".join(
+        [
+            "The user wants me to build the diagram.",
+            "Let me look at how existing diagrams are structured.",
+            "Let me check the components and existing diagram articles.",
+            "Let me search for existing SVG diagrams in the site.",
+        ]
+    )
+    loop = "\n".join([block] * 5) + "\n"  # 4 distinct lines x5 = 20 lines
+    agent = _fake_agent([loop])
+    try:
+        asyncio.run(run_guarded(agent, "build it"))
+        raise AssertionError("expected DegenerationError")
+    except DegenerationError as e:
+        assert e.result.reason == "thinking_loop"
+
+
+def test_run_guarded_returns_result_when_clean():
+    """A non-looping background agent returns its result normally."""
+    clean = "Let me build it.\nThen I will verify the diff.\nDone.\n"
+    agent = _fake_agent([clean], result_value="the-answer")
+    result = asyncio.run(run_guarded(agent, "build it"))
+    assert result == "the-answer"
+
+
+def test_run_guarded_thinking_chunks_across_deltas():
+    """Loops detected even when thinking arrives chunked (stream_thinking buffers
+    across PartDeltaEvents)."""
+    block = "\n".join(["Search the tree.", "Read the index.", "Verify the diff."])
+    loop = "\n".join([block] * 5) + "\n"
+    agent = _fake_agent([loop])
+    try:
+        asyncio.run(run_guarded(agent, "go"))
+        raise AssertionError("expected DegenerationError")
+    except DegenerationError:
+        pass

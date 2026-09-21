@@ -26,6 +26,8 @@ from typing import Concatenate, ParamSpec
 
 from pydantic_ai.toolsets import FunctionToolset
 
+from paf.degeneration_guard import run_guarded
+
 from ._store import _store
 
 _P = ParamSpec("_P")
@@ -78,7 +80,7 @@ async def _run_vision(images: list[bytes], prompt: str) -> str:
     content.extend(BinaryContent(data=raw, media_type="image/png") for raw in images)
 
     agent = Agent(_vision_model())
-    result = await agent.run(content)
+    result = await run_guarded(agent, content)
     return str(result.output)
 
 

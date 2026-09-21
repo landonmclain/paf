@@ -32,7 +32,9 @@ common phrase recurring while genuinely thinking (e.g. "hmm let me get the exact
 line first then decide") never trips it. If it proves ineffective or a false-positive,
 remove it — it's cheap insurance.
 
-No external dependencies beyond the stdlib.
+Only external dependency: `pydantic_ai.exceptions.UnexpectedModelBehavior` (the
+base of :class:`DegenerationError`, so the runtime's existing mid-stream failure
+handler still catches it). The detectors themselves use only the stdlib.
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ import json
 import re
 from collections import Counter, deque
 from dataclasses import dataclass
+
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 
 @dataclass
@@ -264,4 +268,89 @@ class ToolCallGuard:
         self._count = 0
 
 
-__all__ = ["DegenerationGuard", "ToolCallGuard", "DegenerationResult"]
+class DegenerationError(UnexpectedModelBehavior):
+    """Raised when a degeneration guard detects a loop mid-generation.
+
+    Subclasses :class:`~pydantic_ai.exceptions.UnexpectedModelBehavior` so the
+    main runtime's existing mid-stream failure handler
+    (``except (ModelHTTPError, UnexpectedModelBehavior)``) preserves the partial
+    messages and surfaces a clean error+retry. For background/direct
+    ``agent.run`` call sites it simply propagates as a per-job failure.
+    """
+
+    def __init__(self, result) -> None:
+        self.result = result
+        super().__init__(
+            f"degeneration guard: {result.reason!r} repeated {result.repeat_count}x "
+            f"({result.line!r})"
+        )
+
+
+async def run_guarded(
+    agent,
+    prompt,
+    *,
+    thinking_guard: DegenerationGuard | None = None,
+    tool_guard: ToolCallGuard | None = None,
+):
+    """Run a pydantic-ai agent under the degeneration guards, mirroring the main
+    runtime's `Session.stream` wiring for background/direct `agent.run` call
+    sites (thread-summarizer, memory reviewer/owner, vision) that never stream.
+
+    Streams the agent via `agent.iter(prompt)` (the same graph execution
+    `agent.run` uses internally, just exposed) so we can watch thinking deltas
+    and completed tool calls, and returns the COMPLETE `AgentRunResult` — so
+    callers can keep using `result.output` and `result.all_messages()` exactly
+    as they would after `await agent.run(prompt)`.
+
+    Guard policy (per call site, both optional):
+    - Thinking guard is ON by default — it only fires on a pure thinking
+      narration loop and is safe on every background agent.
+    - Tool-call guard is OFF by default — the tool-using background agents
+      (memory reviewer, owner) deliberately repeat their own tool calls as the
+      job (reviewer calls `memory_review`/`memory_merge` many times; the owner
+      reads `read_memory`/`search_memory` in a loop with its own `_guard_repeat`
+      guard). Apply it only where a stuck repeat-tool loop is the actual risk.
+
+    On detection raises :class:`DegenerationError`. Background callers already handle
+    per-job exceptions (e.g. the thread summarizer's `on_complete(False, ...)` +
+    re-raise), so a guarded abort surfaces as a job failure and the block is
+    retried next cadence — it never burns the token budget on the runaway.
+    """
+    from pydantic_ai.agent import CallToolsNode
+    from pydantic_ai.messages import (
+        PartDeltaEvent,
+        ThinkingPartDelta,
+        ToolCallPart,
+    )
+
+    think = thinking_guard or DegenerationGuard()
+    tool_g = tool_guard or ToolCallGuard()
+    async with agent.iter(prompt) as run:
+        async for node in run:
+            # Completed tool calls -> tool-loop guard (opt-in).
+            if isinstance(node, CallToolsNode):
+                for part in node.model_response.parts:
+                    if isinstance(part, ToolCallPart):
+                        tg = tool_g.add_tool_call(part.tool_name, part.args)
+                        if tg is not None:
+                            raise DegenerationError(tg)
+            # Streaming thinking deltas -> thinking-loop guard (default on).
+            async with node.stream(run.ctx) as stream:
+                async for event in stream:
+                    if isinstance(event, PartDeltaEvent) and isinstance(
+                        event.delta, ThinkingPartDelta
+                    ):
+                        rg = think.stream_thinking(event.delta.content_delta or "")
+                        if rg is not None:
+                            raise DegenerationError(rg)
+    return run.result
+
+
+__all__ = [
+    "DegenerationGuard",
+    "ToolCallGuard",
+    "DegenerationResult",
+    "DegenerationError",
+    "run_guarded",
+]
