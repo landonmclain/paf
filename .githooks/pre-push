@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Pre-push hook: run the same checks as .github/workflows/ci.yml, EXCEPT pyright
-# (which we let GitHub CI run — too heavy for every local push).
+# Pre-push hook: run the checks most likely to be forgotten, quickly, on every
+# push. GitHub CI already runs the full pytest suite, so we don't re-run tests
+# here (they're the slow part and rarely forgotten).
 #
 #   ruff check           (lint)
 #   ruff format --check  (format)
-#   pytest -n auto       (tests)
+#   pyright              (typecheck — the usual silent foot-gun)
 #
 # Any failure prints a banner and exits non-zero, which aborts the push.
 # Configure git to use this hooks dir:
@@ -24,8 +25,8 @@ uv run ruff check src tests --output-format=concise || fail=1
 step "ruff format --check (format)"
 uv run ruff format --check src tests || fail=1
 
-step "pytest -n auto (tests)"
-uv run pytest -n auto -q || fail=1
+step "pyright (typecheck)"
+npx --yes pyright || fail=1
 
 if [ "$fail" -ne 0 ]; then
   printf '\n\033[1;31mpre-push checks FAILED — push aborted.\033[0m\n'
