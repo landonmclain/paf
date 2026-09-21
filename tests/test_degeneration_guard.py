@@ -272,9 +272,7 @@ def _fake_agent(thinking_chunks, result_value="ok", include_non_stream_node=Fals
         def __init__(self, chunks):
             # ModelRequestNode is a dataclass; supply a minimal request. The
             # real graph machinery is never invoked — only .stream() is used.
-            super().__init__(
-                request=ModelRequest(parts=[UserPromptPart(content="go")])
-            )
+            super().__init__(request=ModelRequest(parts=[UserPromptPart(content="go")]))
             self._chunks = list(chunks)
 
         def stream(self, ctx):  # type: ignore[override]  # stubbed for tests
@@ -285,6 +283,7 @@ def _fake_agent(thinking_chunks, result_value="ok", include_non_stream_node=Fals
                         delta=ThinkingPartDelta(content_delta=c),
                         event_kind="part_delta",
                     )
+
             return _AsyncGen(gen())
 
         async def __aenter__(self):
@@ -399,8 +398,11 @@ def test_run_guarded_skips_non_streamable_nodes():
     'UserPromptNode' object has no attribute 'stream' crash on the memory
     owner."""
     block = "\n".join(
-        ["The user wants me to build the diagram.", "Let me check the structure.",
-         "Let me search for SVG diagrams in the site."]
+        [
+            "The user wants me to build the diagram.",
+            "Let me check the structure.",
+            "Let me search for SVG diagrams in the site.",
+        ]
     )
     loop = "\n".join([block] * 5) + "\n"
     agent = _fake_agent([loop], include_non_stream_node=True)

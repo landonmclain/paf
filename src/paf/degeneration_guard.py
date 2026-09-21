@@ -171,7 +171,9 @@ class DegenerationGuard:
 #
 def _scalar(v):
     """Render one dict value to a stable string, matching how a UI row would show it."""
-    return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, sort_keys=True)
+    return (
+        v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, sort_keys=True)
+    )
 
 
 def _humanize_args(args) -> str:
