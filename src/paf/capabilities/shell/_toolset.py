@@ -531,8 +531,8 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 return
             base = lines[0]
             exit_code = status.exit_code
-            # exit_code None (unknown, vanished process) → treat as done, not error.
-            terminal_status = "done" if (exit_code == 0 or exit_code is None) else "error"
+            # exit_code None (unknown, vanished process) → treat as error, not done.
+            terminal_status = "done" if exit_code == 0 else "error"
             self._shell_cmds.append(
                 {
                     "run_id": run_id,
@@ -546,7 +546,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             )
         if self._run_events is not None:
             exit_code = status.exit_code
-            terminal_status = "done" if (exit_code == 0 or exit_code is None) else "error"
+            terminal_status = "done" if exit_code == 0 else "error"
             self._run_events.append(
                 {
                     "run_id": run_id,

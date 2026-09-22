@@ -180,10 +180,11 @@ def test_check_resolves_stale_running_when_process_gone(tmp_path: Path) -> None:
         async with _toolset(tmp_path, conversation_id="c1") as t:
             check = await t.check_command("shell.c1.9")
             assert "[status: finished]" in check, check
-            # The staleness was resolved by APPENDING a terminal line.
+            # The staleness was resolved by APPENDING a terminal line. A vanished
+            # process with no exit code is reported as error, not done.
             lines = sc.all_for("shell.c1.9")
-            assert lines[-1]["status"] == "done"
-            assert len(lines) == 2  # running + resolved done
+            assert lines[-1]["status"] == "error"
+            assert len(lines) == 2  # running + resolved error
         return True
 
     assert asyncio.run(scenario()) is True
