@@ -38,6 +38,10 @@ def _safe_key_segment(key: str | Path) -> str:
     # Bare single-segment, safe names pass through untouched.
     if re.fullmatch(r"[A-Za-z0-9_.-]+", s):
         return s
+    # Nested safe path (e.g. "<agent>/conversations/<cid>") passes through so
+    # conversation-scoped stores nest cleanly under the agent dir.
+    if re.fullmatch(r"[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+", s):
+        return s
     safe = s.strip("/\\").replace(":", "_").replace(os.sep, "_") or "_"
     return f"{safe[:48]}-{hashlib.sha256(s.encode('utf-8')).hexdigest()[:8]}"
 
