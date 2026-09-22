@@ -540,7 +540,6 @@ def test_session_review_span_publishes_task_done(tmp_path):
     # Bare coordinator: only the fields the review seam touches.
     s = object.__new__(_bgmod.BackgroundCoordinator)
     s._background_tasks = {}
-    s._task_subscribers = []
     s._consolidation_seq = 0
     s._thread_summarizer_seq = 0
     s._review_seq = 0
@@ -548,6 +547,9 @@ def test_session_review_span_publishes_task_done(tmp_path):
     s._memory_directory = str(tmp_path)
     s.agent_name = "assistant"
     s._run_events = None
+    s._emitter = _bgmod.get_agent_emitter("assistant")
+    s.lane = "agent"
+    s.conversation_id = None
 
     # Deterministic no-LLM review span (the seam references _revmod.review).
     async def noop_review(directory, *, overrides=None, agent_name=None):
@@ -565,10 +567,10 @@ def test_session_review_span_publishes_task_done(tmp_path):
     task = _bgmod.BackgroundTask(
         id="review.demo:x.1", label="Reviewing memory (demo:x)"
     )
-    s._publish_task(task)
+    asyncio.run(s._publish_task(task))
 
     seen: list[tuple[str, str]] = []
-    s.subscribe_tasks(lambda ev: seen.append((ev.kind, ev.status)))
+    s.subscribe_tasks(lambda ev: seen.append((ev.label, ev.status.value)))
 
     async def run():
         assert q is not None
@@ -578,4 +580,4 @@ def test_session_review_span_publishes_task_done(tmp_path):
 
     # The in-flight row must transition to done and be visible to subscribers.
     assert task.status == "done", f"expected done, got {task.status!r}"
-    assert ("task:Reviewing memory (demo:x)", "done") in seen
+    assert ("Reviewing memory (demo:x)", "done") in seen
