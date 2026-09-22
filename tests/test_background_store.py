@@ -162,3 +162,50 @@ def test_coordinator_publishes_each_transition_to_journal(tmp_path: Path) -> Non
     assert events[0]["agent"] == "assistant"
     assert events[0]["run_id"] == "consolidation.conv-1.1"
     assert events[2]["detail"] == "3 records folded"
+
+
+def test_conversation_scoped_store_roots_at_hashed_dir(tmp_path: Path) -> None:
+    """A conversation-scoped store roots at
+    ``<root>/<agent>/conversations/<hash>/runs.jsonl``, isolated from the agent
+    journal and from other conversations.
+    """
+    import hashlib
+
+    root = tmp_path / "processes"
+    agent = "demo_assistant"
+    cid = "p:c1"
+
+    s = RunEventStore.open(str(root), agent, conversation_id=cid)
+    s.append(_event(status="running"))
+
+    # The journal lives under the hashed per-conversation dir.
+    expected = (
+        root
+        / agent
+        / "conversations"
+        / hashlib.sha256(cid.encode("utf-8")).hexdigest()[:24]
+        / "runs.jsonl"
+    )
+    assert expected.exists()
+    assert len(s.read_all()) == 1
+
+    # The agent journal is untouched.
+    assert not (root / agent / "runs.jsonl").exists()
+
+    # A different conversation is isolated.
+    other = RunEventStore.open(str(root), agent, conversation_id="p:c2")
+    assert other.read_all() == []
+
+
+def test_safe_key_segment_passes_through_nested_safe_path() -> None:
+    """Nested safe keys (``<agent>/conversations/<hash>``) map to a real nested
+    directory, not a flattened+hashed single segment.
+    """
+    from paf.capabilities._storage._flat_file import _safe_key_segment
+
+    key = "demo_assistant/conversations/abc123"
+    assert _safe_key_segment(key) == key
+
+    # Bare names still pass through; deep/absolute keys still hash.
+    assert _safe_key_segment("demo_assistant") == "demo_assistant"
+    assert _safe_key_segment("/deep/absolute/path") != "/deep/absolute/path"
