@@ -156,15 +156,18 @@ def test_part_delta_text_and_thinking() -> None:
 # Imported here (not at module top) so tests above never trigger a paf.background
 # / session-build import at module scope.
 from paf.background import BackgroundCoordinator  # noqa: E402
+from paf.background_processes._events import get_agent_emitter  # noqa: E402
 
 
 def _bare_coordinator() -> BackgroundCoordinator:
     """A coordinator with no store built (pure registry tests)."""
     c = object.__new__(BackgroundCoordinator)
     c._background_tasks = {}
-    c._task_subscribers = []
     c._consolidation_seq = 0
     c._run_events = None
+    c._emitter = get_agent_emitter("assistant")
+    c.lane = "agent"
+    c.conversation_id = None
     return c
 
 
@@ -172,23 +175,23 @@ def test_subscribe_replays_active_task() -> None:
     c = _bare_coordinator()
     seen: list[tuple[str, str]] = []
 
-    def cb(ev: runtime.BackgroundEvent) -> None:
-        seen.append((ev.kind, ev.status))
+    def cb(ev) -> None:
+        seen.append((ev.label, ev.status.value))
 
     c.subscribe_tasks(cb)
     t = runtime.BackgroundTask(id="consolidation.c.1", label="Consolidating memory (c)")
-    c._publish_task(t)  # queued (default)
+    asyncio.run(c._publish_task(t))  # queued (default)
 
     # Late subscriber must see the in-flight (queued) task replayed.
     seen2: list[tuple[str, str]] = []
-    c.subscribe_tasks(lambda ev: seen2.append((ev.kind, ev.status)))
-    assert ("task:Consolidating memory (c)", "queued") in seen2
+    c.subscribe_tasks(lambda ev: seen2.append((ev.label, ev.status.value)))
+    assert ("Consolidating memory (c)", "queued") in seen2
 
     # Transition to done reaches both subscribers.
     t.status = runtime.DONE
-    c._publish_task(t)
-    assert ("task:Consolidating memory (c)", "done") in seen
-    assert ("task:Consolidating memory (c)", "done") in seen2
+    asyncio.run(c._publish_task(t))
+    assert ("Consolidating memory (c)", "done") in seen
+    assert ("Consolidating memory (c)", "done") in seen2
 
 
 def test_done_task_not_replayed() -> None:
@@ -196,7 +199,7 @@ def test_done_task_not_replayed() -> None:
     c.subscribe_tasks(lambda ev: None)
     t = runtime.BackgroundTask(id="consolidation.d.1", label="L")
     t.status = runtime.DONE
-    c._publish_task(t)
+    asyncio.run(c._publish_task(t))
     seen: list = []
     c.subscribe_tasks(lambda ev: seen.append(ev))
     assert seen == []  # only queued/running are active; done is not replayed
