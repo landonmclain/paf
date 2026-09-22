@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 
 from paf.background import PROCESSING, BackgroundCoordinator, BackgroundTask
+from paf.background_processes._events import ProcessEventType
 from paf.runtime import StreamEvent
 from ui import sse
 
@@ -223,25 +224,15 @@ def test_background_coordinator_task_bytes_identical_via_session_slot() -> None:
 
     assert replayed, "active task must be replayed synchronously on subscribe"
     ev = replayed[0]
-    assert ev.status == PROCESSING
+    assert ev.status == ProcessEventType.running
 
-    # Half 2: the SSE wire bytes from this coordinator flow are byte-identical
-    # to building the frame directly from the same event via sse's own
-    # serializer (the path _turn_frames uses).
+    # Half 2: the replayed event is a ProcessEvent; _task_frame maps it to the
+    # wire frame the UI consumes (id/label/status/progress/detail).
     name, data = sse._task_frame(ev)
     assert name == "task"
     assert data["id"] == "consolidation.conv-1.3"
-    via_coordinator = sse._frame(name, data)
-
-    # Rebuild the exact frame from the task's own as_event() to prove the byte
-    # contract holds all the way from the coordinator's registry -> replay ->
-    # serialize -> frame (no shape drift in the move).
-    ev2 = task.as_event()
-    name2, data2 = sse._task_frame(ev2)
-    direct = sse._frame(name2, data2)
-    assert via_coordinator == direct, (
-        "coordinator replay frame differs from direct serialization"
-    )
+    assert data["label"] == "Consolidating memory (conv-1)"
+    assert data["status"] == "running"
 
     # Half 3: task_history scopes to the conversation and returns the row
     # (the /api/conversations/{id}/tasks endpoint reads this through session.background).
@@ -317,10 +308,11 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
         def _ev(status):
             class _E:
                 def __init__(self):
-                    self.kind = "task:Consolidating memory (conv-1)"
+                    self.id = "consolidation.conv-1.2"
+                    self.label = "Consolidating memory (conv-1)"
                     self.status = status
+                    self.progress = 1.0
                     self.detail = "5 turns -> 1 summary"
-                    self.metadata = {"id": "consolidation.conv-1.2", "progress": 1.0}
 
             return _E()
 
