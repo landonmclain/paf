@@ -19,9 +19,10 @@ import os
 import re
 import shlex
 import tempfile
+import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Concatenate, ParamSpec
+from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
@@ -30,11 +31,17 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, ToolsetTool
 
 from paf.capabilities._sandbox import (
     BackgroundHandle,
+    BackgroundStatus,
     LocalProcessExecutor,
     SandboxedExecutor,
 )
 
+from ._background import ShellBackgroundQueue, ShellRun
 from ._output import truncate_tail
+from ._store import ShellCommandStore
+
+if TYPE_CHECKING:  # pragma: no cover
+    from paf.background_processes._store import RunEventStore
 
 _P = ParamSpec("_P")
 
@@ -99,6 +106,8 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         env: Mapping[str, str] | None = None,
         denied_env_patterns: Sequence[str] = (),
         executor: SandboxedExecutor | None = None,
+        processes_root: str | Path | None = None,
+        agent: str = "",
     ) -> None:
         super().__init__()
         self._cwd = cwd.resolve()
@@ -116,6 +125,26 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         self._denied_env_patterns = list(denied_env_patterns)
         self._executor = executor if executor is not None else LocalProcessExecutor()
         self._background: dict[str, BackgroundHandle] = {}
+        # Durable stores + background queue. Only wired when a `processes_root`
+        # is given (the shell capability's default), so callers that just want
+        # in-memory background processes keep behaving exactly as before.
+        self._processes_root = Path(processes_root) if processes_root is not None else None
+        self._agent = agent
+        self._shell_cmds: ShellCommandStore | None = None
+        self._run_events: RunEventStore | None = None
+        self._bg_queue: ShellBackgroundQueue | None = None
+        if self._processes_root is not None:
+            from paf.background_processes._store import RunEventStore
+
+            self._shell_cmds = ShellCommandStore.open(str(self._processes_root), agent)
+            self._run_events = RunEventStore.open(str(self._processes_root), agent)
+            self._bg_queue = ShellBackgroundQueue(
+                executor=self._executor,
+                cwd=self._initial_cwd,
+                agent=agent,
+                shell_cmds=self._shell_cmds,
+                run_events=self._run_events,
+            )
 
         if self._allowed_commands and self._denied_commands:
             raise ValueError("Specify allowed_commands or denied_commands, not both.")
@@ -148,6 +177,8 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             env=self._env,
             denied_env_patterns=self._denied_env_patterns,
             executor=self._executor,
+            processes_root=self._processes_root,
+            agent=self._agent,
         )
 
     async def call_tool(
@@ -195,10 +226,17 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         }
 
     async def __aexit__(self, *args: Any) -> None:
-        """Terminate all remaining background processes and clean up."""
+        """Terminate live in-memory processes; stop the supervisor cleanly.
+
+        Detached background processes are NOT killed here (they survive the
+        toolset and loop by design); we only stop the queue's supervisor tasks
+        so their subprocess transports aren't GC'd after loop close.
+        """
         for handle in self._background.values():
             await self._executor.stop(handle)
         self._background.clear()
+        if self._bg_queue is not None:
+            await self._bg_queue.shutdown()
 
     def _first_denied_operator(self, command: str) -> str | None:
         """Return the first denied operator found in command, or None."""
@@ -314,77 +352,184 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
     async def start_command(self, command: str) -> str:
         """Start a long-running command in the background (e.g. a server or watcher).
 
-        Callers MUST call `stop_command(command_id)` when done to terminate the
-        process and clean up temporary output files.
+        The command runs as a DETACHED subprocess via the background queue, and
+        its lifecycle (status, pid, exit code) is logged durably to both the
+        run-event feed and the shell command store. Callers make a later
+        ``check_command`` / ``stop_command`` with this returned run id.
 
         Args:
             command: The shell command to run in the background.
 
         Returns:
-            A message containing the unique command ID for later check/stop calls.
+            A message containing the unique run id for later check/stop calls.
         """
         self._check_command(command)
-        handle = await self._executor.start(
-            command,
-            cwd=self._cwd,
-            env=self._resolve_env(),
-        )
-        self._background[handle.command_id] = handle
-        return f"Started background command: {command!r}\nID: {handle.command_id}"
+        run_id = uuid.uuid4().hex[:12]
+        # Publish the basic "running" row synchronously so the UI feed sees the
+        # command instantly; the queue worker then spawns, records pid, and
+        # supervises to completion.
+        if self._run_events is not None:
+            self._run_events.append(
+                {
+                    "run_id": run_id,
+                    "process_id": "shell",
+                    "status": "running",
+                    "detail": f"started: {command}",
+                    "agent": self._agent,
+                    "conversation_id": None,
+                    "timestamp": self._queue_now(),
+                }
+            )
+        if self._bg_queue is not None:
+            self._bg_queue.enqueue(
+                run_id,
+                ShellRun(
+                    run_id=run_id,
+                    command=command,
+                    cwd=str(self._cwd),
+                    env=self._resolve_env(),
+                ),
+            )
+        else:
+            handle = await self._executor.start(
+                command,
+                cwd=self._cwd,
+                env=self._resolve_env(),
+            )
+            self._background[handle.command_id] = handle
+            return (
+                f"Started background command: {command!r}\nID: {handle.command_id}"
+            )
+        return f"Started background command: {command!r}\nID: {run_id}"
 
+    @_recoverable
     async def check_command(self, command_id: str) -> str:
         """Check the status and recent output of a background command.
 
+        Works for both live (in-memory) handles and detached survivors: when no
+        live executor handle is present, status is derived from the durable
+        shell store (join key = run id) plus a pid-liveness check, so a process
+        started in an earlier session can still be checked by id.
+
         Args:
-            command_id: The ID returned by start_command.
+            command_id: The id returned by start_command.
 
         Returns:
-            Status and recent output of the background command.
+            Status and available output/exit code of the background command.
         """
+        # Fastest, richest path: a live executor handle in this instance.
         handle = self._background.get(command_id)
-        if handle is None:
+        if handle is not None:
+            return self._format_check(await self._executor.check(handle))
+
+        # Durable path: read the rich shell store, verify pid liveness.
+        record = self._shell_cmds.recent(command_id) if self._shell_cmds else None
+        if record is None:
             return f"[Error: unknown command ID {command_id!r}]"
+        return self._format_check(
+            self._record_status(record)
+        )
 
-        status = await self._executor.check(handle)
-
-        output_sections: list[str] = []
-        if status.stdout:
-            output_sections.append(f"[stdout]\n{status.stdout}")
-        if status.stderr:
-            output_sections.append(f"[stderr]\n{status.stderr}")
-        parts = [
-            "\n".join(output_sections) if output_sections else "(no output yet)",
-            f"[status: {status.status}]",
-        ]
-        if status.status == "finished" and status.exit_code is not None:
-            parts.append(f"[exit code: {status.exit_code}]")
-        return "\n".join(parts)
-
+    @_recoverable
     async def stop_command(self, command_id: str) -> str:
         """Stop a background command and return its final output.
 
+        Stops a live in-memory handle via the executor; otherwise, for a
+        detached survivor, terminates its process group by pid and marks the
+        durable record stopped.
+
         Args:
-            command_id: The ID returned by start_command.
+            command_id: The id returned by start_command.
 
         Returns:
-            Final output and exit status of the stopped command.
+            Final status of the stopped command.
         """
         handle = self._background.get(command_id)
-        if handle is None:
+        if handle is not None:
+            status = await self._executor.stop(handle)
+            del self._background[command_id]
+            return self._format_stop(status)
+
+        record = self._shell_cmds.recent(command_id) if self._shell_cmds else None
+        if record is None:
             return f"[Error: unknown command ID {command_id!r}]"
+        pid = record.get("pid")
+        if pid is not None and self._pid_alive(pid):
+            self._kill_pid(pid)
+        return self._format_stop(
+            BackgroundStatus(status="finished", stdout="", stderr="", exit_code=0)
+            if pid is None
+            else BackgroundStatus(
+                status="finished",
+                stdout=self._format_cmd(record),
+                stderr="",
+                exit_code=0,
+            )
+        )
 
-        status = await self._executor.stop(handle)
-        del self._background[command_id]
+    @staticmethod
+    def _record_status(record: dict[str, Any]) -> "BackgroundStatus":
+        """Derive a status snapshot from a durable shell record."""
+        pid = record.get("pid")
+        st = record.get("status")
+        if st in ("done", "error") or record.get("finished_at"):
+            return BackgroundStatus(
+                status="finished",
+                stdout="",
+                stderr="",
+                exit_code=record.get("exit_code"),
+            )
+        if pid is not None and os.path.exists(f"/proc/{pid}"):
+            return BackgroundStatus(status="running", stdout="", stderr="")
+        return BackgroundStatus(
+            status="running" if st == "running" else "finished", stdout="", stderr=""
+        )
 
-        output_sections: list[str] = []
+    def _format_check(self, status: "BackgroundStatus") -> str:
+        parts = [f"[status: {status.status}]"]
         if status.stdout:
-            output_sections.append(f"[stdout]\n{status.stdout}")
+            parts.append(f"[stdout]\n{status.stdout}")
         if status.stderr:
-            output_sections.append(f"[stderr]\n{status.stderr}")
-        parts = [
-            "\n".join(output_sections) if output_sections else "(no output)",
-            "[stopped]",
-        ]
+            parts.append(f"[stderr]\n{status.stderr}")
+        if status.status == "finished" and status.exit_code is not None:
+            parts.append(f"[exit code: {status.exit_code}]")
+        if len(parts) == 1:
+            parts.insert(0, "(no output yet)")
+        return "\n".join(parts)
+
+    def _format_stop(self, status: "BackgroundStatus") -> str:
+        parts = ["[stopped]"]
+        if status.stdout:
+            parts.append(f"[{status.stdout}]")
         if status.exit_code is not None:
             parts.append(f"[exit code: {status.exit_code}]")
         return "\n".join(parts)
+
+    @staticmethod
+    def _format_cmd(record: dict[str, Any]) -> str:
+        cmd = record.get("command", "")
+        return f"stopped (was running: {cmd})"
+
+    @staticmethod
+    def _queue_now() -> str:
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return False
+        return True
+
+    @staticmethod
+    def _kill_pid(pid: int) -> None:
+        """SIGTERM the process group of pid (best-effort, for detached re-attach)."""
+        import signal
+
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass

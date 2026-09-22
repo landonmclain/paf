@@ -114,6 +114,19 @@ class Shell(AbstractCapability[AgentDepsT]):
     at construction, per 'the model proposes, the runtime executes'.
     """
 
+    processes_root: str | Path | None = None
+    """Root where durable background stores live (``data/processes``).
+
+    When set, shell background commands are persisted to
+    ``<processes_root>/<agent>/runs.jsonl`` (UI feed) and
+    ``<processes_root>/<agent>/shell_cmds.jsonl`` (rich shell records) and run
+    through the ``ShellBackgroundQueue`` as detached subprocesses. When `None`
+    (default) shell keeps the legacy in-memory background-process behavior.
+    """
+
+    agent: str = ""
+    """Agent name used to scope durable stores. Empty when not persisting."""
+
     def __post_init__(self) -> None:
         """Resolve the built-in denylist according to the selected policy."""
         if self.denied_commands is _DEFAULT_DENIED_COMMANDS:
@@ -135,4 +148,6 @@ class Shell(AbstractCapability[AgentDepsT]):
             env=self.env,
             denied_env_patterns=self.denied_env_patterns,
             executor=self.executor,
+            processes_root=self.processes_root,
+            agent=self.agent,
         )
