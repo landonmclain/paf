@@ -272,7 +272,7 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
     return _resolve_executor(executor_config)
 
 
-def _build_shell(store, shell_config: dict | None = None) -> _Shell:
+def _build_shell(store, shell_config: dict | None = None, agent_name: str | None = None) -> _Shell:
     """Shell command execution rooted at the project root (paf-owned copy).
 
     `store` is accepted for a uniform builder signature but unused — the shell
@@ -289,6 +289,13 @@ def _build_shell(store, shell_config: dict | None = None) -> _Shell:
     the sandbox). Absent/``None`` -> ``PROJECT_ROOT`` + local executor. The
     built-in deny-list and interactive-command block always apply; these knobs
     only move the cwd and the backend.
+
+    `agent_name` scopes shell's DURABLE background stores to
+    ``data/processes/<agent>/`` (same root the coordinator's runs feed uses), so
+    ``start_command`` processes are persisted and re-attached by pid across
+    turns/restarts via ``ShellCommandStore`` + the ``ShellBackgroundQueue``.
+    Background durability is always ON for agent-built shells; the toolset's
+    ``processes_root=None`` legacy path is only for direct unit-test use.
     """
     cwd = PROJECT_ROOT
     if (
@@ -300,7 +307,12 @@ def _build_shell(store, shell_config: dict | None = None) -> _Shell:
     executor = None
     if isinstance(shell_config, dict):
         executor = _resolve_shell_executor(shell_config.get("executor"))
-    return _Shell(cwd=cwd, executor=executor)
+    return _Shell(
+        cwd=cwd,
+        executor=executor,
+        processes_root=str(PROJECT_ROOT / "data" / "processes"),
+        agent=agent_name or "assistant",
+    )
 
 
 def _build_git(store, git_config: dict | None = None) -> _Git:
@@ -903,7 +915,7 @@ def build_runtime_capabilities(
         elif name == "FileSystem":
             capabilities.append(_build_filesystem(store, filesystem_config))
         elif name == "Shell":
-            capabilities.append(_build_shell(store, shell_config))
+            capabilities.append(_build_shell(store, shell_config, agent_name))
         elif name == "Git":
             capabilities.append(_build_git(store, git_config))
         elif name == "CodebaseMap":
