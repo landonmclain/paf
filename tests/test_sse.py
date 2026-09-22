@@ -17,7 +17,11 @@ from __future__ import annotations
 import asyncio
 
 from paf.background import PROCESSING, BackgroundCoordinator, BackgroundTask
-from paf.background_processes._events import ProcessEventType
+from paf.background_processes._events import (
+    ProcessEvent,
+    ProcessEventType,
+    get_agent_emitter,
+)
 from paf.runtime import StreamEvent
 from ui import sse
 
@@ -248,20 +252,12 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
     class _Coordinator:
         def __init__(self, history: list) -> None:
             self._history = history
-            self.cb = None
-            self.unsubscribed = {"v": False}
+            self.agent_name = "feed-test-agent"
+            self.lane = "conversation"
 
         def task_history(self, conversation_id):
             assert conversation_id == "conv-1"
             return self._history
-
-        def subscribe_tasks(self, cb):
-            self.cb = cb
-            return cb
-
-        def unsubscribe_tasks(self, cb):
-            assert cb is self.cb
-            self.unsubscribed["v"] = True
 
     class _Session:
         def __init__(self, coord) -> None:
@@ -281,6 +277,7 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
             self.updated_at = "2026-09-13T00:00:00"
 
     coord = _Coordinator([_Hist("consolidation.conv-1.1", "DONE")])
+    emitter = get_agent_emitter("feed-test-agent")
 
     class _Req:
         async def is_disconnected(self) -> bool:
@@ -293,7 +290,7 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
     async def _drive():
         out = []
 
-        # Pump frames from the feed as they arrive; drive via subscribe callback.
+        # Pump frames from the feed as they arrive; drive via the shared emitter.
         async def _pump():
             async for f in feed:
                 out.append(f)
@@ -304,21 +301,20 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
         # Let the restore history frame arrive.
         await asyncio.sleep(0.01)
 
-        # Fire live events through the subscribed callback (simulate queued->running).
+        # Fire live events on the per-agent emitter (simulate queued->running).
         def _ev(status):
-            class _E:
-                def __init__(self):
-                    self.id = "consolidation.conv-1.2"
-                    self.label = "Consolidating memory (conv-1)"
-                    self.status = status
-                    self.progress = 1.0
-                    self.detail = "5 turns -> 1 summary"
+            return ProcessEvent(
+                id="consolidation.conv-1.2",
+                label="Consolidating memory (conv-1)",
+                status=status,
+                progress=1.0,
+                detail="5 turns -> 1 summary",
+                lane="conversation",
+                scope="conv-1",
+            )
 
-            return _E()
-
-        assert coord.cb is not None
-        coord.cb(_ev("running"))
-        coord.cb(_ev("DONE"))
+        await emitter.emit_process(_ev("running"))
+        await emitter.emit_process(_ev("done"))
 
         await asyncio.wait_for(pump_task, timeout=2)
         return out
@@ -331,8 +327,8 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
     joined = "\n".join(out)
     assert "consolidation.conv-1.2" in joined
     assert "Consolidating memory" in joined
-    # Teardown (generator exhausted after 3 frames) unsubscribes.
-    assert coord.unsubscribed["v"] is True, (
+    # Teardown (generator exhausted after 3 frames) unsubscribes from the emitter.
+    assert all(len(v) == 0 for v in emitter._listeners.values()), (
         "feed teardown must unsubscribe the subscriber"
     )
 
