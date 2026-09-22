@@ -21,7 +21,7 @@ import shlex
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec
+from typing import Any, Concatenate, ParamSpec
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
@@ -36,11 +36,10 @@ from paf.capabilities._sandbox import (
 )
 
 from ._background import ShellBackgroundQueue, ShellRun
+from ._events import ProcessEvent, ProcessEventType
 from ._output import truncate_tail
+from ._registry import get_process_emitter
 from ._store import ShellCommandStore
-
-if TYPE_CHECKING:  # pragma: no cover
-    from paf.background_processes._store import RunEventStore
 
 _P = ParamSpec("_P")
 
@@ -134,15 +133,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         )
         self._agent = agent
         self._shell_cmds: ShellCommandStore | None = None
-        self._run_events: RunEventStore | None = None
         self._bg_queue: ShellBackgroundQueue | None = None
         if self._processes_root is not None:
-            from paf.background_processes._store import RunEventStore
-
             self._shell_cmds = ShellCommandStore.open(
-                str(self._processes_root), agent, conversation_id=self._conversation_id
-            )
-            self._run_events = RunEventStore.open(
                 str(self._processes_root), agent, conversation_id=self._conversation_id
             )
             self._bg_queue = ShellBackgroundQueue(
@@ -150,7 +143,6 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 cwd=self._initial_cwd,
                 agent=agent,
                 shell_cmds=self._shell_cmds,
-                run_events=self._run_events,
             )
 
         if self._allowed_commands and self._denied_commands:
@@ -375,21 +367,21 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         cid = self._conversation_id or "global"
         seq = self._next_seq(cid)
         run_id = f"shell.{cid}.{seq}"
-        # Publish the basic "running" row synchronously so the UI feed sees the
+        # Emit the "running" event synchronously so the live feed sees the
         # command instantly; the queue worker then spawns, records pid, and
         # supervises to completion.
-        if self._run_events is not None:
-            self._run_events.append(
-                {
-                    "run_id": run_id,
-                    "process_id": "shell",
-                    "status": "running",
-                    "detail": f"started: {command}",
-                    "agent": self._agent,
-                    "conversation_id": self._conversation_id,
-                    "timestamp": self._queue_now(),
-                }
+        await get_process_emitter(self._agent).emit_process(
+            ProcessEvent(
+                event_type=ProcessEventType.running,
+                id=run_id,
+                label=f"shell: {command}",
+                status="running",
+                detail=f"started: {command}",
+                lane="conversation",
+                scope=self._conversation_id,
+                updated_at=self._queue_now(),
             )
+        )
         if self._bg_queue is not None:
             self._bg_queue.enqueue(
                 run_id,
@@ -463,7 +455,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         status, exit_code = self._derive_status(last, command_id)
         if status.status == "finished" and last.get("status") in ("running", None):
             # Supervisor never wrote the terminal line; journal it now.
-            self._append_terminal(command_id, status)
+            await self._append_terminal(command_id, status)
         return self._format_check(status)
 
     @_recoverable
@@ -495,7 +487,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         pid = last.get("pid")
         if pid is not None and self._pid_alive(pid):
             self._kill_pid(pid)
-        self._append_terminal(
+        await self._append_terminal(
             command_id,
             BackgroundStatus(status="finished", stdout="", stderr="", exit_code=0),
             detail=f"stopped: {last.get('command', '')}",
@@ -527,22 +519,24 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             ), None
         return BackgroundStatus(status="running", stdout="", stderr=""), None
 
-    def _append_terminal(
+    async def _append_terminal(
         self, run_id: str, status: BackgroundStatus, *, detail: str = ""
     ) -> None:
-        """Append a terminal rich + basic line (append-only; never mutate prior)."""
+        """Append a terminal rich line and emit a live terminal event."""
+        command = run_id
         if self._shell_cmds is not None:
             lines = self._shell_cmds.all_for(run_id)
             if not lines:
                 return
             base = lines[0]
+            command = base.get("command", run_id)
             exit_code = status.exit_code
             # exit_code None (unknown, vanished process) → treat as error, not done.
             terminal_status = "done" if exit_code == 0 else "error"
             self._shell_cmds.append(
                 {
                     "run_id": run_id,
-                    "command": base.get("command", ""),
+                    "command": command,
                     "agent": self._agent,
                     "conversation_id": base.get(
                         "conversation_id", self._conversation_id
@@ -552,20 +546,20 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                     "exit_code": exit_code,
                 }
             )
-        if self._run_events is not None:
-            exit_code = status.exit_code
-            terminal_status = "done" if exit_code == 0 else "error"
-            self._run_events.append(
-                {
-                    "run_id": run_id,
-                    "process_id": "shell",
-                    "status": terminal_status,
-                    "detail": detail or f"exit {exit_code}",
-                    "agent": self._agent,
-                    "conversation_id": self._conversation_id,
-                    "timestamp": self._queue_now(),
-                }
+        exit_code = status.exit_code
+        terminal_status = "done" if exit_code == 0 else "error"
+        await get_process_emitter(self._agent).emit_process(
+            ProcessEvent(
+                event_type=ProcessEventType(terminal_status),
+                id=run_id,
+                label=f"shell: {command}",
+                status=terminal_status,
+                detail=detail or f"exit {exit_code}",
+                lane="conversation",
+                scope=self._conversation_id,
+                updated_at=self._queue_now(),
             )
+        )
 
     @staticmethod
     def _format_check(status: BackgroundStatus) -> str:
