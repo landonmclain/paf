@@ -343,7 +343,7 @@ class Session:
 
     # Class-level default so a Session always exposes ``background`` (bare by
     # default); the app/CLI attaches a coordinator when the profile calls for it.
-    background: BackgroundCoordinator | None = None
+    background: BackgroundLanes | None = None
 
     def __init__(
         self,
