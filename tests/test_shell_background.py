@@ -24,8 +24,12 @@ from pathlib import Path
 
 import pytest
 
-from paf.capabilities.shell._events import ProcessEvent, ProcessEventType
-from paf.capabilities.shell._registry import clear_process_emitters, get_process_emitter
+from paf.background_processes._events import (
+    ProcessEvent,
+    ProcessEventType,
+    clear_agent_emitters,
+    get_agent_emitter,
+)
 from paf.capabilities.shell._store import ShellCommandStore
 from paf.capabilities.shell._toolset import ShellToolset
 
@@ -33,9 +37,9 @@ from paf.capabilities.shell._toolset import ShellToolset
 @pytest.fixture(autouse=True)
 def _isolate_emitters() -> None:
     """Clear the process-wide per-agent emitters so captured events are isolated."""
-    clear_process_emitters()
+    clear_agent_emitters()
     yield
-    clear_process_emitters()
+    clear_agent_emitters()
 
 
 def _toolset(
@@ -114,9 +118,7 @@ def test_shell_store_conversation_scoped_root(tmp_path: Path) -> None:
 def test_start_command_emits_running_and_writes_rich_store(tmp_path: Path) -> None:
     async def scenario():
         events: list[ProcessEvent] = []
-        get_process_emitter("demo_assistant").on(
-            ProcessEventType.running, events.append
-        )
+        get_agent_emitter("demo_assistant").on(ProcessEventType.running, events.append)
         async with _toolset(tmp_path) as t:
             out = await t.start_command("echo hello-background")
             run_id = out.split("ID: ")[1]
@@ -147,9 +149,7 @@ def test_run_id_prepends_shell_and_conversation_and_stamps_conversation_id(
 
     async def scenario():
         events: list[ProcessEvent] = []
-        get_process_emitter("demo_assistant").on(
-            ProcessEventType.running, events.append
-        )
+        get_agent_emitter("demo_assistant").on(ProcessEventType.running, events.append)
         async with _toolset(tmp_path, conversation_id="c1") as t:
             out = await t.start_command("echo convo")
             run_id = out.split("ID: ")[1]
@@ -271,9 +271,7 @@ def test_two_store_join_key_is_run_id(tmp_path: Path) -> None:
 
     async def scenario():
         events: list[ProcessEvent] = []
-        get_process_emitter("demo_assistant").on(
-            ProcessEventType.running, events.append
-        )
+        get_agent_emitter("demo_assistant").on(ProcessEventType.running, events.append)
         async with _toolset(tmp_path) as t:
             out = await t.start_command("echo join-check")
             run_id = out.split("ID: ")[1]

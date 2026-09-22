@@ -28,6 +28,11 @@ from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, ToolsetTool
 
+from paf.background_processes._events import (
+    ProcessEvent,
+    ProcessEventType,
+    get_agent_emitter,
+)
 from paf.capabilities._sandbox import (
     BackgroundHandle,
     BackgroundStatus,
@@ -36,9 +41,7 @@ from paf.capabilities._sandbox import (
 )
 
 from ._background import ShellBackgroundQueue, ShellRun
-from ._events import ProcessEvent, ProcessEventType
 from ._output import truncate_tail
-from ._registry import get_process_emitter
 from ._store import ShellCommandStore
 
 _P = ParamSpec("_P")
@@ -370,16 +373,14 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         # Emit the "running" event synchronously so the live feed sees the
         # command instantly; the queue worker then spawns, records pid, and
         # supervises to completion.
-        await get_process_emitter(self._agent).emit_process(
+        await get_agent_emitter(self._agent).emit_process(
             ProcessEvent(
-                event_type=ProcessEventType.running,
                 id=run_id,
                 label=f"shell: {command}",
-                status="running",
+                status=ProcessEventType.running,
                 detail=f"started: {command}",
                 lane="conversation",
                 scope=self._conversation_id,
-                updated_at=self._queue_now(),
             )
         )
         if self._bg_queue is not None:
@@ -548,16 +549,14 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             )
         exit_code = status.exit_code
         terminal_status = "done" if exit_code == 0 else "error"
-        await get_process_emitter(self._agent).emit_process(
+        await get_agent_emitter(self._agent).emit_process(
             ProcessEvent(
-                event_type=ProcessEventType(terminal_status),
                 id=run_id,
                 label=f"shell: {command}",
-                status=terminal_status,
+                status=ProcessEventType(terminal_status),
                 detail=detail or f"exit {exit_code}",
                 lane="conversation",
                 scope=self._conversation_id,
-                updated_at=self._queue_now(),
             )
         )
 

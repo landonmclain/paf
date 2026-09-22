@@ -30,9 +30,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from paf.background import BackgroundQueueService, QueueState
+from paf.background_processes._events import (
+    ProcessEvent,
+    ProcessEventType,
+    get_agent_emitter,
+)
 from paf.capabilities._sandbox import BackgroundHandle, SandboxedExecutor
-from paf.capabilities.shell._events import ProcessEvent, ProcessEventType
-from paf.capabilities.shell._registry import get_process_emitter
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +101,7 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         self.name = name
         # The per-agent live event emitter (shared with the coordinator's task
         # bus and the SSE feed). Shell emits a ProcessEvent on each transition.
-        self._emitter = get_process_emitter(agent)
+        self._emitter = get_agent_emitter(agent)
 
     def _record_rich(self, job: ShellRun, *, status: str, **fields: object) -> None:
         """Append one rich shell journal line (join key = run_id).
@@ -131,14 +134,12 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         """
         await self._emitter.emit_process(
             ProcessEvent(
-                event_type=ProcessEventType(status),
                 id=run_id,
                 label=label,
-                status=status,
+                status=ProcessEventType(status),
                 detail=detail,
                 lane="conversation",
                 scope=self._job_cid.get(run_id),
-                updated_at=_now_iso(),
             )
         )
 
