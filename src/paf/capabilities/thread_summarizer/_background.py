@@ -175,7 +175,7 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
         capture_root: str,
         span_source: ThreadSpanSource | None = None,
         summarize_span_fn: SummarizeSpan | None = None,
-        on_complete: Callable[[str, bool, str], None | Awaitable[None]] | None = None,
+        on_complete: Callable[[str, bool, str], Awaitable[None]] | None = None,
         name: str = "thread-summarizer",
     ) -> None:
         super().__init__()

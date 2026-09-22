@@ -881,7 +881,7 @@ class BackgroundCoordinator:
             status=ProcessEventType(task.status),
             progress=task.progress,
             detail=task.detail,
-            lane=self.lane or "agent",
+            lane=cast(Literal["agent", "conversation"], self.lane or "agent"),
             scope=self.conversation_id,
         )
 
