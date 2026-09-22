@@ -368,12 +368,14 @@ def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
         session.background._thread_summarizer_enabled = True
         # Simulate a failed thread summarizer task for conversation cA.
         session.background._thread_summarizer_seq = 1
-        session.background._publish_task(
-            BackgroundTask(
-                id="thread_summarize.profile:cA.1",
-                label="Summarizing thread (profile:cA)",
-                status="error",
-                detail="summary run/turn anchor must increase",
+        asyncio.run(
+            session.background._publish_task(
+                BackgroundTask(
+                    id="thread_summarize.profile:cA.1",
+                    label="Summarizing thread (profile:cA)",
+                    status="error",
+                    detail="summary run/turn anchor must increase",
+                )
             )
         )
 
