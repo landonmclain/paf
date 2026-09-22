@@ -290,7 +290,6 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
             self.updated_at = "2026-09-13T00:00:00"
 
     coord = _Coordinator([_Hist("consolidation.conv-1.1", "DONE")])
-    s = _Session(coord)
 
     class _Req:
         async def is_disconnected(self) -> bool:
@@ -298,7 +297,7 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
             # not fire and cut this feed short.
             return False
 
-    feed = sse._process_feed(s, "conv-1", _Req())  # type: ignore[attr-defined]
+    feed = sse._process_feed(coord, "conv-1", _Req())  # type: ignore[attr-defined]
 
     async def _drive():
         out = []
@@ -357,7 +356,7 @@ def test_process_feed_bare_session_streams_nothing_and_stays_alive() -> None:
         async def is_disconnected(self) -> bool:
             return False
 
-    feed = sse._process_feed(_Session(), "conv-1", _Req())  # type: ignore[attr-defined]
+    feed = sse._process_feed(None, "conv-1", _Req())  # type: ignore[attr-defined]
 
     async def _drive():
         await feed.aclose()  # type: ignore[attr-defined] - must not raise on a bare session
@@ -389,7 +388,7 @@ def test_process_feed_terminates_on_client_disconnect() -> None:
             self.n += 1
             return self.n >= 3
 
-    feed = sse._process_feed(_Session(), "conv-1", _Req())  # type: ignore[attr-defined]
+    feed = sse._process_feed(None, "conv-1", _Req())  # type: ignore[attr-defined]
 
     async def _drive():
         out = []
