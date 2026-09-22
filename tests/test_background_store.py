@@ -9,9 +9,8 @@ durable registry needs.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import asyncio
+from pathlib import Path
 
 from paf.background_processes._store import RunEventStore
 
