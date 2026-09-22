@@ -539,3 +539,115 @@ def test_reconcile_prefers_newer_seq_over_stale_skip_on_timestamp_tie() -> None:
     # The running fold (last line) wins: no stale skip text.
     assert out.status == PROCESSING
     assert out.detail == ""
+
+
+def test_two_lane_journals_split_thread_and_memory(tmp_path) -> None:
+    """The two-lane split: thread records land in the per-conversation journal,
+    memory records stay in the per-agent journal, as separate files.
+    """
+    import hashlib
+    from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import (
+        BackgroundCoordinator,
+        BackgroundTask,
+    )
+    from paf.capabilities import PROFILES
+
+    processes_root = str(tmp_path / "processes")
+    agent = "demo_assistant"
+
+    # Conversation lane: thread summarizer, scoped to conversation c1.
+    conv = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name=agent,
+        profile=PROFILES.get("demo"),
+        lane="conversation",
+        conversation_id="c1",
+        processes_root=processes_root,
+    )
+    conv._publish_task(BackgroundTask(id="thread_summarize.c1.1", label="Summarizing"))
+
+    # Agent lane: memory consolidation, shared per-agent.
+    agentc = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name=agent,
+        profile=PROFILES.get("demo"),
+        lane="agent",
+        processes_root=processes_root,
+    )
+    agentc._publish_task(BackgroundTask(id="consolidation.c1.1", label="Consolidating"))
+
+    # Thread record lands in the per-conversation journal.
+    conv_events = conv._run_events.read_all()
+    assert [e["process_id"] for e in conv_events] == ["thread_summarize"]
+    assert conv_events[0]["conversation_id"] == "c1"
+
+    # Memory record lands in the agent journal.
+    agent_events = agentc._run_events.read_all()
+    assert [e["process_id"] for e in agent_events] == ["consolidation"]
+
+    # The two journals are separate files at the expected locations.
+    conv_path = (
+        tmp_path
+        / "processes"
+        / agent
+        / "conversations"
+        / hashlib.sha256(b"c1").hexdigest()[:24]
+        / "runs.jsonl"
+    )
+    agent_path = tmp_path / "processes" / agent / "runs.jsonl"
+    assert conv_path.exists()
+    assert agent_path.exists()
+    assert conv_path != agent_path
+
+
+def test_lane_reads_are_separate_not_merged(tmp_path) -> None:
+    """The two lanes read separately (no merge facade): the agent lane's
+    ``task_history(None)`` returns all agent-scoped rows; the conversation
+    lane's ``task_history(cid)`` returns only that conversation's rows.
+    """
+    from tempfile import mkdtemp
+
+    from pydantic_ai_harness.step_persistence import FileStepStore
+
+    from paf.background import (
+        BackgroundCoordinator,
+        BackgroundTask,
+    )
+    from paf.capabilities import PROFILES
+
+    processes_root = str(tmp_path / "processes")
+    agent = "demo_assistant"
+
+    # Agent lane: agent-scoped task id (no cid).
+    agentc = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name=agent,
+        profile=PROFILES.get("demo"),
+        lane="agent",
+        processes_root=processes_root,
+    )
+    agentc._publish_task(
+        BackgroundTask(id=f"consolidation.{agent}.1", label="Consolidating")
+    )
+
+    # Conversation lane: cid-scoped thread task.
+    conv = BackgroundCoordinator(
+        FileStepStore(directory=mkdtemp()),
+        agent_name=agent,
+        profile=PROFILES.get("demo"),
+        lane="conversation",
+        conversation_id="c1",
+        processes_root=processes_root,
+    )
+    conv._publish_task(BackgroundTask(id="thread_summarize.c1.1", label="Summarizing"))
+
+    # Agent lane: task_history(None) returns all agent-scoped rows.
+    assert [t.id for t in agentc.task_history(None)] == [f"consolidation.{agent}.1"]
+
+    # Conversation lane: task_history(cid) returns only that conversation's rows.
+    assert [t.id for t in conv.task_history("c1")] == ["thread_summarize.c1.1"]
+    assert conv.task_history("c2") == []
