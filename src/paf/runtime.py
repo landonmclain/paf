@@ -61,6 +61,7 @@ from paf.background import (
     SKIPPED,
     BackgroundCoordinator,
     BackgroundEvent,
+    BackgroundLanes,
     BackgroundTask,
 )
 from paf.capabilities import PROFILES
@@ -387,11 +388,11 @@ class Session:
         self._usage_limits = spec_usage_limits(agent_name)
         self.history: list = []
         # Background orchestrator — BARE by default. The app/CLI attaches a
-        # :class:`paf.background.BackgroundCoordinator` (via
+        # :class:`paf.background.BackgroundLanes` facade (via
         # ``BackgroundCoordinator.for_session(self)``) when the spec/profile
         # calls for memory/thread machinery; a memory-less profile (e.g.
         # ``contextbench``) stays ``None`` so it carries no scaffolding.
-        self.background: BackgroundCoordinator | None = None
+        self.background: BackgroundLanes | None = None
         # Session-held CancellationToken -> stop (created here so cancel()
         # works and iter() has a token from the start).
         self._token = CancellationToken()
@@ -430,14 +431,15 @@ class Session:
             return cid
         return f"{pname}:{cid}"
 
-    def attach_background(self) -> BackgroundCoordinator | None:
-        """Attach the background coordinator for this session (or keep it bare).
+    def attach_background(self) -> BackgroundLanes | None:
+        """Attach the two-lane background coordinator for this session (or keep it bare).
 
         The app/CLI calls this once after constructing the Session: it builds a
-        :class:`paf.background.BackgroundCoordinator` scoped to this session's
-        store/profile and assigns it to ``self.background``. A memory-less
-        profile (e.g. ``contextbench``) yields ``None`` — the session stays
-        turn-only. Returns the attached coordinator (or None).
+        :class:`paf.background.BackgroundLanes` facade (shared agent lane +
+        per-session conversation lane) scoped to this session's store/profile
+        and assigns it to ``self.background``. A memory-less profile (e.g.
+        ``contextbench``) yields ``None`` — the session stays turn-only.
+        Returns the attached facade (or None).
         """
         self.background = BackgroundCoordinator.for_session(self)
         return self.background
