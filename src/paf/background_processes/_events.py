@@ -110,3 +110,8 @@ def get_agent_emitter(agent_name: str) -> ProcessEventEmitter:
         emitter = ProcessEventEmitter()
         _agent_emitters[agent_name] = emitter
     return emitter
+
+
+def clear_agent_emitters() -> None:
+    """Drop all emitters (test isolation only)."""
+    _agent_emitters.clear()
