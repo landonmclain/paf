@@ -49,6 +49,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from paf.background_processes._events import get_agent_emitter
 from paf.capabilities import PROFILES
 from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
@@ -732,16 +733,28 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
         # previously covered was returning a *completed* run's row back to idle;
         # that is handled explicitly when a task reaches a terminal state.
 
-        # 2. Subscribe for live events. subscribe_tasks replays already-active
-        #    (queued|running) tasks synchronously *and* fans out live transitions;
-        #    both funnel through the same queue, so ordering is preserved. When a
-        #    task reaches a TERMINAL state we also re-publish the idle snapshot so
-        #    its stable row returns to idle (a completed fold no longer shows as
-        #    running).
+        # 2. Subscribe for live events on the shared per-agent emitter, filtered
+        #    to THIS lane/scope. The emitter is per-agent (both lanes of an agent
+        #    share one bus), so we filter: an agent-lane feed keeps only agent
+        #    events; a conversation-lane feed keeps only that conversation's
+        #    events. The durable store read above (task_history) is the reconnect
+        #    history; the emitter is live-only. When a task reaches a TERMINAL
+        #    state we also re-publish the idle snapshot so its stable row returns
+        #    to idle (a completed fold no longer shows as running).
+        emitter = None
         sub = None
         if bg is not None:
+            emitter = get_agent_emitter(bg.agent_name)
+            lane = bg.lane or "agent"
+
+            def _matches(ev) -> bool:
+                if lane == "agent":
+                    return ev.lane == "agent"
+                return ev.lane == "conversation" and ev.scope == scope
 
             def _on_task(ev) -> None:
+                if not _matches(ev):
+                    return
                 _publish(_task_frame(ev))
                 if getattr(ev.status, "value", ev.status) in (
                     "done",
@@ -757,7 +770,7 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
                         )
                     )
 
-            sub = bg.subscribe_tasks(_on_task)
+            sub = emitter.on_any(_on_task)
 
         # Watch for the client disconnecting. This feed is intentionally
         # never-ending ("no turn-end sentinel"), so without a disconnect signal
@@ -787,9 +800,9 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
         finally:
             disconnect_watcher.cancel()
             closed["v"] = True
-            if sub is not None:
+            if sub is not None and emitter is not None:
                 try:
-                    bg.unsubscribe_tasks(sub)  # type: ignore[union-attr]
+                    emitter.off_any(sub)  # type: ignore[union-attr]
                 except Exception:  # noqa: BLE001 - best-effort teardown
                     log.warning(
                         "processes_stream subscriber teardown failed", exc_info=True
