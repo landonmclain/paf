@@ -174,7 +174,9 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         del state
         try:
             self._job_cid[job.run_id] = job.conversation_id
-            self._record_basic(job.run_id, status="running")
+            # The basic "running" row is already published synchronously by
+            # start_command (with a richer "started: <cmd>" detail); don't
+            # append a second one here.
             cwd = Path(job.cwd).resolve() if job.cwd else self.cwd or Path(".")
             env = job.env
             handle = await self.executor.start(
