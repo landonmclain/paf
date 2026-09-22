@@ -39,9 +39,29 @@ class ShellCommandStore:
         self._kind = kind
 
     @classmethod
-    def open(cls, root: str, agent: str, *, kind: str = DEFAULT_KIND) -> ShellCommandStore:
-        """Open a store rooted at ``root`` (``data/processes``) for ``agent``."""
-        return cls(FlatJsonlStore(root), agent=agent, kind=kind)
+    def open(
+        cls,
+        root: str,
+        agent: str,
+        *,
+        kind: str = DEFAULT_KIND,
+        conversation_id: str | None = None,
+    ) -> ShellCommandStore:
+        """Open a store rooted at ``root`` (``data/processes``) for ``agent``.
+
+        With ``conversation_id`` the store is conversation-scoped and roots at
+        ``<root>/<agent>/conversations/<cid>/shell_cmds.jsonl`` (colocated with
+        the basic ``runs.jsonl`` for the same conversation); otherwise it is the
+        per-agent journal ``<root>/<agent>/shell_cmds.jsonl``.
+        """
+        if conversation_id is None:
+            return cls(FlatJsonlStore(root), agent=agent, kind=kind)
+        # Lazy import: background_processes._store transitively re-enters
+        # paf.capabilities, so a top-level import here would be circular.
+        from paf.background_processes._store import _safe_cid
+
+        key = f"{agent}/conversations/{_safe_cid(conversation_id)}"
+        return cls(FlatJsonlStore(root), agent=key, kind=kind)
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         """Append one rich shell record. No interpretation — just a record."""

@@ -137,8 +137,12 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         if self._processes_root is not None:
             from paf.background_processes._store import RunEventStore
 
-            self._shell_cmds = ShellCommandStore.open(str(self._processes_root), agent)
-            self._run_events = RunEventStore.open(str(self._processes_root), agent)
+            self._shell_cmds = ShellCommandStore.open(
+                str(self._processes_root), agent, conversation_id=self._conversation_id
+            )
+            self._run_events = RunEventStore.open(
+                str(self._processes_root), agent, conversation_id=self._conversation_id
+            )
             self._bg_queue = ShellBackgroundQueue(
                 executor=self._executor,
                 cwd=self._initial_cwd,

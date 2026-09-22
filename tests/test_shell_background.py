@@ -69,6 +69,34 @@ def test_shell_store_restores_after_reopen(tmp_path: Path) -> None:
     assert reopened.read_all()[0]["exit_code"] == 0
 
 
+def test_shell_store_conversation_scoped_root(tmp_path: Path) -> None:
+    """ShellCommandStore.open with conversation_id roots at the hashed
+    per-conversation folder, colocated with the basic runs.jsonl."""
+    import hashlib
+
+    root = tmp_path / "processes"
+    agent = "demo_assistant"
+    store = ShellCommandStore.open(str(root), agent, conversation_id="c1")
+    store.append(
+        {"run_id": "shell.c1.1", "command": "ls", "status": "running", "pid": 1}
+    )
+
+    # Rich store lands in the hashed conversation folder.
+    conv_path = (
+        root
+        / agent
+        / "conversations"
+        / hashlib.sha256(b"c1").hexdigest()[:24]
+        / "shell_cmds.jsonl"
+    )
+    assert conv_path.exists()
+    assert store.read_all()[0]["run_id"] == "shell.c1.1"
+
+    # The agent-level store (no conversation_id) is a separate file.
+    agent_store = ShellCommandStore.open(str(root), agent)
+    assert agent_store.read_all() == []
+
+
 def test_start_command_writes_both_stores_and_returns_run_id(tmp_path: Path) -> None:
     async def scenario():
         async with _toolset(tmp_path) as t:
@@ -108,9 +136,14 @@ def test_run_id_prepends_shell_and_conversation_and_stamps_conversation_id(
             out = await t.start_command("echo convo")
             run_id = out.split("ID: ")[1]
             assert run_id == "shell.c1.1", run_id
-            # conversation_id stamped in the basic + rich rows
-            re = RunEventStore.open(str(_processes(tmp_path)), "demo_assistant")
-            sc = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
+            # conversation_id stamped in the basic + rich rows (both stores are
+            # conversation-scoped now, so open them with the same cid)
+            re = RunEventStore.open(
+                str(_processes(tmp_path)), "demo_assistant", conversation_id="c1"
+            )
+            sc = ShellCommandStore.open(
+                str(_processes(tmp_path)), "demo_assistant", conversation_id="c1"
+            )
             basic = [e for e in re.read_all() if e["run_id"] == run_id]
             assert basic and basic[0]["conversation_id"] == "c1"
             # rich row (written by worker) also carries it
@@ -164,7 +197,11 @@ def test_check_resolves_stale_running_when_process_gone(tmp_path: Path) -> None:
     """
 
     async def scenario():
-        sc = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
+        # The toolset below opens conversation-scoped stores, so the hand-written
+        # line must go into the same conversation-scoped store.
+        sc = ShellCommandStore.open(
+            str(_processes(tmp_path)), "demo_assistant", conversation_id="c1"
+        )
         # Hand-write a `running` line with a dead pid (624242 unlikely to exist).
         sc.append(
             {
