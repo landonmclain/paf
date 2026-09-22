@@ -29,13 +29,18 @@ re-spawned by the next :meth:`enqueue`; callers must NOT assume a warm worker.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
+
+from paf.background_processes._events import (
+    ProcessEvent,
+    ProcessEventType,
+    get_agent_emitter,
+)
 
 log = logging.getLogger(__name__)
 
@@ -347,6 +352,11 @@ class BackgroundCoordinator:
         # future conversation-scoped processes, per-conversation). None = a
         # legacy direct construction that registers every process.
         self.lane = lane
+        self.conversation_id = conversation_id
+        # The shared per-agent live-event bus. Both lanes of this agent and any
+        # other process (shell, future curator) emit here; the feed subscribes
+        # once per agent and filters by lane/scope.
+        self._emitter = get_agent_emitter(self.agent_name)
 
         # Dumb append-only run-event store: every task status
         # transition is recorded losslessly, scoped by agent. Root is
@@ -403,7 +413,6 @@ class BackgroundCoordinator:
 
         # Task registry + subscriber list (+ seq counters for stable ids).
         self._background_tasks: dict[str, BackgroundTask] = {}
-        self._task_subscribers: list[Callable[[BackgroundEvent], Any]] = []
         self._consolidation_seq = 0
         self._review_seq = 0
         self._thread_summarizer_seq = 0
@@ -522,26 +531,26 @@ class BackgroundCoordinator:
         return self._thread_queue
 
     def subscribe_tasks(
-        self, cb: Callable[[BackgroundEvent], Any]
-    ) -> Callable[[BackgroundEvent], Any]:
+        self, cb: Callable[[ProcessEvent], Any]
+    ) -> Callable[[ProcessEvent], Any]:
         """Register a consumer for background-task lifecycle.
 
-        The callback is invoked on every ``BackgroundEvent`` transition
-        (queued/running/done/error/skipped) for every registered task. On
-        subscribe, ALREADY-ACTIVE tasks (status queued|running) are REPLAYED
-        synchronously first, so a late-joining connection (e.g. a web tab that
-        opens mid-fold) sees ``running`` instead of missing the transition.
+        The callback is invoked on every ``ProcessEvent`` transition
+        (queued/running/done/error/skipped) for every registered task, via the
+        shared per-agent emitter. On subscribe, ALREADY-ACTIVE tasks (status
+        queued|running) are REPLAYED synchronously first, so a late-joining
+        connection (e.g. a web tab that opens mid-fold) sees ``running`` instead
+        of missing the transition.
 
         Returns the callback unchanged (convenient: ``cb = s.subscribe_tasks(cb)``).
         """
-        if cb not in self._task_subscribers:
-            self._task_subscribers.append(cb)
+        self._emitter.on_any(cb)
         for task in self._background_tasks.values():
             if task.status in (QUEUED, PROCESSING):
-                cb(task.as_event())
+                cb(self._to_process_event(task))
         return cb
 
-    def unsubscribe_tasks(self, cb: Callable[[BackgroundEvent], Any]) -> None:
+    def unsubscribe_tasks(self, cb: Callable[[ProcessEvent], Any]) -> None:
         """Deregister a consumer previously registered via :meth:`subscribe_tasks`.
 
         Idempotent and best-effort: a callback that isn't registered (or was
@@ -549,10 +558,7 @@ class BackgroundCoordinator:
         dedicated ``/api/processes/stream``) so a disconnecting client doesn't
         leak a subscriber that keeps pushing into a dead queue.
         """
-        try:
-            self._task_subscribers.remove(cb)
-        except ValueError:
-            pass
+        self._emitter.off_any(cb)
 
     def task_history(self, conversation_id: str | None = None) -> list[BackgroundTask]:
         """Background-task rows, newest first.
@@ -851,25 +857,33 @@ class BackgroundCoordinator:
                 detail="idle · status unavailable",
             )
 
-    def _publish_task(self, task: BackgroundTask) -> None:
-        """Store a task in the registry and notify all subscribers.
+    async def _publish_task(self, task: BackgroundTask) -> None:
+        """Store a task in the registry and emit its transition on the shared bus.
 
         A failing subscriber must never break the session/coordinator: the
-        error is logged and the callback skipped (fire-and-forget awaits).
+        emitter logs and skips a raising listener.
         """
         task.updated_at = datetime.now(UTC).replace(microsecond=0).isoformat()
         self._background_tasks[task.id] = task
         if self._run_events is not None:
             self._run_events.append(self._journal_event(task))
-        ev = task.as_event()
-        for cb in self._task_subscribers:
-            try:
-                result = cb(ev)
-                if inspect.isawaitable(result):
-                    t = asyncio.ensure_future(result)  # fire-and-forget, never block
-                    t.add_done_callback(_log_subscriber_failure)
-            except Exception:  # a subscriber must never break the session
-                log.exception("background-task subscriber failed task=%s", task.id)
+        await self._emitter.emit_process(self._to_process_event(task))
+
+    def _to_process_event(self, task: BackgroundTask) -> ProcessEvent:
+        """Map a registry task to the shared live-event payload (lane + scope).
+
+        ``lane`` is this coordinator's lane; ``scope`` is the conversation id
+        for a conversation-lane coordinator, or None for the agent lane.
+        """
+        return ProcessEvent(
+            id=task.id,
+            label=task.label,
+            status=ProcessEventType(task.status),
+            progress=task.progress,
+            detail=task.detail,
+            lane=self.lane or "agent",
+            scope=self.conversation_id,
+        )
 
     def _journal_event(self, task: BackgroundTask) -> dict:
         """The lossless event record for one task status transition.
@@ -903,7 +917,7 @@ class BackgroundCoordinator:
             from paf.capabilities.memory._watermark import MemoryWatermark
             from paf.capabilities.persistence import build_history_source
 
-            def _complete(kind: StepStatus, detail: str = "") -> None:
+            async def _complete(kind: StepStatus, detail: str = "") -> None:
                 for task_id, task in list(self._background_tasks.items()):
                     if task_id.startswith("consolidation.") and task.status in (
                         QUEUED,
@@ -912,7 +926,7 @@ class BackgroundCoordinator:
                         task.status = kind
                         task.detail = detail
                         task.progress = 1.0 if kind == DONE else None
-                        self._publish_task(task)
+                        await self._publish_task(task)
 
             source = build_history_source(self._store)
 
@@ -937,10 +951,10 @@ class BackgroundCoordinator:
                         n = await queue_ref._default_consolidate_span(
                             messages, directory, watermark
                         )
-                    _complete(DONE, f"{n} records folded")
+                    await _complete(DONE, f"{n} records folded")
                     return n
                 except Exception as exc:
-                    _complete(ERROR, str(exc))
+                    await _complete(ERROR, str(exc))
                     raise
 
             queue = MemoryConsolidationQueue(
@@ -959,7 +973,7 @@ class BackgroundCoordinator:
             from paf.capabilities.memory._background import MemoryReviewQueue
             from paf.capabilities.memory._review import review as _default_review
 
-            def _complete(kind: StepStatus, detail: str = "") -> None:
+            async def _complete(kind: StepStatus, detail: str = "") -> None:
                 for task_id, task in list(self._background_tasks.items()):
                     if task_id.startswith("review.") and task.status in (
                         QUEUED,
@@ -968,7 +982,7 @@ class BackgroundCoordinator:
                         task.status = kind
                         task.detail = detail
                         task.progress = 1.0 if kind == DONE else None
-                        self._publish_task(task)
+                        await self._publish_task(task)
 
             async def review_span(directory: str) -> int:
                 from paf.capabilities.memory._overrides import OverrideStore
@@ -979,10 +993,10 @@ class BackgroundCoordinator:
                         overrides=OverrideStore(directory),
                         agent_name=self.agent_name,
                     )
-                    _complete(DONE, f"{n} verdict(s) applied")
+                    await _complete(DONE, f"{n} verdict(s) applied")
                     return n
                 except Exception as exc:
-                    _complete(ERROR, str(exc))
+                    await _complete(ERROR, str(exc))
                     raise
 
             self._review_queue = MemoryReviewQueue(
@@ -1006,7 +1020,7 @@ class BackgroundCoordinator:
             )
         return self._thread_queue
 
-    def _complete_thread_summarize(
+    async def _complete_thread_summarize(
         self, conversation_id: str, success: bool, detail: str
     ) -> None:
         """Publish completion for active thread-summarizer task rows."""
@@ -1017,7 +1031,7 @@ class BackgroundCoordinator:
                 task.status = DONE if success else ERROR
                 task.detail = detail
                 task.progress = 1.0 if success else None
-                self._publish_task(task)
+                await self._publish_task(task)
 
     # -- post-turn triggers (the single seam) ------------------------------
 
@@ -1075,13 +1089,13 @@ class BackgroundCoordinator:
         self._thread_summarizer_seq += 1
         task_id = f"thread_summarize.{cid}.{self._thread_summarizer_seq}"
         task = BackgroundTask(id=task_id, label=f"Summarizing thread ({cid})")
-        self._publish_task(task)  # queued
+        await self._publish_task(task)  # queued
         try:
             runs = await self._store.list_runs(conversation_id=cid)
             if not runs:
                 task.status = SKIPPED
                 task.detail = "no persisted runs yet"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
             tip_history = await source.run_history(run_id=tip_run)
@@ -1089,7 +1103,7 @@ class BackgroundCoordinator:
             if not anchors:
                 task.status = SKIPPED
                 task.detail = "no persisted turns"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             tip_turn = len(anchors) - 1
             store = ThreadSummaryStore(self._thread_capture_root, cid)
@@ -1116,7 +1130,7 @@ class BackgroundCoordinator:
                 task.detail = (
                     f"only {span_turns} unsettled turn(s); need >= {BLOCK_TURNS}"
                 )
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             # Single-flight: skip if a thread summarize is already queued/running.
             queue = self._ensure_thread_summarizer_queue()
@@ -1124,7 +1138,7 @@ class BackgroundCoordinator:
             if cst.queued > 0 or cst.running:
                 task.status = SKIPPED
                 task.detail = "thread summarization already in flight"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             queue.enqueue(
                 cid,
@@ -1135,13 +1149,13 @@ class BackgroundCoordinator:
                 ),
             )
             task.status = PROCESSING  # job handed to the worker
-            self._publish_task(task)
+            await self._publish_task(task)
         except (
             Exception
         ) as exc:  # trigger path itself failed (rare); never break the turn
             task.status = ERROR
             task.detail = str(exc)
-            self._publish_task(task)
+            await self._publish_task(task)
 
     async def _maybe_trigger_review(self, cid: str | None) -> None:
         """Fire the background reviewer hook, publishing task lifecycle.
@@ -1173,13 +1187,13 @@ class BackgroundCoordinator:
         self._review_seq += 1
         task_id = f"review.{self.agent_name}.{self._review_seq}"
         task = BackgroundTask(id=task_id, label="Reviewing memory")
-        self._publish_task(task)  # queued
+        await self._publish_task(task)  # queued
         try:
             runs = await self._store.list_runs(conversation_id=cid)
             if not runs:
                 task.status = SKIPPED
                 task.detail = "no persisted runs yet"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
             tip_history = await source.run_history(run_id=tip_run)
@@ -1187,7 +1201,7 @@ class BackgroundCoordinator:
             if not anchors:
                 task.status = SKIPPED
                 task.detail = "no persisted turns"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             tip_turn = len(anchors) - 1
             wm = MemoryWatermark.load(
@@ -1214,7 +1228,7 @@ class BackgroundCoordinator:
                 task.detail = (
                     f"only {span_turns} unsettled turn(s); need >= {self.review_turns}"
                 )
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             # Mirror the owner's worker-owns-watermark contract: the trigger
             # SCHEDULES only. It enqueues a ReviewJob carrying the resolved tip
@@ -1232,18 +1246,18 @@ class BackgroundCoordinator:
             if rst.queued > 0 or rst.running:
                 task.status = SKIPPED
                 task.detail = "memory review already in flight"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             rq.enqueue(
                 self.agent_name,
                 ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
             )
             task.status = PROCESSING  # job handed to the worker
-            self._publish_task(task)
+            await self._publish_task(task)
         except Exception as exc:  # the review hook must not break the turn
             task.status = ERROR
             task.detail = str(exc)
-            self._publish_task(task)
+            await self._publish_task(task)
 
     async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
         """Fire the background-consolidation hook, publishing task lifecycle.
@@ -1275,13 +1289,13 @@ class BackgroundCoordinator:
         self._consolidation_seq += 1
         task_id = f"consolidation.{self.agent_name}.{self._consolidation_seq}"
         task = BackgroundTask(id=task_id, label="Consolidating memory")
-        self._publish_task(task)  # queued
+        await self._publish_task(task)  # queued
         try:
             runs = await self._store.list_runs(conversation_id=cid)
             if not runs:
                 task.status = SKIPPED
                 task.detail = "no persisted runs yet"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             tip_run = runs[-1].run_id
             tip_history = await source.run_history(run_id=tip_run)
@@ -1289,7 +1303,7 @@ class BackgroundCoordinator:
             if not anchors:
                 task.status = SKIPPED
                 task.detail = "no persisted turns"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             tip_turn = len(anchors) - 1
             wm = MemoryWatermark.load(self._memory_directory, run_id=tip_run)
@@ -1317,7 +1331,7 @@ class BackgroundCoordinator:
             if span_turns < self.consolidate_turns:
                 task.status = SKIPPED
                 task.detail = f"only {span_turns} unsettled turn(s); need >= {self.consolidate_turns}"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             # Single-flight: skip if a consolidation is already queued or running
             # so a slow worker behind the cadence gate can't pile up duplicate folds.
@@ -1326,7 +1340,7 @@ class BackgroundCoordinator:
             if mst.queued > 0 or mst.running:
                 task.status = SKIPPED
                 task.detail = "consolidation already in flight"
-                self._publish_task(task)
+                await self._publish_task(task)
                 return
             mq.enqueue(
                 self.agent_name,
@@ -1338,11 +1352,11 @@ class BackgroundCoordinator:
                 ),
             )
             task.status = PROCESSING  # job handed to the worker
-            self._publish_task(task)
+            await self._publish_task(task)
         except Exception as exc:  # trigger path itself failed (rare)
             task.status = ERROR
             task.detail = str(exc)
-            self._publish_task(task)
+            await self._publish_task(task)
 
 
 # ---------------------------------------------------------------------------
