@@ -31,6 +31,8 @@ from pathlib import Path
 
 from paf.background import BackgroundQueueService, QueueState
 from paf.capabilities._sandbox import BackgroundHandle, SandboxedExecutor
+from paf.capabilities.shell._events import ProcessEvent, ProcessEventType
+from paf.capabilities.shell._registry import get_process_emitter
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +86,6 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         cwd: str | Path,
         agent: str,
         shell_cmds,  # ShellCommandStore
-        run_events=None,  # RunEventStore | None — the UI feed (basic records)
         on_complete=None,  # Callable[[str, bool, str], None] (session_id, ok, detail)
         name: str = "shell-background",
     ) -> None:
@@ -93,30 +94,11 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         self.cwd = Path(cwd).resolve() if cwd else None
         self.agent = agent
         self.shell_cmds = shell_cmds
-        self.run_events = run_events
         self.on_complete = on_complete
         self.name = name
-
-    def _record_basic(self, run_id: str, *, status: str, detail: str = "") -> None:
-        """Append one basic run-event row the UI watches (only when wired).
-
-        Append-only: each call is an independent journal line with its own
-        ``timestamp`` and ``status``. A finished process appends a second line
-        (``done``/``error``); prior lines are never mutated.
-        """
-        if self.run_events is None:
-            return
-        self.run_events.append(
-            {
-                "run_id": run_id,
-                "process_id": "shell",
-                "status": status,
-                "detail": detail,
-                "agent": self.agent,
-                "conversation_id": self._job_cid.get(run_id),
-                "timestamp": _now_iso(),
-            }
-        )
+        # The per-agent live event emitter (shared with the coordinator's task
+        # bus and the SSE feed). Shell emits a ProcessEvent on each transition.
+        self._emitter = get_process_emitter(agent)
 
     def _record_rich(self, job: ShellRun, *, status: str, **fields: object) -> None:
         """Append one rich shell journal line (join key = run_id).
@@ -138,8 +120,30 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
             }
         )
 
+    async def _emit(
+        self, run_id: str, status: str, label: str, detail: str = ""
+    ) -> None:
+        """Push one live process event to the per-agent emitter.
+
+        Shell processes are conversation-scoped by origin, so the event carries
+        ``lane="conversation"`` and the run's conversation id as ``scope``; the
+        SSE feed filters on these to route the row to the right panel.
+        """
+        await self._emitter.emit_process(
+            ProcessEvent(
+                event_type=ProcessEventType(status),
+                id=run_id,
+                label=label,
+                status=status,
+                detail=detail,
+                lane="conversation",
+                scope=self._job_cid.get(run_id),
+                updated_at=_now_iso(),
+            )
+        )
+
     _job_cid: dict[str, str | None] = {}
-    """run_id -> conversation_id for basic rows (basic recorder has no job object)."""
+    """run_id -> conversation_id for emitted events (the emitter has no job object)."""
 
     async def shutdown(self) -> None:
         """Cancel all live worker tasks (detached processes keep running).
@@ -200,10 +204,11 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                         status="done" if status.exit_code == 0 else "error",
                         exit_code=status.exit_code,
                     )
-                    self._record_basic(
+                    await self._emit(
                         job.run_id,
-                        status="done" if status.exit_code == 0 else "error",
-                        detail=_detail(status.stdout, status.stderr, status.exit_code),
+                        "done" if status.exit_code == 0 else "error",
+                        f"shell: {job.command}",
+                        _detail(status.stdout, status.stderr, status.exit_code),
                     )
                     if self.on_complete is not None:
                         self.on_complete(
@@ -213,8 +218,8 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                         )
                     return
         except Exception as exc:
-            self._record_basic(job.run_id, status="error", detail=str(exc))
             self._record_rich(job, status="error")
+            await self._emit(job.run_id, "error", f"shell: {job.command}", str(exc))
             if self.on_complete is not None:
                 self.on_complete(session_id, False, str(exc))
             raise
