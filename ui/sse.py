@@ -261,18 +261,18 @@ def _serialize_turn(ev: TurnStreamEvent) -> tuple[str, dict[str, Any]]:
 
 
 def _task_frame(got: Any) -> tuple[str, dict[str, Any]] | None:
-    """Map a BackgroundEvent -> `task:` SSE frame. Returns None when the event is
+    """Map a ProcessEvent -> `task:` SSE frame. Returns None when the event is
     the stream-termination sentinel (None)."""
     if got is None:
         return None
-    meta = getattr(got, "metadata", {}) or {}
+    status = getattr(got.status, "value", got.status)
     return (
         "task",
         {
-            "id": meta.get("id") or got.kind,
-            "label": got.kind,
-            "status": got.status,
-            "progress": meta.get("progress"),
+            "id": got.id,
+            "label": got.label,
+            "status": status,
+            "progress": got.progress,
             "detail": got.detail,
             "updated_at": "",
         },
@@ -743,7 +743,11 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
 
             def _on_task(ev) -> None:
                 _publish(_task_frame(ev))
-                if getattr(ev, "status", None) in ("done", "error", "skipped"):
+                if getattr(ev.status, "value", ev.status) in (
+                    "done",
+                    "error",
+                    "skipped",
+                ):
                     task = asyncio.create_task(_publish_idle())
                     task.add_done_callback(
                         lambda t: (
