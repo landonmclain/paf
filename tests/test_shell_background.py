@@ -3,9 +3,9 @@
 Covers the Phase 6 shell changes:
 - ``ShellCommandStore`` (``capabilities/shell/_store.py``) round-trips on the
   shared append-only seam, scoped by agent in the same ``data/processes`` root.
-- The two-store join: a ``start_command`` publishes a BASIC row to the
-  coordinator's ``RunEventStore`` (the UI feed) and a RICH row (pid/status) to
-  ``ShellCommandStore``, keyed on the same ``run_id``.
+- Live events: ``start_command`` emits a ``ProcessEvent`` (running) through the
+  per-agent ``ProcessEventEmitter`` (the feed path) and writes a RICH row
+  (pid/status) to ``ShellCommandStore``, keyed on the same ``run_id``.
 - ``start_command`` fires IMMEDIATELY through ``ShellBackgroundQueue`` (no
   turn-end / coordinator wait) and returns a run id.
 - Detached-process re-attach: after the toolset's live cache is gone, a fresh
@@ -22,9 +22,20 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from paf.background_processes._store import RunEventStore
+import pytest
+
+from paf.capabilities.shell._events import ProcessEvent, ProcessEventType
+from paf.capabilities.shell._registry import clear_process_emitters, get_process_emitter
 from paf.capabilities.shell._store import ShellCommandStore
 from paf.capabilities.shell._toolset import ShellToolset
+
+
+@pytest.fixture(autouse=True)
+def _isolate_emitters() -> None:
+    """Clear the process-wide per-agent emitters so captured events are isolated."""
+    clear_process_emitters()
+    yield
+    clear_process_emitters()
 
 
 def _toolset(
@@ -100,21 +111,21 @@ def test_shell_store_conversation_scoped_root(tmp_path: Path) -> None:
     assert agent_store.read_all() == []
 
 
-def test_start_command_writes_both_stores_and_returns_run_id(tmp_path: Path) -> None:
+def test_start_command_emits_running_and_writes_rich_store(tmp_path: Path) -> None:
     async def scenario():
+        events: list[ProcessEvent] = []
+        get_process_emitter("demo_assistant").on(
+            ProcessEventType.running, events.append
+        )
         async with _toolset(tmp_path) as t:
             out = await t.start_command("echo hello-background")
             run_id = out.split("ID: ")[1]
-            # Durable stores updated.
-            run_events = RunEventStore.open(str(_processes(tmp_path)), "demo_assistant")
-            shell = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
-            basic = [e for e in run_events.read_all() if e["run_id"] == run_id]
-            assert basic, "expected a basic row in RunEventStore"
-            assert basic[0]["status"] == "running"
-            assert basic[0]["process_id"] == "shell"
+            # A live "running" event was emitted (the feed path), not a runs.jsonl row.
+            assert any(e.id == run_id and e.status == "running" for e in events)
             # The rich record is written by the async worker after it spawns the
             # detached subprocess — wait for it (with pid) rather than asserting
             # synchronously right after start_command.
+            shell = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
             rich = None
             for _ in range(40):
                 rich = shell.recent(run_id)
@@ -132,24 +143,25 @@ def test_start_command_writes_both_stores_and_returns_run_id(tmp_path: Path) -> 
 def test_run_id_prepends_shell_and_conversation_and_stamps_conversation_id(
     tmp_path: Path,
 ) -> None:
-    """run_id is shell.<conversation_id>.<seq>; conversation_id lands in both stores."""
+    """run_id is shell.<conversation_id>.<seq>; conversation_id lands in the event scope + rich store."""
 
     async def scenario():
+        events: list[ProcessEvent] = []
+        get_process_emitter("demo_assistant").on(
+            ProcessEventType.running, events.append
+        )
         async with _toolset(tmp_path, conversation_id="c1") as t:
             out = await t.start_command("echo convo")
             run_id = out.split("ID: ")[1]
             assert run_id == "shell.c1.1", run_id
-            # conversation_id stamped in the basic + rich rows (both stores are
-            # conversation-scoped now, so open them with the same cid)
-            re = RunEventStore.open(
-                str(_processes(tmp_path)), "demo_assistant", conversation_id="c1"
-            )
+            # The emitted running event carries the conversation scope + lane.
+            ev = next(e for e in events if e.id == run_id)
+            assert ev.scope == "c1"
+            assert ev.lane == "conversation"
+            # rich row (written by worker) also carries it
             sc = ShellCommandStore.open(
                 str(_processes(tmp_path)), "demo_assistant", conversation_id="c1"
             )
-            basic = [e for e in re.read_all() if e["run_id"] == run_id]
-            assert basic and basic[0]["conversation_id"] == "c1"
-            # rich row (written by worker) also carries it
             for _ in range(40):
                 if sc.recent(run_id) is not None:
                     break
@@ -255,16 +267,18 @@ def test_legacy_in_memory_path_without_processes_root(tmp_path: Path) -> None:
 
 
 def test_two_store_join_key_is_run_id(tmp_path: Path) -> None:
-    """The same run_id keys a basic run-event row and a rich shell row."""
+    """The same run_id keys a live emitted event and a rich shell row."""
 
     async def scenario():
+        events: list[ProcessEvent] = []
+        get_process_emitter("demo_assistant").on(
+            ProcessEventType.running, events.append
+        )
         async with _toolset(tmp_path) as t:
             out = await t.start_command("echo join-check")
             run_id = out.split("ID: ")[1]
-            # The basic row carries a join_candidate key we can compare against.
-            assert t._bg_queue is not None  # wired when processes_root is set
-            basic = RunEventStore.open(str(_processes(tmp_path)), "demo_assistant")
-            rows = [e for e in basic.read_all() if e["run_id"] == run_id]
+            # A live running event was emitted for this run_id (the feed path).
+            assert any(e.id == run_id for e in events)
             # The rich row rejoins by the same run_id (the ShellCommandStore.recent
             # lookup *is* the join). The rich row is written by the worker, so wait
             # for it; prove it resolves to the command we started.
@@ -276,7 +290,6 @@ def test_two_store_join_key_is_run_id(tmp_path: Path) -> None:
                     break
                 await asyncio.sleep(0.05)
             assert rich_store.recent(run_id)["command"] == "echo join-check"
-            assert rows, "basic feed row present"
             return True
 
     assert asyncio.run(scenario()) is True
