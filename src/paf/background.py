@@ -325,6 +325,8 @@ class BackgroundCoordinator:
         *,
         agent_name: str = "assistant",
         profile=None,
+        lane: Literal["agent", "conversation"] | None = None,
+        conversation_id: str | None = None,
         memory_directory: str | None = None,
         processes_root: str | None = None,
         consolidate_span=None,
@@ -340,6 +342,11 @@ class BackgroundCoordinator:
         self._store = store
         self.agent_name = agent_name
         self.profile = profile
+        # Which lane this coordinator hosts: "agent" (memory consolidation +
+        # review, shared per-agent) or "conversation" (thread summarizer +
+        # future conversation-scoped processes, per-conversation). None = a
+        # legacy direct construction that registers every process.
+        self.lane = lane
 
         # Dumb append-only run-event store: every task status
         # transition is recorded losslessly, scoped by agent. Root is
@@ -350,7 +357,9 @@ class BackgroundCoordinator:
             from paf.config import PROJECT_ROOT
 
             processes_root = str(PROJECT_ROOT / "data" / "processes")
-        self._run_events = RunEventStore.open(processes_root, agent_name)
+        self._run_events = RunEventStore.open(
+            processes_root, agent_name, conversation_id=conversation_id
+        )
 
         # Turn-count cadence (the active gate). Resolved from the spec's
         # `memory:` block; falls back to the same block's minute values reading
@@ -415,55 +424,85 @@ class BackgroundCoordinator:
         types. Adding a process = registering a definition here.
         """
         has_memory = "Memory" in self._capability_names
-        return [
-            ProcessDefinition(
-                id_namespace="consolidation",
-                label="Consolidating memory",
-                enabled=lambda c: has_memory,
-                trigger=self._maybe_trigger_consolidation,
-                idle_row=self._consolidation_idle_row,
-            ),
-            ProcessDefinition(
-                id_namespace="review",
-                label="Reviewing memory",
-                enabled=lambda c: has_memory,
-                trigger=self._maybe_trigger_review,
-                idle_row=self._review_idle_row,
-            ),
-            ProcessDefinition(
-                id_namespace="thread_summarize",
-                label="Summarizing thread",
-                enabled=lambda c: self._thread_summarizer_enabled,
-                trigger=self._maybe_trigger_thread_summarize,
-                idle_row=self._thread_idle_row,
-            ),
-        ]
+        processes: list[ProcessDefinition] = []
+        # Agent lane: memory consolidation + review (per-agent).
+        if self.lane != "conversation":
+            processes += [
+                ProcessDefinition(
+                    id_namespace="consolidation",
+                    label="Consolidating memory",
+                    enabled=lambda c: has_memory,
+                    trigger=self._maybe_trigger_consolidation,
+                    idle_row=self._consolidation_idle_row,
+                ),
+                ProcessDefinition(
+                    id_namespace="review",
+                    label="Reviewing memory",
+                    enabled=lambda c: has_memory,
+                    trigger=self._maybe_trigger_review,
+                    idle_row=self._review_idle_row,
+                ),
+            ]
+        # Conversation lane: thread summarizer (per-conversation).
+        if self.lane != "agent":
+            processes.append(
+                ProcessDefinition(
+                    id_namespace="thread_summarize",
+                    label="Summarizing thread",
+                    enabled=lambda c: self._thread_summarizer_enabled,
+                    trigger=self._maybe_trigger_thread_summarize,
+                    idle_row=self._thread_idle_row,
+                ),
+            )
+        return processes
+
+    def has_enabled(self) -> bool:
+        """True if any registered process is enabled for this coordinator."""
+        return any(p.enabled is not None and p.enabled(self) for p in self._processes)
 
     @classmethod
-    def for_session(cls, session) -> BackgroundCoordinator | None:
-        """Build (or skip) the coordinator for a session from its own state.
+    def for_session(cls, session) -> BackgroundLanes | None:
+        """Build (or skip) the two-lane coordinator for a session.
 
-        The app/CLI attaches the result to ``session.background``. Returns
-        ``None`` for a profile that needs no background machinery (no Memory,
-        no ThreadSummarizer) -- e.g. ``contextbench`` -- so those agents run
-        truly bare. Reads only public/duck-typed session attributes (no import
-        of ``paf.runtime``), so there is no circular dependency.
+        The app/CLI attaches the result to ``session.background``. Returns a
+        :class:`BackgroundLanes` facade holding the shared per-agent lane
+        (memory consolidation + review) and the per-session conversation lane
+        (thread summarizer), or ``None`` for a profile that needs no background
+        machinery (no Memory, no ThreadSummarizer) -- e.g. ``contextbench`` --
+        so those agents run truly bare. Reads only public/duck-typed session
+        attributes (no import of ``paf.runtime``), so there is no circular
+        dependency.
         """
         agent_name = session.agent_name
         profile = getattr(session, "profile", None)
-        coord = cls(
+
+        # Conversation lane: per-session (one session == one conversation).
+        conv = cls(
             store=session._store,
             agent_name=agent_name,
             profile=profile,
+            lane="conversation",
+            conversation_id=getattr(session, "conversation_id", None),
         )
-        # A profile with no enabled background process (no Memory, no
-        # ThreadSummarizer) needs no coordinator -- e.g. ``contextbench`` runs
-        # truly bare.
-        if not any(
-            p.enabled is not None and p.enabled(coord) for p in coord._processes
-        ):
+        conv = conv if conv.has_enabled() else None
+
+        # Agent lane: shared per-agent (one instance per agent_name).
+        agent = _agent_coordinators.get(agent_name)
+        if agent is None:
+            candidate = cls(
+                store=session._store,
+                agent_name=agent_name,
+                profile=profile,
+                lane="agent",
+            )
+            if candidate.has_enabled():
+                agent = candidate
+                _agent_coordinators[agent_name] = agent
+
+        lanes = BackgroundLanes(agent=agent, conversation=conv)
+        if not lanes.enabled():
             return None
-        return coord
+        return lanes
 
     # -- task registry / subscriber fan-out -------------------------------
 
@@ -515,17 +554,22 @@ class BackgroundCoordinator:
         except ValueError:
             pass
 
-    def task_history(self, conversation_id: str) -> list[BackgroundTask]:
-        """Background-task rows scoped to a conversation, newest first.
+    def task_history(self, conversation_id: str | None = None) -> list[BackgroundTask]:
+        """Background-task rows, newest first.
 
         Includes terminal ``error`` rows (e.g. a failed thread summarizer) so a
         UI can surface "a background task failed for this conversation" even
         though the completion lands AFTER the turn's SSE stream closes. Task
         ids are prefixed ``{kind}.{conversation_id}.{seq}``; we match on the
         conversation segment (bounds-checked so a cid prefix can't over-match).
+        ``conversation_id=None`` (the agent lane) returns ALL rows — the agent
+        lane's ids are agent-scoped, so there is no conversation to filter by.
         """
-        needle = f".{conversation_id}."
-        rows = [t for t in self._background_tasks.values() if needle in f".{t.id}"]
+        if conversation_id is None:
+            rows = list(self._background_tasks.values())
+        else:
+            needle = f".{conversation_id}."
+            rows = [t for t in self._background_tasks.values() if needle in f".{t.id}"]
         rows.sort(key=lambda t: t.updated_at, reverse=True)
         return rows
 
@@ -600,7 +644,9 @@ class BackgroundCoordinator:
             detail=rec.get("detail") or row.detail,
         )
 
-    async def job_status_summary(self, conversation_id: str) -> list[JobIdleStatus]:
+    async def job_status_summary(
+        self, conversation_id: str | None = None
+    ) -> list[JobIdleStatus]:
         """READ-ONLY idle status for the registered background processes (Processes panel).
 
         Lets a UI render the background jobs as persistent rows — "idle, N
@@ -615,12 +661,20 @@ class BackgroundCoordinator:
         etc.), so when that job fires later the live queued/running/done frames
         coalesce OVER the idle row instead of duplicating it.
 
+        ``conversation_id=None`` (the agent lane) scopes rows by agent name
+        (``consolidation.<agent>``), matching the agent lane's agent-scoped
+        task ids, and reads runs across all conversations.
+
         The store/history seam is resolved ONCE and shared across every enabled
         process's ``idle_row`` (a single pass over persisted runs), then each
         registered process computes its own row.
         """
         from paf.capabilities._turns import user_anchor_indices
         from paf.capabilities.persistence import build_history_source
+
+        # For the agent lane (None), scope rows by agent name so ids are
+        # agent-scoped (consolidation.<agent>), matching agent-scoped task ids.
+        scope = conversation_id if conversation_id is not None else self.agent_name
 
         rows: list[JobIdleStatus] = []
         source = None
@@ -644,7 +698,7 @@ class BackgroundCoordinator:
                 if p.enabled is not None and p.enabled(self):
                     rows.append(
                         JobIdleStatus(
-                            id=f"{p.id_namespace}.{conversation_id}",
+                            id=f"{p.id_namespace}.{scope}",
                             label=p.label,
                             detail="idle · status unavailable",
                         )
@@ -654,7 +708,7 @@ class BackgroundCoordinator:
         ctx = _IdleContext(source=source, tip_run=tip_run, tip_turn=tip_turn)
         for p in self._processes:
             if p.enabled is not None and p.enabled(self) and p.idle_row is not None:
-                row = await p.idle_row(conversation_id, ctx)
+                row = await p.idle_row(scope, ctx)
                 if row is not None:
                     rows.append(row)
         return rows
@@ -693,9 +747,10 @@ class BackgroundCoordinator:
 
         try:
             wm = MemoryWatermark.load(self._memory_directory)
-            n = await self._span_count(
-                ctx.source, wm, ctx.tip_run, ctx.tip_turn, conversation_id
-            )
+            # Memory is per-agent: count turns across ALL conversations (None =
+            # all runs), matching the cross-conversation trigger gate — not this
+            # conversation's turns alone.
+            n = await self._span_count(ctx.source, wm, ctx.tip_run, ctx.tip_turn, None)
             reason = (
                 f"{n}/{self.consolidate_turns} turns to a fold"
                 if n < self.consolidate_turns
@@ -727,9 +782,9 @@ class BackgroundCoordinator:
             wm = MemoryWatermark.load(
                 self._memory_directory, filename="memory-review-watermark.json"
             )
-            n = await self._span_count(
-                ctx.source, wm, ctx.tip_run, ctx.tip_turn, conversation_id
-            )
+            # Memory is per-agent: count turns across ALL conversations (None =
+            # all runs), matching the cross-conversation trigger gate.
+            n = await self._span_count(ctx.source, wm, ctx.tip_run, ctx.tip_turn, None)
             reason = (
                 f"{n}/{self.review_turns} turns to a review"
                 if n < self.review_turns
@@ -1116,8 +1171,8 @@ class BackgroundCoordinator:
         source = build_history_source(self._store)
 
         self._review_seq += 1
-        task_id = f"review.{cid}.{self._review_seq}"
-        task = BackgroundTask(id=task_id, label=f"Reviewing memory ({cid})")
+        task_id = f"review.{self.agent_name}.{self._review_seq}"
+        task = BackgroundTask(id=task_id, label="Reviewing memory")
         self._publish_task(task)  # queued
         try:
             runs = await self._store.list_runs(conversation_id=cid)
@@ -1218,8 +1273,8 @@ class BackgroundCoordinator:
         source = build_history_source(self._store)
 
         self._consolidation_seq += 1
-        task_id = f"consolidation.{cid}.{self._consolidation_seq}"
-        task = BackgroundTask(id=task_id, label=f"Consolidating memory ({cid})")
+        task_id = f"consolidation.{self.agent_name}.{self._consolidation_seq}"
+        task = BackgroundTask(id=task_id, label="Consolidating memory")
         self._publish_task(task)  # queued
         try:
             runs = await self._store.list_runs(conversation_id=cid)
@@ -1288,3 +1343,48 @@ class BackgroundCoordinator:
             task.status = ERROR
             task.detail = str(exc)
             self._publish_task(task)
+
+
+# ---------------------------------------------------------------------------
+# BackgroundLanes — the two-lane facade a Session holds as ``session.background``.
+#
+# Wraps the agent lane (shared per-agent: memory consolidation + review) and the
+# conversation lane (per-session: thread summarizer + future conversation-scoped
+# processes) behind one surface so the runtime and UI call sites are unchanged.
+# Each lane is a BackgroundCoordinator; the facade merges their task history,
+# idle summary, and subscriber fan-out, and dispatches after_turn to both.
+# ---------------------------------------------------------------------------
+
+# Shared per-agent coordinators (one agent lane per agent_name, never per-session).
+_agent_coordinators: dict[str, BackgroundCoordinator] = {}
+
+
+class BackgroundLanes:
+    """Two-lane background container: agent lane + conversation lane.
+
+    ``session.background`` is this container (or ``None``). It holds the two
+    independent coordinators (``.agent`` and ``.conversation``) and fans out
+    the post-turn trigger to both. It does NOT merge their read surfaces —
+    ``task_history``/``job_status_summary``/``subscribe_tasks`` stay per-lane,
+    and the feed reads each lane directly. The agent lane is shared per-agent;
+    the conversation lane is per-session.
+    """
+
+    def __init__(
+        self,
+        agent: BackgroundCoordinator | None,
+        conversation: BackgroundCoordinator | None,
+    ) -> None:
+        self.agent = agent
+        self.conversation = conversation
+
+    def enabled(self) -> bool:
+        """True if either lane hosts an enabled process."""
+        return self.agent is not None or self.conversation is not None
+
+    async def after_turn(self, cid: str | None) -> None:
+        """Fire both lanes' post-turn triggers for one conversation."""
+        if self.agent is not None:
+            await self.agent.after_turn(cid)
+        if self.conversation is not None:
+            await self.conversation.after_turn(cid)
