@@ -275,7 +275,6 @@ def _task_frame(got: Any) -> tuple[str, dict[str, Any]] | None:
             "status": status,
             "progress": got.progress,
             "detail": got.detail,
-            "updated_at": "",
         },
     )
 
@@ -693,7 +692,6 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
                             "status": task.status,
                             "progress": task.progress,
                             "detail": task.detail,
-                            "updated_at": task.updated_at,
                         },
                     )
                 )
