@@ -98,7 +98,12 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         self.name = name
 
     def _record_basic(self, run_id: str, *, status: str, detail: str = "") -> None:
-        """Basic run-event row the UI watches (only when a feed store is wired)."""
+        """Append one basic run-event row the UI watches (only when wired).
+
+        Append-only: each call is an independent journal line with its own
+        ``timestamp`` and ``status``. A finished process appends a second line
+        (``done``/``error``); prior lines are never mutated.
+        """
         if self.run_events is None:
             return
         self.run_events.append(
@@ -108,23 +113,33 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                 "status": status,
                 "detail": detail,
                 "agent": self.agent,
-                "conversation_id": None,
+                "conversation_id": self._job_cid.get(run_id),
                 "timestamp": _now_iso(),
             }
         )
 
-    def _record_rich(self, job: ShellRun, **fields: object) -> None:
-        """Append/update the rich shell record (join key = run_id)."""
+    def _record_rich(self, job: ShellRun, *, status: str, **fields: object) -> None:
+        """Append one rich shell journal line (join key = run_id).
+
+        ``status`` is REQUIRED and stamped per line with a single ``timestamp``;
+        never mutate a prior line. Each line is self-contained — ``command`` /
+        ``agent`` / ``conversation_id`` are repeated on every line so a later
+        line stands alone regardless of what preceded it.
+        """
         self.shell_cmds.append(
             {
                 "run_id": job.run_id,
                 "command": job.command,
                 "agent": self.agent,
                 "conversation_id": job.conversation_id,
-                "started_at": _now_iso(),
+                "timestamp": _now_iso(),
+                "status": status,
                 **fields,
             }
         )
+
+    _job_cid: dict[str, str | None] = {}
+    """run_id -> conversation_id for basic rows (basic recorder has no job object)."""
 
     async def shutdown(self) -> None:
         """Cancel all live worker tasks (detached processes keep running).
@@ -158,6 +173,7 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
     ) -> None:
         del state
         try:
+            self._job_cid[job.run_id] = job.conversation_id
             self._record_basic(job.run_id, status="running")
             cwd = Path(job.cwd).resolve() if job.cwd else self.cwd or Path(".")
             env = job.env
@@ -167,28 +183,22 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
             pid = _pid_of(handle)
             self._record_rich(
                 job,
+                status="running",
                 pid=pid,
                 cwd=str(cwd),
-                status="running",
-                exit_code=None,
-                finished_at=None,
             )
 
             # Supervise while this session's loop is alive. A long-running
             # detached process keeps going even if the loop closes; a later
             # session re-attaches by pid.
-            last_status = "running"
             while True:
                 await asyncio.sleep(_POLL_S)
                 status = await self.executor.check(handle)
                 if status.status == "finished":
                     self._record_rich(
                         job,
-                        pid=pid,
-                        cwd=str(cwd),
                         status="done" if status.exit_code == 0 else "error",
                         exit_code=status.exit_code,
-                        finished_at=_now_iso(),
                     )
                     self._record_basic(
                         job.run_id,
@@ -202,10 +212,9 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                             f"exit {status.exit_code}",
                         )
                     return
-                # still running — publish a periodic heartbeat? keep simple: no-op
         except Exception as exc:
             self._record_basic(job.run_id, status="error", detail=str(exc))
-            self._record_rich(job, status="error", exit_code=None, finished_at=_now_iso())
+            self._record_rich(job, status="error")
             if self.on_complete is not None:
                 self.on_complete(session_id, False, str(exc))
             raise

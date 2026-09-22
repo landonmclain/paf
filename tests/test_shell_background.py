@@ -27,7 +27,9 @@ from paf.capabilities.shell._store import ShellCommandStore
 from paf.capabilities.shell._toolset import ShellToolset
 
 
-def _toolset(root: str | Path, *, agent: str = "demo_assistant") -> ShellToolset:
+def _toolset(
+    root: str | Path, *, agent: str = "demo_assistant", conversation_id: str | None = None
+) -> ShellToolset:
     return ShellToolset(
         cwd=Path("."),
         allowed_commands=[],
@@ -39,6 +41,7 @@ def _toolset(root: str | Path, *, agent: str = "demo_assistant") -> ShellToolset
         allow_interactive=False,
         processes_root=Path(root) / "processes",
         agent=agent,
+        conversation_id=conversation_id,
     )
 
 
@@ -92,7 +95,36 @@ def test_start_command_writes_both_stores_and_returns_run_id(tmp_path: Path) -> 
             return run_id
 
     run_id = asyncio.run(scenario())
-    assert len(run_id) == 12
+    assert run_id.startswith("shell.global.")
+
+
+def test_run_id_prepends_shell_and_conversation_and_stamps_conversation_id(
+    tmp_path: Path,
+) -> None:
+    """run_id is shell.<conversation_id>.<seq>; conversation_id lands in both stores."""
+
+    async def scenario():
+        async with _toolset(tmp_path, conversation_id="c1") as t:
+            out = await t.start_command("echo convo")
+            run_id = out.split("ID: ")[1]
+            assert run_id == "shell.c1.1", run_id
+            # conversation_id stamped in the basic + rich rows
+            re = RunEventStore.open(str(_processes(tmp_path)), "demo_assistant")
+            sc = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
+            basic = [e for e in re.read_all() if e["run_id"] == run_id]
+            assert basic and basic[0]["conversation_id"] == "c1"
+            # rich row (written by worker) also carries it
+            for _ in range(40):
+                if sc.recent(run_id) is not None:
+                    break
+                await asyncio.sleep(0.05)
+            assert sc.recent(run_id)["conversation_id"] == "c1"
+            # second start in the same conversation advances seq
+            out2 = await t.start_command("echo convo2")
+            assert out2.split("ID: ")[1] == "shell.c1.2"
+            return run_id
+
+    assert asyncio.run(scenario()) == "shell.c1.1"
 
 
 def test_check_command_reattaches_by_pid_after_cache_gone(tmp_path: Path) -> None:
@@ -120,6 +152,41 @@ def test_check_command_reattaches_by_pid_after_cache_gone(tmp_path: Path) -> Non
 
     run_id = asyncio.run(scenario())
     assert run_id
+
+
+def test_check_resolves_stale_running_when_process_gone(tmp_path: Path) -> None:
+    """A journal line stuck on `running` (supervisor died) resolves to finished.
+
+    Simulates a process that finished but whose supervisor never wrote the
+    terminal line: the durable store has a `running` line with a NOW-DEAD pid.
+    check_command should derive finished from pid-gone and APPEND a terminal
+    line (append-only), not keep reporting running.
+    """
+
+    async def scenario():
+        sc = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
+        # Hand-write a `running` line with a dead pid (624242 unlikely to exist).
+        sc.append(
+            {
+                "run_id": "shell.c1.9",
+                "command": "sleep 1",
+                "agent": "demo_assistant",
+                "conversation_id": "c1",
+                "timestamp": "2026-09-22T00:00:00+00:00",
+                "status": "running",
+                "pid": 624242,
+            }
+        )
+        async with _toolset(tmp_path, conversation_id="c1") as t:
+            check = await t.check_command("shell.c1.9")
+            assert "[status: finished]" in check, check
+            # The staleness was resolved by APPENDING a terminal line.
+            lines = sc.all_for("shell.c1.9")
+            assert lines[-1]["status"] == "done"
+            assert len(lines) == 2  # running + resolved done
+        return True
+
+    assert asyncio.run(scenario()) is True
 
 
 def test_legacy_in_memory_path_without_processes_root(tmp_path: Path) -> None:

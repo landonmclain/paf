@@ -51,15 +51,23 @@ class ShellCommandStore:
         """All shell records in append (file line) order."""
         return self._store.read_all(self._kind, self._agent)
 
+    def all_for(self, run_id: str) -> list[dict[str, Any]]:
+        """Every rich line for one shell process ``run_id``, in append order.
+
+        A process appends multiple lines over its life (``running`` -> a
+        terminal ``done``/``error``), so this is the full journal for the run;
+        the LAST element is its current state. Used by ``check``/``stop`` to
+        resolve status (and to detect that the supervisor died before appending
+        the terminal line).
+        """
+        return [r for r in self.read_all() if r.get("run_id") == run_id]
+
     def recent(self, run_id: str) -> dict[str, Any] | None:
-        """The newest rich record for one shell process ``run_id`` (or None).
+        """The newest rich line for one shell process ``run_id`` (or None).
 
         Lines are append order = chronological order. ``run_id`` is the join key
         shared with the basic ``runs.jsonl`` record. Returned as the raw dict so
         callers derive status/pid/exit_code/live-attach detail from it.
         """
-        for record in reversed(self.read_all()):
-            if record.get("run_id") != run_id:
-                continue
-            return record
-        return None
+        lines = self.all_for(run_id)
+        return lines[-1] if lines else None

@@ -19,7 +19,6 @@ import os
 import re
 import shlex
 import tempfile
-import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Concatenate, ParamSpec
@@ -108,12 +107,14 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         executor: SandboxedExecutor | None = None,
         processes_root: str | Path | None = None,
         agent: str = "",
+        conversation_id: str | None = None,
     ) -> None:
         super().__init__()
         self._cwd = cwd.resolve()
         # The configured starting directory, never mutated by persist_cwd, so
         # `for_run` can hand each run a fresh instance rooted back here.
         self._initial_cwd = self._cwd
+        self._conversation_id = conversation_id
         self._allowed_commands = list(allowed_commands)
         self._denied_commands = list(denied_commands)
         self._denied_operators = list(denied_operators)
@@ -179,6 +180,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             executor=self._executor,
             processes_root=self._processes_root,
             agent=self._agent,
+            conversation_id=getattr(ctx, "conversation_id", None),
         )
 
     async def call_tool(
@@ -364,7 +366,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             A message containing the unique run id for later check/stop calls.
         """
         self._check_command(command)
-        run_id = uuid.uuid4().hex[:12]
+        cid = self._conversation_id or "global"
+        seq = self._next_seq(cid)
+        run_id = f"shell.{cid}.{seq}"
         # Publish the basic "running" row synchronously so the UI feed sees the
         # command instantly; the queue worker then spawns, records pid, and
         # supervises to completion.
@@ -376,7 +380,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                     "status": "running",
                     "detail": f"started: {command}",
                     "agent": self._agent,
-                    "conversation_id": None,
+                    "conversation_id": self._conversation_id,
                     "timestamp": self._queue_now(),
                 }
             )
@@ -386,6 +390,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 ShellRun(
                     run_id=run_id,
                     command=command,
+                    conversation_id=self._conversation_id,
                     cwd=str(self._cwd),
                     env=self._resolve_env(),
                 ),
@@ -402,14 +407,38 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             )
         return f"Started background command: {command!r}\nID: {run_id}"
 
+    def _next_seq(self, cid: str) -> int:
+        """Next per-conversation sequence for ``shell.{cid}.{seq}`` run ids.
+
+        Derived from the durable store (scans existing ``shell.{cid}.*`` rich
+        lines) so the id stays unique across turns/restarts — the per-run
+        toolset has no in-memory counter to rely on.
+        """
+        if self._shell_cmds is None:
+            return 1
+        prefix = f"shell.{cid}."
+        max_seq = 0
+        for rec in self._shell_cmds.read_all():
+            rid = rec.get("run_id", "")
+            if not rid.startswith(prefix):
+                continue
+            tail = rid[len(prefix) :]
+            if tail.isdigit():
+                max_seq = max(max_seq, int(tail))
+        return max_seq + 1
+
     @_recoverable
     async def check_command(self, command_id: str) -> str:
         """Check the status and recent output of a background command.
 
         Works for both live (in-memory) handles and detached survivors: when no
         live executor handle is present, status is derived from the durable
-        shell store (join key = run id) plus a pid-liveness check, so a process
-        started in an earlier session can still be checked by id.
+        shell store (join key = run id) plus a pid-liveness check. If the last
+        durable line still says ``running`` but the process is gone (e.g. the
+        supervisor died with the turn before writing the terminal line), this
+        RESOLVES the staleness by appending a terminal ``done``/``error`` line
+        (append-only — never mutates a prior line) and reports the finished
+        status.
 
         Args:
             command_id: The id returned by start_command.
@@ -422,21 +451,27 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         if handle is not None:
             return self._format_check(await self._executor.check(handle))
 
-        # Durable path: read the rich shell store, verify pid liveness.
-        record = self._shell_cmds.recent(command_id) if self._shell_cmds else None
-        if record is None:
+        # Durable path: read the rich shell store; resolve stale `running`.
+        lines = self._shell_cmds.all_for(command_id) if self._shell_cmds else []
+        if not lines:
             return f"[Error: unknown command ID {command_id!r}]"
-        return self._format_check(
-            self._record_status(record)
-        )
+        last = lines[-1]
+        status, exit_code = self._derive_status(last, command_id)
+        if (
+            status.status == "finished"
+            and last.get("status") in ("running", None)
+        ):
+            # Supervisor never wrote the terminal line; journal it now.
+            self._append_terminal(command_id, status)
+        return self._format_check(status)
 
     @_recoverable
     async def stop_command(self, command_id: str) -> str:
         """Stop a background command and return its final output.
 
         Stops a live in-memory handle via the executor; otherwise, for a
-        detached survivor, terminates its process group by pid and marks the
-        durable record stopped.
+        detached survivor, terminates its process group by pid, appends a
+        terminal ``stopped`` line to the durable store, and reports it.
 
         Args:
             command_id: The id returned by start_command.
@@ -450,42 +485,82 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             del self._background[command_id]
             return self._format_stop(status)
 
-        record = self._shell_cmds.recent(command_id) if self._shell_cmds else None
-        if record is None:
+        if not self._shell_cmds:
             return f"[Error: unknown command ID {command_id!r}]"
-        pid = record.get("pid")
+        lines = self._shell_cmds.all_for(command_id)
+        if not lines:
+            return f"[Error: unknown command ID {command_id!r}]"
+        last = lines[-1]
+        pid = last.get("pid")
         if pid is not None and self._pid_alive(pid):
             self._kill_pid(pid)
+        self._append_terminal(
+            command_id,
+            BackgroundStatus(status="finished", stdout="", stderr="", exit_code=0),
+            detail=f"stopped: {last.get('command', '')}",
+        )
         return self._format_stop(
             BackgroundStatus(status="finished", stdout="", stderr="", exit_code=0)
-            if pid is None
-            else BackgroundStatus(
-                status="finished",
-                stdout=self._format_cmd(record),
-                stderr="",
-                exit_code=0,
-            )
         )
+
+    def _derive_status(
+        self, last: dict[str, Any], run_id: str
+    ) -> tuple[BackgroundStatus, int | None]:
+        """(BackgroundStatus, exit_code) resolved from the last rich line."""
+        st = last.get("status")
+        if st in ("done", "error"):
+            return (
+                BackgroundStatus(
+                    status="finished", stdout="", stderr="", exit_code=last.get("exit_code")
+                ),
+                last.get("exit_code"),
+            )
+        pid = last.get("pid")
+        # Running line but process is gone → finished (never-mutated; resolve by append).
+        if pid is not None and not self._pid_alive(pid):
+            return BackgroundStatus(status="finished", stdout="", stderr="", exit_code=None), None
+        return BackgroundStatus(status="running", stdout="", stderr=""), None
+
+    def _append_terminal(
+        self, run_id: str, status: BackgroundStatus, *, detail: str = ""
+    ) -> None:
+        """Append a terminal rich + basic line (append-only; never mutate prior)."""
+        if self._shell_cmds is not None:
+            lines = self._shell_cmds.all_for(run_id)
+            if not lines:
+                return
+            base = lines[0]
+            exit_code = status.exit_code
+            # exit_code None (unknown, vanished process) → treat as done, not error.
+            terminal_status = "done" if (exit_code == 0 or exit_code is None) else "error"
+            self._shell_cmds.append(
+                {
+                    "run_id": run_id,
+                    "command": base.get("command", ""),
+                    "agent": self._agent,
+                    "conversation_id": base.get("conversation_id", self._conversation_id),
+                    "timestamp": self._queue_now(),
+                    "status": terminal_status,
+                    "exit_code": exit_code,
+                }
+            )
+        if self._run_events is not None:
+            exit_code = status.exit_code
+            terminal_status = "done" if (exit_code == 0 or exit_code is None) else "error"
+            self._run_events.append(
+                {
+                    "run_id": run_id,
+                    "process_id": "shell",
+                    "status": terminal_status,
+                    "detail": detail or f"exit {exit_code}",
+                    "agent": self._agent,
+                    "conversation_id": self._conversation_id,
+                    "timestamp": self._queue_now(),
+                }
+            )
 
     @staticmethod
-    def _record_status(record: dict[str, Any]) -> "BackgroundStatus":
-        """Derive a status snapshot from a durable shell record."""
-        pid = record.get("pid")
-        st = record.get("status")
-        if st in ("done", "error") or record.get("finished_at"):
-            return BackgroundStatus(
-                status="finished",
-                stdout="",
-                stderr="",
-                exit_code=record.get("exit_code"),
-            )
-        if pid is not None and os.path.exists(f"/proc/{pid}"):
-            return BackgroundStatus(status="running", stdout="", stderr="")
-        return BackgroundStatus(
-            status="running" if st == "running" else "finished", stdout="", stderr=""
-        )
-
-    def _format_check(self, status: "BackgroundStatus") -> str:
+    def _format_check(status: "BackgroundStatus") -> str:
         parts = [f"[status: {status.status}]"]
         if status.stdout:
             parts.append(f"[stdout]\n{status.stdout}")
@@ -504,11 +579,6 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         if status.exit_code is not None:
             parts.append(f"[exit code: {status.exit_code}]")
         return "\n".join(parts)
-
-    @staticmethod
-    def _format_cmd(record: dict[str, Any]) -> str:
-        cmd = record.get("command", "")
-        return f"stopped (was running: {cmd})"
 
     @staticmethod
     def _queue_now() -> str:
