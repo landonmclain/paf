@@ -16,8 +16,8 @@ name: longmemeval
 
 # The profile (capability allowlist) this spec belongs to. Read by the CLI
 # (`resolve_profile_name`) to choose the default profile for a one-arg
-# invocation. Comment out Memory in the profile for the search-only (no-memory)
-# arm.
+# invocation. The no-memory (search-only) arm is `MEMORY=0` in the harness
+# (tests/framework.py), not a profile edit — the subject is built manually.
 profile: longmemeval
 
 # Provider-qualified model string. Same default as the harness subject: DeepSeek
@@ -100,6 +100,11 @@ model_settings:
   # benchmark harness pins for this model (tests/framework.py max_tokens=12288).
   max_tokens: 12288
 
+  openrouter_reasoning:
+    effort: low
+
+  frequency_penalty: 1.0
+
   # OpenRouter prompt caching (big token-efficiency lever for a heavy,
   # mostly-static prompt — instructions, conversation journal, MEMORY.md, tool
   # defs are the exact cache targets).
@@ -115,6 +120,7 @@ model_settings:
     provider:
       order: [deepinfra, parasail, coreweave]
       quantizations: [fp8]
+
 
 # Memory block: per-tier COUNT caps on the injected render (render-owned) and
 # the per-read char cap on MEMORY.md. The extractor/reviewer are invoked
