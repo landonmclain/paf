@@ -262,7 +262,7 @@ def test_two_store_join_key_is_run_id(tmp_path: Path) -> None:
             out = await t.start_command("echo join-check")
             run_id = out.split("ID: ")[1]
             # The basic row carries a join_candidate key we can compare against.
-            t._bg_queue is not None  # wired when processes_root is set
+            assert t._bg_queue is not None  # wired when processes_root is set
             basic = RunEventStore.open(str(_processes(tmp_path)), "demo_assistant")
             rows = [e for e in basic.read_all() if e["run_id"] == run_id]
             # The rich row rejoins by the same run_id (the ShellCommandStore.recent

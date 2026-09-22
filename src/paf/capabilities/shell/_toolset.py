@@ -568,7 +568,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             )
 
     @staticmethod
-    def _format_check(status: "BackgroundStatus") -> str:
+    def _format_check(status: BackgroundStatus) -> str:
         parts = [f"[status: {status.status}]"]
         if status.stdout:
             parts.append(f"[stdout]\n{status.stdout}")
@@ -580,7 +580,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             parts.insert(0, "(no output yet)")
         return "\n".join(parts)
 
-    def _format_stop(self, status: "BackgroundStatus") -> str:
+    def _format_stop(self, status: BackgroundStatus) -> str:
         parts = ["[stopped]"]
         if status.stdout:
             parts.append(f"[{status.stdout}]")
