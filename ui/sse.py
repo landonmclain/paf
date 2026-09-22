@@ -31,7 +31,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,7 +108,7 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
             agent,
             profile=_profile_for(agent),
             conversation_id=conversation_id,
-            resume_window=50,
+            resume_window=200,
         )
         session.attach_background()
         _sessions[key] = session
@@ -605,7 +605,10 @@ async def conversation_tasks(
 
 @app.get("/api/processes/stream")
 async def processes_stream(
-    request: Request, conversation_id: str, agent: str = DEFAULT_AGENT
+    request: Request,
+    conversation_id: str | None = None,
+    agent: str = DEFAULT_AGENT,
+    lane: Literal["agent", "conversation"] = "conversation",
 ) -> StreamingResponse:
     """Long-lived, turn-independent SSE feed of background processes/lifecycle.
 
@@ -614,45 +617,60 @@ async def processes_stream(
     stream — they ride this dedicated feed instead, which opens ONCE per lane
     and stays open as long as the client wants, with no turn-end sentinel.
 
+    Lane-aware: ``lane=agent`` streams the shared per-agent lane (memory
+    consolidation + review, keyed by ``agent``, no conversation); ``lane=
+    conversation`` streams one conversation's lane (thread summarizer, keyed by
+    ``conversation_id``). A consumer subscribes to each lane it wants,
+    separately.
+
     Wire contract is identical to the old in-turn ``task:`` frames (id / label /
     status / progress / detail / updated_at), so the adapter and ProcessesPanel
-    consume them unchanged. On connect we first restore the conversation's
-    current task history (terminal rows, e.g. a finished/failed summarizer),
-    then subscribe for live transitions (queued -> running -> done|error|skipped).
+    consume them unchanged. On connect we first restore the lane's current task
+    history (terminal rows, e.g. a finished/failed summarizer), then subscribe
+    for live transitions (queued -> running -> done|error|skipped).
     """
-    return _process_response(_process_feed, conversation_id, agent, request)
+    return _process_response(_process_feed, conversation_id, agent, lane, request)
 
 
 def _process_response(
-    feed: Callable[[Session, str, Request], AsyncIterator[str]],
-    conversation_id: str,
+    feed: Callable[[Any, str | None, Request], AsyncIterator[str]],
+    conversation_id: str | None,
     agent: str,
+    lane: str,
     request: Request,
 ) -> StreamingResponse:
-    """Adapter from a session-scoped feed generator to an SSE StreamingResponse."""
+    """Adapter from a lane-scoped feed generator to an SSE StreamingResponse."""
 
     async def gen() -> AsyncIterator[str]:
         session = await _get_session(conversation_id, agent)
-        async for frame in feed(session, conversation_id, request):
+        bg = session.background
+        if bg is None:
+            return
+        if lane == "agent":
+            lane_bg = bg.agent
+            scope: str | None = None
+        else:
+            lane_bg = bg.conversation
+            scope = session._scoped_cid(conversation_id) or conversation_id
+        if lane_bg is None:
+            return
+        async for frame in feed(lane_bg, scope, request):
             yield frame
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-def _process_feed(
-    session: Session, conversation_id: str, request: Request
-) -> AsyncIterator[str]:
+def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator[str]:
     """Stream background-process frames for one lane, never tying to a turn.
 
-    On connect: restore the conversation's current task history (terminal +
-    active rows), then subscribe to the coordinator for live transitions. The
+    On connect: restore the lane's current task history (terminal + active
+    rows), then subscribe to the lane coordinator for live transitions. The
     feed stays open until the client disconnects — no turn-end sentinel.
+    ``scope`` is the conversation id for the conversation lane, or None for the
+    agent lane (which reads all agent-scoped rows).
     """
 
     async def _inner() -> AsyncIterator[str]:
-        bg = session.background
-        scoped_cid = session._scoped_cid(conversation_id) or conversation_id
-
         q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
         closed = {"v": False}
 
@@ -664,7 +682,7 @@ def _process_feed(
         # 1. Restore terminal + active history first (so a late-joining tab sees
         #    the full current state, not just live deltas).
         if bg is not None:
-            for task in bg.task_history(scoped_cid):
+            for task in bg.task_history(scope):
                 _publish(
                     (
                         "task",
@@ -689,7 +707,7 @@ def _process_feed(
             if bg is None:
                 return
             try:
-                idle = await bg.job_status_summary(scoped_cid)
+                idle = await bg.job_status_summary(scope)
                 for st in idle:
                     _publish(
                         (
