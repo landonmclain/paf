@@ -175,7 +175,7 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
         capture_root: str,
         span_source: ThreadSpanSource | None = None,
         summarize_span_fn: SummarizeSpan | None = None,
-        on_complete: Callable[[str, bool, str], None] | None = None,
+        on_complete: Callable[[str, bool, str], None | Awaitable[None]] | None = None,
         name: str = "thread-summarizer",
     ) -> None:
         super().__init__()
@@ -225,7 +225,7 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                 log.info("thread_summarizer_job session=%s success span=0", session_id)
                 self._advance(job.conversation_id, span_target)
                 if self.on_complete is not None:
-                    self.on_complete(session_id, True, "0 turns summarized")
+                    await self.on_complete(session_id, True, "0 turns summarized")
                 return
 
             # Slice into distinct-real-turn blocks and summarize each as its own
@@ -342,10 +342,10 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
                 span_target,
             )
             if self.on_complete is not None:
-                self.on_complete(session_id, True, detail)
+                await self.on_complete(session_id, True, detail)
         except Exception as exc:
             if self.on_complete is not None:
-                self.on_complete(session_id, False, str(exc))
+                await self.on_complete(session_id, False, str(exc))
             raise
 
     @staticmethod
