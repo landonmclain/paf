@@ -129,7 +129,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         # Durable stores + background queue. Only wired when a `processes_root`
         # is given (the shell capability's default), so callers that just want
         # in-memory background processes keep behaving exactly as before.
-        self._processes_root = Path(processes_root) if processes_root is not None else None
+        self._processes_root = (
+            Path(processes_root) if processes_root is not None else None
+        )
         self._agent = agent
         self._shell_cmds: ShellCommandStore | None = None
         self._run_events: RunEventStore | None = None
@@ -406,9 +408,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 env=self._resolve_env(),
             )
             self._background[handle.command_id] = handle
-            return (
-                f"Started background command: {command!r}\nID: {handle.command_id}"
-            )
+            return f"Started background command: {command!r}\nID: {handle.command_id}"
         return f"Started background command: {command!r}\nID: {run_id}"
 
     def _next_seq(self, cid: str) -> int:
@@ -461,10 +461,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             return f"[Error: unknown command ID {command_id!r}]"
         last = lines[-1]
         status, exit_code = self._derive_status(last, command_id)
-        if (
-            status.status == "finished"
-            and last.get("status") in ("running", None)
-        ):
+        if status.status == "finished" and last.get("status") in ("running", None):
             # Supervisor never wrote the terminal line; journal it now.
             self._append_terminal(command_id, status)
         return self._format_check(status)
@@ -515,14 +512,19 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         if st in ("done", "error"):
             return (
                 BackgroundStatus(
-                    status="finished", stdout="", stderr="", exit_code=last.get("exit_code")
+                    status="finished",
+                    stdout="",
+                    stderr="",
+                    exit_code=last.get("exit_code"),
                 ),
                 last.get("exit_code"),
             )
         pid = last.get("pid")
         # Running line but process is gone → finished (never-mutated; resolve by append).
         if pid is not None and not self._pid_alive(pid):
-            return BackgroundStatus(status="finished", stdout="", stderr="", exit_code=None), None
+            return BackgroundStatus(
+                status="finished", stdout="", stderr="", exit_code=None
+            ), None
         return BackgroundStatus(status="running", stdout="", stderr=""), None
 
     def _append_terminal(
@@ -542,7 +544,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                     "run_id": run_id,
                     "command": base.get("command", ""),
                     "agent": self._agent,
-                    "conversation_id": base.get("conversation_id", self._conversation_id),
+                    "conversation_id": base.get(
+                        "conversation_id", self._conversation_id
+                    ),
                     "timestamp": self._queue_now(),
                     "status": terminal_status,
                     "exit_code": exit_code,

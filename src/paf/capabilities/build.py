@@ -272,7 +272,9 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
     return _resolve_executor(executor_config)
 
 
-def _build_shell(store, shell_config: dict | None = None, agent_name: str | None = None) -> _Shell:
+def _build_shell(
+    store, shell_config: dict | None = None, agent_name: str | None = None
+) -> _Shell:
     """Shell command execution rooted at the project root (paf-owned copy).
 
     `store` is accepted for a uniform builder signature but unused — the shell

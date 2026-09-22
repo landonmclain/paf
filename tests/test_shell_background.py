@@ -28,7 +28,10 @@ from paf.capabilities.shell._toolset import ShellToolset
 
 
 def _toolset(
-    root: str | Path, *, agent: str = "demo_assistant", conversation_id: str | None = None
+    root: str | Path,
+    *,
+    agent: str = "demo_assistant",
+    conversation_id: str | None = None,
 ) -> ShellToolset:
     return ShellToolset(
         cwd=Path("."),
@@ -265,7 +268,9 @@ def test_two_store_join_key_is_run_id(tmp_path: Path) -> None:
             # The rich row rejoins by the same run_id (the ShellCommandStore.recent
             # lookup *is* the join). The rich row is written by the worker, so wait
             # for it; prove it resolves to the command we started.
-            rich_store = ShellCommandStore.open(str(_processes(tmp_path)), "demo_assistant")
+            rich_store = ShellCommandStore.open(
+                str(_processes(tmp_path)), "demo_assistant"
+            )
             for _ in range(40):
                 if rich_store.recent(run_id) is not None:
                     break

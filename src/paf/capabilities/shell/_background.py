@@ -179,9 +179,7 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
             # append a second one here.
             cwd = Path(job.cwd).resolve() if job.cwd else self.cwd or Path(".")
             env = job.env
-            handle = await self.executor.start(
-                job.command, cwd=cwd, env=env
-            )
+            handle = await self.executor.start(job.command, cwd=cwd, env=env)
             pid = _pid_of(handle)
             self._record_rich(
                 job,
