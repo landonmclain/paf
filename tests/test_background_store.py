@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import asyncio
+
 from paf.background_processes._store import RunEventStore
 
 
@@ -148,12 +150,12 @@ def test_coordinator_publishes_each_transition_to_journal(tmp_path: Path) -> Non
     task = BackgroundTask(
         id="consolidation.conv-1.1", label="Consolidating memory (conv-1)"
     )
-    coord._publish_task(task)  # queued
+    asyncio.run(coord._publish_task(task))  # queued
     task.status = PROCESSING
-    coord._publish_task(task)  # running
+    asyncio.run(coord._publish_task(task))  # running
     task.status = DONE
     task.detail = "3 records folded"
-    coord._publish_task(task)  # done
+    asyncio.run(coord._publish_task(task))  # done
 
     events = coord._run_events.read_all()
     assert [e["status"] for e in events] == [QUEUED, PROCESSING, DONE]
