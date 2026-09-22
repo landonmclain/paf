@@ -568,7 +568,11 @@ def test_two_lane_journals_split_thread_and_memory(tmp_path) -> None:
         conversation_id="c1",
         processes_root=processes_root,
     )
-    conv._publish_task(BackgroundTask(id="thread_summarize.c1.1", label="Summarizing"))
+    asyncio.run(
+        conv._publish_task(
+            BackgroundTask(id="thread_summarize.c1.1", label="Summarizing")
+        )
+    )
 
     # Agent lane: memory consolidation, shared per-agent.
     agentc = BackgroundCoordinator(
@@ -578,7 +582,11 @@ def test_two_lane_journals_split_thread_and_memory(tmp_path) -> None:
         lane="agent",
         processes_root=processes_root,
     )
-    agentc._publish_task(BackgroundTask(id="consolidation.c1.1", label="Consolidating"))
+    asyncio.run(
+        agentc._publish_task(
+            BackgroundTask(id="consolidation.c1.1", label="Consolidating")
+        )
+    )
 
     # Thread record lands in the per-conversation journal.
     conv_events = conv._run_events.read_all()
@@ -630,8 +638,10 @@ def test_lane_reads_are_separate_not_merged(tmp_path) -> None:
         lane="agent",
         processes_root=processes_root,
     )
-    agentc._publish_task(
-        BackgroundTask(id=f"consolidation.{agent}.1", label="Consolidating")
+    asyncio.run(
+        agentc._publish_task(
+            BackgroundTask(id=f"consolidation.{agent}.1", label="Consolidating")
+        )
     )
 
     # Conversation lane: cid-scoped thread task.
@@ -643,7 +653,11 @@ def test_lane_reads_are_separate_not_merged(tmp_path) -> None:
         conversation_id="c1",
         processes_root=processes_root,
     )
-    conv._publish_task(BackgroundTask(id="thread_summarize.c1.1", label="Summarizing"))
+    asyncio.run(
+        conv._publish_task(
+            BackgroundTask(id="thread_summarize.c1.1", label="Summarizing")
+        )
+    )
 
     # Agent lane: task_history(None) returns all agent-scoped rows.
     assert [t.id for t in agentc.task_history(None)] == [f"consolidation.{agent}.1"]
