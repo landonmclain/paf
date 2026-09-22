@@ -25,7 +25,7 @@ from pydantic_ai_harness.conversation_search._source import HistorySource
 
 from .._turns import user_anchor_indices
 from ._ranking import Bm25Params, bm25_rank
-from ._reader import READ_TURN_DESCRIPTION, TurnFinder
+from ._reader import _READ_TOOL_RETRIES, READ_TURN_DESCRIPTION, TurnFinder
 from ._render import display_lines, format_messages, is_summary_artifact
 
 SearchScope = Literal["all", "conversation"]
@@ -62,8 +62,7 @@ When to use:
 
 When NOT to use:
 - The information is still in the current conversation context
-- You have a ref from the turn index and only need one turn (use read_turn)
-- You only need a matching one-line summary (use search_index first)
+- You have a ref from a search hit and only need one turn (use read_turn)
 - You need external or real-time information (use web tools instead)"""
 
 _CONVERSATION_SCOPE_NOTE = (
@@ -177,7 +176,10 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # model a `run_id:turn_id` ref to expand -- the model reaches the full
         # turn directly.
         self.add_function(
-            self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION
+            self.read_turn,
+            name="read_turn",
+            description=READ_TURN_DESCRIPTION,
+            retries=_READ_TOOL_RETRIES,
         )
 
     async def read_turn(

@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic_ai import ModelRetry
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -787,7 +788,7 @@ def test_search_guard_resets_on_read_turn(tmp_path: Path) -> None:
 
 
 def test_read_turn_bad_ref_is_graceful(tmp_path: Path) -> None:
-    """`read_turn` on the search toolset degrades gracefully on a bad ref --
+    """`read_turn` on the search toolset raises `ModelRetry` on a bad ref --
     same behavior as the index's read_turn (a shared primitive means one code path)."""
     store = _mk_store(tmp_path, {"c1": [*_msg(user="hello", assistant="hi there")]})
     source = SnapshotHistorySource(store)
@@ -802,9 +803,31 @@ def test_read_turn_bad_ref_is_graceful(tmp_path: Path) -> None:
     )
 
     async def go():
-        out = await ts.read_turn(_FakeCtx("c1"), "run-c1:99")
-        assert "No turn at index 99" in out, out
-        out = await ts.read_turn(_FakeCtx("c1"), "run-missing:0")
-        assert "No persisted history" in out, out
+        with pytest.raises(ModelRetry, match="No turn at index 99"):
+            await ts.read_turn(_FakeCtx("c1"), "run-c1:99")
+        with pytest.raises(ModelRetry, match="No persisted history"):
+            await ts.read_turn(_FakeCtx("c1"), "run-missing:0")
+
+    asyncio.run(go())
+
+
+def test_read_turn_invalid_run_id_is_retryable(tmp_path: Path) -> None:
+    """A ref whose run_id the store rejects (e.g. a stale `#N` turn-index ref)
+    raises `ModelRetry` instead of crashing the run."""
+    store = _mk_store(tmp_path, {"c1": [*_msg(user="hello", assistant="hi there")]})
+    source = SnapshotHistorySource(store)
+    ts = ConversationSearchToolset(
+        source,
+        tool_id="conversation-search",
+        max_matches=5,
+        context_lines=1,
+        bm25_k1=1.5,
+        bm25_b=0.75,
+        scope="all",
+    )
+
+    async def go():
+        with pytest.raises(ModelRetry, match="Failed to read history for run '#2'"):
+            await ts.read_turn(_FakeCtx("c1"), "#2")
 
     asyncio.run(go())

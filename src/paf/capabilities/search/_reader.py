@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 
-from pydantic_ai import RunContext
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -40,18 +40,30 @@ _TOOL_RETURN_TRUNCATE = 500
 _TOOL_CALL_TRUNCATE = 200
 _TEXT_TRUNCATE = 500
 
-READ_TURN_DESCRIPTION = """\
-Read one specific turn from persisted conversation history, by its index ref.
+# ModelRetry budget for `read_turn`. Every model-correctable failure (a malformed
+# ref, an out-of-range turn_id, an unknown run, an invalid run_id the store
+# rejects) raises `ModelRetry` so the model can correct and retry; pydantic-ai
+# defaults an undeclared tool to 1 retry, too low for a mid-turn redirect. Matches
+# the search toolset's `_SEARCH_TOOL_RETRIES` convention.
+_READ_TOOL_RETRIES = 5
 
-The turn index keeps a one-line summary of every turn in context. When
-you recognize from the index (or a `search_index` hit) that a turn is relevant,
-call this with that run's (ref) to pull the FULL original turn -- the exact user prompt
-and assistant responses / tool calls -- back into context.
+# Errors that mean "the model asked for something the tool couldn't do" -- a
+# malformed/invalid run_id, a store I/O failure. pyai only feeds `ModelRetry` back
+# to the model; any other exception aborts the whole run. We convert these so the
+# agent can correct itself and continue.
+_RECOVERABLE_ERRORS = (ValueError, OSError)
+
+READ_TURN_DESCRIPTION = """\
+Read one specific turn from persisted conversation history, by its ref.
+
+A ref comes from a `search_conversation_history` hit: each result carries a
+`turn: <run_id>:<turn_id>` ref. Call this with that ref to pull the FULL
+original turn -- the exact user prompt and assistant responses / tool calls --
+back into context.
 
 Pass ref='{run_id}' to fetch one run's entire durable history, or
-ref='{run_id}:{turn_id}' to fetch just the turn at that index (copy the exact
-ref shown in the index). `turn_id` is the ordinal of the turn's user prompt
-within the run (0, 1, ...), so refs are stable.
+ref='{run_id}:{turn_id}' to fetch just the turn at that index. `turn_id` is the
+ordinal of the turn's user prompt within the run (0, 1, ...), so refs are stable.
 
 Tool calls and results are returned truncated by default (tool results ~500 chars,
 tool call args ~200 chars, message text ~500 chars -- same budget as search
@@ -59,11 +71,10 @@ excerpts) so a read stays bounded. To pull a byte-complete turn -- including the
 full untruncated tool results -- pass full=True. Prefer full=True only when the
 truncated read shows the content actually matters and you need the complete value.
 
-This is the targeted read step (rung 4): call it only once you HAVE a ref for the
-turn you want -- from the injected index or a `search_index` hit. If you don't yet
-have a ref and no index line names the turn, use `search_index` first. When one
-turn is not enough and you need a wider picture, escalate to
-`search_conversation_history` (last resort).
+This is the targeted read step: call it only once you HAVE a ref for the turn you
+want -- from a `search_conversation_history` hit. If you don't yet have a ref, use
+`search_conversation_history` first. When one turn is not enough and you need a
+wider picture, escalate to `search_conversation_history` (last resort).
 """
 
 
@@ -186,14 +197,26 @@ class TurnFinder:
         conversation_id: str | None = None,
         full: bool = False,
     ) -> str:
-        history = await self._source.run_history(run_id=run_id)
+        try:
+            history = await self._source.run_history(run_id=run_id)
+        except _RECOVERABLE_ERRORS as e:
+            raise ModelRetry(
+                f"Failed to read history for run '{run_id}': {e}. Pass a "
+                "`run_id:turn_id` ref from a search hit, or a bare run_id."
+            ) from e
         if not history:
-            return f"No persisted history for run '{run_id}' (is it in this store?)."
+            raise ModelRetry(
+                f"No persisted history for run '{run_id}' (is it in this store?). "
+                "Search for the right run_id first."
+            )
         if ":" in ref:
             try:
                 turn_id = int(ref.rsplit(":", 1)[1])
             except ValueError:
-                return f"Malformed ref '{ref}'; expected '{run_id}' or '{run_id}:<turn_id>'."
+                raise ModelRetry(
+                    f"Malformed ref '{ref}'; expected '{run_id}' or "
+                    f"'{run_id}:<turn_id>'."
+                ) from None
             return self._render_turn(history, turn_id, run_id, full=full)
         return self._render_run(history, run_id, full=full)
 
@@ -203,9 +226,10 @@ class TurnFinder:
         # Find the turn_id-th ModelRequest carrying a UserPromptPart (the anchor).
         anchors = [i for i, m in enumerate(history) if _is_user_turn(m)]
         if turn_id < 0 or turn_id >= len(anchors):
-            return (
+            raise ModelRetry(
                 f"No turn at index {turn_id} in run '{run_id}' "
-                f"({len(anchors)} user turns total)."
+                f"({len(anchors)} user turns total). Pick a valid turn_id from a "
+                "search hit."
             )
         start = anchors[turn_id]
         # A turn spans from its anchor to the next user-turn anchor (or the end).
@@ -248,7 +272,10 @@ class ReadTurnToolset(FunctionToolset[AgentDepsT]):
         super().__init__(id=tool_id)
         self._finder = TurnFinder(source)
         self.add_function(
-            self.read_turn, name="read_turn", description=READ_TURN_DESCRIPTION
+            self.read_turn,
+            name="read_turn",
+            description=READ_TURN_DESCRIPTION,
+            retries=_READ_TOOL_RETRIES,
         )
 
     async def read_turn(
