@@ -117,3 +117,35 @@ def test_spike_detach_keeps_turn_then_reattach_catches_tail_then_cancel() -> Non
 
     tail = asyncio.run(scenario())
     assert any("frame-" in fr for fr in tail)
+
+
+def test_rejoin_empty_when_no_turn() -> None:
+    """rejoin on a lane with no in-flight turn yields an EMPTY stream and must
+    NOT start a new turn — the client renders history instead."""
+
+    async def scenario():
+        sess = _bare_session()
+        frames = sse._turn_frames(sess, "", "conv-1", _Request(), rejoin=True)  # type: ignore[attr-defined]
+        collected = [fr async for fr in frames]
+        assert collected == [], "rejoin with no in-flight turn is an empty stream"
+        assert sess._turn is None, "rejoin must NOT start a new turn"
+
+    asyncio.run(scenario())
+
+
+def test_rejoin_attaches_to_running_turn() -> None:
+    """rejoin on a lane with an in-flight turn attaches to the SAME running
+    turn (no second turn) and catches its live tail."""
+
+    async def scenario():
+        sess = _bare_session()
+        handle = sess.start_turn("hello")
+        frames = sse._turn_frames(sess, "ignored", "conv-1", _Request(), rejoin=True)  # type: ignore[attr-defined]
+        first = await anext(frames)
+        assert "frame-" in first, "rejoin attaches to the in-flight turn"
+        assert sess._turn is handle, "rejoin re-attaches, not a second turn"
+        await sess.cancel()
+        async for _fr in frames:
+            pass
+
+    asyncio.run(scenario())

@@ -891,7 +891,12 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
 
 
 def _turn_frames(
-    session: Session, prompt: str, conversation_id: str, request: Request
+    session: Session,
+    prompt: str,
+    conversation_id: str,
+    request: Request,
+    *,
+    rejoin: bool = False,
 ) -> AsyncIterator[str]:
     """Subscribe to one Session-owned turn, forwarding its events as SSE.
 
@@ -901,6 +906,10 @@ def _turn_frames(
     writing to the dead socket) but the turn keeps running server-side, so a
     returning client can re-attach. Cancellation is exclusively the explicit
     ``POST /api/cancel``.
+
+    ``rejoin=True`` is the refresh/visibility re-attach: attach to the in-flight
+    turn if one is running (the prompt is ignored), else yield an EMPTY stream
+    without starting a new turn — the client renders settled history instead.
 
     Background / maintenance work (``task:`` frames) is NOT mixed in here — it
     lives on its own dedicated ``GET /api/processes/stream`` feed so it never
@@ -915,10 +924,19 @@ def _turn_frames(
             _scoped(conversation_id) if _scoped is not None else None
         ) or conversation_id
 
-        # Start (or re-attach to) the Session-owned turn. If a turn is already
-        # running on this lane, start_turn returns that running handle and the
-        # prompt is ignored (re-attach, per the durable-turns design).
-        handle = session.start_turn(prompt, conversation_id=conversation_id)
+        if rejoin:
+            # Refresh/visibility re-attach: subscribe to the in-flight turn if
+            # one is running; otherwise yield an empty stream (the client
+            # renders history) WITHOUT starting a new turn.
+            handle = getattr(session, "_turn", None)
+            if handle is None or handle.done:
+                return
+        else:
+            # Start (or re-attach to) the Session-owned turn. If a turn is
+            # already running on this lane, start_turn returns that running
+            # handle and the prompt is ignored (re-attach, per the durable-turns
+            # design).
+            handle = session.start_turn(prompt, conversation_id=conversation_id)
 
         async def _on_plan(_ev: Any) -> None:
             # Full-snapshot per mutation (Plan-Live-Sidebar-Spec): read the
@@ -986,21 +1004,36 @@ def _turn_frames(
 async def chat(body: dict[str, Any], request: Request) -> StreamingResponse:
     """Open an SSE stream for one turn on a conversation.
 
-    Body: ``{conversation_id, prompt, agent?}``. Returns ``text/event-stream``
-    of TurnStreamEvent frames; forwards ``task:`` frames for the background
-    timeline while the stream is open.
+    Body: ``{conversation_id, prompt, agent?, rejoin?}``. Returns
+    ``text/event-stream`` of TurnStreamEvent frames; forwards ``task:`` frames
+    for the background timeline while the stream is open.
+
+    ``rejoin: true`` (used for refresh/visibility re-attach) does NOT require a
+    prompt: it attaches to the in-flight turn if one is running on the lane,
+    else returns an empty stream without starting a new turn.
     """
     conversation_id = body.get("conversation_id")
-    prompt = body.get("prompt")
-    if not conversation_id or not prompt:
+    rejoin = bool(body.get("rejoin", False))
+    if not conversation_id:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, "conversation_id + prompt required"
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "conversation_id required"
+        )
+    if not rejoin and not body.get("prompt"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "conversation_id + prompt required (or rejoin: true)",
         )
     session = await _get_session(
         str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
     )
 
-    frames = _turn_frames(session, str(prompt), str(conversation_id), request)
+    frames = _turn_frames(
+        session,
+        str(body.get("prompt") or ""),
+        str(conversation_id),
+        request,
+        rejoin=rejoin,
+    )
     return StreamingResponse(frames, media_type="text/event-stream")
 
 
