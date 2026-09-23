@@ -36,6 +36,7 @@ from paf.background_processes._events import (
     get_agent_emitter,
 )
 from paf.capabilities._sandbox import BackgroundHandle, SandboxedExecutor
+from paf.capabilities.shell._store import ShellCommandStore
 
 log = logging.getLogger(__name__)
 
@@ -232,3 +233,91 @@ def _detail(stdout: str, stderr: str, exit_code: int | None) -> str:
     if exit_code is None:
         return "finished"
     return f"exit {exit_code}" + (f": {tail}" if tail else "")
+
+
+# --- Reconnect restore -------------------------------------------------------
+# Shell processes live in the durable shell store (``shell_cmds.jsonl``), NOT the
+# coordinator's ``task_history``, so the SSE process feed's on-connect restore
+# must read them here to re-show them after a refresh / conversation switch.
+# Restore active (running) rows plus terminal rows finished within a short
+# window; older terminal rows are dropped so the panel never accumulates every
+# shell process a conversation has ever run.
+
+_RESTORE_RECENT_WINDOW_S = 15 * 60  # terminal rows restored if finished within this
+
+
+def conversation_shell_frames(
+    processes_root: str | Path,
+    agent: str,
+    scoped_cid: str,
+    *,
+    now: datetime | None = None,
+    recent_window_s: int = _RESTORE_RECENT_WINDOW_S,
+) -> list[dict[str, object]]:
+    """Current shell background processes for a conversation, as task frames.
+
+    Reads the durable shell store (``shell_cmds.jsonl``) for ``scoped_cid`` and
+    returns one row per process in the same shape the live feed publishes
+    (``id`` / ``label`` / ``status`` / ``progress`` / ``detail``), so a reconnect
+    can re-show them. A process's current state is the LAST journal line for its
+    ``run_id`` (append order is chronological). Active ``running`` rows are
+    always returned; terminal rows (``done``/``error``) are returned only when
+    finished within ``recent_window_s`` (default 15 min) so old runs fall off.
+    """
+    now = now or datetime.now(UTC)
+    store = ShellCommandStore.open(
+        str(processes_root), agent, conversation_id=scoped_cid
+    )
+    latest: dict[str, dict[str, object]] = {}
+    for rec in store.read_all():
+        rid = rec.get("run_id")
+        if not rid:
+            continue
+        latest[rid] = rec  # last line wins (append order = chronological)
+
+    frames: list[dict[str, object]] = []
+    for rid, rec in latest.items():
+        status = rec.get("status")
+        command = str(rec.get("command") or rid)
+        if status == "running":
+            frames.append(
+                {
+                    "id": rid,
+                    "label": f"shell: {command}",
+                    "status": "running",
+                    "progress": None,
+                    "detail": f"started: {command}",
+                }
+            )
+        elif status in ("done", "error"):
+            if _finished_within(rec, now, recent_window_s):
+                exit_code = rec.get("exit_code")
+                detail = (
+                    f"exit {exit_code}" if exit_code is not None else str(status)
+                )
+                frames.append(
+                    {
+                        "id": rid,
+                        "label": f"shell: {command}",
+                        "status": str(status),
+                        "progress": None,
+                        "detail": detail,
+                    }
+                )
+    return frames
+
+
+def _finished_within(
+    rec: dict[str, object], now: datetime, window_s: int
+) -> bool:
+    """True when the record's ``timestamp`` falls inside the recency window."""
+    ts = rec.get("timestamp")
+    if not ts:
+        return False
+    try:
+        finished = datetime.fromisoformat(str(ts))
+    except (TypeError, ValueError):
+        return False
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=UTC)
+    return 0 <= (now - finished).total_seconds() <= window_s
