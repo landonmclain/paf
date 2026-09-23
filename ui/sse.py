@@ -202,6 +202,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         setup_observability,
         shutdown_observability,
     )
+    from paf.background import _background_runner
 
     setup_observability()  # process anchor: refs never hit 0 during idle eviction
     sweeper = asyncio.create_task(_close_idle_loop())
@@ -211,6 +212,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         sweeper.cancel()
         for key in list(_sessions.keys()):
             _close_session(key)
+        await _background_runner.shutdown()
         shutdown_observability()  # release the anchor (all lanes already closed)
 
 

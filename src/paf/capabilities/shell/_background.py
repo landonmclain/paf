@@ -89,7 +89,7 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         cwd: str | Path,
         agent: str,
         shell_cmds,  # ShellCommandStore
-        on_complete=None,  # Callable[[str, bool, str], None] (session_id, ok, detail)
+        on_complete=None,  # Callable[[str, str, bool, str], None] (run_id, conversation_id, ok, detail)
         name: str = "shell-background",
     ) -> None:
         super().__init__()
@@ -147,28 +147,14 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
     """run_id -> conversation_id for emitted events (the emitter has no job object)."""
 
     async def shutdown(self) -> None:
-        """Cancel all live worker tasks (detached processes keep running).
+        """Drop per-session queue state; the worker keeps running in the runner.
 
-        Called on toolset/loop teardown so lingering supervisor tasks don't
-        hold the subprocess transports past loop close (which otherwise raises
-        ``RuntimeError: Event loop is closed`` on GC). The DETACHED OS process
-        is unaffected — it keeps running and a later session re-attaches by pid.
+        The worker task now lives in the process-level :class:`BackgroundRunner`
+        (spawned by ``enqueue``), so it is NOT cancelled here — it keeps
+        supervising the detached process to completion and is only stopped on
+        server exit via the runner. We just release the per-session state map.
         """
-        pending: list[asyncio.Task] = []
-        for session_id, state in list(self._states.items()):
-            task = getattr(state, "worker_task", None)
-            if task is not None and not task.done():
-                task.cancel()
-                pending.append(task)
-            if session_id in self._states:
-                del self._states[session_id]
-        # Await the cancellations so each worker fully unwinds (releasing its
-        # subprocess transport) before the caller closes the loop.
-        for task in pending:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        self._states.clear()
 
     async def process_job(
         self,
@@ -213,7 +199,8 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                     )
                     if self.on_complete is not None:
                         self.on_complete(
-                            session_id,
+                            job.run_id,
+                            job.conversation_id,
                             status.exit_code == 0,
                             f"exit {status.exit_code}",
                         )
@@ -222,7 +209,7 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
             self._record_rich(job, status="error")
             await self._emit(job.run_id, "error", f"shell: {job.command}", str(exc))
             if self.on_complete is not None:
-                self.on_complete(session_id, False, str(exc))
+                self.on_complete(job.run_id, job.conversation_id, False, str(exc))
             raise
 
 

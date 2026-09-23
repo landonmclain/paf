@@ -53,6 +53,45 @@ def _log_subscriber_failure(task: asyncio.Task) -> None:
         log.exception("background-task subscriber coroutine failed")
 
 
+class BackgroundRunner:
+    """Process-level task group for background workers that outlive sessions.
+
+    Every :class:`BackgroundQueueService` spawns its worker here instead of on
+    the session's event loop, so a worker keeps running after the turn that
+    enqueued its job ends. That is what lets a detached background process be
+    supervised to completion (truthful terminal status) even though the session
+    that started it is gone. The app/CLI starts it once at boot and shuts it
+    down on exit; it is never tied to a single session's lifecycle.
+    """
+
+    def __init__(self) -> None:
+        self._tasks: set[asyncio.Task] = set()
+
+    def spawn(self, coro: Awaitable[None]) -> asyncio.Task:
+        """Run ``coro`` as a tracked background task on the current loop.
+
+        The task is created on whatever loop is current (the server's loop in
+        the app), so it survives session teardown; the runner only cancels it
+        on :meth:`shutdown`.
+        """
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    async def shutdown(self) -> None:
+        """Cancel and await every tracked task (called on server exit)."""
+        for task in list(self._tasks):
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+
+# Process-level singleton: every queue's workers run here, detached from any
+# single session's event loop.
+_background_runner = BackgroundRunner()
+
+
 @dataclass
 class QueueState[JobT]:
     """Runtime state for one session-specific background queue."""
@@ -105,10 +144,7 @@ class BackgroundQueueService[JobT](ABC):
         state.queue.put_nowait(job)
 
         if state.worker_task is None or state.worker_task.done():
-            state.worker_task = asyncio.create_task(
-                self._worker(session_id),
-                name=f"{self.name}:{session_id}",
-            )
+            state.worker_task = _background_runner.spawn(self._worker(session_id))
 
     async def drain(self, session_id: str) -> None:
         state = self.get_state(session_id)
