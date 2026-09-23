@@ -25,6 +25,7 @@ Transport only — no runtime changes, no pydantic-ai imports beyond Session.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -55,6 +56,7 @@ from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
 from paf.capabilities.planning._store import FilePlanStore
 from paf.config import PROJECT_ROOT
+from paf.observability.instrumentation import root_span
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
 
 if TYPE_CHECKING:
@@ -110,11 +112,43 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
             profile=_profile_for(agent),
             conversation_id=conversation_id,
             resume_window=200,
+            on_complete=functools.partial(_notify_agent, agent),
         )
         session.attach_background()
         _sessions[key] = session
     _sessions_last_used[key] = _now()
     return session
+
+
+async def _notify_agent(
+    agent: str, run_id: str, conversation_id: str | None, ok: bool, detail: str
+) -> None:
+    """Run a notify turn through the REGISTRY session for the originating lane.
+
+    The shell queue fires this when a ``notify_on_completion`` process finishes.
+    The queue passes the already-scoped cid (``{profile}:{cid}``); we strip the
+    profile prefix and look up (or create) the registry Session so the notify
+    turn lands in the SAME session the UI's ``/api/chat``/history reads — making
+    the completion visible live instead of only after a server restart.
+    """
+    if conversation_id is None:
+        return
+    raw_cid = (
+        conversation_id.split(":", 1)[1] if ":" in conversation_id else conversation_id
+    )
+    session = await _get_session(raw_cid, agent)
+    with root_span(
+        f"paf.notify.{run_id}",
+        agent=agent,
+        conversation_id=conversation_id,
+        run_id=run_id,
+        ok=ok,
+        detail=detail,
+    ):
+        async for _ev in session.stream(
+            f"[system] Background process {run_id} finished: {detail}"
+        ):
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +232,11 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     refs >= 1 for the process life; the balance in the `finally` releases it on
     a clean shutdown so a genuine process exit still flushes + shuts down.
     """
+    from paf.background import _background_runner
     from paf.observability.instrumentation import (
         setup_observability,
         shutdown_observability,
     )
-    from paf.background import _background_runner
 
     setup_observability()  # process anchor: refs never hit 0 during idle eviction
     sweeper = asyncio.create_task(_close_idle_loop())

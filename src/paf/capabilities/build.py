@@ -273,7 +273,10 @@ def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
 
 
 def _build_shell(
-    store, shell_config: dict | None = None, agent_name: str | None = None
+    store,
+    shell_config: dict | None = None,
+    agent_name: str | None = None,
+    on_complete=None,
 ) -> _Shell:
     """Shell command execution rooted at the project root (paf-owned copy).
 
@@ -314,6 +317,7 @@ def _build_shell(
         executor=executor,
         processes_root=str(PROJECT_ROOT / "data" / "processes"),
         agent=agent_name or "assistant",
+        on_complete=on_complete,
     )
 
 
@@ -841,6 +845,7 @@ def build_runtime_capabilities(
     codebase_map_config: dict | None = None,
     skills_config: dict | None = None,
     agent_name: str | None = None,
+    on_complete=None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -917,7 +922,7 @@ def build_runtime_capabilities(
         elif name == "FileSystem":
             capabilities.append(_build_filesystem(store, filesystem_config))
         elif name == "Shell":
-            capabilities.append(_build_shell(store, shell_config, agent_name))
+            capabilities.append(_build_shell(store, shell_config, agent_name, on_complete))
         elif name == "Git":
             capabilities.append(_build_git(store, git_config))
         elif name == "CodebaseMap":

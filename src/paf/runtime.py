@@ -355,6 +355,7 @@ class Session:
         resume: bool = True,
         resume_window: int | None = None,
         store=None,
+        on_complete=None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how clients pick the default profile
@@ -376,7 +377,9 @@ class Session:
         self._store = store if store is not None else _build_store()
         if trace:
             setup_observability()
-        self._agent: Agent[Any, Any] = build_agent(agent_name, profile=profile)
+        self._agent: Agent[Any, Any] = build_agent(
+            agent_name, profile=profile, on_complete=on_complete
+        )
         # Tier A turn-boundary compaction strategy (routine trim). Built from the
         # spec's `compact:` block; None when `compact.turn_boundary` is explicitly
         # false (control arm). Driven via compact_now at the top of stream(). Must

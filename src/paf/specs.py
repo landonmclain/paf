@@ -655,6 +655,7 @@ def build_agent(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
     profile: AgentProfile | None = None,
+    on_complete=None,
     **overrides: Any,
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
@@ -730,6 +731,7 @@ def build_agent(
             codebase_map_config=codebase_map_config,
             skills_config=skills_config,
             agent_name=agent_name,
+            on_complete=on_complete,
         ),
         **overrides,
     )

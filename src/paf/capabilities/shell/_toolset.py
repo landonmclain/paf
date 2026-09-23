@@ -110,6 +110,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         processes_root: str | Path | None = None,
         agent: str = "",
         conversation_id: str | None = None,
+        on_complete: (
+            Callable[[str, str | None, bool, str], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         super().__init__()
         self._cwd = cwd.resolve()
@@ -117,6 +120,10 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         # `for_run` can hand each run a fresh instance rooted back here.
         self._initial_cwd = self._cwd
         self._conversation_id = conversation_id
+        # Completion notification hook, injected by the embedding layer (the
+        # SSE transport). When None, completed processes just persist/feed and
+        # never trigger a notify turn.
+        self._on_complete = on_complete
         self._allowed_commands = list(allowed_commands)
         self._denied_commands = list(denied_commands)
         self._denied_operators = list(denied_operators)
@@ -146,6 +153,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 cwd=self._initial_cwd,
                 agent=agent,
                 shell_cmds=self._shell_cmds,
+                on_complete=on_complete,
             )
 
         if self._allowed_commands and self._denied_commands:
@@ -182,6 +190,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             processes_root=self._processes_root,
             agent=self._agent,
             conversation_id=getattr(ctx, "conversation_id", None),
+            on_complete=self._on_complete,
         )
 
     async def call_tool(
@@ -352,7 +361,9 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                 cwd_file.unlink(missing_ok=True)
 
     @_recoverable
-    async def start_command(self, command: str) -> str:
+    async def start_command(
+        self, command: str, notify_on_completion: bool = False
+    ) -> str:
         """Start a long-running command in the background (e.g. a server or watcher).
 
         The command runs as a DETACHED subprocess via the background queue, and
@@ -392,6 +403,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
                     conversation_id=self._conversation_id,
                     cwd=str(self._cwd),
                     env=self._resolve_env(),
+                    notify_on_completion=notify_on_completion,
                 ),
             )
         else:

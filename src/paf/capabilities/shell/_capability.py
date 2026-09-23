@@ -5,7 +5,7 @@ Originally copied from pydantic-ai-harness, MIT.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,6 +127,15 @@ class Shell(AbstractCapability[AgentDepsT]):
     agent: str = ""
     """Agent name used to scope durable stores. Empty when not persisting."""
 
+    on_complete: (
+        Callable[[str, str | None, bool, str], Awaitable[None]] | None
+    ) = None
+    """Completion-notification hook, injected by the embedding layer (the SSE
+    transport). When set, the toolset's queue fires it when a
+    ``notify_on_completion`` process finishes; the callback is expected to run a
+    notify turn through the originating session. ``None`` disables the hook.
+    """
+
     def __post_init__(self) -> None:
         """Resolve the built-in denylist according to the selected policy."""
         if self.denied_commands is _DEFAULT_DENIED_COMMANDS:
@@ -150,4 +159,5 @@ class Shell(AbstractCapability[AgentDepsT]):
             executor=self.executor,
             processes_root=self.processes_root,
             agent=self.agent,
+            on_complete=self.on_complete,
         )

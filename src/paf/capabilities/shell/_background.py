@@ -52,6 +52,7 @@ class ShellRun:
     conversation_id: str | None = None
     cwd: str | None = None  # explicit cwd override; default = queue's cwd
     env: dict[str, str] | None = None
+    notify_on_completion: bool = False
 
 
 def _now_iso() -> str:
@@ -89,7 +90,7 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         cwd: str | Path,
         agent: str,
         shell_cmds,  # ShellCommandStore
-        on_complete=None,  # Callable[[str, str, bool, str], None] (run_id, conversation_id, ok, detail)
+        on_complete=None,  # Callable[[str, str, bool, str], Awaitable[None]] (run_id, conversation_id, ok, detail)
         name: str = "shell-background",
     ) -> None:
         super().__init__()
@@ -156,6 +157,20 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
         """
         self._states.clear()
 
+    async def _notify(self, job: ShellRun, ok: bool, detail: str) -> None:
+        """Fire the ``on_complete`` callback best-effort (never breaks the worker).
+
+        The callback runs a full agent turn (the notify-on-completion message),
+        so a failure there must not mask the terminal-status recording or the
+        original exception in :meth:`process_job`.
+        """
+        if self.on_complete is None:
+            return
+        try:
+            await self.on_complete(job.run_id, job.conversation_id, ok, detail)
+        except Exception:  # noqa: BLE001 - notify is best-effort
+            log.exception("notify_on_complete failed for %s", job.run_id)
+
     async def process_job(
         self,
         session_id: str,
@@ -197,19 +212,16 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                         f"shell: {job.command}",
                         _detail(status.stdout, status.stderr, status.exit_code),
                     )
-                    if self.on_complete is not None:
-                        self.on_complete(
-                            job.run_id,
-                            job.conversation_id,
-                            status.exit_code == 0,
-                            f"exit {status.exit_code}",
+                    if job.notify_on_completion and self.on_complete is not None:
+                        await self._notify(
+                            job, status.exit_code == 0, f"exit {status.exit_code}"
                         )
                     return
         except Exception as exc:
             self._record_rich(job, status="error")
             await self._emit(job.run_id, "error", f"shell: {job.command}", str(exc))
-            if self.on_complete is not None:
-                self.on_complete(job.run_id, job.conversation_id, False, str(exc))
+            if job.notify_on_completion and self.on_complete is not None:
+                await self._notify(job, False, str(exc))
             raise
 
 
