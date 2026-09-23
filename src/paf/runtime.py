@@ -91,6 +91,7 @@ __all__ = [
     "BackgroundEvent",
     "BackgroundTask",
     "MaintenanceEvent",
+    "TurnHandle",
     "PROCESSING",
     "DONE",
     "ERROR",
@@ -325,6 +326,81 @@ def _profile_name(profile: Any) -> str | None:
     return None
 
 
+class TurnHandle:
+    """A Session-owned, running (or finished) turn with re-attachable subscribers.
+
+    Owns the background asyncio task that drives ``Session.stream()`` and the
+    per-subscriber event fan-out. The turn runs to completion regardless of
+    whether any subscriber is attached; a subscriber attaches with
+    :meth:`subscribe` and receives events from its attach point onward
+    (fold-state up to now comes from history replay, not this stream).
+
+    This is the durable-turns primitive: turn lifetime is decoupled from any
+    single SSE request. A second ``start_turn`` on the same Session re-attaches
+    to the running handle instead of starting a second turn.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        prompt: str,
+        conversation_id: str | None,
+        token: CancellationToken,
+    ) -> None:
+        self._session = session
+        self._token = token
+        self._subscribers: set[asyncio.Queue[TurnStreamEvent | None]] = set()
+        # Set by the pump on an unexpected end (not a clean finish/cancel).
+        self.error: BaseException | None = None
+        self._task = asyncio.create_task(self._pump(prompt, conversation_id))
+
+    @property
+    def done(self) -> bool:
+        """True once the turn task has settled (any outcome)."""
+        return self._task.done()
+
+    def cancel(self) -> None:
+        """Stop the underlying turn task (hard stop; token cancel is gentler)."""
+        if not self._task.done():
+            self._task.cancel()
+
+    async def _pump(self, prompt: str, conversation_id: str | None) -> None:
+        try:
+            async for ev in self._session.stream(
+                prompt, conversation_id=conversation_id, _token=self._token
+            ):
+                self._publish(ev)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
+            self.error = exc
+            log.warning("turn pump ended with error: %r", exc)
+        finally:
+            self._publish(None)  # end sentinel to every subscriber
+            self._session._clear_turn(self)
+
+    def _publish(self, ev: TurnStreamEvent | None) -> None:
+        for q in list(self._subscribers):
+            q.put_nowait(ev)
+
+    async def subscribe(self) -> AsyncIterator[TurnStreamEvent]:
+        """Yield this turn's events from now until it ends (empty if done)."""
+        q: asyncio.Queue[TurnStreamEvent | None] = asyncio.Queue()
+        self._subscribers.add(q)
+        # A subscriber arriving after the turn settled gets the end sentinel
+        # immediately (its content comes from history replay, not this stream).
+        if self.done:
+            q.put_nowait(None)
+        try:
+            while True:
+                ev = await q.get()
+                if ev is None:
+                    return
+                yield ev
+        finally:
+            self._subscribers.discard(q)
+
+
 # ---------------------------------------------------------------------------
 # The single self-contained Session
 # ---------------------------------------------------------------------------
@@ -401,6 +477,8 @@ class Session:
         self._token = CancellationToken()
         # Live AgentRun handle for steer/enqueue.
         self._run: Any = None
+        # Session-owned running turn handle (durable turns). None when idle.
+        self._turn: TurnHandle | None = None
 
     # -- introspection ---------------------------------------------------------
 
@@ -585,6 +663,7 @@ class Session:
         prompt: str,
         *,
         conversation_id: str | None = None,
+        _token: CancellationToken | None = None,
     ) -> AsyncIterator[TurnStreamEvent]:
         """Run one turn, yielding renderable :class:`StreamEvent` objects.
 
@@ -614,7 +693,7 @@ class Session:
         # stop would instantly cancel every later run ("The agent run was
         # cancelled."). Recreate it per turn so stop only ever affects the
         # current turn.
-        self._token = CancellationToken()
+        self._token = _token if _token is not None else CancellationToken()
         await self._ensure_resumed(scoped)
 
         # Stamp the current UTC timestamp onto the start of EVERY user message,
@@ -796,6 +875,32 @@ class Session:
         """
         return asyncio.run(self.run(prompt, conversation_id=conversation_id))
 
+    # -- durable-turn ownership -----------------------------------------------
+
+    def start_turn(
+        self, prompt: str, *, conversation_id: str | None = None
+    ) -> TurnHandle:
+        """Start a Session-owned turn, or re-attach to the running one.
+
+        The turn runs in a background task decoupled from any request; callers
+        attach with :meth:`TurnHandle.subscribe`. If a turn is already running
+        on this session, returns that running handle (the prompt is ignored —
+        re-attach, per the durable-turns design); start a new turn by cancelling
+        or letting the current one finish first. The turn's CancellationToken is
+        created synchronously so an immediate ``cancel()`` is never dropped.
+        """
+        if self._turn is not None:
+            return self._turn
+        token = CancellationToken()
+        self._token = token
+        self._turn = TurnHandle(self, prompt, conversation_id, token)
+        return self._turn
+
+    def _clear_turn(self, handle: TurnHandle) -> None:
+        """Drop the owned-turn ref once its pump settles (idempotent)."""
+        if self._turn is handle:
+            self._turn = None
+
     # -- steering / control ---------------------------------------------------
 
     async def cancel(self) -> None:
@@ -825,6 +930,8 @@ class Session:
 
     def close(self) -> None:
         """Flush buffered spans and disable tracing before process exit."""
+        if self._turn is not None:
+            self._turn.cancel()  # stop a running owned turn (best-effort)
         if self.trace:
             shutdown_observability()
 
