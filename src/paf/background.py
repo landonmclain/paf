@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -67,7 +67,7 @@ class BackgroundRunner:
     def __init__(self) -> None:
         self._tasks: set[asyncio.Task] = set()
 
-    def spawn(self, coro: Awaitable[None]) -> asyncio.Task:
+    def spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task:
         """Run ``coro`` as a tracked background task on the current loop.
 
         The task is created on whatever loop is current (the server's loop in
