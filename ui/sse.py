@@ -761,6 +761,22 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
 
         await _publish_idle()
 
+        # 1c. Restore this conversation's shell background processes. Shell rows
+        #     live in the durable shell store (NOT the coordinator's
+        #     task_history restored above), so a reconnect must read them here
+        #     or a running / recently-finished shell process would vanish after
+        #     a refresh or conversation switch. Agent lane has no scope -> skip.
+        if scope is not None:
+            try:
+                from paf.capabilities.shell._background import conversation_shell_frames
+
+                for frame in conversation_shell_frames(
+                    PROJECT_ROOT / "data" / "processes", bg.agent_name, scope
+                ):
+                    _publish(("task", frame))
+            except Exception:
+                log.warning("shell process restore failed", exc_info=True)
+
         # No wall-clock heartbeat: every background job is TURN-gated, so task
         # events (SKIPPED/PROCESSING) already fire on every ``after_turn`` and
         # the subscriber below refreshes the panel live. The only residue a timer

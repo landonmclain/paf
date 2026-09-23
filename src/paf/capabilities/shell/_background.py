@@ -292,9 +292,7 @@ def conversation_shell_frames(
         elif status in ("done", "error"):
             if _finished_within(rec, now, recent_window_s):
                 exit_code = rec.get("exit_code")
-                detail = (
-                    f"exit {exit_code}" if exit_code is not None else str(status)
-                )
+                detail = f"exit {exit_code}" if exit_code is not None else str(status)
                 frames.append(
                     {
                         "id": rid,
@@ -307,9 +305,7 @@ def conversation_shell_frames(
     return frames
 
 
-def _finished_within(
-    rec: dict[str, object], now: datetime, window_s: int
-) -> bool:
+def _finished_within(rec: dict[str, object], now: datetime, window_s: int) -> bool:
     """True when the record's ``timestamp`` falls inside the recency window."""
     ts = rec.get("timestamp")
     if not ts:
