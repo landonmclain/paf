@@ -52,20 +52,31 @@ def _fake_turn(block_on: asyncio.Event) -> object:
     return _Turn()
 
 
+class _FakeHandle:
+    """Minimal TurnHandle stand-in: an async-generator subscribe + error slot."""
+
+    def __init__(self, turn) -> None:
+        self._turn = turn
+        self.error = None
+
+    async def subscribe(self):
+        async for ev in self._turn:
+            yield ev
+
+
+class _FakeRequest:
+    async def is_disconnected(self) -> bool:
+        return False
+
+
 def _fake_session(block_on: asyncio.Event) -> object:
     class _Session:
-        cancelled = {"v": False}
-
         def _scoped_cid(self, cid):
             return cid  # bare session -> identity (mirrors Session._scoped_cid)
 
-        def stream(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
-            return _fake_turn(block_on)
-
-        async def cancel(self) -> None:
-            self.cancelled["v"] = True
-            block_on.set()  # let the suspended stream settle
+            return _FakeHandle(_fake_turn(block_on))
 
     return _Session()
 
@@ -75,7 +86,7 @@ def test_turn_frames_emits_plan_snapshot_on_mutation_and_unsubscribes() -> None:
     clear_plan_emitters()
     block_on = asyncio.Event()
     sess = _fake_session(block_on)
-    frames = sse._turn_frames(sess, "hi", "conv-1")  # type: ignore[attr-defined]
+    frames = sse._turn_frames(sess, "hi", "conv-1", _FakeRequest())  # type: ignore[attr-defined]
 
     plan_frame = {
         "items": [{"id": "c5b38e0a", "content": "step one", "status": "in_progress"}]
@@ -116,7 +127,7 @@ def test_turn_frames_no_plan_frame_without_mutation() -> None:
     clear_plan_emitters()
     block_on = asyncio.Event()
     sess = _fake_session(block_on)
-    frames = sse._turn_frames(sess, "hi", "conv-1")  # type: ignore[attr-defined]
+    frames = sse._turn_frames(sess, "hi", "conv-1", _FakeRequest())  # type: ignore[attr-defined]
 
     async def _drive():
         first = await anext(frames)

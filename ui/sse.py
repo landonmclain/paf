@@ -862,9 +862,16 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
 
 
 def _turn_frames(
-    session: Session, prompt: str, conversation_id: str
+    session: Session, prompt: str, conversation_id: str, request: Request
 ) -> AsyncIterator[str]:
-    """Run one turn, forwarding turn events as SSE.
+    """Subscribe to one Session-owned turn, forwarding its events as SSE.
+
+    The turn starts (or re-attaches to) on the Session via ``start_turn`` and
+    runs in a background task OWNED BY THE SESSION — not by this request. This
+    generator is a *subscriber*: on client disconnect it detaches (stops
+    writing to the dead socket) but the turn keeps running server-side, so a
+    returning client can re-attach. Cancellation is exclusively the explicit
+    ``POST /api/cancel``.
 
     Background / maintenance work (``task:`` frames) is NOT mixed in here — it
     lives on its own dedicated ``GET /api/processes/stream`` feed so it never
@@ -873,11 +880,16 @@ def _turn_frames(
     """
 
     async def _inner() -> AsyncIterator[str]:
-        turn_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+        out_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
         _scoped = getattr(session, "_scoped_cid", None)
         scoped_cid = (
             _scoped(conversation_id) if _scoped is not None else None
         ) or conversation_id
+
+        # Start (or re-attach to) the Session-owned turn. If a turn is already
+        # running on this lane, start_turn returns that running handle and the
+        # prompt is ignored (re-attach, per the durable-turns design).
+        handle = session.start_turn(prompt, conversation_id=conversation_id)
 
         async def _on_plan(_ev: Any) -> None:
             # Full-snapshot per mutation (Plan-Live-Sidebar-Spec): read the
@@ -889,7 +901,7 @@ def _turn_frames(
             except Exception:  # noqa: BLE001 - a subscriber must never break the turn
                 log.warning("plan snapshot for %s failed", scoped_cid, exc_info=True)
                 return
-            turn_q.put_nowait(("plan", {"items": items}))
+            out_q.put_nowait(("plan", {"items": items}))
 
         # Observe the conversation's shared plan emitter (the SAME emitter the
         # agent's FilePlanStore writes through, via _registry). Any plan
@@ -899,48 +911,50 @@ def _turn_frames(
             (t, emitter.on(t, _on_plan)) for t in PlanEventType
         ]
 
-        async def _pump_turn() -> None:
-            try:
-                async for ev in session.stream(prompt, conversation_id=conversation_id):
-                    await turn_q.put(_serialize_turn(ev))
-            except Exception as exc:  # noqa: BLE001 - surface as an error frame
-                log.warning("turn stream ended: %r", exc)
-                await turn_q.put(("error", {"detail": str(exc)}))
-            finally:
-                await turn_q.put(None)  # sentinel: turn stream finished
+        async def _forward_turn() -> None:
+            # Forward the Session-owned turn's events as SSE frames from the
+            # subscriber's attach point onward. A turn that ended in error has
+            # handle.error set -> surface an error frame before the end.
+            async for ev in handle.subscribe():
+                await out_q.put(_serialize_turn(ev))
+            if handle.error is not None:
+                await out_q.put(("error", {"detail": str(handle.error)}))
+            await out_q.put(None)  # sentinel: turn stream finished
 
-        turn = asyncio.create_task(_pump_turn())
+        # Watch for the client disconnecting: end THIS SSE stream (detach the
+        # subscriber) but leave the Session-owned turn running so a re-attach
+        # can pick it up. Without it, the generator pins the socket open until
+        # the turn finishes (uvicorn graceful shutdown waits on it).
+        async def _watch_disconnect() -> None:
+            try:
+                while not await request.is_disconnected():
+                    await asyncio.sleep(0.5)
+            except Exception:  # noqa: BLE001 - a broken watch must not panic
+                pass
+            out_q.put_nowait(None)
+
+        forward = asyncio.create_task(_forward_turn())
+        disconnect_watcher = asyncio.create_task(_watch_disconnect())
         try:
-            # Drive the TURN to completion. The stream ends exactly when the turn
-            # ends (clean EOF -> client onDone -> UI shows "done"). There is no
-            # background-task queue here — those frames flow on the separate
-            # /api/processes/stream feed.
             while True:
-                item = await turn_q.get()
+                item = await out_q.get()
                 if item is None:
-                    break  # turn finished -- close the SSE stream now
+                    break  # turn finished OR client disconnected -- close the stream
                 yield _frame(*item)
         finally:
-            # Cooperative teardown: cancel the session's CancellationToken, NOT
-            # the turn task directly (see commit 24cd3aa for the OTel span/context
-            # rationale). Then drain the turn task so it settles before teardown.
             for evt_type, cb in plan_registrations:
                 emitter.off(evt_type, cb)
-            try:
-                await session.cancel()
-            except Exception:  # noqa: BLE001 - best-effort; never mask teardown
-                log.warning(
-                    "session.cancel() during stream teardown failed", exc_info=True
-                )
-            if not turn.done():
-                turn.cancel()
-            await asyncio.gather(turn, return_exceptions=True)
+            # Detach only: cancel the subscriber tasks. The Session-owned turn
+            # (handle) keeps running — NO session.cancel() here.
+            forward.cancel()
+            disconnect_watcher.cancel()
+            await asyncio.gather(forward, disconnect_watcher, return_exceptions=True)
 
     return _inner()
 
 
 @app.post("/api/chat")
-async def chat(body: dict[str, Any]) -> StreamingResponse:
+async def chat(body: dict[str, Any], request: Request) -> StreamingResponse:
     """Open an SSE stream for one turn on a conversation.
 
     Body: ``{conversation_id, prompt, agent?}``. Returns ``text/event-stream``
@@ -957,7 +971,7 @@ async def chat(body: dict[str, Any]) -> StreamingResponse:
         str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
     )
 
-    frames = _turn_frames(session, str(prompt), str(conversation_id))
+    frames = _turn_frames(session, str(prompt), str(conversation_id), request)
     return StreamingResponse(frames, media_type="text/event-stream")
 
 

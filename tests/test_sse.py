@@ -1,15 +1,10 @@
 """Tests for the SSE transport teardown path (ui/sse.py ``_turn_frames``).
 
-The focus is the teardown contract that fixed "tracing sometimes just stops":
-when the turn's SSE generator is torn down mid-suspension (Stop / client
-disconnect) the code MUST cancel the session *cooperatively* via
-``session.cancel()`` (CancellationToken) rather than injecting a foreign-task
-``asyncio.CancelledError`` into the ``session.stream()`` generator. Cancelling
-the task directly is what made OTel's ``context.detach()`` raise
-``ValueError: <Token> was created in a different Context`` (the span never ended
---> trace lost) and produced ``aclose(): asynchronous generator is already
-running``. We assert the teardown settles cleanly and triggers the cooperative
-cancel path.
+The teardown contract for durable turns (Durable-Server-Side-Turns-Reattach-Spec):
+``_turn_frames`` is a SUBSCRIBER to a Session-owned turn. When the SSE generator is
+torn down mid-suspension (Stop / client disconnect) it DETACHES the subscriber — it
+must NOT call ``session.cancel()``, because the Session-owned turn keeps running
+server-side and a returning client re-attaches (disconnect != cancel).
 """
 
 from __future__ import annotations
@@ -30,17 +25,42 @@ def _event() -> StreamEvent:
     return StreamEvent(kind="text", text="partial")
 
 
-def test_turn_frames_teardown_cancels_cooperatively_and_settles() -> None:
-    """Closing the SSE generator mid-turn must use session.cancel(), not a
-    foreign Task.cancel(), and must settle without leaking CancelledError."""
+class _FakeHandle:
+    """Minimal TurnHandle stand-in: an async-generator subscribe + error slot."""
+
+    def __init__(self, turn) -> None:
+        self._turn = turn
+        self.error = None
+        self.detached = {"v": False}
+
+    async def subscribe(self):
+        try:
+            async for ev in self._turn:
+                yield ev
+        finally:
+            self.detached["v"] = True
+
+
+class _FakeRequest:
+    def __init__(self, disconnected: bool = False) -> None:
+        self._disconnected = disconnected
+
+    async def is_disconnected(self) -> bool:
+        return self._disconnected
+
+
+def test_turn_frames_teardown_detaches_without_cancelling() -> None:
+    """Closing the SSE generator mid-turn must DETACH the subscriber, never
+    call session.cancel() — the Session-owned turn keeps running (disconnect
+    != cancel, the durable-turns invariant)."""
+
+    released = asyncio.Event()
 
     class _FakeTurn:
         """async iterator that yields one event then blocks mid-suspension."""
 
-        def __init__(self, released: asyncio.Event) -> None:
-            self._released = released
+        def __init__(self) -> None:
             self._sent = False
-            self.closed = False
 
         def __aiter__(self):
             return self
@@ -50,40 +70,33 @@ def test_turn_frames_teardown_cancels_cooperatively_and_settles() -> None:
                 self._sent = True
                 return _event()
             # Suspend open (equivalent to stream() yielding a chunk mid-turn).
-            await self._released.wait()
+            await released.wait()
             raise StopAsyncIteration
 
     class _FakeSession:
         def __init__(self) -> None:
             self.cancel_called = False
-            self.task_subscribed = None
-            self._released = asyncio.Event()
-            self.background = self  # bare coordinator stub: subscribe routes here
 
-        def stream(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
-            return _FakeTurn(self._released)
-
-        def subscribe_tasks(self, cb) -> None:
-            self.task_subscribed = cb
+            return _FakeHandle(_FakeTurn())
 
         async def cancel(self) -> None:
             self.cancel_called = True
-            self._released.set()  # let the suspended stream() complete/close
 
     s = _FakeSession()
-    frames = sse._turn_frames(s, "hi", "conv-1")  # type: ignore[attr-defined]
+    frames = sse._turn_frames(s, "hi", "conv-1", _FakeRequest())  # type: ignore[attr-defined]
 
     async def _drive():
-        # Pull one frame -> the turn is now suspended mid-turn (Stop case).
+        # Pull one frame -> the turn is now suspended mid-turn.
         first = await anext(frames)
         assert "partial" in first
-        # Now tear the SSE connection down (client disconnect / Stop).
+        # Tear the SSE connection down (client disconnect / Stop).
         await frames.aclose()
 
     asyncio.run(_drive())
 
-    assert s.cancel_called is True, "teardown must cancel the session cooperatively"
+    assert s.cancel_called is False, "teardown must NOT cancel the session-owned turn"
     # The stream task must have settled (no leaked CancelledError from aclose).
 
 
@@ -92,11 +105,9 @@ def test_turn_frames_does_not_forward_task_frames() -> None:
 
     Phase 1 of the Unified-Background-Process-Feed-Spec decouples the two: a
     background ``task`` frame landing mid-turn used to be merged into ``/api/chat``
-    and could tear a thinking/text block (the ``"The u" / "ser asks…"`` split by
-    ``task:Summarizing thread``). ``_turn_frames`` now only drives the turn and
-    never subscribes to the background coordinator — task frames flow on the
-    dedicated ``/api/processes/stream`` feed instead (see
-    ``test_processes_stream_*``).
+    and could tear a thinking/text block. ``_turn_frames`` now only subscribes to
+    the turn handle and never subscribes to the background coordinator — task
+    frames flow on the dedicated ``/api/processes/stream`` feed instead.
     """
 
     subscribed = {"v": False}
@@ -115,20 +126,14 @@ def test_turn_frames_does_not_forward_task_frames() -> None:
             raise StopAsyncIteration
 
     class _FakeSession:
-        def __init__(self) -> None:
-            self.background = self  # coordinator stub
-
-        def stream(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
-            return _FakeTurn()
+            return _FakeHandle(_FakeTurn())
 
         def subscribe_tasks(self, cb) -> None:
             subscribed["v"] = True  # must never be called by _turn_frames
 
-        async def cancel(self) -> None:
-            pass
-
-    frames = sse._turn_frames(_FakeSession(), "hi", "conv-1")  # type: ignore[attr-defined]
+    frames = sse._turn_frames(_FakeSession(), "hi", "conv-1", _FakeRequest())  # type: ignore[attr-defined]
 
     async def _drive():
         got = await anext(frames)
@@ -149,24 +154,15 @@ def test_turn_frames_teardown_survives_no_active_turn() -> None:
     """Closing a generator whose turn already finished must be a clean no-op."""
 
     class _FakeSession:
-        def __init__(self) -> None:
-            self.background = self  # bare coordinator stub
-
-        def stream(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
 
             async def _g():
                 yield _event()
 
-            return _g()
+            return _FakeHandle(_g())
 
-        def subscribe_tasks(self, cb) -> None:
-            del cb
-
-        async def cancel(self) -> None:
-            pass
-
-    frames = sse._turn_frames(_FakeSession(), "hi", "conv-1")  # type: ignore[attr-defined]
+    frames = sse._turn_frames(_FakeSession(), "hi", "conv-1", _FakeRequest())  # type: ignore[attr-defined]
 
     async def _drive():
         await anext(frames)
