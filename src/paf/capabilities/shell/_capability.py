@@ -127,9 +127,7 @@ class Shell(AbstractCapability[AgentDepsT]):
     agent: str = ""
     """Agent name used to scope durable stores. Empty when not persisting."""
 
-    on_complete: (
-        Callable[[str, str | None, bool, str], Awaitable[None]] | None
-    ) = None
+    on_complete: Callable[[str, str | None, bool, str], Awaitable[None]] | None = None
     """Completion-notification hook, injected by the embedding layer (the SSE
     transport). When set, the toolset's queue fires it when a
     ``notify_on_completion`` process finishes; the callback is expected to run a

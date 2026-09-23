@@ -922,7 +922,9 @@ def build_runtime_capabilities(
         elif name == "FileSystem":
             capabilities.append(_build_filesystem(store, filesystem_config))
         elif name == "Shell":
-            capabilities.append(_build_shell(store, shell_config, agent_name, on_complete))
+            capabilities.append(
+                _build_shell(store, shell_config, agent_name, on_complete)
+            )
         elif name == "Git":
             capabilities.append(_build_git(store, git_config))
         elif name == "CodebaseMap":
