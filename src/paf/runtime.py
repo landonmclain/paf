@@ -359,6 +359,16 @@ class TurnHandle:
         """True once the turn task has settled (any outcome)."""
         return self._task.done()
 
+    @property
+    def has_subscribers(self) -> bool:
+        """True while at least one SSE subscriber is attached (a live stream).
+
+        The idle sweeper uses this to distinguish a turn that is actively
+        streaming to a connected client (not reapable) from a detached turn
+        with no subscriber (an orphan, reapable as the cost guard).
+        """
+        return bool(self._subscribers)
+
     def cancel(self) -> None:
         """Stop the underlying turn task (hard stop; token cancel is gentler)."""
         if not self._task.done():

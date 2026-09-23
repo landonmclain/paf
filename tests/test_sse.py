@@ -386,3 +386,28 @@ def test_process_feed_terminates_on_client_disconnect() -> None:
         await asyncio.wait_for(_collect(), timeout=5)
 
     asyncio.run(_drive())
+
+
+def test_session_is_busy_guards_idle_reap() -> None:
+    """The sweeper must not reap a live-stream session, but must reap orphans."""
+
+    class _BusyTurn:
+        done = False
+        has_subscribers = True
+
+    class _DetachedTurn:
+        done = False
+        has_subscribers = False
+
+    class _DoneTurn:
+        done = True
+        has_subscribers = True
+
+    class _S:
+        def __init__(self, turn) -> None:
+            self._turn = turn
+
+    assert sse._session_is_busy(_S(_BusyTurn())) is True, "live stream: not reapable"
+    assert sse._session_is_busy(_S(_DetachedTurn())) is False, "orphan: reapable"
+    assert sse._session_is_busy(_S(_DoneTurn())) is False, "settled: reapable"
+    assert sse._session_is_busy(_S(None)) is False, "no turn: reapable"

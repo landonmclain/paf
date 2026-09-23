@@ -195,6 +195,22 @@ def _save_titles(agent: str, titles: dict[str, dict[str, Any]]) -> None:
     _title_store(agent).write(_TITLES_KIND, agent, titles)
 
 
+def _session_is_busy(session: Session) -> bool:
+    """True if a session has a live turn with an attached subscriber.
+
+    The idle sweeper must not reap a session that is actively streaming to a
+    connected client (a live stream can outlive the attach-time last_used
+    timestamp). A running turn with NO subscriber is an orphan and stays
+    reapable — that is the cost guard.
+    """
+    turn = getattr(session, "_turn", None)
+    return (
+        turn is not None
+        and not getattr(turn, "done", True)
+        and bool(getattr(turn, "has_subscribers", False))
+    )
+
+
 def _close_session(key: str) -> None:
     """Close + evict one lane (flush spans, drop the worker). Tolerant of races."""
     session = _sessions.pop(key, None)
@@ -208,11 +224,24 @@ def _close_session(key: str) -> None:
 
 
 async def _close_idle_loop() -> None:
-    """Periodically close lanes idle past ``IDLE_TTL_SECONDS`` (started on startup)."""
+    """Periodically close lanes idle past ``IDLE_TTL_SECONDS`` (started on startup).
+
+    A session mid-live-stream (a running turn with an attached subscriber) is
+    never reaped even if its attach-time last_used has gone stale; a running
+    turn with no subscriber is an orphan and is reaped (the cost guard), which
+    cancels it via ``Session.close()``.
+    """
     while True:
         await asyncio.sleep(60)  # sweep every minute
         cutoff = _now() - IDLE_TTL_SECONDS
-        stale = [k for k, t in _sessions_last_used.items() if t < cutoff]
+        stale: list[str] = []
+        for key, t in list(_sessions_last_used.items()):
+            if t >= cutoff:
+                continue
+            session = _sessions.get(key)
+            if session is not None and _session_is_busy(session):
+                continue
+            stale.append(key)
         for key in stale:
             log.info(
                 "closing idle session %s (no activity in %ds)", key, IDLE_TTL_SECONDS
