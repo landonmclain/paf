@@ -486,3 +486,57 @@ def test_stream_propagates_real_cancellation(monkeypatch) -> None:
 
 
 _FAKE_SHELL_PROFILE = _FakeProfile(name="test")
+
+
+# --- Session-owned turn handle (durable turns, no agent build) -------------
+
+
+def _fake_session() -> runtime.Session:
+    """A Session shell (no agent build) for turn-handle mechanics."""
+    s = object.__new__(runtime.Session)
+    s._turn = None
+    s._token = None
+    return s
+
+
+def test_start_turn_reattaches_and_fans_out() -> None:
+    s = _fake_session()
+
+    async def fake_stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        for text in ["hi", "there"]:
+            yield runtime.StreamEvent(kind="text", text=text)
+
+    s.stream = fake_stream  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        h1 = s.start_turn("prompt", conversation_id="c1")
+        assert s._turn is h1
+        # A second start_turn re-attaches; the prompt is ignored.
+        h2 = s.start_turn("ignored", conversation_id="c1")
+        assert h2 is h1
+        events = [ev async for ev in h1.subscribe()]
+        assert [e.text for e in events] == ["hi", "there"]
+        assert h1.done
+        assert s._turn is None  # cleared once the turn settles
+
+    asyncio.run(scenario())
+
+
+def test_turn_handle_records_error_and_clears() -> None:
+    s = _fake_session()
+
+    async def boom(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="x")
+        raise ValueError("boom")
+
+    s.stream = boom  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        h = s.start_turn("p")
+        events = [ev async for ev in h.subscribe()]
+        assert [e.text for e in events] == ["x"]
+        assert isinstance(h.error, ValueError)
+        assert h.done
+        assert s._turn is None
+
+    asyncio.run(scenario())
