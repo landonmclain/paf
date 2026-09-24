@@ -303,6 +303,45 @@ def test_enqueue_returns_none_when_no_run_running(
     assert asyncio.run(s.enqueue("steer me")) is None
 
 
+def test_notify_steers_into_live_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 3: notify() must steer into a live AgentRun, not start a new turn."""
+    monkeypatch.setattr(runtime.Session, "__init__", lambda self, *a, **k: None)
+
+    s = runtime.Session(_FakeRun.__module__ + ".x", agent_name="x", trace=False)
+    fake = _FakeRun()
+    s._run = fake  # type: ignore[attr-defined]
+
+    def _no_start(*a: object, **k: object) -> None:
+        raise AssertionError("notify must steer, not start a turn, when a run is live")
+
+    monkeypatch.setattr(s, "start_turn", _no_start)
+
+    enq_id = s.notify("[system] Background process r1 finished: exit 0")
+    assert enq_id == "enq-1"
+    assert fake.enqueued == [("[system] Background process r1 finished: exit 0", "asap")]
+
+
+def test_notify_starts_new_turn_when_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 3: notify() with no live run becomes a new message (start_turn)."""
+    monkeypatch.setattr(runtime.Session, "__init__", lambda self, *a, **k: None)
+
+    s = runtime.Session("x", agent_name="x", trace=False)
+    s._run = None  # type: ignore[attr-defined]
+
+    started: list[str] = []
+    monkeypatch.setattr(
+        s, "start_turn", lambda content: started.append(content) or object()
+    )
+
+    result = s.notify("[system] Background process r1 finished: exit 0")
+    assert result is None
+    assert started == ["[system] Background process r1 finished: exit 0"]
+
+
 class _FakeProfile:
     def __init__(self, name: str) -> None:
         self.name = name

@@ -936,6 +936,29 @@ class Session:
             return None
         return run.enqueue(content, priority=priority)
 
+    def notify(self, content: str) -> str | None:
+        """Deliver an automated completion message (steer), never a raw stream.
+
+        Background-process completion notifications ride this single gate: if an
+        ``AgentRun`` is live (``self._run``) the message is steered in as a
+        pending message at the next node boundary; if the lane is idle it
+        becomes a new message (a fresh detached turn via ``start_turn``). The
+        liveness key is a live ``AgentRun``, NOT whether a turn handle exists
+        (``_turn``): ``enqueue`` drops the message when no run is live, and
+        ``start_turn`` re-attaches and ignores the prompt when a turn exists —
+        so keying off ``_turn`` would silently lose the notify in the start/
+        settle windows. Synchronous check-and-act (no await between the check
+        and the act) so it cannot race a concurrent ``start_turn``, and it never
+        calls ``stream()`` directly (which would clobber ``_token``/``_run``/
+        ``history`` on a live turn). Returns the ``enqueue_id`` when steered,
+        or ``None`` when a new turn was started.
+        """
+        run = self._run
+        if run is not None:
+            return run.enqueue(content, priority="asap")
+        self.start_turn(content)
+        return None
+
     # -- observability lifecycle ---------------------------------------------
 
     def close(self) -> None:

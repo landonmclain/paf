@@ -123,13 +123,17 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
 async def _notify_agent(
     agent: str, run_id: str, conversation_id: str | None, ok: bool, detail: str
 ) -> None:
-    """Run a notify turn through the REGISTRY session for the originating lane.
+    """Deliver a background-process completion message to the originating lane.
 
     The shell queue fires this when a ``notify_on_completion`` process finishes.
     The queue passes the already-scoped cid (``{profile}:{cid}``); we strip the
     profile prefix and look up (or create) the registry Session so the notify
-    turn lands in the SAME session the UI's ``/api/chat``/history reads — making
-    the completion visible live instead of only after a server restart.
+    lands in the SAME session the UI's ``/api/chat``/history reads — making the
+    completion visible live instead of only after a server restart. Delivery
+    goes through ``Session.notify`` (the Phase-3 steer gate): the message is
+    steered into a live AgentRun when one is running, else it becomes a new
+    detached turn — never a raw ``stream()``, which would clobber a live turn's
+    ``_token``/``_run``/``history``.
     """
     if conversation_id is None:
         return
@@ -145,10 +149,7 @@ async def _notify_agent(
         ok=ok,
         detail=detail,
     ):
-        async for _ev in session.stream(
-            f"[system] Background process {run_id} finished: {detail}"
-        ):
-            pass
+        session.notify(f"[system] Background process {run_id} finished: {detail}")
 
 
 # ---------------------------------------------------------------------------
