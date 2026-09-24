@@ -24,13 +24,20 @@ from paf.events import GenericEventEmitter, Listener
 
 
 class ProcessEventType(str, Enum):  # noqa: UP042 - str-Enum hybrid keeps status JSON-serializable
-    """The lifecycle statuses a background process can emit."""
+    """The lifecycle statuses a background process can emit.
+
+    ``turn_started`` is a transport signal (not a process lifecycle state): it
+    tells a conversation-lane process feed that a detached notify turn started,
+    so the UI can re-attach and stream it. It lives on the same enum so it
+    routes through the shared per-agent emitter's ``on_any`` dispatch.
+    """
 
     queued = "queued"
     running = "running"
     done = "done"
     error = "error"
     skipped = "skipped"
+    turn_started = "turn_started"
 
 
 class ProcessEvent(BaseModel):

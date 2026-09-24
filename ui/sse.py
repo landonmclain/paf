@@ -50,7 +50,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from paf.background_processes._events import get_agent_emitter
+from paf.background_processes._events import (
+    ProcessEvent,
+    ProcessEventType,
+    get_agent_emitter,
+)
 from paf.capabilities import PROFILES
 from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
@@ -149,7 +153,39 @@ async def _notify_agent(
         ok=ok,
         detail=detail,
     ):
-        session.notify(f"[system] Background process {run_id} finished: {detail}")
+        started = session.notify(
+            f"[system] Background process {run_id} finished: {detail}"
+        )
+    # Only when the notify actually STARTED a new turn (idle lane) do we signal
+    # the conversation-lane process feed so the UI re-attaches and streams the
+    # model response. When it was steered into a live turn, that turn is already
+    # streaming to the UI, so no signal is needed.
+    if started is None:
+        await _emit_turn_started(agent, conversation_id, run_id)
+
+
+async def _emit_turn_started(agent: str, conversation_id: str, run_id: str) -> None:
+    """Signal the conversation-lane process feed that a notify turn started.
+
+    Emits a ``turn_started`` ProcessEvent on the per-agent emitter so the
+    matching conversation feed forwards it as a ``turn:`` frame. The UI uses
+    that frame to re-attach to the detached notify turn (``rejoinTurn``) and
+    stream its model response. Only called when the notify actually started a
+    new turn (idle lane); a steered notify is already part of a streaming turn.
+    """
+    try:
+        emitter = get_agent_emitter(agent)
+        await emitter.emit_process(
+            ProcessEvent(
+                id=run_id,
+                label="",
+                status=ProcessEventType.turn_started,
+                lane="conversation",
+                scope=conversation_id,
+            )
+        )
+    except Exception:  # noqa: BLE001 - a broken signal must never break the notify
+        log.warning("turn-started emit failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -834,6 +870,12 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
 
             def _on_task(ev) -> None:
                 if not _matches(ev):
+                    return
+                # A turn_started event is a re-attach signal, not a process row:
+                # forward it as a `turn:` frame so the UI can rejoin and stream
+                # the detached notify turn.
+                if getattr(ev.status, "value", ev.status) == "turn_started":
+                    _publish(("turn", {"run_id": ev.id}))
                     return
                 _publish(_task_frame(ev))
                 if getattr(ev.status, "value", ev.status) in (

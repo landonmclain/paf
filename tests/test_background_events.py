@@ -44,7 +44,8 @@ def test_emit_process_dispatches_to_on_any_listener() -> None:
 
 
 def test_on_any_receives_every_status() -> None:
-    """``on_any`` fires for queued/running/done/error/skipped alike."""
+    """``on_any`` fires for queued/running/done/error/skipped alike, plus the
+    turn_started re-attach signal (a transport event on the same bus)."""
 
     async def run() -> None:
         emitter = ProcessEventEmitter()
@@ -52,7 +53,14 @@ def test_on_any_receives_every_status() -> None:
         emitter.on_any(lambda e: statuses.append(e.status.value))
         for status in ProcessEventType:
             await emitter.emit_process(ProcessEvent(id="p.1", label="P", status=status))
-        assert statuses == ["queued", "running", "done", "error", "skipped"]
+        assert statuses == [
+            "queued",
+            "running",
+            "done",
+            "error",
+            "skipped",
+            "turn_started",
+        ]
 
     asyncio.run(run())
 
