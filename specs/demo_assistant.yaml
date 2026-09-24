@@ -102,7 +102,7 @@ model_settings:
   # forever' loops on simple turns. OpenRouterModelSettings.openrouter_reasoning
   # forwards to the OpenRouter `reasoning` body.
   openrouter_reasoning:
-    effort: low
+    effort: high
 
 # ---------------------------------------------------------------------------
 # Web trust boundary (lives in the spec — the source of truth). Read by
@@ -166,6 +166,7 @@ web:
 browser:
   allowed_domains:
     - staging.example.com
+    - staging.com
     - example.com
     - localhost
     - 127.0.0.1

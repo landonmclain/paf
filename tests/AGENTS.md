@@ -5,6 +5,9 @@ working on the graded memory/retrieval benchmarks in this directory. These are
 **live LLM benchmarks** — they cost real OpenRouter tokens and write real Langfuse
 traces. Read before running.
 
+> **Full unit test suite:** from the repo root, `PYTHONPATH= .venv/bin/python -m pytest`
+> takes ~50s (~769 tests).
+
 > **When unsure, lean on the traces, not the logs.** A run's stdout/log is the
 > harness's *narrative*; the Langfuse ClickHouse data is what actually happened
 > (which tool calls fired, in what order, how many LLM generations, what the model

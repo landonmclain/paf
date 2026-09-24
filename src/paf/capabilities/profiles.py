@@ -99,7 +99,7 @@ DEMO_PROFILE = AgentProfile(
         "Subagents",
         "Planning",
         "ThreadSummarizer",
-        "Secrets",
+        # "Secrets",
         # "Guardrails",
         # "ToolGating",
     ),

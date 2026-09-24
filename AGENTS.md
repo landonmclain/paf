@@ -13,6 +13,9 @@ web-UI-centric; the graded benchmark harness has its own guide — **see
 > mechanical explanation. `.env` must be sourced with `set -a && . ./.env && set +a`
 > (plain `source` does not export `OPENROUTER_API_KEY`).
 
+> **Full unit test suite:** from the repo root, `PYTHONPATH= .venv/bin/python -m pytest`
+> takes ~50s (~769 tests).
+
 ## The web server is a systemd user service — do not run it ad hoc
 
 `ui/web.py` serves the paf Gradio chat on `0.0.0.0:8080` (Tailscale
