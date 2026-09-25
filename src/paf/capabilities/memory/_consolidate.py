@@ -366,4 +366,3 @@ async def consolidate(
         CONSOLIDATION_PROMPT.format(evicted_text=evicted_text),
     )
     logger.info("consolidated %d evicted msgs: %s", len(evicted), result.output)
-

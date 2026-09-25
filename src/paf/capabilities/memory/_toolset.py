@@ -28,7 +28,6 @@ MAIN_FILENAME = "MEMORY.md"
 DEFAULT_MAX_ITEM_CHARS = 1200
 
 
-
 def _merge_item_char_cap() -> int:
     """The reviewer spec's per-item char cap (``max_item_chars``), default 1200.
 

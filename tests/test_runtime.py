@@ -320,7 +320,9 @@ def test_notify_steers_into_live_run(
 
     enq_id = s.notify("[system] Background process r1 finished: exit 0")
     assert enq_id == "enq-1"
-    assert fake.enqueued == [("[system] Background process r1 finished: exit 0", "asap")]
+    assert fake.enqueued == [
+        ("[system] Background process r1 finished: exit 0", "asap")
+    ]
 
 
 def test_notify_starts_new_turn_when_idle(

@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 async def consolidate_conversation(
-    messages: list["ModelMessage"],
+    messages: list[ModelMessage],
     *,
     store,
     agent_name: str,
@@ -150,7 +150,7 @@ def _split_chunks(text: str, *, max_tokens: int) -> list[str]:
 
 
 async def consolidate_conversation_chunked(
-    messages: list["ModelMessage"],
+    messages: list[ModelMessage],
     *,
     store,
     agent_name: str,

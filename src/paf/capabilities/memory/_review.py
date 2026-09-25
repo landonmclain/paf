@@ -126,7 +126,11 @@ def _reviewer_prompt() -> str:
         )
     from typing import cast as _cast
 
-    return _cast(str, instructions) if not isinstance(instructions, list) else str(instructions)
+    return (
+        _cast(str, instructions)
+        if not isinstance(instructions, list)
+        else str(instructions)
+    )
 
 
 def _build_reviewer(
