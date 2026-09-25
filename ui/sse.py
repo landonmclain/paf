@@ -115,7 +115,7 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
             agent,
             profile=_profile_for(agent),
             conversation_id=conversation_id,
-            resume_window=200,
+            resume_window=300,
             on_complete=functools.partial(_notify_agent, agent),
         )
         session.attach_background()

@@ -333,12 +333,6 @@ compact:
 #   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
   consolidate_every: 10
-  # Turn-count cadence (active gate). Memory is cheap extract+append -> fold
-  # every 5 turns; reviewer is slow archive/merge and
-  # batches ~2 folds -> every 10 turns. Thread summarizer uses its own 10-turn
-  # block. consolidate_every/review_every above are the legacy minute fallback.
-  consolidate_turns: 5
-  review_turns: 10
   tier_caps:
     t1: 50
     t2: 25

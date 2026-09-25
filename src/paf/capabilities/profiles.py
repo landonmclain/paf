@@ -69,7 +69,7 @@ ASSISTANT_PROFILE = AgentProfile(
         "Subagents",
         "Planning",
         "ThreadSummarizer",
-        "Secrets",
+        # "Secrets",
         # "Guardrails",
         # "ToolGating",
     ),
