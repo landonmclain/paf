@@ -59,8 +59,9 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Lossless recall over the persistence store; built in Python (needs a real
     # SnapshotHistorySource), cataloged so the allowlist + schema stay complete.
     "ConversationSearch": ConversationSearch,
-    # Durable-facts notebook (MEMORY.md + topic files). Has `from_spec`, so it
-    # resolves declaratively AND via build.py.
+    # Durable-facts notebook (MEMORY.md). Built in Python via build.py (needs a
+    # real JournalViewStore + OverrideStore); cataloged so the allowlist + schema
+    # stay complete.
     "Memory": Memory,
     # Per-conversation background thread summarizer. OFF by default — the profile
     # allowlist is the ON/OFF switch.

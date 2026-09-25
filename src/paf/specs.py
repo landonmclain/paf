@@ -332,16 +332,6 @@ def resolve_memory_config(
             and review_candidate > 0
         ):
             review_every = review_candidate
-        turns_c = cfg.get("consolidate_turns")
-        if isinstance(turns_c, int) and not isinstance(turns_c, bool) and turns_c > 0:
-            turns = turns_c
-        review_turns_c = cfg.get("review_turns")
-        if (
-            isinstance(review_turns_c, int)
-            and not isinstance(review_turns_c, bool)
-            and review_turns_c > 0
-        ):
-            review_turns = review_turns_c
     return {
         "consolidate_every": every,
         "review_every": review_every,

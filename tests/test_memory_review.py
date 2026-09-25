@@ -153,7 +153,7 @@ def test_memory_capability_assistant_still_gets_override_toolset(tmp_path):
 def test_review_builds_reviewer_agent(tmp_path):
     from paf.capabilities.memory._review import (
         _build_reviewer_memory,
-        review_model,
+        _reviewer_spec_config,
     )
     from paf.capabilities.memory._view import JournalViewStore
 
@@ -166,7 +166,7 @@ def test_review_builds_reviewer_agent(tmp_path):
     )
     assert mem.get_toolset() is not None
     assert set(mem.get_toolset().tools.keys()) == {"memory_review"}
-    assert review_model()  # resolves to the owner's model string
+    assert _reviewer_spec_config()[0]  # reviewer model string resolves from spec
 
 
 # ---------------------------------------------------------------------------

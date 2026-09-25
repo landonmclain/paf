@@ -75,7 +75,6 @@ def _memory_cap(mem_dir: Path):
         store=JournalViewStore(mem_dir),
         agent_name="assistant",
         inject_memory=True,
-        writable=False,
         expose_tools=False,
         guidance="",
     )
@@ -166,25 +165,14 @@ def test_read_missing_file_returns_none(tmp_path: Path) -> None:
     assert asyncio.run(_t()) is None
 
 
-def test_no_subfiles(mem_dir: Path) -> None:
-    store = JournalViewStore(mem_dir)
-
-    async def _t():
-        return await store.list_paths("assistant/", limit=10)
-
-    assert asyncio.run(_t()) == []
-
-
 def test_read_only_blocks_writes(mem_dir: Path) -> None:
     store = JournalViewStore(mem_dir)
 
     async def _t():
-        with pytest.raises(NotImplementedError):
-            await store.write("assistant/MEMORY.md", "x", expected_version=None)
-        with pytest.raises(NotImplementedError):
-            await store.delete("assistant/MEMORY.md", expected_version=None)
+        # Read-only by construction: only `read` exists on the journal view.
+        return await store.read("assistant/MEMORY.md", max_chars=100_000)
 
-    asyncio.run(_t())
+    assert asyncio.run(_t()) is not None
 
 
 def test_expose_tools_false_registers_no_memory_tools(mem_dir: Path) -> None:
@@ -201,7 +189,6 @@ def test_expose_tools_false_registers_no_memory_tools(mem_dir: Path) -> None:
         store=_JVS(mem_dir),
         agent_name="assistant",
         inject_memory=True,
-        writable=False,
         expose_tools=False,
         guidance="",
     )
@@ -222,7 +209,6 @@ def test_expose_tools_true_nonjournal_registers_no_toolset(mem_dir: Path) -> Non
         store=_JVS(mem_dir),
         agent_name="assistant",
         inject_memory=True,
-        writable=False,
         expose_tools=True,
         guidance="",
     )

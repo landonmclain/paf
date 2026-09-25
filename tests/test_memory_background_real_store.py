@@ -370,12 +370,12 @@ def test_turn_gate_fires_at_review_turns_threshold(tmp_path: Path) -> None:
     assert fired and fired[-1] != SKIPPED
 
 
-def test_turn_gate_skips_below_threshold_and_spec_is_readable(tmp_path: Path) -> None:
-    """One complete turn short of the gate -> skip; spec vars resolve to 5/10."""
+def test_turn_gate_skips_below_threshold_and_defaults(tmp_path: Path) -> None:
+    """One complete turn short of the gate -> skip; turn gates resolve to defaults."""
     from paf.background import SKIPPED, BackgroundCoordinator
     from paf.specs import resolve_memory_config
 
-    # The live spec (specs/demo_assistant.yaml) declares the acting defaults.
+    # Turn-count gates come from code defaults (5/10), not a spec knob.
     cfg = resolve_memory_config("demo_assistant")
     assert cfg["consolidate_turns"] == 5
     assert cfg["review_turns"] == 10

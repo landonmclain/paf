@@ -27,16 +27,13 @@ from ._store import MemoryFile
 class JournalViewStore:
     """Read-only view of a rendered ``MEMORY.md`` file.
 
-    Implements just the read side of the :class:`MemoryStore` protocol that
+    Implements the read side of the :class:`MemoryStore` protocol that
     injection needs:
 
     - ``read(path, max_chars)`` returns the top-level ``MEMORY.md`` content in
       this root directory, *regardless of the scoped path* the capability asks
       for (it asks ``assistant/MEMORY.md``; we always answer with the root
       render).
-    - ``list_paths(...)`` returns ``[]`` -- a pure journal view has no topic
-      subfiles.
-    - ``write``/``delete``/``get_operation`` are read-only stubs that raise.
 
     ``MEMORY.md`` must already exist (the render step writes it before recall).
     Missing file -> ``read`` returns ``None`` (the capability falls back to its
@@ -61,15 +58,3 @@ class JournalViewStore:
             operation_id=None,
             truncated=truncated,
         )
-
-    async def get_operation(self, operation):
-        return None
-
-    async def write(self, path, content, *, expected_version, operation=None):
-        raise NotImplementedError("JournalViewStore is read-only")
-
-    async def delete(self, path, *, expected_version, operation=None):
-        raise NotImplementedError("JournalViewStore is read-only")
-
-    async def list_paths(self, prefix: str = "", *, limit: int) -> list[str]:
-        return []

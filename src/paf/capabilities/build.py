@@ -142,9 +142,6 @@ def _build_memory(
 
     cfg = memory_config if isinstance(memory_config, dict) else {}
 
-    consolidate_every = _read_positive_int(
-        cfg, "consolidate_every", DEFAULT_CONSOLIDATE_EVERY
-    )
     max_memory_size = _read_positive_int(
         cfg, "max_memory_size", DEFAULT_MEMORY_MAX_SIZE
     )
@@ -154,14 +151,12 @@ def _build_memory(
     return Memory(
         store=JournalViewStore(memory_dir),
         inject_memory=True,
-        writable=False,
         expose_tools=False,
         max_memory_size=max_memory_size,
         # None → `_DEFAULT_MEMORY_GUIDANCE` (the tiered, read-only notebook
         # guidance the assistant should always carry). A spec may opt out with
         # an explicit `guidance: ""`.
         guidance=None,
-        consolidate_every=consolidate_every,
         # The assistant's narrow curation tool: propose archiving a stale fact.
         # It writes only to the override sidecar (never the journal/index).
         overrides=OverrideStore(memory_dir),

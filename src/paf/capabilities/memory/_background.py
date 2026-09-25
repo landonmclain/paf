@@ -29,7 +29,6 @@ watermark spec's "does this break the benchmark" section).
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +39,7 @@ from paf.background import BackgroundQueueService, QueueState
 from .._hashes import _content_hash
 from .._turns import user_anchor_indices
 from ._journal import JournalStore
-from ._watermark import _WATERMARK_FILENAME, MemoryWatermark
+from ._watermark import MemoryWatermark
 
 # Cross-run overlap reconciliation (the memory-family lesson): each run's
 # persisted history is CUMULATIVE — a snapshot carries the whole conversation
@@ -439,11 +438,6 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             journal=journal,
         )
         return journal.count() - before
-
-
-def put_watermark_path(directory: str | os.PathLike) -> str:
-    """Path of the watermark file within a memory directory (for tests/docs)."""
-    return str(Path(directory) / _WATERMARK_FILENAME)
 
 
 # ---------------------------------------------------------------------------

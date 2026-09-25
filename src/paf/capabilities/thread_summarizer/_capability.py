@@ -65,7 +65,7 @@ _THREAD_MAX_CHARS = 4000
 def capture_directory_for(agent_name: str | None) -> Path:
     """Per-agent capture dir: ``<CWD>/data/summaries/<agent_name>/``.
 
-    Mirrors ``memory_dir_for``/``DEFAULT_MEMORY_DIR`` (``data/memory/<agent>``).
+    Mirrors ``memory_dir_for`` (``data/memory/<agent>``).
     The thread summarizer keeps its derived summaries + per-conversation
     watermarks below this root, under ``conversations/<hash(cid)>/``.
     """

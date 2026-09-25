@@ -1,4 +1,4 @@
-"""Memory capability: a persistent, injected notebook plus on-demand memory files."""
+"""Memory capability: a persistent, injected notebook."""
 
 from __future__ import annotations
 
@@ -30,11 +30,8 @@ from ._toolset import (
     JournalAppendToolset,
     OverrideToolset,
     ReviewerToolset,
-    injected_subfile_limit,
-    list_subfiles,
     render_memory_prompt,
 )
-from ._view import JournalViewStore
 
 _DEFAULT_MEMORY_GUIDANCE = (
     "You carry read-only durable memory injected below as `<memory>`. You NEVER write "
@@ -64,9 +61,9 @@ _DEFAULT_MEMORY_GUIDANCE = (
 _MEMORY_DATA_PREFIX = "\n\n<memory>\n"
 _MEMORY_DATA_SUFFIX = "\n</memory>"
 _MEMORY_PART_METADATA = "pydantic-ai-harness.memory.v1"
-# Injected when the scope has no `MEMORY.md` and no topic files yet. Keeps the
-# durable-notebook surface present from turn one so the model is cued to
-# maintain it (and to make the first write) instead of never seeing it at all.
+# Injected when the scope has no `MEMORY.md` yet. Keeps the durable-notebook
+# surface present from turn one so the model is cued to maintain it (and to
+# make the first write) instead of never seeing it at all.
 _EMPTY_MAIN = "No memories recorded/written yet."
 
 
@@ -74,13 +71,7 @@ _EMPTY_MAIN = "No memories recorded/written yet."
 class Memory(AbstractCapability[AgentDepsT]):
     """Persistent agent memory across sessions.
 
-    `MEMORY.md` is injected as user-role context and longer topic files are
-    available through `read_memory` and `search_memory`. Store access performed
-    by automatic injection is not workflow-safe durable I/O. With Temporal or
-    Prefect, use `inject_memory=False`; the static, idempotent `memory` toolset
-    can then be wrapped by those integrations. DBOS does not currently wrap an
-    ordinary `FunctionToolset` as a durable step, so this capability's tools are
-    not DBOS-durable without an application-provided DBOS step wrapper.
+    ``MEMORY.md`` is injected as user-role context on each real user turn.
     """
 
     store: MemoryStore
@@ -94,13 +85,6 @@ class Memory(AbstractCapability[AgentDepsT]):
     agent_name: str = "main"
     """Storage segment that isolates memory within a namespace. Part of the scope
     key only; never rendered into the model-facing memory block."""
-
-    heading: str = field(default="", kw_only=True)
-    """Markdown heading for rendered guidance and the injected memory block,
-    rendered as `## {heading}` when set. The default is empty: the block already
-    sits inside `<memory>` markers, so none is added. Set a distinct value per
-    instance when several `Memory` capabilities share one agent (for example
-    `heading='Team notes'`) so the model can tell the blocks apart."""
 
     namespace: str | Callable[[RunContext[AgentDepsT]], str] = ""
     """Static or per-run tenant namespace, never exposed as a tool argument."""
@@ -117,28 +101,11 @@ class Memory(AbstractCapability[AgentDepsT]):
     never be injected verbatim.
     """
 
-    max_search_results: int = 10
-    """Maximum matches returned by one search."""
-
-    max_search_result_chars: int = 4_000
-    """Maximum combined snippet characters returned by one search."""
-
-    max_search_files: int = 1_000
-    """Maximum files scanned by one search."""
-
     guidance: str | None = None
     """Override injected usage guidance; `''` disables guidance."""
 
     injection_errors: Literal["ignore", "raise"] = "ignore"
     """Whether store failures during automatic injection are ignored or raised."""
-
-    writable: bool = True
-    """Whether this capability may write memory.
-
-    ``False`` ⇒ the assistant can never contaminate durable memory. The
-    consolidation owner (:mod:`paf.capabilities.memory._consolidate`) carries
-    ``writable=True`` and is the sole writer.
-    """
 
     expose_tools: bool = True
     """Whether this capability registers ANY memory tools.
@@ -152,23 +119,10 @@ class Memory(AbstractCapability[AgentDepsT]):
     toolset).
     """
 
-    consolidate_every: int = 10
-    """Background-consolidation cadence: fire every N user-turns past the
-    memory watermark.
-
-    **Memory owns every memory config variable** — this is the capability's
-    knob for how often the background consolidation owner runs (decoupled from
-    eviction). It is handed to the background queue as an injected constructor
-    arg when that service gets its live construction site; the queue never
-    reads spec/env for itself. Must be > 0. Injected from the spec's top-level
-    ``memory: {consolidate_every: N}`` block via ``_build_memory``; default 10
-    keeps the owner ahead of the eviction window (which keeps ~20 messages).
-    """
-
     journal: JournalStore | None = field(default=None, kw_only=True)
     """Optional append-only journal the owner writes through the model.
 
-    When set (with ``writable=True``), :meth:`get_toolset` returns a
+    When set, :meth:`get_toolset` returns a
     journal-append toolset exposing ONLY ``append_memory`` (which appends to
     this journal). The owner never edits, moves, or deletes memory — it appends
     immutable facts to the journal, and the render pass
@@ -203,10 +157,6 @@ class Memory(AbstractCapability[AgentDepsT]):
 
     def __post_init__(self) -> None:
         _validate_positive("max_memory_size", self.max_memory_size)
-        _validate_positive("max_search_results", self.max_search_results)
-        _validate_positive("max_search_result_chars", self.max_search_result_chars)
-        _validate_positive("max_search_files", self.max_search_files)
-        _validate_positive("consolidate_every", self.consolidate_every)
         if self.injection_errors not in ("ignore", "raise"):
             raise ValueError("injection_errors must be 'ignore' or 'raise'")
 
@@ -282,7 +232,7 @@ class Memory(AbstractCapability[AgentDepsT]):
         return render_memory_prompt(
             "",
             [],
-            heading=self.heading,
+            heading="",
             guidance=guidance,
         )
 
@@ -336,11 +286,8 @@ class Memory(AbstractCapability[AgentDepsT]):
             try:
                 main_path = f"{scope}/{MAIN_FILENAME}"
                 main = await store.read(main_path, max_chars=self.max_memory_size)
-                subfiles, files_truncated = await list_subfiles(
-                    store,
-                    scope,
-                    limit=injected_subfile_limit(),
-                )
+                subfiles: list[str] = []
+                files_truncated = False
             except Exception as exc:
                 if span.is_recording():
                     span.set_attributes(
@@ -364,7 +311,7 @@ class Memory(AbstractCapability[AgentDepsT]):
                 rendered = render_memory_prompt(
                     main_content,
                     subfiles,
-                    heading=self.heading,
+                    heading="",
                     guidance="",
                     main_truncated=main is not None and main.truncated,
                     files_truncated=files_truncated,
@@ -436,51 +383,6 @@ class Memory(AbstractCapability[AgentDepsT]):
                 messages[index] = replace(message, parts=parts)
 
     @classmethod
-    def from_spec(
-        cls,
-        *,
-        backend: Literal["memory", "file", "markdown"] = "memory",
-        directory: str = ".agent-memory",
-        agent_name: str = "main",
-        heading: str = "",
-        namespace: str = "",
-        inject_memory: bool = True,
-        max_memory_size: int = 65_536,
-        max_search_results: int = 10,
-        max_search_result_chars: int = 4_000,
-        max_search_files: int = 1_000,
-        consolidate_every: int = 10,
-        guidance: str | None = None,
-        injection_errors: Literal["ignore", "raise"] = "ignore",
-        writable: bool = True,
-        expose_tools: bool = True,
-    ) -> Memory[AgentDepsT]:
-        """Construct a memory capability from serializable options.
-
-        ``backend`` is accepted for spec compatibility only: the legacy
-        ``'file'`` and ``'markdown'`` backends were removed, and there is no
-        process-lifetime default. The read path always reads the rendered
-        ``MEMORY.md``, so ``store`` is the read-only ``JournalViewStore`` rooted
-        at ``directory``. ``writable``/``expose_tools`` gate the tool surface.
-        """
-        return cls(
-            store=JournalViewStore(directory),
-            agent_name=agent_name,
-            heading=heading,
-            namespace=namespace,
-            inject_memory=inject_memory,
-            max_memory_size=max_memory_size,
-            max_search_results=max_search_results,
-            max_search_result_chars=max_search_result_chars,
-            max_search_files=max_search_files,
-            consolidate_every=consolidate_every,
-            guidance=guidance,
-            injection_errors=injection_errors,
-            writable=writable,
-            expose_tools=expose_tools,
-        )
-
-    @classmethod
     def get_serialization_name(cls) -> str | None:
         """Return the name used by custom capability specs."""
         return "Memory"
@@ -489,8 +391,3 @@ class Memory(AbstractCapability[AgentDepsT]):
 def _validate_positive(name: str, value: int) -> None:
     if value <= 0:
         raise ValueError(f"{name} must be a positive integer")
-
-
-def _validate_non_negative(name: str, value: int) -> None:
-    if value < 0:
-        raise ValueError(f"{name} must be a non-negative integer")

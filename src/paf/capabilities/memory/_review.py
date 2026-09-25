@@ -33,16 +33,9 @@ from pydantic_ai import Agent, ModelSettings
 
 from paf.degeneration_guard import run_guarded
 
-from ._consolidate import _consolidation_model_settings, consolidate_model
-
 if TYPE_CHECKING:
     from ._capability import Memory
 logger = logging.getLogger(__name__)
-
-
-def review_model() -> str:
-    """The reviewer model — same as the owner's by decision."""
-    return consolidate_model()
 
 
 def _build_reviewer_memory(
@@ -70,8 +63,7 @@ def _build_reviewer_memory(
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=False,  # reads the render via read_render, not injection
-        guidance="",  # single reviewer prompt is REVIEW_PROMPT (the user message)
-        writable=False,
+        guidance="",  # single reviewer prompt is the spec instructions (the user message)
         expose_tools=True,  # carries the reviewer toolset (memory_review + merge)
         overrides=overrides,
         reviewer=True,
@@ -79,24 +71,25 @@ def _build_reviewer_memory(
     )
 
 
-def _reviewer_spec_config() -> tuple[str, ModelSettings, int, int] | None:
+def _reviewer_spec_config() -> tuple[str, ModelSettings, int, int]:
     """Resolve the reviewer leaf spec (model, model_settings, retries, max_item_chars).
 
-    Returns None when the ``memory_reviewer`` spec is absent/unreadable so callers
-    fall back to :func:`review_model` + shared consolidation settings + hardcoded
-    retries (keeps unit tests and non-spec deployments working). When present it
-    is the source of truth (Spec-Driven-Background-Agents).
+    The ``memory_reviewer`` leaf spec is the source of truth
+    (Spec-Driven-Background-Agents) for the reviewer's model, model_settings,
+    retries, and max_item_chars — there is no code fallback. A missing or
+    model-less spec is a hard error: an agent without a spec'd model isn't an
+    agent.
     """
-    try:
-        from paf.specs import resolve_background_spec
-    except Exception:  # noqa: BLE001 - best-effort sugar
-        return None
-    try:
-        spec, raw = resolve_background_spec("memory_reviewer")
-    except Exception:  # noqa: BLE001 - absent/unreadable spec
-        return None
-    model = spec.model or review_model()
-    settings = spec.model_settings or _consolidation_model_settings()
+    from paf.specs import resolve_background_spec
+
+    spec, raw = resolve_background_spec("memory_reviewer")
+    if not spec.model:
+        raise RuntimeError(
+            "memory_reviewer spec declares no model — an agent without a "
+            "spec'd model isn't an agent"
+        )
+    model: str = spec.model
+    settings = spec.model_settings
     retries = raw.get("retries")
     if not isinstance(retries, int) or isinstance(retries, bool) or retries < 1:
         retries = 2  # DEFAULT_REVIEWER_RETRIES
@@ -114,24 +107,26 @@ DEFAULT_MAX_ITEM_CHARS = 1200
 
 
 def _reviewer_prompt() -> str:
-    """The reviewer's operating prompt — spec `instructions` or REVIEW_PROMPT.
+    """The reviewer's operating prompt — the spec `instructions` (sole source).
 
-    The reviewer's guidance carries a ``{rendered}`` placeholder (the current
-    memory render), formatted at run time by :func:`review`. When the spec
-    declares ``instructions`` it is the source of truth; falls back to the
-    constant :data:`REVIEW_PROMPT`.
+    The ``memory_reviewer`` spec's ``instructions`` block is the reviewer's
+    operating manual, resolved at run time and formatted with the current
+    ``{rendered}`` memory by :func:`review`. There is no code fallback: a
+    missing or instructions-less spec is a hard error (the manual must be
+    spec'd, not hardcoded).
     """
-    try:
-        from paf.specs import resolve_background_spec
+    from paf.specs import resolve_background_spec
 
-        spec, _raw = resolve_background_spec("memory_reviewer")
-        if spec.instructions:
-            from typing import cast as _cast
+    spec, _raw = resolve_background_spec("memory_reviewer")
+    instructions = spec.instructions
+    if not instructions:
+        raise RuntimeError(
+            "memory_reviewer spec declares no instructions — the reviewer's "
+            "operating manual must be spec'd, not hardcoded"
+        )
+    from typing import cast as _cast
 
-            return _cast(str, spec.instructions)
-    except Exception:  # noqa: BLE001 - best-effort sugar
-        pass
-    return REVIEW_PROMPT
+    return _cast(str, instructions) if not isinstance(instructions, list) else str(instructions)
 
 
 def _build_reviewer(
@@ -150,15 +145,7 @@ def _build_reviewer(
         namespace=namespace,
         journal=journal,
     )
-    spec_cfg = _reviewer_spec_config()
-    if spec_cfg is not None:
-        model, model_settings, retries, _max_chars = spec_cfg
-    else:
-        model, model_settings, retries = (
-            review_model(),
-            _consolidation_model_settings(),
-            2,
-        )
+    model, model_settings, retries, _max_chars = _reviewer_spec_config()
     reviewer = Agent(
         model,
         name="memory-reviewer",
@@ -167,65 +154,6 @@ def _build_reviewer(
         retries=retries,
     )
     return reviewer, reviewer_memory
-
-
-REVIEW_PROMPT = """\
-You are the memory reviewer. You curate this user's durable memory — you do NOT
-add new facts (that's the owner's job). Your input is the current rendered
-memory below, tiered (## t1 / ## t2 / ## t3), one fact per line, each ending in
-its journal line id (#N). Some lines carry a `*(archive pending review)*`
-marker — those are assistant suggestions awaiting your verdict.
-
-{rendered}
-
-Your ONE job is to keep this memory tight and non-redundant so real, distinct
-facts don't get crowded out. The tier list has a hard size limit: everything
-above it is silently dropped from what the agent sees. Every duplicate line you
-leave standing is a slot a genuinely distinct fact should have.
-
-MERGE — collapse complementary fragments of ONE fact into a single canonical line:
-- When several lines are pieces of the SAME fact (same subject, each carrying
-  distinct detail — e.g. separate lines for the user's name, role, family, and
-  location), merge them into ONE line with `memory_merge`. You pass `merge_ids`
-  (the source line ids), `fact` (ONE consolidated statement preserving EVERY
-  distinct detail from all of them), `tier` (where the merged fact belongs), and
-  `type` (its semantic kind). This is preferred over archiving, because archiving
-  would drop the enriching detail; `memory_merge` keeps it all in one line.
-- The merged `fact` must be the union of the sources' existing detail — if it
-  contains any claim present in NONE of the merged lines, it is NOT a merge; do
-  not. You consolidate, you do not invent.
-- Require at least two sources. Do NOT merge lines that are genuinely distinct
-  facts (different subjects);
-  merge only fragments of the same fact.
-
-ARCHIVE — collapse duplicates aggressively, then handle contradiction:
-- When several lines say the same thing in different words (same subject and
-  same core claim, differing only in phrasing or incidental detail), keep ONE
-  and archive the rest. This is your most important action. Do NOT require
-  identical wording — restatements of the same fact are still duplicates. For
-  example, five lines all describing the same writing-voice rule in slightly
-  different words are one fact, not five.
-    - keep the MOST THOROUGH line (richest detail);
-    - if two are equally complete, keep the most recent (newest date);
-    - archive every other duplicate.
-- Archive a fact directly contradicted or factually superseded by a newer fact
-  in this view (e.g. "rm is denied" superseded by "rm works").
-
-Do NOT archive a fact merely for being old, historical, process-related, or
-settled — that is a TIER_CHANGE, never an archive. Do NOT archive one-of-a-kind
-facts that carry genuinely distinct nuance; only collapse true restatements.
-
-TIER_CHANGE (ONE step down, t1->t2 or t2->t3 only): a settled live decision or
-goal demotes as it stops being the current focus. Demote sparingly — never turn
-t3 into a graveyard by dumping every old design fact there. Never up-tier except
-for a clearly central, durable constraint.
-
-REJECT: only for a pending-marked line you disagree with (the fact is still true
-and not a duplicate). If it IS a duplicate of another line, archive it instead.
-
-Work through the list top to bottom, collapse every duplicate group to its one
-best line, and archive contradictions. Leave genuinely distinct facts alone.
-"""
 
 
 async def review(

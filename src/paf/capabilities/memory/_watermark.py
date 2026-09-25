@@ -44,9 +44,6 @@ from paf.capabilities._storage._atomic import write_atomic
 
 _WATERMARK_FILENAME = "memory-watermark.json"
 
-#: Sentinel for "no turn consumed yet" (a fresh session / first run).
-_EMPTY = ""
-
 
 @dataclass
 class MemoryWatermark:

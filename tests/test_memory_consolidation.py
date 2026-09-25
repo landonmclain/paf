@@ -134,7 +134,6 @@ def test_build_owner_is_single_writer_and_read_via_tools() -> None:
 
     cap = _build_owner_memory(None, agent_name="assistant", namespace="")
     assert isinstance(cap, Memory)
-    assert cap.writable is True
     assert cap.inject_memory is False
     assert cap.guidance == CONSOLIDATION_GUIDANCE
 

@@ -101,8 +101,8 @@ def test_incremental_token_reorder_dup_absorbed(tmp_path):
     assert len(_load(tmp_path).entries) == 1
 
 
-def test_keep_winner_tier_then_recency_newer_t1_wins(tmp_path):
-    # newer t1 beats the older t2 (tier first, then most-recent)
+def test_keep_winner_recency_first_wins(tmp_path):
+    # newer born_on wins regardless of tier (recency-first winner rule)
     _seed_store(
         tmp_path,
         [
@@ -116,7 +116,6 @@ def test_keep_winner_tier_then_recency_newer_t1_wins(tmp_path):
     )
     update_index(tmp_path)
     e = _load(tmp_path).entries[0]
-    assert e["tier"] == "t1"
     assert e["current_line"] == 2
     assert e["deduped_lines"] == [1]
 
@@ -138,8 +137,8 @@ def test_keep_winner_same_tier_recency(tmp_path):
     assert _load(tmp_path).entries[0]["current_line"] == 2
 
 
-def test_keep_winner_tier_wins_over_recency(tmp_path):
-    # much newer lower-tier does NOT beat a stable t1
+def test_keep_winner_recency_beats_tier(tmp_path):
+    # much newer lower-tier DOES beat a stable t1 (recency-first winner rule)
     _seed_store(
         tmp_path,
         [
@@ -153,8 +152,7 @@ def test_keep_winner_tier_wins_over_recency(tmp_path):
     )
     update_index(tmp_path)
     e = _load(tmp_path).entries[0]
-    assert e["tier"] == "t1"
-    assert e["current_line"] == 1
+    assert e["current_line"] == 2
 
 
 def test_incremental_distinct_facts_separate_winners(tmp_path):

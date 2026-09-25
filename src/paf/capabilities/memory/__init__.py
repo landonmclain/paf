@@ -25,93 +25,26 @@ fired by the watermark trigger (``_watermark``) through the queues in
 
 A ``Memory`` always carries a concrete backend (the ``store`` arg is required);
 the read path supplies the read-only ``JournalViewStore`` of the rendered
-journal.
-
-- ``_store``      -- ``MemoryStore``/``SearchableMemoryStore`` protocols, shared
-                    record types, ``lexical_search``, validation.
-- ``_journal``    -- append-only ``JournalStore`` (source of truth).
-- ``_index``      -- derived ``MemoryIndex`` of surviving facts (dedup winners).
-- ``_render``     -- ``write_render`` / ``render_journal_memory`` (MEMORY.md).
-- ``_view``       -- ``JournalViewStore`` (read-only injection seam).
-- ``_overrides``  -- append-only override sidecar (assistant suggestions +
-                    reviewer verdicts), folded into the render.
-- ``_toolset``    -- the tool surfaces: ``JournalAppendToolset`` (owner),
-                    ``OverrideToolset`` (assistant), ``ReviewerToolset``.
-- ``_capability`` -- the ``Memory`` capability.
-- ``_consolidate``-- the owner sub-agent (sole writer: appends facts).
-- ``_review``     -- the reviewer sub-agent (curates the rendered memory).
-- ``_watermark``  -- the persisted-consumption watermark + trigger predicate.
-- ``_background`` -- the consolidation + review background queues.
-- ``_window``     -- per-agent memory directory resolution.
-- ``_atomic``     -- re-export shim to ``_storage._atomic``.
+journal. The public surface is intentionally small: the capability, the journal
+store and its record type, the override sidecar, the render helpers, and the
+owner's append toolset. Sub-agents, toolsets, and the view reader are reached
+through their private modules.
 """
 
 from __future__ import annotations
 
 from ._capability import Memory
-from ._journal import MEMORY_TYPES, JournalStore, MemoryRecord
-from ._overrides import OverrideStore, fold_overrides, load_overrides
-from ._render import read_render, render_journal_memory, write_render
-from ._store import (
-    MemoryConflictError,
-    MemoryFile,
-    MemoryMutation,
-    MemoryOperation,
-    MemoryOperationConflictError,
-    MemorySearchMatch,
-    MemorySearchResult,
-    MemoryStore,
-    SearchableMemoryStore,
-    lexical_search,
-    validate_store_path,
-    validate_store_prefix,
-)
-from ._toolset import (
-    MAIN_FILENAME,
-    JournalAppendToolset,
-    MemoryMergeResult,
-    MemoryWriteResult,
-    OverrideResult,
-    OverrideToolset,
-    ReviewerResult,
-    ReviewerToolset,
-    list_subfiles,
-    normalize_filename,
-    render_memory_prompt,
-)
+from ._journal import JournalStore, MemoryRecord
+from ._overrides import OverrideStore
+from ._render import render_journal_memory, write_render
+from ._toolset import JournalAppendToolset
 
 __all__ = [
     "JournalAppendToolset",
     "JournalStore",
-    "MAIN_FILENAME",
-    "MEMORY_TYPES",
     "Memory",
-    "MemoryConflictError",
-    "MemoryFile",
-    "MemoryMergeResult",
-    "MemoryMutation",
-    "MemoryOperation",
-    "MemoryOperationConflictError",
     "MemoryRecord",
-    "MemorySearchMatch",
-    "MemorySearchResult",
-    "MemoryStore",
-    "MemoryWriteResult",
-    "OverrideResult",
     "OverrideStore",
-    "OverrideToolset",
-    "ReviewerResult",
-    "ReviewerToolset",
-    "SearchableMemoryStore",
-    "fold_overrides",
-    "lexical_search",
-    "list_subfiles",
-    "load_overrides",
-    "normalize_filename",
-    "read_render",
     "render_journal_memory",
-    "render_memory_prompt",
-    "validate_store_path",
-    "validate_store_prefix",
     "write_render",
 ]

@@ -808,7 +808,7 @@ def main(argv: list[str] | None = None) -> dict:
                 # message-boundary-aligned chunks into durable memory so
                 # single-mention thematic clusters survive the owner's single-shot
                 # budget.
-                from paf.capabilities.memory._consolidate import (
+                from tests._lmem_consolidate import (
                     consolidate_conversation_chunked,
                 )
 

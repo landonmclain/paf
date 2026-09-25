@@ -6,14 +6,12 @@ This module carries the memory tool surface:
 - :class:`OverrideToolset` — the assistant's ``memory_archive_suggestion``.
 - :class:`ReviewerToolset` — the reviewer's ``memory_review`` + ``memory_merge``.
 - :class:`MemoryWriteResult` — the result shape ``append_memory`` emits.
-- shared helpers ``MAIN_FILENAME`` / ``normalize_filename`` / ``list_subfiles`` /
-  ``injection_listing_limit`` / ``render_memory_prompt`` used by the
+- shared helpers ``MAIN_FILENAME`` / ``render_memory_prompt`` used by the
   :class:`~paf.capabilities.memory.Memory` capability's injection + guidance.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Literal, NotRequired
 
 from pydantic_ai import ModelRetry
@@ -23,12 +21,12 @@ from typing_extensions import TypedDict
 
 from ._journal import MEMORY_TIERS, MEMORY_TYPES, JournalStore
 from ._overrides import OverrideStore
-from ._store import MemoryStore
 
 MAIN_FILENAME = "MEMORY.md"
 """The main notebook file injected as bounded user-role context."""
 
 DEFAULT_MAX_ITEM_CHARS = 1200
+
 
 
 def _merge_item_char_cap() -> int:
@@ -52,19 +50,6 @@ def _merge_item_char_cap() -> int:
     return DEFAULT_MAX_ITEM_CHARS
 
 
-_FILENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
-_CHARS_PER_TOKEN = 4
-_MAX_SEARCH_QUERY_CHARS = 1_000
-_MAX_SEARCH_TERMS = 32
-_MIN_FILENAME_LIST_CHARS = 6
-
-# Maximum topic-file names surfaced in the injected memory listing. Tier caps
-# bound MEMORY.md itself; this is a separate, small cap on how many other
-# memory files are listed (a handful is plenty — the rest are reachable via
-# search_memory).
-_MAX_INJECTED_SUBFILES = 20
-
-
 class MemoryWriteResult(TypedDict):
     """Result from a memory append — echoes the recorded fact back so the model
     can confirm its append landed.
@@ -78,45 +63,6 @@ class MemoryWriteResult(TypedDict):
     replayed: bool
     status: Literal["created", "appended", "updated"]
     diff: str | None
-
-
-def normalize_filename(file: str) -> str:
-    """Validate a model-supplied memory filename and normalize it to `<name>.md`."""
-    name = file.strip()
-    if name and not name.endswith(".md"):
-        name = f"{name}.md"
-    if not _FILENAME_RE.fullmatch(name) or ".." in name:
-        raise ModelRetry(
-            f'{file!r} is not a valid memory filename -- use a short name like "postgres-migration.md" '
-            "(letters, digits, dots, dashes; no slashes)."
-        )
-    return name
-
-
-async def list_subfiles(
-    store: MemoryStore, scope: str, *, limit: int
-) -> tuple[list[str], bool]:
-    """Return a bounded filename list and whether additional paths may exist."""
-    prefix = f"{scope}/"
-    names: list[str] = []
-    request_limit = limit + 2  # one main notebook plus one truncation sentinel
-    returned_paths = await store.list_paths(prefix, limit=request_limit)
-    paths = returned_paths[:request_limit]
-    for path in paths:
-        if not path.startswith(prefix):
-            raise RuntimeError(
-                "memory backend returned a path outside the requested scope"
-            )
-        name = path.removeprefix(prefix)
-        if "/" not in name and name != MAIN_FILENAME and name.endswith(".md"):
-            names.append(name)
-    names.sort()
-    return names[:limit], len(names) > limit or len(returned_paths) >= request_limit
-
-
-def injected_subfile_limit() -> int:
-    """Fixed cap on the topic-file names surfaced in the injected listing."""
-    return _MAX_INJECTED_SUBFILES
 
 
 def render_memory_prompt(

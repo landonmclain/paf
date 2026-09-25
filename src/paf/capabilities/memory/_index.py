@@ -21,8 +21,9 @@ re-reading every record. This index is that verdict, and it is:
   full pass (:func:`build_index`).
 
 Keep-winner rule: within a dedup group, the winner is the record with the
-**highest tier** (t1 > t2 > t3), breaking ties by **most-recent ``born_on``**,
-finally by append order (higher line# = newer).
+**most-recent ``born_on``**, breaking ties by append order (higher line# =
+newer). Tier is NOT a winner criterion — tier is reviewer-owned judgement,
+not something the deterministic index should arbitrate.
 
 Dedup scoping: folds dedup on **exact** and **normalized-token-set** equality
 (catches verbatim + re-ordered repeats at O(1)). Paraphrase bloat is NOT
@@ -51,9 +52,6 @@ from ._journal import JournalStore, MemoryRecord
 
 _INDEX_FILENAME = "memory-index.json"
 _SCHEMA = 1
-
-# Tier priority for the keep-winner rule: higher index = "wins" a dedup group.
-_TIER_PRIORITY = {"t1": 3, "t2": 2, "t3": 1}
 
 # Stopwords too generic to discriminate facts. Anything below 3 chars is also
 # dropped.
@@ -93,18 +91,16 @@ def fact_keys(fact: str) -> dict[str, str]:
 
 def _winner_better(
     candidate_line: int,
-    cand_tier: str,
     cand_born,
     cur_line: int,
-    cur_tier: str,
     cur_born,
 ) -> bool:
-    """Keep-winner rule: highest tier, then most-recent born_on, then newest.
+    """Keep-winner rule: most-recent born_on, then newest append.
 
-    Operates on plain (tier, born_on) so it needs no reconstructed record.
+    Tier is deliberately NOT a winner criterion — it is reviewer-owned
+    judgement, not something the deterministic index should arbitrate.
+    Operates on plain (born_on) so it needs no reconstructed record.
     """
-    if _TIER_PRIORITY[cand_tier] != _TIER_PRIORITY[cur_tier]:
-        return _TIER_PRIORITY[cand_tier] > _TIER_PRIORITY[cur_tier]
     cb = _born_ts(cand_born)
     ub = _born_ts(cur_born)
     if cb != ub:
@@ -214,10 +210,8 @@ class MemoryIndex:
     def _absorb(self, winner: dict, line_number: int, record: MemoryRecord) -> None:
         if _winner_better(
             line_number,
-            record.tier,
             record.born_on,
             int(winner["current_line"]),
-            winner["tier"],
             winner.get("born_on"),
         ):
             # the new record wins -> old winner becomes a deduped predecessor
@@ -232,8 +226,6 @@ class MemoryIndex:
 
     def _set_winner(self, entry: dict, line_number: int, record: MemoryRecord) -> None:
         entry["current_line"] = line_number
-        entry["tier"] = record.tier
-        entry["tier_rank"] = _TIER_PRIORITY[record.tier]
         entry["born_on"] = record.born_on
         entry["source_ref"] = record.source_ref
 
@@ -245,8 +237,6 @@ class MemoryIndex:
             "key_tokens": keys["tokens"],
             "current_line": line_number,
             "deduped_lines": deduped,
-            "tier": record.tier,
-            "tier_rank": _TIER_PRIORITY[record.tier],
             "born_on": record.born_on,
             "source_ref": record.source_ref,
         }

@@ -13,12 +13,6 @@ from pathlib import Path
 
 from paf.config import PROJECT_ROOT, settings
 
-# The fixed store the memory owner uses (build.py `_build_memory`). Anchored to
-# PROJECT_ROOT through the shared Settings object (MEMORY_DIR / .env), so both
-# always target one canonical directory no matter where the process is launched
-# from.
-DEFAULT_MEMORY_DIR = str(PROJECT_ROOT / Path(settings.memory_dir))
-
 
 def memory_dir_for(agent_name: str) -> str:
     """The per-agent memory directory: ``<MEMORY_DIR>/<agent_name>/``.

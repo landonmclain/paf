@@ -28,16 +28,6 @@ class Settings(BaseSettings):
     # `.md` bodies + `.memory-state.json` CAS sidecar.
     memory_dir: str = "data/memory"
 
-    # Model for the consolidation owner sub-agent. Blank → a cheap default
-    # (see paf.capabilities.memory._consolidate). Not the spec'd subject model.
-    consol_model: str = ""
-
-    # OpenRouter routing pin for the consolidation owner (provider order +
-    # quantization hard filter). Empty list disables the pin.
-    consol_provider_order: list[str] = ["deepinfra", "parasail", "coreweave"]
-    consol_provider_quantizations: list[str] = ["fp8"]
-    consol_seed: int | None = None
-
     # Observability (Langfuse OTLP). Provide in .env / environment — secrets +
     # host config, not meant to be entered here. All blank = tracing off.
     otlp_endpoint: str = ""

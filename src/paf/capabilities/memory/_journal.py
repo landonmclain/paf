@@ -21,8 +21,9 @@ Design decisions:
   a chunk regardless of what is already there. The ONLY write-side safety is
   atomicity (a chunk's records are appended as one block; a crash mid-block
   never leaves a half-written line).
-- **Self-contained** — atomic line-writes via the shared
-  ``_storage._atomic.write_atomic``; no storage-service seam of its own.
+- **Self-contained** — atomic line-writes via the shared ``_storage``
+  ``_append_jsonl_atomic`` helper (read + append + ``os.replace``); no
+  storage-service seam of its own.
 - **Sits beside ``MEMORY.md``** — same directory, same flat-file role. The journal
   is the append-only source; ``MEMORY.md`` (the render) is the presentation the
   answerer reads.
@@ -45,7 +46,7 @@ import os
 import threading
 from datetime import UTC, datetime
 
-from paf.capabilities._storage._atomic import write_atomic
+from paf.capabilities._storage import _append_jsonl_atomic
 
 _JOURNAL_FILENAME = "memory-journal.jsonl"
 
@@ -180,27 +181,6 @@ def _normalize_born_on(value: str | datetime | None) -> str:
         return text
 
 
-def _append_block_atomic(path: str | os.PathLike, lines: list[str]) -> None:
-    """Append ``lines`` (each already JSON-serialized, one record per line) atomically.
-
-    Reads the current file, appends the new lines, writes the whole thing back via
-    ``write_atomic`` (staging + ``os.replace``). This is the crash-safety guarantee:
-    a reader sees either the prior complete journal or the new complete journal,
-    never a torn line. **Explicitly not** a bare ``open(..., 'a')`` append: that
-    could leave a partial trailing line on crash, and an append-only journal must
-    never hold a corrupt line.
-    """
-    path = os.fspath(path)
-    existing: list[str] = []
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as fh:
-            for ln in fh:
-                if ln.strip():
-                    existing.append(ln if ln.endswith("\n") else ln + "\n")
-    parts = existing + lines
-    write_atomic(path, "".join(parts))
-
-
 class JournalStore:
     """Append-only durable-facts journal (one JSON record per line).
 
@@ -231,10 +211,6 @@ class JournalStore:
     def filename(self) -> str:
         return _JOURNAL_FILENAME
 
-    def _next_line_number(self) -> int:
-        """Next id = current record count + 1 (1-based line number)."""
-        return self.count() + 1
-
     # --- appends -----------------------------------------------------------
 
     def append(
@@ -251,8 +227,7 @@ class JournalStore:
             type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref
         )
         with self._lock:
-            line = json.dumps(record.to_row(), ensure_ascii=False)
-            _append_block_atomic(self._path, [line + "\n"])
+            _append_jsonl_atomic(self._path, [record.to_row()])
         return record
 
     def append_record(self, record: MemoryRecord) -> MemoryRecord:
@@ -274,8 +249,7 @@ class JournalStore:
         if not records:
             return []
         with self._lock:
-            lines = [json.dumps(r.to_row(), ensure_ascii=False) + "\n" for r in records]
-            _append_block_atomic(self._path, lines)
+            _append_jsonl_atomic(self._path, [r.to_row() for r in records])
         return records
 
     # --- reads -------------------------------------------------------------

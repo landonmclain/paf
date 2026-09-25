@@ -35,7 +35,7 @@ import os
 import threading
 from datetime import UTC, datetime
 
-from paf.capabilities._storage._atomic import write_atomic
+from paf.capabilities._storage import _append_jsonl_atomic
 
 _OVERRIDES_FILENAME = "memory-overrides.jsonl"
 _SCHEMA = 1
@@ -107,23 +107,6 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _append_block_atomic(path: str | os.PathLike, lines: list[str]) -> None:
-    """Append ``lines`` (JSON records, one per line) atomically.
-
-    Mirrors the journal's block-append: reads current file, appends, writes the
-    whole thing back via ``write_atomic`` so a crash never leaves a torn line.
-    """
-    path = os.fspath(path)
-    existing: list[str] = []
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as fh:
-            for ln in fh:
-                if ln.strip():
-                    existing.append(ln if ln.endswith("\n") else ln + "\n")
-    parts = existing + lines
-    write_atomic(path, "".join(parts))
-
-
 class OverrideStore:
     """Append-only override sidecar (one JSON record per line).
 
@@ -138,17 +121,9 @@ class OverrideStore:
         self._lock = threading.RLock()
 
     @property
-    def path(self) -> str:
-        return self._path
-
-    @property
     def directory(self) -> str:
         """The memory scope dir this sidecar sits in (journal/index/MEMORY.md home)."""
         return self._dir
-
-    @property
-    def filename(self) -> str:
-        return _OVERRIDES_FILENAME
 
     # --- append ------------------------------------------------------------
 
@@ -199,8 +174,7 @@ class OverrideStore:
             record["tier"] = tier
 
         with self._lock:
-            line = json.dumps(record, ensure_ascii=False)
-            _append_block_atomic(self._path, [line + "\n"])
+            _append_jsonl_atomic(self._path, [record])
         return record
 
     # --- reads -------------------------------------------------------------
