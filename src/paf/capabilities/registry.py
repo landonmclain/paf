@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic_ai.capabilities import MCP
 from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
@@ -110,4 +111,8 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Secret-handle resolution + result redaction. Built in Python so the profile
     # gate controls it.
     "Secrets": ToolGuardrail,
+    # Builtin MCP servers. A core pydantic-ai capability (has `from_spec`), so the
+    # loader could resolve it natively; it's cataloged so a profile can allowlist
+    # it and the gate stays consistent (build.py wraps loaded toolsets in MCP).
+    "MCP": MCP,
 }

@@ -24,7 +24,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, cast
 
+from pydantic_ai.capabilities import MCP
+from pydantic_ai.mcp import load_mcp_toolsets
 from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
 from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import (
@@ -832,6 +835,32 @@ def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
     )
 
 
+def _build_mcp(store, mcp_config: str | None = None) -> list:
+    """Build builtin ``MCP`` capabilities from a ``mcpServers`` JSON path.
+
+    ``mcp_config`` is a path (str) to a Claude-Desktop-style ``mcpServers`` JSON,
+    declared by the spec's top-level ``mcp: {config: <path>}`` block.
+    ``load_mcp_toolsets`` reads it with the builtin recursive ``${VAR}`` /
+    ``${VAR:-default}`` env expander (so server creds come from .env, never the
+    spec), returning one *prefixed* ``MCPToolset`` per server. Each is wrapped in
+    the builtin ``MCP(local=toolset)`` capability so the profile gate + the
+    ``capabilities=`` seam see it like any other capability (connection stays
+    lazy — building spawns no subprocess / opens no socket until the agent's
+    first turn needs the server's tools).
+
+    Returns a list of ``MCP`` capabilities (one per server). ``None``/absent
+    config -> ``[]`` (the profile-gated capability is simply absent). A
+    declared-but-missing file raises ``FileNotFoundError`` loudly at build — a
+    bad config should fail loudly, not silently no-op.
+    """
+    if not mcp_config:
+        return []
+    path = Path(os.path.expanduser(mcp_config))
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return [MCP(local=cast(Any, toolset)) for toolset in load_mcp_toolsets(path)]
+
+
 def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
@@ -844,6 +873,7 @@ def build_runtime_capabilities(
     git_config: dict | None = None,
     codebase_map_config: dict | None = None,
     skills_config: dict | None = None,
+    mcp_config: str | None = None,
     agent_name: str | None = None,
     on_complete=None,
 ) -> list:
@@ -887,6 +917,8 @@ def build_runtime_capabilities(
         "Browser": _build_browser,
         # Skill library — list/load on demand + deterministic pointer trigger.
         "Skills": _build_skills,
+        # Builtin MCP servers loaded from a mcpServers JSON (env-expanded).
+        "MCP": _build_mcp,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).
         "ToolOutputLimits": _build_tool_output_limits,
         # Observational prompt-cache-collapse monitor (BUILTIN, paf-supplied config).
@@ -931,6 +963,10 @@ def build_runtime_capabilities(
             capabilities.append(_build_codebase_map(store, codebase_map_config))
         elif name == "Skills":
             capabilities.append(_build_skills(store, skills_config))
+        elif name == "MCP":
+            # One MCP capability per server in the JSON; extends (not append) so
+            # a profile allowlisting "MCP" gets every declared server.
+            capabilities.extend(_build_mcp(store, mcp_config))
         elif name == "Memory":
             # Memory owns every memory config variable (e.g. `consolidate_every`
             # — the background-consolidation cadence) read from the spec's

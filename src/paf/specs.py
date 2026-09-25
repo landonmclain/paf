@@ -467,6 +467,37 @@ def resolve_profile_name(
     return value if isinstance(value, str) and value else None
 
 
+def _spec_mcp_config(spec_path: Path) -> str | None:
+    """Read the spec's top-level ``mcp:`` block into an MCP config path.
+
+    The block just declares the path to a Claude-Desktop-style ``mcpServers``
+    JSON; the servers + creds live there (env-expanded by the builtin), not in
+    the spec. Shape:
+
+        mcp:
+          config: data/mcp_servers.json
+
+    ``config`` is the path to the mcpServers JSON; ``_build_mcp`` resolves it
+    against ``PROJECT_ROOT`` when relative and ``os.path.expanduser``-expands
+    ``~``. Absent/unreadable block or missing ``config`` -> None (the
+    profile-gated MCP capability stays absent).
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("mcp")
+    if not isinstance(block, dict):
+        return None
+    config = block.get("config")
+    if not isinstance(config, str) or not config.strip():
+        return None
+    return config
+
+
 def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict | None:
     """Read one per-capability root block from a spec into a config dict.
 
@@ -697,6 +728,8 @@ def build_agent(
     shell_config = _spec_shell_config(spec_path)
     git_config = _spec_git_config(spec_path)
     codebase_map_config = _spec_codebase_map_config(spec_path)
+    # mcpServers JSON path from the spec's `mcp:` block (builtin env expansion).
+    mcp_config = _spec_mcp_config(spec_path)
     # Bounded-timeout OpenRouter client for `openrouter:` models (see
     # providers/openrouter.py); falls back to the plain string when no key.
     if (
@@ -730,6 +763,7 @@ def build_agent(
             git_config=git_config,
             codebase_map_config=codebase_map_config,
             skills_config=skills_config,
+            mcp_config=mcp_config,
             agent_name=agent_name,
             on_complete=on_complete,
         ),

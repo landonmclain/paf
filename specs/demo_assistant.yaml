@@ -289,6 +289,12 @@ skills:
 #   which reads from the persisted store (durable, lossless) on
 #   `memory.consolidate_every`. Eviction is pure context management — it never
 #   calls memory, and it can never evict the active user turn.
+# MCP servers (builtin pydantic-ai MCP via load_mcp_toolsets). The `config` is the
+# path to a Claude-Desktop-style `mcpServers` JSON; server creds come from .env via
+# the builtin `${VAR}` expander (env-var-only — never in the spec). DEMO_PROFILE
+# allowlists "MCP". Connection is lazy: no server starts until a turn needs it.
+mcp:
+  config: data/mcp_servers/demo_servers.json
 compact:
   turn_boundary: true          # Run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (single mid-turn behavior).
   turn_boundary_target: 150000 # Routine budget at the turn boundary — keeps each turn small/stable (well under the 300k emergency). 150k for now; tuneable.
