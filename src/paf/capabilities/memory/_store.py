@@ -32,7 +32,6 @@ class MemoryFile:
 
     content: str
     version: str
-    operation_id: str | None
     truncated: bool
 
 

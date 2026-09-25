@@ -55,6 +55,5 @@ class JournalViewStore:
         return MemoryFile(
             content=content,
             version="view",
-            operation_id=None,
             truncated=truncated,
         )
