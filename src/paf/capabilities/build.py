@@ -29,7 +29,6 @@ from typing import Any, cast
 from pydantic_ai.capabilities import MCP
 from pydantic_ai.mcp import load_mcp_toolsets
 from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
-from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.tool_output_limits import (
     Band,
     Spill,
@@ -63,6 +62,7 @@ from paf.capabilities.planning import Planning
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
+from paf.capabilities.subagents import Subagents
 from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault as _Vault
 from paf.capabilities.visual import Visual as _Visual
@@ -71,6 +71,10 @@ from paf.config import PROJECT_ROOT, settings
 
 # The profile name that gates context compaction in build_runtime_capabilities.
 _COMPACTION_CAPABILITY = "Compaction"
+
+# Leaf specs (bare names under specs/sub_agents/) the Subagents capability
+# builds. The runtime delegate_task key comes from each spec's `subagent.name`.
+_SUBAGENT_ROSTER: tuple[str, ...] = ("writer_subagent",)
 
 # Where the Memory capability writes its readable `.md` bodies + `.memory-state.json`
 # CAS sidecar, anchored to the repo root (same convention as persistence/_STORE_DIR).
@@ -746,87 +750,37 @@ def _build_secrets(store) -> ToolGuardrail:
     )
 
 
-def _build_subagents(store, filesystem_config: dict | None = None) -> SubAgents:
-    """Explicit sub-agent delegation (BUILTIN, not a paf port) — demo leaf agent.
+def _build_subagents(
+    store,
+    filesystem_config: dict | None = None,
+    agent_name: str | None = None,
+) -> Subagents:
+    """paf-owned subagent delegation over the spec-driven leaf roster.
 
-    Lets the demo agent delegate a self-contained task to a named child agent via
-    one `delegate_task(agent_name, task)` tool. Each child runs in its own fresh,
-    isolated run and never sees the parent conversation (the parent must pass
-    everything the task needs). One demo child:
+    Each leaf is a spec under ``specs/sub_agents/`` (model, model_settings,
+    description, instructions, plus a ``subagent:`` policy block) built by
+    :func:`paf.capabilities.subagents.load_leaf`. Every child gets the SAME
+    scoped FileSystem as the parent (root from ``filesystem_config`` / default
+    PROJECT_ROOT) unless its spec sets ``filesystem.root_dir`` — the parent
+    passes file paths and the child reads them in its own fresh run.
 
-    - ``writer`` — drafts prose/format from material the parent passes in (no
-      own tools by default; deterministic leaf). Spec-driven via
-      ``specs/sub_agents/writer_subagent.yaml`` — model, model_settings
-      (temperature), description, system_prompt — so it's declarative and
-      per-agent tunable rather than env/`WRITER_MODEL`-configured.
+    ``agent_name`` scopes the durable task store to
+    ``data/processes/<agent>/`` (the same root shell and the process feed use),
+    where every delegation's record and ``.md`` output are persisted.
 
-    The writer is given the SAME scoped FileSystem capability as the main model
-    via `shared_capabilities`, so it can read its own source notes/files rooted
-    at the same dir the parent uses (root from `filesystem_config` / default
-    PROJECT_ROOT), unless the writer spec sets its own `filesystem.root_dir`.
-    This keeps the parent's context small — the parent passes
-    file paths in `task` and the child reads the content in its own fresh run.
-    `inherit_tools` stays off (child doesn't inherit the parent's toolset;
-    capability-owned toolsets can't be inherited anyway — see harness
-    `_inherited_toolsets`).
-
-    This is a pydantic-ai AbstractCapability consumed from the harness (same
-    drop-in pattern as ToolOutputLimits / WarnOnCacheBusts). It is NOT
-    spec-serializable (holds live `Agent` instances; get_serialization_name ->
-    None), so it is built ONLY here in Python by passing explicit `SubAgent`
-    entries — it can never resolve from a YAML spec. `agent_folders=None` disables
-    disk-agent loading entirely so the demo is purely explicit and deterministic
-    (it does not vary with whatever markdown agent files happen to exist in
-    `~/.agents/` or the project). `store` unused (uniform builder signature).
+    NOT spec-serializable (holds live ``Agent`` instances), so it is built only
+    here and supplied via the ``capabilities=`` seam, gated by the profile.
     """
-    from typing import Any, cast
+    from paf.capabilities.subagents import load_leaf
 
-    from pydantic_ai import Agent
-
-    # Spec-driven leaf (Spec-Driven-Background-Agents plan): model, model
-    # settings (temperature), description, and system prompt come from
-    # `specs/sub_agents/writer_subagent.yaml` — resolved by bare name via
-    # get_spec_path's recursive search — instead of inline code + env vars.
-    # Imported locally to avoid the specs <-> build circular import (specs.py
-    # imports build_runtime_capabilities at module level).
-    from paf.specs import (  # noqa: PLC0415
-        _spec_rooted_config,
-        get_spec_path,
-        load_agent_spec,
-    )
-
-    spec_path = get_spec_path("writer_subagent")
-    wspec = load_agent_spec("writer_subagent")
-    # Build via Agent.from_spec: its single flexible signature takes the spec
-    # directly and narrows the loosely-typed AgentSpec fields internally — the
-    # strict __init__ overloads reject TemplateStr/dict[str,Any]/None values,
-    # which is what Pylance complained about. The writer is still a leaf: no
-    # profile/capability resolution runs here. The writer's `instructions` is a
-    # plain YAML block scalar (guaranteed str) and `model_settings` a dict that
-    # pydantic-ai accepts as a ModelSettings, so we narrow both explicitly.
-    writer = Agent.from_spec(
-        wspec,
-        model=wspec.model,
-        name="writer",  # runtime name stays `writer` (delegate_task key); the
-        # spec/loader identity is the clearer `writer_subagent`.
-        description=wspec.description,
-        system_prompt=cast(str, wspec.instructions),
-        model_settings=cast(Any, wspec.model_settings),
-    )
-    # Optional per-leaf FileSystem root override: if the writer spec declares a
-    # `filesystem.root_dir`, the shared FS roots there; otherwise it inherits
-    # the parent agent's `filesystem_config` / default PROJECT_ROOT (current
-    # behavior). Traversal/protected-pattern gates always apply regardless.
-    leaf_fs_config = _spec_rooted_config(spec_path, "filesystem", "root_dir")
-    shared_fs = (
-        _build_filesystem(store, leaf_fs_config)
-        if leaf_fs_config
-        else _build_filesystem(store, filesystem_config)
-    )
-    return SubAgents(
-        agents=[SubAgent(writer)],
-        agent_folders=None,  # purely explicit, deterministic demo (no disk loading)
-        shared_capabilities=[shared_fs],
+    leaves = [
+        load_leaf(name, store=store, filesystem_config=filesystem_config)
+        for name in _SUBAGENT_ROSTER
+    ]
+    return Subagents(
+        leaves=leaves,
+        processes_root=str(PROJECT_ROOT / "data" / "processes"),
+        agent=agent_name or "assistant",
     )
 
 
@@ -974,12 +928,11 @@ def build_runtime_capabilities(
             # capability_names` continue above.
             capabilities.append(_build_thread_summarizer(store, None, agent_name))
         elif name == "Subagents":
-            # The writer sub-agent gets the SAME scoped FileSystem capability as
-            # the main model (root from `filesystem_config` / default PROJECT_ROOT)
-            # via `shared_capabilities`, so the parent passes file paths in `task`
-            # and the child reads the content in its own fresh run — keeping the
-            # parent's context small.
-            capabilities.append(_build_subagents(store, filesystem_config))
+            # Each leaf gets the SAME scoped FileSystem as the main model (root
+            # from `filesystem_config` / default PROJECT_ROOT), so the parent
+            # passes file paths in `task` and the child reads the content in its
+            # own fresh run. `agent_name` scopes the durable task store.
+            capabilities.append(_build_subagents(store, filesystem_config, agent_name))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

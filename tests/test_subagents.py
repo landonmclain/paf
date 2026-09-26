@@ -1,0 +1,397 @@
+"""Tests for the paf-owned ``Subagents`` capability (sync delegation + persistence).
+
+Parents and leaves run on ``FunctionModel`` so no network is touched; task
+stores are rooted at ``tmp_path`` (never the real ``data/``). Follows the repo
+convention of sync ``def test_*`` functions driving async code (no
+pytest-asyncio).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelRetry
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.usage import UsageLimits
+
+from paf.background_processes._events import clear_agent_emitters, get_agent_emitter
+from paf.capabilities.subagents import (
+    Leaf,
+    LeafPolicy,
+    Subagents,
+    SubagentTaskStore,
+)
+from paf.capabilities.subagents import _store as store_mod
+from paf.capabilities.subagents._notify import NOTIFY_MAX_CHARS, excerpt, notify_text
+from paf.capabilities.subagents._roster import TLDR_INSTRUCTION
+
+CID = "demo:c1"
+AGENT = "test_agent"
+
+
+# -- helpers -------------------------------------------------------------------
+
+
+def _text_leaf(
+    text: str, name: str = "writer", policy: LeafPolicy | None = None
+) -> Leaf:
+    """A leaf whose model always answers ``text``."""
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart(text)])
+
+    return Leaf(
+        name=name,
+        description=f"{name} leaf",
+        agent=Agent(FunctionModel(fn), name=name),
+        policy=policy or LeafPolicy(),
+    )
+
+
+def _leaf_from(fn: Any, name: str = "writer", policy: LeafPolicy | None = None) -> Leaf:
+    return Leaf(
+        name=name,
+        description="",
+        agent=Agent(FunctionModel(fn), name=name),
+        policy=policy or LeafPolicy(),
+    )
+
+
+def _parent(sub: Subagents, calls: list[tuple[str, dict[str, Any]]]) -> Agent[Any, str]:
+    """A parent that makes ``calls`` one per step, then answers with the last result."""
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        made = sum(
+            1
+            for m in messages
+            for p in getattr(m, "parts", [])
+            if isinstance(p, ToolCallPart)
+        )
+        if made < len(calls):
+            tool, args = calls[made]
+            return ModelResponse(parts=[ToolCallPart(tool, args)])
+        returns = [
+            p
+            for m in messages
+            for p in getattr(m, "parts", [])
+            if isinstance(p, ToolReturnPart)
+        ]
+        return ModelResponse(parts=[TextPart(str(returns[-1].content))])
+
+    return Agent(FunctionModel(fn), capabilities=[sub])
+
+
+def _sub(tmp_path: Path, *leaves: Leaf) -> Subagents:
+    return Subagents(leaves=list(leaves), processes_root=tmp_path, agent=AGENT)
+
+
+def _store(tmp_path: Path, cid: str | None = CID) -> SubagentTaskStore:
+    return SubagentTaskStore(tmp_path, AGENT, conversation_id=cid)
+
+
+def _run(agent: Agent[Any, str], cid: str | None = CID) -> str:
+    return agent.run_sync("go", conversation_id=cid).output
+
+
+@pytest.fixture(autouse=True)
+def _isolate_emitters():
+    clear_agent_emitters()
+    yield
+    clear_agent_emitters()
+
+
+# -- excerpt / notify text ---------------------------------------------------------
+
+
+def test_excerpt_returns_short_output_whole() -> None:
+    text = "x" * NOTIFY_MAX_CHARS
+    assert excerpt(text, "t1") == text  # exactly at the limit: whole, no pointer
+
+
+def test_excerpt_cuts_at_paragraph_then_line_then_hard() -> None:
+    para = "A" * 1000 + "\n\n" + "B" * 1000
+    out = excerpt(para, "t1")
+    assert out.startswith("A" * 1000 + "\n\n… [truncated — ")
+    assert "B" not in out.split("…")[0]
+    assert "1002 more chars; check_task('t1')" in out  # "\n\n" + 1000 B's
+
+    line = "A" * 1000 + "\n" + "B" * 1000
+    assert excerpt(line, "t1").startswith("A" * 1000 + "\n\n… [truncated")
+
+    # No boundary in the back half of the limit -> hard cut at the limit.
+    hard = "A" * 100 + "\n" + "B" * 3000
+    out = excerpt(hard, "t1")
+    assert out.split("\n\n…")[0] == hard[:NOTIFY_MAX_CHARS]
+    assert f"{len(hard) - NOTIFY_MAX_CHARS} more chars" in out
+
+
+def test_notify_text_ok_and_error() -> None:
+    assert notify_text("writer", "t1", True, "done!") == (
+        "[system] Subagent writer task t1 finished (ok):\n\ndone!"
+    )
+    assert notify_text("writer", "t1", False, "boom") == (
+        "[system] Subagent writer task t1 finished (error): boom"
+    )
+
+
+# -- sync delegation ----------------------------------------------------------------
+
+
+def test_delegate_returns_output_and_persists_record_and_md(tmp_path: Path) -> None:
+    sub = _sub(tmp_path, _text_leaf("TL;DR: done.\n\nFull body."))
+    out = _run(
+        _parent(sub, [("delegate_task", {"agent_name": "writer", "task": "write it"})])
+    )
+    assert out == "TL;DR: done.\n\nFull body."
+
+    store = _store(tmp_path)
+    rec = store.get(f"subagent.{CID}.1")
+    assert rec is not None
+    assert rec["status"] == "done"
+    assert rec["mode"] == "sync"
+    assert rec["agent"] == "writer"
+    assert rec["task"] == "write it"
+    assert rec["parent_run_id"]  # captured from the parent's ctx.run_id
+    assert rec["conversation_id"] == CID
+    assert rec["output_chars"] == len(out)
+    assert rec["usage"]  # the child's own run usage
+
+    md = Path(rec["output_path"])
+    assert md.exists()
+    assert md.parent.name == "subagent_outputs"
+    raw = md.read_text(encoding="utf-8")
+    front = yaml.safe_load(raw.split("---\n")[1])
+    assert front["task_id"] == f"subagent.{CID}.1"
+    assert front["agent"] == "writer"
+    assert front["task"] == "write it"
+    assert "status" not in front  # status lives only in the JSONL
+    assert store.read_output(rec["task_id"]) == out
+
+
+def test_task_ids_increment_per_conversation(tmp_path: Path) -> None:
+    sub = _sub(tmp_path, _text_leaf("ok"))
+    call = ("delegate_task", {"agent_name": "writer", "task": "t"})
+    _run(_parent(sub, [call, call]))
+    _run(_parent(sub, [call]), cid="demo:c2")
+    assert set(_store(tmp_path).latest_all()) == {
+        f"subagent.{CID}.1",
+        f"subagent.{CID}.2",
+    }
+    assert set(_store(tmp_path, "demo:c2").latest_all()) == {"subagent.demo:c2.1"}
+
+
+def test_colon_cid_gives_safe_filename_but_real_task_id(tmp_path: Path) -> None:
+    sub = _sub(tmp_path, _text_leaf("ok"))
+    _run(_parent(sub, [("delegate_task", {"agent_name": "writer", "task": "t"})]))
+    rec = _store(tmp_path).get(f"subagent.{CID}.1")
+    assert rec is not None
+    name = Path(rec["output_path"]).name
+    assert ":" not in name
+    assert name == "subagent.demo_c1.1.md"
+
+
+def test_leaf_exception_is_soft_failure_error_record_no_file(tmp_path: Path) -> None:
+    def boom(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        raise RuntimeError("model exploded")
+
+    sub = _sub(tmp_path, _leaf_from(boom))
+    out = _run(_parent(sub, [("delegate_task", {"agent_name": "writer", "task": "t"})]))
+    assert out.startswith("Subagent 'writer' failed: RuntimeError: model exploded")
+    assert "recoverable" in out
+    rec = _store(tmp_path).get(f"subagent.{CID}.1")
+    assert rec is not None
+    assert rec["status"] == "error"
+    assert rec["output_path"] is None
+    assert list(tmp_path.rglob("*.md")) == []
+
+
+def test_timeout_and_usage_limit_are_errors(tmp_path: Path) -> None:
+    async def slow(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        await asyncio.sleep(5)
+        return ModelResponse(parts=[TextPart("late")])
+
+    slow_leaf = _leaf_from(slow, name="slow", policy=LeafPolicy(timeout_seconds=0.05))
+    capped = _text_leaf(
+        "never",
+        name="capped",
+        policy=LeafPolicy(usage_limits=UsageLimits(request_limit=0)),
+    )
+    sub = _sub(tmp_path, slow_leaf, capped)
+    out = _run(
+        _parent(
+            sub,
+            [
+                ("delegate_task", {"agent_name": "slow", "task": "t"}),
+                ("delegate_task", {"agent_name": "capped", "task": "t"}),
+            ],
+        )
+    )
+    store = _store(tmp_path)
+    assert "timed out after 0.05s" in store.get(f"subagent.{CID}.1")["detail"]  # type: ignore[index]
+    assert store.get(f"subagent.{CID}.2")["status"] == "error"  # type: ignore[index]
+    assert "UsageLimitExceeded" in out
+
+
+def test_unknown_agent_is_model_retry(tmp_path: Path) -> None:
+    toolset = _sub(tmp_path, _text_leaf("ok")).get_toolset()
+    assert toolset is not None
+    with pytest.raises(ModelRetry, match="Unknown subagent 'nope'. Available: writer"):
+        toolset._leaf("nope")
+
+
+def test_max_calls_per_run_is_enforced(tmp_path: Path) -> None:
+    leaf = _text_leaf("ok", policy=LeafPolicy(max_calls_per_run=1))
+    call = ("delegate_task", {"agent_name": "writer", "task": "t"})
+    out = _run(_parent(_sub(tmp_path, leaf), [call, call]))
+    assert "reached its call budget (1 per run)" in out
+    assert len(_store(tmp_path).latest_all()) == 1  # the over-budget call ran nothing
+
+
+def test_check_task_pages_the_output(tmp_path: Path) -> None:
+    body = "".join(f"{i:05d}\n" for i in range(2000))  # 12000 chars
+    sub = _sub(tmp_path, _text_leaf(body))
+    tid = f"subagent.{CID}.1"
+    out = _run(
+        _parent(
+            sub,
+            [
+                ("delegate_task", {"agent_name": "writer", "task": "t"}),
+                ("check_task", {"task_id": tid, "offset": 6000, "max_chars": 60}),
+            ],
+        )
+    )
+    assert out.startswith(
+        f"Task {tid} (writer): done — output chars 6000-6060 of 12000:"
+    )
+    assert "01000\n" in out
+    assert f"call check_task('{tid}', offset=6060)" in out
+    assert "---" not in out  # frontmatter stripped
+
+
+def test_check_task_unknown_id(tmp_path: Path) -> None:
+    sub = _sub(tmp_path, _text_leaf("ok"))
+    out = _run(_parent(sub, [("check_task", {"task_id": "subagent.x.9"})]))
+    assert out == "[Error: unknown task id 'subagent.x.9' in this conversation]"
+
+
+def test_sync_delegation_emits_running_then_done(tmp_path: Path) -> None:
+    events: list[tuple[str, str, str | None]] = []
+    get_agent_emitter(AGENT).on_any(
+        lambda e: events.append((e.id, e.status.value, e.scope))
+    )
+    sub = _sub(tmp_path, _text_leaf("ok"))
+    _run(_parent(sub, [("delegate_task", {"agent_name": "writer", "task": "t"})]))
+    tid = f"subagent.{CID}.1"
+    assert events == [(tid, "running", CID), (tid, "done", CID)]
+
+
+def test_reconcile_marks_previous_process_tasks_interrupted(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    rec = store.create(
+        agent_name="writer", task="t", mode="background", parent_run_id="r"
+    )
+    store.update(rec["task_id"], status="running")
+    # A fresh process: the per-process "already reconciled" memo is empty.
+    store_mod._reconciled.clear()
+    reopened = _store(tmp_path)
+    final = reopened.get(rec["task_id"])
+    assert final is not None
+    assert final["status"] == "interrupted"
+    assert final["detail"] == "server restarted"
+    # Same process: opening again does not touch a task started after.
+    live = reopened.create(
+        agent_name="writer", task="t", mode="background", parent_run_id="r"
+    )
+    reopened.update(live["task_id"], status="running")
+    assert _store(tmp_path).get(live["task_id"])["status"] == "running"  # type: ignore[index]
+
+
+def test_duplicate_leaf_names_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="Duplicate subagent names"):
+        _sub(tmp_path, _text_leaf("a"), _text_leaf("b"))
+
+
+def test_no_leaves_means_no_tools_or_instructions(tmp_path: Path) -> None:
+    sub = _sub(tmp_path)
+    assert sub.get_toolset() is None
+    assert sub.get_instructions() is None
+
+
+# -- real writer spec ------------------------------------------------------------
+
+
+def test_writer_leaf_from_spec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The real writer spec: runtime name, policy, TL;DR once, no parent-only tools."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # construction only, no calls
+    from paf.capabilities.persistence import _build_store
+    from paf.capabilities.subagents import load_leaf
+    from paf.specs import load_agent_spec
+
+    leaf = load_leaf("writer_subagent", store=_build_store(), filesystem_config=None)
+    assert leaf.name == "writer"
+    assert leaf.policy.timeout_seconds == 300
+    assert leaf.policy.usage_limits.request_limit == 30
+    assert leaf.policy.background == "allowed"
+
+    seen: dict[str, Any] = {}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen["instructions"] = info.instructions or ""
+        seen["tools"] = {t.name for t in info.function_tools}
+        seen["system_parts"] = [
+            p
+            for m in messages
+            for p in getattr(m, "parts", [])
+            if p.part_kind == "system-prompt"
+        ]
+        return ModelResponse(parts=[TextPart("ok")])
+
+    leaf.agent.run_sync("hi", model=FunctionModel(fn))
+    spec_text = str(load_agent_spec("writer_subagent").instructions).strip()
+    assert seen["instructions"].count(spec_text[:80]) == 1  # prompt sent once
+    assert seen["instructions"].rstrip().endswith(TLDR_INSTRUCTION)
+    assert seen["system_parts"] == []
+    assert "read_file" in seen["tools"]  # the shared FileSystem
+    assert not seen["tools"] & {
+        "delegate_task",
+        "check_task",
+        "search_conversation_history",
+    }
+
+
+def test_usage_dict_is_json_safe_with_decimal_cost() -> None:
+    """Regression: OpenRouter reports cost as Decimal, which json.dumps rejects."""
+    import json
+    from dataclasses import dataclass, field
+    from decimal import Decimal
+
+    from paf.capabilities.subagents._runner import _usage_dict
+
+    @dataclass
+    class FakeUsage:
+        requests: int = 2
+        input_tokens: int = 10
+        cache_read_tokens: int = 0
+        details: dict[str, Any] = field(
+            default_factory=lambda: {"cost": Decimal("0.0012"), "reasoning": 3}
+        )
+
+    out = _usage_dict(FakeUsage())
+    assert out == {
+        "requests": 2,
+        "input_tokens": 10,
+        "details": {"cost": 0.0012, "reasoning": 3},
+    }
+    json.dumps(out)  # must not raise
