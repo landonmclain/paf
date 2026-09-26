@@ -2,43 +2,24 @@
 
 Covers the consolidation owner's seams:
 
-1.  owner guidance enforces append-only journal semantics;
-2.  the consolidation model + provider-routing config (CONSOL_MODEL /
-    provider order / quantizations / seed) resolves from settings;
-3.  owner construction invariants (sole writer, inject control) for both the
+1.  the owner's default guidance describes the tiered, append-only notebook
+    (not the legacy four-section format);
+2.  owner construction invariants (sole writer, inject control) for both the
     tool-only live owner and the chunked seed-time variant;
-4.  ``resident_consolidate_text`` derives a real ``born_on`` from the inline
-    ``[date: ...]`` prefix without leaking it into the stored fact;
-5.  seed-time chunked consolidation (``consolidate_conversation_chunked`` /
-    ``_split_chunks``) never splits a message and merges cumulatively.
+3.  ``resident_consolidate_text`` derives a real ``born_on`` from the inline
+    ``[date: ...]`` prefix without leaking it into the stored fact.
 
-The inline eviction-fold window (``MemoryConsolidationWindow``) is DELETED:
-durable-fact capture is the background watermark worker's job, and the
+The owner's model, model_settings, and operating guidance resolve from the
+``memory_extractor`` leaf spec (Spec-Driven-Background-Agents) — the legacy
+``CONSOL_MODEL`` / provider-order / seed env knobs were removed. The chunked
+seed-time helpers (``consolidate_conversation_chunked`` / ``_split_chunks``)
+live in ``tests/_lmem_consolidate.py`` (benchmark-only, per the relocation
+rule). The inline eviction-fold window (``MemoryConsolidationWindow``) is
+DELETED: durable-fact capture is the background watermark worker's job, and the
 assistant's eviction tier is trim-only ``TurnBoundSlidingWindow``.
 """
 
 from __future__ import annotations
-
-from paf.capabilities.memory._consolidate import (
-    CONSOLIDATION_GUIDANCE,
-    consolidate_model,
-)
-
-# ---------------------------------------------------------------------------
-# owner consolidation guidance + model env
-# ---------------------------------------------------------------------------
-
-
-def test_consolidation_guidance_is_owned_by_owner() -> None:
-    """The owner guidance enforces append-only journal semantics."""
-    assert "append-only journal" in CONSOLIDATION_GUIDANCE
-    assert "append_memory" in CONSOLIDATION_GUIDANCE
-    assert "never edit, move, or delete" in CONSOLIDATION_GUIDANCE
-    assert "APPEND AS YOU SEE IT" in CONSOLIDATION_GUIDANCE
-    # The old in-place section-surgery contract must be gone.
-    assert "write_memory" not in CONSOLIDATION_GUIDANCE
-    assert "## Facts" not in CONSOLIDATION_GUIDANCE
-    assert "NEWER ALWAYS WINS" not in CONSOLIDATION_GUIDANCE
 
 
 def test_memory_guidance_describes_tiered_not_legacy_sections() -> None:
@@ -72,70 +53,36 @@ def test_memory_guidance_describes_tiered_not_legacy_sections() -> None:
     assert "write_memory" not in built_owner.guidance
 
 
-def test_consolidation_model_reads_config(monkeypatch) -> None:
-    """Settings.consol_model (CONSOL_MODEL / .env) overrides the deepseek default."""
-    from paf.config import settings
-
-    monkeypatch.setattr(settings, "consol_model", "")
-    assert consolidate_model() == "openrouter:deepseek/deepseek-v4-flash-0731"
-    monkeypatch.setattr(settings, "consol_model", "openai:gpt-5.6-luna-pro")
-    assert consolidate_model() == "openai:gpt-5.6-luna-pro"
-
-
-def test_consolidation_model_settings_pins_provider(monkeypatch) -> None:
-    """The owner's model_settings pin routing to deepinfra/fp8 by default.
-
-    Regression guard for the run-to-run nondeterminism fix: the owner must NOT
-    ship OpenRouter's default throughput sort (``:nitro``), and must carry the
-    provider `order` + `quantizations` hard-filter plus sampler determinism
-    (top_p=1.0, fixed seed) exactly like the benchmark subject/judge agents.
-    """
-    from paf.capabilities.memory._consolidate import _consolidation_model_settings
-    from paf.config import settings
-
-    # restore defaults (avoid leaking env overrides into the test)
-    monkeypatch.setattr(
-        settings, "consol_provider_order", ["deepinfra", "parasail", "coreweave"]
-    )
-    monkeypatch.setattr(settings, "consol_provider_quantizations", ["fp8"])
-    monkeypatch.setattr(settings, "consol_seed", 20260815)
-
-    ms = _consolidation_model_settings()
-    assert ms["top_p"] == 1.0
-    assert ms["seed"] == 20260815
-    provider = ms["extra_body"]["provider"]
-    assert provider["order"] == ["deepinfra", "parasail", "coreweave"]
-    assert provider["quantizations"] == ["fp8"]
-
-    # Empty order → no routing pin (plain request), seed/top_p still applied.
-    monkeypatch.setattr(settings, "consol_provider_order", [])
-    ms2 = _consolidation_model_settings()
-    assert "extra_body" not in ms2
-    assert ms2["top_p"] == 1.0
-    assert ms2["seed"] == 20260815
-
-
 # ---------------------------------------------------------------------------
-# owner construction + the seed-time full-conversation variant
+# owner construction
 # ---------------------------------------------------------------------------
 
 
-def test_build_owner_is_single_writer_and_read_via_tools() -> None:
-    """The owner's Memory capability is writable=True, inject_memory=False, guided.
-
-    The hard-won ownership invariants (sole writer, no injected context, fixed
-    operating manual) live in :func:`_build_owner_memory` and apply to BOTH
-    consolidation paths — the eviction slice and the seed-time full-conversation
-    variant. Tested on the capability directly (no Agent construction, so no
-    model provider / API key needed).
-    """
+def test_build_owner_inject_memory_default_is_false() -> None:
+    """Default owner stays tool-only (live eviction path unchanged)."""
     from paf.capabilities.memory import Memory
     from paf.capabilities.memory._consolidate import _build_owner_memory
 
     cap = _build_owner_memory(None, agent_name="assistant", namespace="")
     assert isinstance(cap, Memory)
     assert cap.inject_memory is False
-    assert cap.guidance == CONSOLIDATION_GUIDANCE
+
+
+def test_build_owner_inject_memory_true_for_chunked() -> None:
+    """Chunked seed variant flips inject_memory=True (cumulative in-context merge)."""
+    from paf.capabilities.memory import Memory
+    from paf.capabilities.memory._consolidate import _build_owner_memory
+
+    cap = _build_owner_memory(
+        None, agent_name="assistant", namespace="", inject_memory=True
+    )
+    assert isinstance(cap, Memory)
+    assert cap.inject_memory is True
+
+
+# ---------------------------------------------------------------------------
+# resident_consolidate_text
+# ---------------------------------------------------------------------------
 
 
 def test_resident_consolidate_text_none_when_empty() -> None:
@@ -194,7 +141,7 @@ def test_resident_consolidate_text_labels_inline_date_from_prefix() -> None:
 
 def test_split_chunks_message_boundary_aligned() -> None:
     """Chunks never split a message and respect the token budget per chunk."""
-    from paf.capabilities.memory._consolidate import _split_chunks
+    from tests._lmem_consolidate import _split_chunks
 
     # 3 messages of ~20 chars each + marker (~6). Budget tiny → each message
     # its own chunk (no budget is big enough for two at ~26 chars/4 ≈ 7 tokens).
@@ -218,7 +165,7 @@ def test_split_chunks_message_boundary_aligned() -> None:
 
 def test_split_chunks_merges_under_budget() -> None:
     """A small enough input stays one chunk (no artificial fragmentation)."""
-    from paf.capabilities.memory._consolidate import _split_chunks
+    from tests._lmem_consolidate import _split_chunks
 
     text = "\n".join(["User: short", "Assistant: also short", "User: tiny"])
     chunks = _split_chunks(text, max_tokens=4000)
@@ -227,32 +174,10 @@ def test_split_chunks_merges_under_budget() -> None:
 
 def test_split_chunks_empty_input() -> None:
     """Empty input yields no chunks; a whitespace-only input yields one."""
-    from paf.capabilities.memory._consolidate import _split_chunks
+    from tests._lmem_consolidate import _split_chunks
 
     assert _split_chunks("", max_tokens=1000) == []
     assert _split_chunks("", max_tokens=0) == []
-
-
-def test_build_owner_inject_memory_default_is_false() -> None:
-    """Default owner stays tool-only (live eviction path unchanged)."""
-    from paf.capabilities.memory import Memory
-    from paf.capabilities.memory._consolidate import _build_owner_memory
-
-    cap = _build_owner_memory(None, agent_name="assistant", namespace="")
-    assert isinstance(cap, Memory)
-    assert cap.inject_memory is False
-
-
-def test_build_owner_inject_memory_true_for_chunked() -> None:
-    """Chunked seed variant flips inject_memory=True (cumulative in-context merge)."""
-    from paf.capabilities.memory import Memory
-    from paf.capabilities.memory._consolidate import _build_owner_memory
-
-    cap = _build_owner_memory(
-        None, agent_name="assistant", namespace="", inject_memory=True
-    )
-    assert isinstance(cap, Memory)
-    assert cap.inject_memory is True
 
 
 def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> None:
@@ -267,7 +192,7 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
 
     from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 
-    from paf.capabilities.memory import _consolidate as cons
+    from tests import _lmem_consolidate as lmem
 
     fed: list[str] = []
 
@@ -309,7 +234,7 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
     ):
         return _FakeOwner(), None
 
-    monkeypatch.setattr(cons, "_build_owner", _fake_build_owner)
+    monkeypatch.setattr(lmem, "_build_owner", _fake_build_owner)
 
     msgs: list[ModelMessage] = [
         ModelRequest(parts=[UserPromptPart(content=f"turn number {i} and then some")])
@@ -317,7 +242,7 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
     ]
 
     async def _run():
-        await cons.consolidate_conversation_chunked(
+        await lmem.consolidate_conversation_chunked(
             msgs,
             store=None,  # the fake owner ignores it
             agent_name="assistant",

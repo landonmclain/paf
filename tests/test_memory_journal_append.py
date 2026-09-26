@@ -151,7 +151,6 @@ def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
     cap = Memory(
         store=JournalViewStore(tmp_path),
         agent_name="assistant",
-        writable=True,
         journal=JournalStore(tmp_path),
     )
     ts = cap.get_toolset()
@@ -159,9 +158,7 @@ def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
     assert set(ts.tools.keys()) == {"append_memory"}
     # A non-journal Memory exposes NO toolset (the legacy 4-tool surface is gone).
     assert (
-        Memory(
-            store=JournalViewStore(tmp_path), agent_name="a", writable=True
-        ).get_toolset()
+        Memory(store=JournalViewStore(tmp_path), agent_name="a").get_toolset()
         is None
     )
 
@@ -282,17 +279,3 @@ def test_iso_date_keeps_time() -> None:
     assert _iso_date("2023/05/20") == "2023-05-20T00:00:00+00:00"
 
 
-def test_owner_memory_with_journal_keeps_guidance(tmp_path: Path) -> None:
-    """Journal-backed owner still carries the append-only CONSOLIDATION_GUIDANCE."""
-    from paf.capabilities.memory._consolidate import (
-        CONSOLIDATION_GUIDANCE,
-        _build_owner_memory,
-    )
-
-    cap = _build_owner_memory(
-        None, agent_name="assistant", namespace="", journal=JournalStore(tmp_path)
-    )
-    assert isinstance(cap, Memory)
-    assert cap.guidance == CONSOLIDATION_GUIDANCE
-    assert cap.journal is not None
-    assert isinstance(cap.get_toolset(), JournalAppendToolset)

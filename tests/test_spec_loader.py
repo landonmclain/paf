@@ -76,6 +76,7 @@ def test_real_demo_spec_browser_block_parses() -> None:
     assert cfg == {
         "allowed_domains": [
             "staging.example.com",
+            "staging.com",
             "example.com",
             "localhost",
             "127.0.0.1",

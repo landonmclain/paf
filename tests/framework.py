@@ -229,7 +229,6 @@ def _build_agent(
                 store_resolver=_mem_store,
                 agent_name="assistant",
                 inject_memory=True,
-                writable=False,
                 # The recall/assistant carries NO memory tools: the journal-
                 # rendered notebook is injected in-context, and the recall
                 # ladder is search_conversation_history/read_turn (Conversation-
