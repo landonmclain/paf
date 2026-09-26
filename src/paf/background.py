@@ -32,9 +32,15 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Coroutine
+from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
+
+from pydantic_ai_harness.step_persistence._context import (
+    current_run_id,
+    live_run_history,
+)
 
 from paf.background_processes._events import (
     ProcessEvent,
@@ -51,6 +57,19 @@ def _log_subscriber_failure(task: asyncio.Task) -> None:
         task.result()
     except Exception:
         log.exception("background-task subscriber coroutine failed")
+
+
+#: Harness contextvars scoped to ONE agent run. Reset for detached background
+#: work so it never inherits the spawning run's identity or live history.
+_RUN_SCOPED_VARS: tuple[ContextVar[Any], ...] = (current_run_id, live_run_history)
+
+
+def _detached_context() -> Context:
+    """Copy the current context with the run-scoped harness vars cleared."""
+    ctx = copy_context()
+    for var in _RUN_SCOPED_VARS:
+        ctx.run(var.set, None)
+    return ctx
 
 
 class BackgroundRunner:
@@ -73,8 +92,16 @@ class BackgroundRunner:
         The task is created on whatever loop is current (the server's loop in
         the app), so it survives session teardown; the runner only cancels it
         on :meth:`shutdown`.
+
+        The task runs in a COPY of the caller's context with the harness
+        step-persistence run scope reset (see :func:`_detached_context`): a
+        worker outlives the run that spawned it, so it must not carry that
+        run's ``current_run_id`` (which made every notify turn record the
+        spawning turn as its ``parent_run_id``) or its live message list.
+        Everything else — notably the OpenTelemetry span context, which keeps
+        background spans nested under the triggering turn's trace — is kept.
         """
-        task = asyncio.create_task(coro)
+        task = asyncio.create_task(coro, context=_detached_context())
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task

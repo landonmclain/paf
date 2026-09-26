@@ -665,3 +665,42 @@ def test_lane_reads_are_separate_not_merged(tmp_path) -> None:
     # Conversation lane: task_history(cid) returns only that conversation's rows.
     assert [t.id for t in conv.task_history("c1")] == ["thread_summarize.c1.1"]
     assert conv.task_history("c2") == []
+
+
+def test_spawn_resets_run_scope_but_keeps_other_context():
+    """Detached workers must not inherit the spawning run's harness run scope.
+
+    Regression: ``asyncio.create_task`` copies contextvars, so a worker spawned
+    mid-run carried ``current_run_id`` (every notify turn then recorded the
+    spawning turn as its ``parent_run_id``) and a reference to the run's live
+    message list. Other context (e.g. the OTel span context) is preserved so
+    background spans still nest under the triggering turn's trace.
+    """
+    from contextvars import ContextVar
+
+    from pydantic_ai_harness.step_persistence._context import (
+        current_run_id,
+        live_run_history,
+    )
+
+    from paf.background import BackgroundRunner
+
+    other: ContextVar[str | None] = ContextVar("other", default=None)
+    seen: dict[str, object] = {}
+
+    async def worker() -> None:
+        seen["run_id"] = current_run_id.get()
+        seen["history"] = live_run_history.get()
+        seen["other"] = other.get()
+
+    async def scenario() -> None:
+        current_run_id.set("parent-run")
+        live_run_history.set(([], 3))
+        other.set("kept")
+        runner = BackgroundRunner()
+        await runner.spawn(worker())
+        # The caller's own context is untouched by the reset.
+        assert current_run_id.get() == "parent-run"
+
+    asyncio.run(scenario())
+    assert seen == {"run_id": None, "history": None, "other": "kept"}
