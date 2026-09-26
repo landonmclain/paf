@@ -43,6 +43,7 @@ import asyncio
 import json
 import os
 import re
+import resource
 import time
 import uuid
 from pathlib import Path
@@ -608,6 +609,14 @@ def _retrieval(recall: dict, gold_session_texts: list[str] | None = None) -> dic
 
 
 def main(argv: list[str] | None = None) -> dict:
+    # Long full-suite runs open many transient file/socket handles (step-persistence
+    # store, durable memory, search corpus, Langfuse tracing). The default soft
+    # RLIMIT_NOFILE of 1024 is too low and the process hits EMFILE (Errno 24) mid-run
+    # (~q336 on a 472-Q run). Raise the soft limit to 65536, capped at the hard limit.
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if _soft < 65536:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(65536, _hard), _hard))
+
     spec = load_agent_spec("longmemeval")
 
     questions = _load_questions()
