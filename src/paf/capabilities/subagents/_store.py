@@ -188,6 +188,73 @@ class SubagentTaskStore:
                 self.update(tid, status="interrupted", detail="server restarted")
 
 
+def feed_view(rec: dict[str, Any]) -> tuple[str, str]:
+    """``(feed_status, detail)`` for a task row in the process feed.
+
+    Shared by live events and reconnect restore so both render identically.
+    The feed has no ``cancelled``/``interrupted`` status, so those surface as
+    ``error`` with the real status in the detail (the JSONL keeps it exact).
+    """
+    status = str(rec.get("status"))
+    if status == "done":
+        return "done", f"{rec.get('output_chars')} chars"
+    if status in ("error", "cancelled", "interrupted"):
+        return "error", f"{status}: {rec.get('detail') or ''}".rstrip(": ")
+    if status in ACTIVE:
+        return status, str(rec.get("task") or "")[:80]
+    return "error", status
+
+
+# Terminal rows are restored on reconnect only if they settled this recently
+# (same window as shell), so the panel never accumulates every past task.
+RESTORE_RECENT_WINDOW_S = 15 * 60
+
+
+def conversation_subagent_frames(
+    processes_root: str | Path,
+    agent: str,
+    scoped_cid: str,
+    *,
+    now: datetime | None = None,
+    recent_window_s: int = RESTORE_RECENT_WINDOW_S,
+) -> list[dict[str, object]]:
+    """Current subagent tasks for a conversation, as process-feed task frames.
+
+    The SSE feed's on-connect restore calls this (next to shell's
+    ``conversation_shell_frames``) so running / recently finished subagent rows
+    survive a page refresh or conversation switch. Active rows are always
+    returned; terminal rows only within ``recent_window_s`` of ``updated_at``.
+    """
+    now = now or datetime.now(UTC)
+    store = SubagentTaskStore(processes_root, agent, conversation_id=scoped_cid)
+    frames: list[dict[str, object]] = []
+    for tid, rec in store.latest_all().items():
+        if rec.get("status") not in ACTIVE and not _within(rec, now, recent_window_s):
+            continue
+        status, detail = feed_view(rec)
+        frames.append(
+            {
+                "id": tid,
+                "label": f"subagent: {rec.get('agent')}",
+                "status": status,
+                "progress": None,
+                "detail": detail,
+            }
+        )
+    return frames
+
+
+def _within(rec: dict[str, Any], now: datetime, window_s: int) -> bool:
+    """True when the row's ``updated_at`` falls inside the recency window."""
+    try:
+        ts = datetime.fromisoformat(str(rec.get("updated_at")))
+    except (TypeError, ValueError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return 0 <= (now - ts).total_seconds() <= window_s
+
+
 def _render_output(rec: dict[str, Any], output: str) -> str:
     """Frontmatter (no status) + the leaf's output verbatim."""
     meta = {

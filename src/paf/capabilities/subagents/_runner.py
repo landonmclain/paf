@@ -31,37 +31,20 @@ from paf.observability.instrumentation import root_span
 
 from ._notify import excerpt
 from ._roster import Leaf
-from ._store import SubagentTaskStore
+from ._store import SubagentTaskStore, feed_view
 
 log = logging.getLogger(__name__)
-
-# Task statuses the feed has no enum for surface as `error` with a clear detail;
-# the JSONL keeps the real status.
-_FEED_STATUS = {
-    "queued": ProcessEventType.queued,
-    "running": ProcessEventType.running,
-    "done": ProcessEventType.done,
-    "error": ProcessEventType.error,
-    "cancelled": ProcessEventType.error,
-    "interrupted": ProcessEventType.error,
-}
 
 
 async def emit(store: SubagentTaskStore, rec: dict[str, Any]) -> None:
     """Publish one task transition to the conversation-lane process feed."""
-    status = str(rec.get("status"))
-    if status == "done":
-        detail = f"{rec.get('output_chars')} chars"
-    elif status in ("error", "cancelled", "interrupted"):
-        detail = f"{status}: {rec.get('detail') or ''}".rstrip(": ")
-    else:
-        detail = str(rec.get("task") or "")[:80]
+    status, detail = feed_view(rec)
     try:
         await get_agent_emitter(store.agent).emit_process(
             ProcessEvent(
                 id=str(rec["task_id"]),
                 label=f"subagent: {rec.get('agent')}",
-                status=_FEED_STATUS.get(status, ProcessEventType.error),
+                status=ProcessEventType(status),
                 detail=detail,
                 lane="conversation",
                 scope=store.conversation_id,

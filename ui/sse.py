@@ -842,6 +842,19 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
                     _publish(("task", frame))
             except Exception:
                 log.warning("shell process restore failed", exc_info=True)
+            # Subagent tasks live in their own store too; restore them the same
+            # way so running / recently finished rows survive a refresh.
+            try:
+                from paf.capabilities.subagents._store import (
+                    conversation_subagent_frames,
+                )
+
+                for frame in conversation_subagent_frames(
+                    PROJECT_ROOT / "data" / "processes", bg.agent_name, scope
+                ):
+                    _publish(("task", frame))
+            except Exception:
+                log.warning("subagent task restore failed", exc_info=True)
 
         # No wall-clock heartbeat: every background job is TURN-gated, so task
         # events (SKIPPED/PROCESSING) already fire on every ``after_turn`` and

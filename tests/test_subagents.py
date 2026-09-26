@@ -19,6 +19,7 @@ from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
+    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -86,7 +87,7 @@ def _parent(sub: Subagents, calls: list[tuple[str, dict[str, Any]]]) -> Agent[An
             p
             for m in messages
             for p in getattr(m, "parts", [])
-            if isinstance(p, ToolReturnPart)
+            if isinstance(p, ToolReturnPart | RetryPromptPart)
         ]
         return ModelResponse(parts=[TextPart(str(returns[-1].content))])
 
@@ -395,3 +396,203 @@ def test_usage_dict_is_json_safe_with_decimal_cost() -> None:
         "details": {"cost": 0.0012, "reasoning": 3},
     }
     json.dumps(out)  # must not raise
+
+
+# -- background delegation ---------------------------------------------------------
+
+
+def _gated_leaf(
+    gate: asyncio.Event,
+    log: dict[str, int],
+    text: str = "bg result",
+    name: str = "writer",
+    policy: LeafPolicy | None = None,
+) -> Leaf:
+    """A leaf that blocks on ``gate`` and tracks how many runs are in flight."""
+
+    async def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        log["inflight"] = log.get("inflight", 0) + 1
+        log["peak"] = max(log.get("peak", 0), log["inflight"])
+        try:
+            await gate.wait()
+        finally:
+            log["inflight"] -= 1
+        return ModelResponse(parts=[TextPart(text)])
+
+    return _leaf_from(fn, name=name, policy=policy)
+
+
+async def _settle() -> None:
+    """Await every live background subagent task."""
+    from paf.capabilities.subagents._background import background_tasks
+
+    pending = background_tasks.pending()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def _until(pred: Any, timeout: float = 2.0) -> None:
+    """Yield to the loop until ``pred()`` is true (bounded)."""
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not pred():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not reached")
+        await asyncio.sleep(0.005)
+
+
+def _bg_call(task: str = "t", agent_name: str = "writer") -> tuple[str, dict[str, Any]]:
+    return (
+        "delegate_task",
+        {"agent_name": agent_name, "task": task, "background": True},
+    )
+
+
+def test_background_returns_immediately_then_completes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        gate, log = asyncio.Event(), {}
+        sub = _sub(tmp_path, _gated_leaf(gate, log))
+        out = (await _parent(sub, [_bg_call()]).run("go", conversation_id=CID)).output
+        tid = f"subagent.{CID}.1"
+        assert out == (
+            f"Started subagent task {tid} (writer) in the background. "
+            f"Poll check_task('{tid}') for its result."
+        )  # no on_complete hook -> told to poll
+        await _until(lambda: log.get("inflight") == 1)
+        assert _store(tmp_path).get(tid)["status"] == "running"  # type: ignore[index]
+        gate.set()
+        await _settle()
+        rec = _store(tmp_path).get(tid)
+        assert rec is not None
+        assert rec["status"] == "done"
+        assert rec["mode"] == "background"
+        assert _store(tmp_path).read_output(tid) == "bg result"
+
+    asyncio.run(scenario())
+
+
+def test_background_tasks_run_in_parallel_up_to_the_cap(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        gate, log = asyncio.Event(), {}
+        sub = Subagents(
+            leaves=[_gated_leaf(gate, log)],
+            processes_root=tmp_path,
+            agent=AGENT,
+            max_concurrent=2,
+        )
+        await _parent(sub, [_bg_call(), _bg_call(), _bg_call()]).run(
+            "go", conversation_id=CID
+        )
+        await _until(lambda: log.get("inflight") == 2)
+        await asyncio.sleep(0.05)  # give a 3rd task every chance to start
+        assert log["inflight"] == 2  # capped
+        statuses = {t: r["status"] for t, r in _store(tmp_path).latest_all().items()}
+        assert sorted(statuses.values()) == ["queued", "running", "running"]
+        gate.set()
+        await _settle()
+        assert log["peak"] == 2
+        assert {r["status"] for r in _store(tmp_path).latest_all().values()} == {"done"}
+
+    asyncio.run(scenario())
+
+
+def test_cancel_task_running_and_queued(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        gate, log = asyncio.Event(), {}
+        sub = Subagents(
+            leaves=[_gated_leaf(gate, log)],
+            processes_root=tmp_path,
+            agent=AGENT,
+            max_concurrent=1,
+        )
+        await _parent(sub, [_bg_call(), _bg_call()]).run("go", conversation_id=CID)
+        await _until(lambda: log.get("inflight") == 1)
+        t1, t2 = f"subagent.{CID}.1", f"subagent.{CID}.2"
+        out = (
+            await _parent(
+                sub,
+                [
+                    ("cancel_task", {"task_id": t2}),  # still queued
+                    ("cancel_task", {"task_id": t1}),  # running
+                ],
+            ).run("go", conversation_id=CID)
+        ).output
+        assert out == f"Cancelling task {t1} (writer)."
+        await _settle()
+        store = _store(tmp_path)
+        assert store.get(t1)["status"] == "cancelled"  # type: ignore[index]
+        assert store.get(t2)["status"] == "cancelled"  # type: ignore[index]
+        assert list(tmp_path.rglob("*.md")) == []
+        again = (
+            await _parent(sub, [("cancel_task", {"task_id": t1})]).run(
+                "go", conversation_id=CID
+            )
+        ).output
+        assert again == f"Task {t1} is not running (status: cancelled)."
+
+    asyncio.run(scenario())
+
+
+def test_background_policy_rejections(tmp_path: Path) -> None:
+    never = _text_leaf("x", name="never", policy=LeafPolicy(background="never"))
+    required = _text_leaf(
+        "x", name="required", policy=LeafPolicy(background="required")
+    )
+    sub = _sub(tmp_path, never, required)
+    out = _run(_parent(sub, [_bg_call(agent_name="never")]))
+    assert (
+        "cannot run in the background; call delegate_task with background=false" in out
+    )
+    out = _run(
+        _parent(sub, [("delegate_task", {"agent_name": "required", "task": "t"})])
+    )
+    assert "only runs in the background; call delegate_task with background=true" in out
+    assert _store(tmp_path).latest_all() == {}
+
+
+def test_background_emits_queued_running_done(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        events: list[str] = []
+        get_agent_emitter(AGENT).on_any(lambda e: events.append(e.status.value))
+        sub = _sub(tmp_path, _text_leaf("ok"))
+        await _parent(sub, [_bg_call()]).run("go", conversation_id=CID)
+        await _settle()
+        assert events == ["queued", "running", "done"]
+
+    asyncio.run(scenario())
+
+
+def test_restore_frames_active_always_terminal_within_window(tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from paf.capabilities.subagents._store import conversation_subagent_frames
+
+    store = _store(tmp_path)
+    running = store.create(
+        agent_name="writer", task="long job", mode="background", parent_run_id="r"
+    )
+    store.update(running["task_id"], status="running")
+    old = store.create(agent_name="writer", task="t", mode="sync", parent_run_id="r")
+    store.update(old["task_id"], status="error", detail="boom")
+    fresh = store.create(agent_name="writer", task="t", mode="sync", parent_run_id="r")
+    store.mark_done(fresh["task_id"], output="abc", usage=None)
+
+    now = datetime.now(UTC)
+    frames = {
+        f["id"]: f for f in conversation_subagent_frames(tmp_path, AGENT, CID, now=now)
+    }
+    assert frames[running["task_id"]] == {
+        "id": running["task_id"],
+        "label": "subagent: writer",
+        "status": "running",
+        "progress": None,
+        "detail": "long job",
+    }
+    assert frames[old["task_id"]]["detail"] == "error: boom"
+    assert frames[fresh["task_id"]]["status"] == "done"
+    assert frames[fresh["task_id"]]["detail"] == "3 chars"
+
+    later = now + timedelta(minutes=16)
+    later_ids = {
+        f["id"] for f in conversation_subagent_frames(tmp_path, AGENT, CID, now=later)
+    }
+    assert later_ids == {running["task_id"]}  # terminal rows aged out

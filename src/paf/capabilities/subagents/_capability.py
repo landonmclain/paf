@@ -17,6 +17,7 @@ from typing import Any
 
 from pydantic_ai.capabilities import AbstractCapability
 
+from ._background import DEFAULT_MAX_CONCURRENT, OnComplete
 from ._roster import Leaf
 from ._toolset import SubagentToolset
 
@@ -33,6 +34,14 @@ class Subagents(AbstractCapability[Any]):
 
     agent: str = "assistant"
     """paf agent name — scopes the task store and the process-feed emitter."""
+
+    on_complete: OnComplete | None = None
+    """Completion hook for background tasks, injected by the embedding layer (the
+    web transport's notify). ``None``: background results are polled via
+    ``check_task``."""
+
+    max_concurrent: int = DEFAULT_MAX_CONCURRENT
+    """Background tasks allowed to run at once per conversation (extra queue)."""
 
     def __post_init__(self) -> None:
         names = [leaf.name for leaf in self.leaves]
@@ -59,8 +68,12 @@ class Subagents(AbstractCapability[Any]):
             "You can delegate self-contained tasks to these subagents with the "
             "`delegate_task` tool. Each runs in its own fresh context and does not "
             "see this conversation, so pass everything it needs — prefer file paths "
-            "over pasted content. Every result is saved; `check_task` re-reads a "
-            f"task's output.\n\nAvailable subagents:\n{listing}"
+            "over pasted content. Use the default for short work you need the answer "
+            "to now; set `background=true` for long or independent work — you will "
+            "get a `[system]` message with the result (or its opening, if long) when "
+            "it finishes, so do not poll `check_task` in a loop; call it only when "
+            "you need the full result. `cancel_task` stops a background task."
+            f"\n\nAvailable subagents:\n{listing}"
         )
 
     def get_toolset(self) -> SubagentToolset | None:
@@ -71,4 +84,6 @@ class Subagents(AbstractCapability[Any]):
             leaves={leaf.name: leaf for leaf in self.leaves},
             processes_root=self.processes_root,
             agent=self.agent,
+            on_complete=self.on_complete,
+            max_concurrent=self.max_concurrent,
         )

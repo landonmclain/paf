@@ -1,10 +1,12 @@
-"""Model-facing subagent tools: ``delegate_task`` and ``check_task``.
+"""Model-facing subagent tools: ``delegate_task``, ``check_task``, ``cancel_task``.
 
 ``delegate_task(agent_name, task)`` runs a named leaf to completion and returns
-its full output. Every delegation is recorded in the conversation's task store
-and its output saved to a ``.md`` file (see ``_store``), so ``check_task`` can
-page a long result back later. Failures come back as a soft observation (a
-normal tool result), never an exception that would abort the parent run.
+its full output; with ``background=True`` it returns a task id immediately and
+the result arrives later as a ``[system]`` notify (when the embedding layer
+wires one) or via ``check_task``. Every delegation is recorded in the
+conversation's task store and its output saved to a ``.md`` file (see
+``_store``). Failures come back as a soft observation (a normal tool result),
+never an exception that would abort the parent run.
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
 
+from ._background import DEFAULT_MAX_CONCURRENT, OnComplete, background_tasks
 from ._roster import Leaf
-from ._runner import run_subagent
+from ._runner import emit, run_subagent
 from ._store import SubagentTaskStore
 
 CHECK_MAX_CHARS = 8000
@@ -43,15 +46,22 @@ class SubagentToolset(FunctionToolset[Any]):
         leaves: dict[str, Leaf],
         processes_root: str | Path,
         agent: str,
+        on_complete: OnComplete | None = None,
+        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
     ) -> None:
         super().__init__()
         self._leaves = leaves
         self._processes_root = Path(processes_root)
         self._agent = agent
+        # Completion hook injected by the embedding layer (the web transport's
+        # notify). None (CLI/tests): background results are polled via check_task.
+        self._on_complete = on_complete
+        self._max_concurrent = max_concurrent
         # run_id -> {leaf name -> delegations this run}; enforces max_calls_per_run.
         self._call_counts: dict[str, dict[str, int]] = {}
         self.add_function(self.delegate_task, name="delegate_task")
         self.add_function(self.check_task, name="check_task")
+        self.add_function(self.cancel_task, name="cancel_task")
 
     # -- helpers ---------------------------------------------------------------
 
@@ -84,21 +94,37 @@ class SubagentToolset(FunctionToolset[Any]):
     # -- tools -----------------------------------------------------------------
 
     async def delegate_task(
-        self, ctx: RunContext[Any], agent_name: str, task: str
+        self,
+        ctx: RunContext[Any],
+        agent_name: str,
+        task: str,
+        background: bool = False,
     ) -> str:
-        """Delegate a self-contained task to a named subagent and return its output.
+        """Delegate a self-contained task to a named subagent.
 
         The subagent runs in its own fresh context and does NOT see this
         conversation, so ``task`` must contain everything it needs — prefer
-        passing file paths over pasting content. The full output is also saved
-        and can be re-read later with ``check_task``.
+        passing file paths over pasting content. Every output is saved and can
+        be re-read later with ``check_task``.
+
+        Use the default (``background=false``) for short work you need the
+        answer to now: the full output is returned. Set ``background=true`` for
+        long or independent work: a task id is returned immediately and you get
+        a ``[system]`` message with the result when it finishes — do not poll
+        ``check_task`` in a loop.
 
         Args:
             agent_name: Which subagent to run (see the available subagents list).
             task: The complete, self-contained instruction for the subagent.
+            background: Run without waiting; the result arrives later.
         """
         leaf = self._leaf(agent_name)
-        if leaf.policy.background == "required":
+        if background and leaf.policy.background == "never":
+            raise ModelRetry(
+                f"Subagent {agent_name!r} cannot run in the background; "
+                f"call delegate_task with background=false."
+            )
+        if not background and leaf.policy.background == "required":
             raise ModelRetry(
                 f"Subagent {agent_name!r} only runs in the background; "
                 f"call delegate_task with background=true."
@@ -110,6 +136,8 @@ class SubagentToolset(FunctionToolset[Any]):
                 f"recoverable observation and decide from existing evidence."
             )
         store = self._store(ctx)
+        if background:
+            return await self._start_background(ctx, leaf, task, store)
         rec = store.create(
             agent_name=leaf.name, task=task, mode="sync", parent_run_id=ctx.run_id
         )
@@ -119,6 +147,35 @@ class SubagentToolset(FunctionToolset[Any]):
                 agent_name, str(final.get("detail") or "unknown error")
             )
         return output
+
+    async def _start_background(
+        self, ctx: RunContext[Any], leaf: Leaf, task: str, store: SubagentTaskStore
+    ) -> str:
+        rec = store.create(
+            agent_name=leaf.name,
+            task=task,
+            mode="background",
+            parent_run_id=ctx.run_id,
+        )
+        await emit(store, rec)  # `queued` shows in the feed at once
+        background_tasks.launch(
+            rec,
+            leaf,
+            store,
+            max_concurrent=self._max_concurrent,
+            on_complete=self._on_complete,
+        )
+        tid = rec["task_id"]
+        if self._on_complete is not None:
+            return (
+                f"Started subagent task {tid} ({leaf.name}) in the background. You "
+                f"will get a [system] message with its result when it finishes; do "
+                f"not poll check_task."
+            )
+        return (
+            f"Started subagent task {tid} ({leaf.name}) in the background. Poll "
+            f"check_task('{tid}') for its result."
+        )
 
     async def check_task(
         self,
@@ -157,3 +214,16 @@ class SubagentToolset(FunctionToolset[Any]):
             else ""
         )
         return f"{header} — output chars {start}-{end} of {total}:\n\n{page}{more}"
+
+    async def cancel_task(self, ctx: RunContext[Any], task_id: str) -> str:
+        """Cancel a running background subagent task.
+
+        Args:
+            task_id: The id returned by a background delegate_task call.
+        """
+        rec = self._store(ctx).get(task_id)
+        if rec is None:
+            return f"[Error: unknown task id {task_id!r} in this conversation]"
+        if background_tasks.cancel(task_id):
+            return f"Cancelling task {task_id} ({rec.get('agent')})."
+        return f"Task {task_id} is not running (status: {rec.get('status')})."
