@@ -596,3 +596,138 @@ def test_restore_frames_active_always_terminal_within_window(tmp_path: Path) -> 
         f["id"] for f in conversation_subagent_frames(tmp_path, AGENT, CID, now=later)
     }
     assert later_ids == {running["task_id"]}  # terminal rows aged out
+
+
+# -- completion notify -------------------------------------------------------------
+
+
+def _collecting_hook(sink: list[tuple[str, str | None, bool, str]]) -> Any:
+    async def hook(task_id: str, cid: str | None, ok: bool, text: str) -> None:
+        sink.append((task_id, cid, ok, text))
+
+    return hook
+
+
+def test_on_complete_short_long_and_error(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        calls: list[tuple[str, str | None, bool, str]] = []
+
+        def boom(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            raise RuntimeError("nope")
+
+        long_text = "TL;DR: long.\n\n" + ("word " * 600)
+        sub = Subagents(
+            leaves=[
+                _text_leaf("short answer", name="short"),
+                _text_leaf(long_text, name="long"),
+                _leaf_from(boom, name="bad"),
+            ],
+            processes_root=tmp_path,
+            agent=AGENT,
+            on_complete=_collecting_hook(calls),
+        )
+        out = (
+            await _parent(
+                sub,
+                [
+                    _bg_call(agent_name="short"),
+                    _bg_call(agent_name="long"),
+                    _bg_call(agent_name="bad"),
+                ],
+            ).run("go", conversation_id=CID)
+        ).output
+        assert "You will get a [system] message" in out  # hook wired -> no polling
+        await _settle()
+        by_id = {c[0]: c for c in calls}
+        assert len(calls) == 3  # exactly once each
+
+        t1, t2, t3 = (f"subagent.{CID}.{n}" for n in (1, 2, 3))
+        assert by_id[t1] == (
+            t1,
+            CID,
+            True,
+            f"[system] Subagent short task {t1} finished (ok):\n\nshort answer",
+        )
+        _, _, ok, text = by_id[t2]
+        assert ok
+        assert text.startswith(
+            f"[system] Subagent long task {t2} finished (ok):\n\nTL;DR: long."
+        )
+        assert f"check_task('{t2}') for the full output]" in text
+        assert len(text) < 1700
+        _, _, ok, text = by_id[t3]
+        assert not ok
+        assert text == (
+            f"[system] Subagent bad task {t3} finished (error): RuntimeError: nope"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_task_does_not_notify(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        calls: list[tuple[str, str | None, bool, str]] = []
+        gate, log = asyncio.Event(), {}
+        sub = Subagents(
+            leaves=[_gated_leaf(gate, log)],
+            processes_root=tmp_path,
+            agent=AGENT,
+            on_complete=_collecting_hook(calls),
+        )
+        await _parent(sub, [_bg_call()]).run("go", conversation_id=CID)
+        await _until(lambda: log.get("inflight") == 1)
+        await _parent(sub, [("cancel_task", {"task_id": f"subagent.{CID}.1"})]).run(
+            "go", conversation_id=CID
+        )
+        await _settle()
+        assert calls == []
+
+    asyncio.run(scenario())
+
+
+def test_notify_turn_is_not_linked_to_the_spawning_run(tmp_path: Path) -> None:
+    """End-to-end for the spawn-context fix: a notify turn started from a
+    background completion must not record the spawning turn as its parent."""
+    from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
+
+    step_store = FileStepStore(directory=tmp_path / "steps")
+    notify_runs: list[str] = []
+
+    async def scenario() -> None:
+        async def hook(task_id: str, cid: str | None, ok: bool, text: str) -> None:
+            # What Session.notify does on an idle lane: start a new turn.
+            turn = Agent(
+                FunctionModel(lambda m, i: ModelResponse(parts=[TextPart("ack")])),
+                capabilities=[StepPersistence(store=step_store)],
+            )
+            result = await turn.run(text, conversation_id=cid)
+            notify_runs.append(result.run_id)
+
+        sub = Subagents(
+            leaves=[_text_leaf("done")],
+            processes_root=tmp_path / "proc",
+            agent=AGENT,
+            on_complete=hook,
+        )
+        parent = _parent(sub, [_bg_call()])
+        parent_with_steps = Agent(
+            parent.model,
+            capabilities=[sub, StepPersistence(store=step_store)],
+        )
+        await parent_with_steps.run("go", conversation_id=CID)
+        await _settle()
+
+    asyncio.run(scenario())
+    assert len(notify_runs) == 1
+    runs = {r.run_id: r for r in asyncio.run(step_store.list_runs())}
+    assert runs[notify_runs[0]].parent_run_id is None
+
+
+def test_sse_notify_message_verbatim_for_subagents() -> None:
+    from ui import sse
+
+    text = "[system] Subagent writer task subagent.demo:c1.1 finished (ok):\n\nhi"
+    assert sse._notify_message("subagent.demo:c1.1", text) == text
+    assert sse._notify_message("shell.demo:c1.3", "exit 0") == (
+        "[system] Background process shell.demo:c1.3 finished: exit 0"
+    )

@@ -754,6 +754,7 @@ def _build_subagents(
     store,
     filesystem_config: dict | None = None,
     agent_name: str | None = None,
+    on_complete=None,
 ) -> Subagents:
     """paf-owned subagent delegation over the spec-driven leaf roster.
 
@@ -768,6 +769,11 @@ def _build_subagents(
     ``data/processes/<agent>/`` (the same root shell and the process feed use),
     where every delegation's record and ``.md`` output are persisted.
 
+    ``on_complete`` is the embedding layer's completion hook (the web
+    transport's notify, the same one shell gets): when a ``background=True``
+    delegation settles it delivers the ``[system]`` result message to the
+    originating conversation. ``None`` (CLI) means results are polled.
+
     NOT spec-serializable (holds live ``Agent`` instances), so it is built only
     here and supplied via the ``capabilities=`` seam, gated by the profile.
     """
@@ -781,6 +787,7 @@ def _build_subagents(
         leaves=leaves,
         processes_root=str(PROJECT_ROOT / "data" / "processes"),
         agent=agent_name or "assistant",
+        on_complete=on_complete,
     )
 
 
@@ -932,7 +939,9 @@ def build_runtime_capabilities(
             # from `filesystem_config` / default PROJECT_ROOT), so the parent
             # passes file paths in `task` and the child reads the content in its
             # own fresh run. `agent_name` scopes the durable task store.
-            capabilities.append(_build_subagents(store, filesystem_config, agent_name))
+            capabilities.append(
+                _build_subagents(store, filesystem_config, agent_name, on_complete)
+            )
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

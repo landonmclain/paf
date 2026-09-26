@@ -124,12 +124,26 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
     return session
 
 
+def _notify_message(run_id: str, detail: str) -> str:
+    """The ``[system]`` text a completion notify delivers to the parent.
+
+    Subagent tasks (``subagent.<cid>.<n>``) hand over a ready-made message —
+    the whole output or a truncated head plus a ``check_task`` pointer, built by
+    ``paf.capabilities.subagents._notify`` — so it is delivered verbatim. Shell
+    processes pass a short detail (``exit 0``) that is wrapped here.
+    """
+    if run_id.startswith("subagent."):
+        return detail
+    return f"[system] Background process {run_id} finished: {detail}"
+
+
 async def _notify_agent(
     agent: str, run_id: str, conversation_id: str | None, ok: bool, detail: str
 ) -> None:
     """Deliver a background-process completion message to the originating lane.
 
-    The shell queue fires this when a ``notify_on_completion`` process finishes.
+    The shell queue fires this when a ``notify_on_completion`` process finishes,
+    and the Subagents capability when a background delegation settles.
     The queue passes the already-scoped cid (``{profile}:{cid}``); we strip the
     profile prefix and look up (or create) the registry Session so the notify
     lands in the SAME session the UI's ``/api/chat``/history reads — making the
@@ -153,9 +167,7 @@ async def _notify_agent(
         ok=ok,
         detail=detail,
     ):
-        started = session.notify(
-            f"[system] Background process {run_id} finished: {detail}"
-        )
+        started = session.notify(_notify_message(run_id, detail))
     # Only when the notify actually STARTED a new turn (idle lane) do we signal
     # the conversation-lane process feed so the UI re-attaches and streams the
     # model response. When it was steered into a live turn, that turn is already
