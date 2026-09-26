@@ -159,8 +159,15 @@ async def _notify_agent(
         conversation_id.split(":", 1)[1] if ":" in conversation_id else conversation_id
     )
     session = await _get_session(raw_cid, agent)
+    # A NEW trace, grouped with the conversation by session id. This runs in the
+    # background worker, whose inherited current span is the turn that started
+    # the job (often long finished) — nesting under it buried the notify turn
+    # and everything it triggers (memory, summaries) inside that old trace. The
+    # notify turn's task is created inside this span, so it nests here instead.
     with root_span(
         f"paf.notify.{run_id}",
+        new_trace=True,
+        **{"langfuse.session.id": conversation_id},
         agent=agent,
         conversation_id=conversation_id,
         run_id=run_id,

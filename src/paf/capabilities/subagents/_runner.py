@@ -95,13 +95,15 @@ async def run_subagent(
     recorded and then re-raised so the awaiting task actually cancels.
     """
     task_id = str(rec["task_id"])
+    # Typed so the dotted Langfuse key can't be mistaken for a keyword param.
+    io_attrs: dict[str, Any] = {"langfuse.observation.input": rec.get("task") or ""}
     with root_span(
         f"paf.{task_id}",  # task ids are already "subagent.<cid>.<n>"
         agent=leaf.name,
         task_id=task_id,
         parent_run_id=rec.get("parent_run_id") or "",
         conversation_id=store.conversation_id or "",
-        **{"langfuse.observation.input": rec.get("task") or ""},
+        **io_attrs,
     ) as span:
         running = store.update(task_id, status="running", trace_id=_trace_id(span))
         await emit(store, running)

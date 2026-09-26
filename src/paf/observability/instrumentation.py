@@ -94,7 +94,13 @@ def _flag_current_span_error(message: Any, filename: str, lineno: int) -> None:
 
 
 @contextmanager
-def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterator[Any]:
+def root_span(
+    name: str,
+    tracer: Any | None = None,
+    *,
+    new_trace: bool = False,
+    **attributes: Any,
+) -> Iterator[Any]:
     """Open the trace's ROOT span and yield it, so the caller can attach Langfuse I/O.
 
     Langfuse's OTLP mapper reads ``langfuse.observation.input`` /
@@ -111,12 +117,24 @@ def root_span(name: str, tracer: Any | None = None, **attributes: Any) -> Iterat
     either here (known before the run) or on the yielded span later (e.g.
     ``output`` once the settled result lands). No-op when tracing is disabled --
     returns a null span so callers need no branch.
+
+    By default the span attaches to whatever span is CURRENT (so a turn run
+    inside another span nests under it). ``new_trace=True`` starts it from an
+    empty OTel context instead — a genuine root of a NEW trace, whatever is
+    current. Background work that is not part of the turn that happened to
+    trigger it (memory consolidation/review, thread summaries, notify turns)
+    uses this: ``asyncio.create_task`` copies the current span into every task,
+    so without it those spans nest inside an unrelated, often long-finished,
+    conversation turn. Relate such traces with ``langfuse.session.id`` instead.
     """
+    from opentelemetry import context as otel_context
     from opentelemetry import trace
 
     tracer = tracer or trace.get_tracer("paf")
     assert tracer is not None  # OTel SDK returns a no-op tracer, never None
-    with tracer.start_as_current_span(name) as span:
+    # An empty Context has no current span, so the new span roots a new trace.
+    parent = otel_context.Context() if new_trace else None
+    with tracer.start_as_current_span(name, context=parent) as span:
         for key, value in attributes.items():
             # Only the langfuse.observation.* keys feed Langfuse's structured
             # I/O parser and need JSON encoding. All OTHER attributes (notably

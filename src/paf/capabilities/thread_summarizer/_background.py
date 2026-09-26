@@ -189,6 +189,17 @@ class ThreadSummarizerQueue(BackgroundQueueService[ThreadSummarizeJob]):
         store = ThreadSummaryStore(self.capture_root, conversation_id)
         return store.directory / THREAD_WATERMARK_FILENAME
 
+    def job_trace(self, session_id: str, job: ThreadSummarizeJob) -> tuple[str, dict]:
+        """Each summary pass is its OWN trace, grouped with its conversation via
+        ``langfuse.session.id`` (the scoped cid, the same session the
+        conversation's agent spans carry) rather than nested inside whichever
+        turn happened to trigger it (see ``BackgroundQueueService.job_trace``)."""
+        del session_id
+        return (
+            f"paf.thread_summarize.{job.conversation_id}",
+            {"langfuse.session.id": job.conversation_id},
+        )
+
     async def process_job(
         self,
         session_id: str,

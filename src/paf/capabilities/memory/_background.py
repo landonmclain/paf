@@ -318,6 +318,16 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         self.span_source = span_source
         self.consolidate_span = consolidate_span
 
+    def job_trace(self, session_id: str, job: ConsolidationJob) -> tuple[str, dict]:
+        """Each consolidation is its OWN trace: memory is per-agent, not part of
+        whichever conversation turn happened to trigger it (see
+        ``BackgroundQueueService.job_trace``)."""
+        attrs = {"agent": session_id, "run_id": job.run_id, "turn_id": job.turn_id}
+        return (
+            f"paf.memory.consolidate.{session_id}",
+            {k: v for k, v in attrs.items() if v is not None},
+        )
+
     async def process_job(
         self,
         session_id: str,
@@ -500,6 +510,16 @@ class MemoryReviewQueue(BackgroundQueueService[ReviewJob]):
         self.memory_directory = memory_directory
         self.agent_name = agent_name
         self.review_span = review_span
+
+    def job_trace(self, session_id: str, job: ReviewJob) -> tuple[str, dict]:
+        """Each review pass is its OWN trace: curation is per-agent, not part of
+        whichever conversation turn happened to trigger it (see
+        ``BackgroundQueueService.job_trace``)."""
+        attrs = {"agent": session_id, "run_id": job.run_id, "turn_id": job.turn_id}
+        return (
+            f"paf.memory.review.{session_id}",
+            {k: v for k, v in attrs.items() if v is not None},
+        )
 
     async def process_job(
         self,

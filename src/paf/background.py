@@ -47,6 +47,7 @@ from paf.background_processes._events import (
     ProcessEventType,
     get_agent_emitter,
 )
+from paf.observability.instrumentation import root_span
 
 log = logging.getLogger(__name__)
 
@@ -207,7 +208,7 @@ class BackgroundQueueService[JobT](ABC):
 
             state.active_jobs += 1
             try:
-                await self.process_job(session_id, job, state)
+                await self._run_job(session_id, job, state)
             except Exception:
                 log.exception(
                     "%s_job_failed session=%s",
@@ -217,6 +218,34 @@ class BackgroundQueueService[JobT](ABC):
             finally:
                 state.active_jobs -= 1
                 state.queue.task_done()
+
+    async def _run_job(
+        self, session_id: str, job: JobT, state: QueueState[JobT]
+    ) -> None:
+        """Run one job, in its own trace when :meth:`job_trace` names one."""
+        spec = self.job_trace(session_id, job)
+        if spec is None:
+            await self.process_job(session_id, job, state)
+            return
+        name, attributes = spec
+        with root_span(name, new_trace=True, **attributes):
+            await self.process_job(session_id, job, state)
+
+    def job_trace(
+        self, session_id: str, job: JobT
+    ) -> tuple[str, dict[str, Any]] | None:
+        """``(span name, attributes)`` to run ``job`` as the root of a NEW trace.
+
+        The worker task inherits whatever span was current when it was spawned
+        (``asyncio.create_task`` copies it) — typically an unrelated conversation
+        turn, or a notify turn that happened to trigger it, and for a warm worker
+        possibly a turn from minutes earlier. A queue whose jobs are not part of
+        that turn overrides this so each job gets its own trace (relate traces
+        with ``langfuse.session.id`` in the attributes, not by nesting).
+        ``None`` (default) runs the job under the inherited span.
+        """
+        del session_id, job
+        return None
 
     @abstractmethod
     async def process_job(
