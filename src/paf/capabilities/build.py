@@ -755,6 +755,7 @@ def _build_subagents(
     filesystem_config: dict | None = None,
     agent_name: str | None = None,
     on_complete=None,
+    subagents_config: dict | None = None,
 ) -> Subagents:
     """paf-owned subagent delegation over the spec-driven leaf roster.
 
@@ -774,20 +775,34 @@ def _build_subagents(
     delegation settles it delivers the ``[system]`` result message to the
     originating conversation. ``None`` (CLI) means results are polled.
 
+    ``subagents_config`` is the spec's ``subagents:`` block (see
+    ``specs._spec_subagents_config``): ``agents`` replaces the default roster
+    (:data:`_SUBAGENT_ROSTER`) and ``max_concurrent`` caps background tasks per
+    conversation.
+
     NOT spec-serializable (holds live ``Agent`` instances), so it is built only
     here and supplied via the ``capabilities=`` seam, gated by the profile.
     """
     from paf.capabilities.subagents import load_leaf
+    from paf.capabilities.subagents._background import DEFAULT_MAX_CONCURRENT
 
+    config = subagents_config or {}
+    roster = config.get("agents") or _SUBAGENT_ROSTER
     leaves = [
-        load_leaf(name, store=store, filesystem_config=filesystem_config)
-        for name in _SUBAGENT_ROSTER
+        load_leaf(
+            name,
+            store=store,
+            filesystem_config=filesystem_config,
+            agent_name=agent_name,
+        )
+        for name in roster
     ]
     return Subagents(
         leaves=leaves,
         processes_root=str(PROJECT_ROOT / "data" / "processes"),
         agent=agent_name or "assistant",
         on_complete=on_complete,
+        max_concurrent=config.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
     )
 
 
@@ -832,6 +847,7 @@ def build_runtime_capabilities(
     mcp_config: str | None = None,
     agent_name: str | None = None,
     on_complete=None,
+    subagents_config: dict | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -940,7 +956,9 @@ def build_runtime_capabilities(
             # passes file paths in `task` and the child reads the content in its
             # own fresh run. `agent_name` scopes the durable task store.
             capabilities.append(
-                _build_subagents(store, filesystem_config, agent_name, on_complete)
+                _build_subagents(
+                    store, filesystem_config, agent_name, on_complete, subagents_config
+                )
             )
         else:
             capabilities.append(builder(store))

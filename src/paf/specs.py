@@ -607,6 +607,69 @@ def _spec_codebase_map_config(spec_path: Path) -> dict | None:
     return _spec_rooted_config(spec_path, "codebase_map", "scan_root")
 
 
+def _spec_subagents_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``subagents:`` block (roster + concurrency cap).
+
+    Shape::
+
+        subagents:
+          agents: [writer_subagent, researcher_subagent]   # leaf spec names
+          max_concurrent: 5                                # background cap / conversation
+
+    Returns ``{"agents": [...]?, "max_concurrent": int?}`` with only the valid
+    keys present, or ``None`` when the block is absent / unreadable. Absent ->
+    the builder's default roster.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    block = raw.get("subagents") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return None
+    config: dict[str, Any] = {}
+    agents = block.get("agents")
+    if isinstance(agents, list) and all(isinstance(a, str) and a for a in agents):
+        config["agents"] = list(agents)
+    max_concurrent = block.get("max_concurrent")
+    if isinstance(max_concurrent, int) and max_concurrent > 0:
+        config["max_concurrent"] = max_concurrent
+    return config or None
+
+
+def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
+    """Every per-capability config block a spec can carry, as build kwargs.
+
+    Keys match :func:`paf.capabilities.build.build_runtime_capabilities`'s
+    keyword parameters, so the subject agent (``build_agent``) and tooled
+    subagent leaves read their capability config the same way.
+    """
+    return {
+        # Per-agent compaction tuning from the spec's `compact:` block.
+        "compaction_config": _spec_compaction_config(spec_path),
+        # Web extract allowlist from the spec's `web:` block.
+        "web_search_domains": _spec_web_config(spec_path),
+        # Browser egress allowlist from the spec's `browser:` block.
+        "browser_config": _spec_browser_config(spec_path),
+        # Vault root + allow/deny from the spec's `vault:` block.
+        "vault_config": _spec_vault_config(spec_path),
+        # Memory tuning (e.g. consolidate_every) from the spec's `memory:` block.
+        "memory_config": _spec_memory_config(spec_path),
+        # Root scoping for the root-bearing capabilities from their spec blocks.
+        "filesystem_config": _spec_filesystem_config(spec_path),
+        "shell_config": _spec_shell_config(spec_path),
+        "git_config": _spec_git_config(spec_path),
+        "codebase_map_config": _spec_codebase_map_config(spec_path),
+        # Skill library dirs + top_k from the spec's `skills:` block.
+        "skills_config": _spec_skills_config(spec_path),
+        # mcpServers JSON path from the spec's `mcp:` block (builtin env expansion).
+        "mcp_config": _spec_mcp_config(spec_path),
+        # Subagent roster + background cap from the spec's `subagents:` block.
+        "subagents_config": _spec_subagents_config(spec_path),
+    }
+
+
 class AgentSpecNotFoundError(FileNotFoundError):
     """Raised when an agent specification cannot be found."""
 
@@ -701,25 +764,9 @@ def build_agent(
     profile = profile or ASSISTANT_PROFILE
     spec = load_agent_spec(agent_name, spec_directory)
     spec_path = get_spec_path(agent_name, spec_directory)
-    # Per-agent compaction tuning from the spec's `compact:` block.
-    compaction_config = _spec_compaction_config(spec_path)
-    # Web extract allowlist from the spec's `web:` block.
-    web_config = _spec_web_config(spec_path)
-    # Browser egress allowlist from the spec's `browser:` block.
-    browser_config = _spec_browser_config(spec_path)
-    # Vault root + allow/deny from the spec's `vault:` block.
-    vault_config = _spec_vault_config(spec_path)
-    # Skill library dirs + top_k from the spec's `skills:` block.
-    skills_config = _spec_skills_config(spec_path)
-    # Memory tuning (e.g. consolidate_every) from the spec's `memory:` block.
-    memory_config = _spec_memory_config(spec_path)
-    # Root scoping for the root-bearing capabilities from their spec blocks.
-    filesystem_config = _spec_filesystem_config(spec_path)
-    shell_config = _spec_shell_config(spec_path)
-    git_config = _spec_git_config(spec_path)
-    codebase_map_config = _spec_codebase_map_config(spec_path)
-    # mcpServers JSON path from the spec's `mcp:` block (builtin env expansion).
-    mcp_config = _spec_mcp_config(spec_path)
+    # Every per-capability config block (compact/web/browser/vault/skills/
+    # memory/filesystem/shell/git/codebase_map/mcp/subagents) from the spec.
+    runtime_configs = _spec_runtime_configs(spec_path)
     # Bounded-timeout OpenRouter client for `openrouter:` models (see
     # providers/openrouter.py); falls back to the plain string when no key.
     if (
@@ -743,17 +790,7 @@ def build_agent(
         # `compact:` block (if any) drives the compaction tiers.
         capabilities=build_runtime_capabilities(
             profile,
-            compaction_config,
-            web_config,
-            browser_config,
-            vault_config,
-            memory_config=memory_config,
-            filesystem_config=filesystem_config,
-            shell_config=shell_config,
-            git_config=git_config,
-            codebase_map_config=codebase_map_config,
-            skills_config=skills_config,
-            mcp_config=mcp_config,
+            **runtime_configs,
             agent_name=agent_name,
             on_complete=on_complete,
         ),

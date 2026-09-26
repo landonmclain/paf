@@ -731,3 +731,145 @@ def test_sse_notify_message_verbatim_for_subagents() -> None:
     assert sse._notify_message("shell.demo:c1.3", "exit 0") == (
         "[system] Background process shell.demo:c1.3 finished: exit 0"
     )
+
+
+# -- spec-driven roster + tooled leaves ---------------------------------------------
+
+
+def _tool_names(leaf: Leaf) -> set[str]:
+    seen: dict[str, set[str]] = {}
+
+    def fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen["tools"] = {t.name for t in info.function_tools}
+        return ModelResponse(parts=[TextPart("ok")])
+
+    leaf.agent.run_sync("hi", model=FunctionModel(fn))
+    return seen["tools"]
+
+
+def test_spec_subagents_config_parsing(tmp_path: Path) -> None:
+    from paf.specs import _spec_runtime_configs, _spec_subagents_config
+
+    good = tmp_path / "good.yaml"
+    good.write_text(
+        "subagents:\n  agents: [writer_subagent, researcher_subagent]\n  max_concurrent: 2\n"
+    )
+    assert _spec_subagents_config(good) == {
+        "agents": ["writer_subagent", "researcher_subagent"],
+        "max_concurrent": 2,
+    }
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("subagents:\n  agents: writer\n  max_concurrent: 0\n")
+    assert _spec_subagents_config(bad) is None
+    absent = tmp_path / "absent.yaml"
+    absent.write_text("model: test\n")
+    assert _spec_subagents_config(absent) is None
+    assert _spec_runtime_configs(good)["subagents_config"]["max_concurrent"] == 2
+
+
+def test_roster_and_cap_from_subagents_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    from paf.capabilities import AgentProfile
+    from paf.capabilities.build import build_runtime_capabilities
+
+    built = build_runtime_capabilities(
+        AgentProfile(name="x", capability_names=("Subagents",)),
+        subagents_config={
+            "agents": ["writer_subagent", "researcher_subagent"],
+            "max_concurrent": 2,
+        },
+        agent_name="demo_assistant",
+    )
+    sub = built[0]
+    assert isinstance(sub, Subagents)
+    assert [leaf.name for leaf in sub.leaves] == ["writer", "researcher"]
+    assert sub.max_concurrent == 2
+    # Default roster when no block: just the writer.
+    default = build_runtime_capabilities(
+        AgentProfile(name="x", capability_names=("Subagents",))
+    )[0]
+    assert [leaf.name for leaf in default.leaves] == ["writer"]
+    assert default.max_concurrent == 5
+
+
+def test_researcher_leaf_gets_its_profile_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+    from paf.capabilities.persistence import _build_store
+    from paf.capabilities.subagents import load_leaf
+
+    leaf = load_leaf(
+        "researcher_subagent", store=_build_store(), filesystem_config=None
+    )
+    assert leaf.name == "researcher"
+    assert leaf.policy.timeout_seconds == 600
+    tools = _tool_names(leaf)
+    assert {"search_web", "fetch_web_page", "read_file"} <= tools
+    assert not tools & {"delegate_task", "check_task", "cancel_task"}
+
+
+def test_leaf_profile_never_gets_excluded_capabilities(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Even a profile that allowlists them never gives a leaf persistence,
+    recall, memory, the summarizer, or delegation (depth 1)."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    from paf.capabilities import AgentProfile
+    from paf.capabilities.persistence import _build_store
+    from paf.capabilities.profiles import PROFILES
+    from paf.capabilities.subagents import load_leaf
+    from paf.capabilities.subagents._roster import LEAF_EXCLUDED_CAPABILITIES
+
+    monkeypatch.setitem(
+        PROFILES,
+        "everything-leaf",
+        AgentProfile(
+            name="everything-leaf",
+            capability_names=(*sorted(LEAF_EXCLUDED_CAPABILITIES), "FileSystem"),
+        ),
+    )
+    (tmp_path / "greedy_subagent.yaml").write_text(
+        "name: greedy_subagent\n"
+        "model: openrouter:openai/gpt-5.6-luna\n"
+        "description: test leaf\n"
+        "profile: everything-leaf\n"
+        "instructions: Do the task.\n"
+    )
+    leaf = load_leaf(
+        "greedy_subagent",
+        store=_build_store(),
+        filesystem_config=None,
+        spec_directory=tmp_path,
+    )
+    assert leaf.name == "greedy"
+    tools = _tool_names(leaf)
+    assert "read_file" in tools
+    assert not tools & {
+        "delegate_task",
+        "check_task",
+        "search_conversation_history",
+        "read_turn",
+        "append_memory",
+    }
+
+
+def test_unknown_leaf_profile_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    from paf.capabilities.persistence import _build_store
+    from paf.capabilities.subagents import load_leaf
+
+    (tmp_path / "odd_subagent.yaml").write_text(
+        "name: odd_subagent\nmodel: openrouter:openai/gpt-5.6-luna\nprofile: nope\n"
+    )
+    with pytest.raises(KeyError, match="unknown profile 'nope'"):
+        load_leaf(
+            "odd_subagent",
+            store=_build_store(),
+            filesystem_config=None,
+            spec_directory=tmp_path,
+        )

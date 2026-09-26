@@ -21,6 +21,7 @@ default to bounded values when a spec omits them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from pydantic_ai import Agent
@@ -30,6 +31,14 @@ BackgroundPolicy = Literal["allowed", "required", "never"]
 
 DEFAULT_TIMEOUT_SECONDS = 300.0
 DEFAULT_REQUEST_LIMIT = 30
+
+LEAF_EXCLUDED_CAPABILITIES = frozenset(
+    {"Subagents", "StepPersistence", "ConversationSearch", "Memory", "ThreadSummarizer"}
+)
+"""Never built for a child, whatever its profile allows: a leaf is depth 1 (no
+delegation) and persists results, not transcripts (no step store, recall,
+memory, or summarizer — nothing that would write into or read from the
+parent conversation)."""
 
 TLDR_INSTRUCTION = (
     "Start your response with a 1-3 sentence TL;DR of the result, then the full "
@@ -84,32 +93,80 @@ class Leaf:
     policy: LeafPolicy = field(default_factory=LeafPolicy)
 
 
-def load_leaf(spec_name: str, *, store: Any, filesystem_config: dict | None) -> Leaf:
+def load_leaf(
+    spec_name: str,
+    *,
+    store: Any,
+    filesystem_config: dict | None,
+    agent_name: str | None = None,
+    spec_directory: Path | None = None,
+) -> Leaf:
     """Build one leaf from its spec.
 
-    The child gets the SAME scoped FileSystem capability as the parent (root from
-    the parent's ``filesystem_config`` / default PROJECT_ROOT) unless the leaf
-    spec sets its own ``filesystem.root_dir`` — so the parent passes file paths
-    and the child reads the content in its own fresh run. Children never get
-    step persistence, memory, conversation search, or subagents (depth 1).
+    Tools come from one of two places:
+
+    - **No ``profile:``** (the writer): just the SAME scoped FileSystem as the
+      parent (root from the parent's ``filesystem_config`` / default
+      PROJECT_ROOT, unless the leaf spec sets ``filesystem.root_dir``) — the
+      parent passes file paths and the child reads them in its own fresh run.
+    - **``profile: <name>``**: that profile's capabilities, built through the
+      same ``build_runtime_capabilities`` path as the subject agent, from the
+      leaf spec's own config blocks (``web:``, ``shell:``, ...). The filesystem
+      root still defaults to the parent's.
+
+    Either way a child NEVER gets :data:`LEAF_EXCLUDED_CAPABILITIES` — no step
+    persistence, recall, memory, summarizer, or subagents (depth 1).
+    ``agent_name`` (the parent paf agent) scopes any durable store a tooled leaf
+    uses, e.g. Shell's. ``spec_directory`` overrides the spec root (tests).
     """
     # Local imports: specs.py imports build.py at module level, and build.py
     # imports this package — importing specs here at module load would cycle.
-    from paf.capabilities.build import _build_filesystem  # noqa: PLC0415
+    from paf.capabilities.build import (  # noqa: PLC0415
+        _build_filesystem,
+        build_runtime_capabilities,
+    )
+    from paf.capabilities.profiles import (  # noqa: PLC0415
+        PROFILES,
+        SUBAGENT_PROFILES,
+        AgentProfile,
+    )
     from paf.specs import (  # noqa: PLC0415
-        _spec_rooted_config,
+        DEFAULT_SPEC_DIRECTORY,
+        _spec_runtime_configs,
         get_spec_path,
         resolve_background_spec,
     )
 
-    spec, raw = resolve_background_spec(spec_name)
+    spec_dir = spec_directory or DEFAULT_SPEC_DIRECTORY
+    spec, raw = resolve_background_spec(spec_name, spec_dir)
+    spec_path = get_spec_path(spec_name, spec_dir)
     block_raw = raw.get("subagent")
     block: dict[str, Any] = block_raw if isinstance(block_raw, dict) else {}
     name = str(block.get("name") or spec_name.removesuffix("_subagent"))
-    leaf_fs_config = _spec_rooted_config(
-        get_spec_path(spec_name), "filesystem", "root_dir"
-    )
-    shared_fs = _build_filesystem(store, leaf_fs_config or filesystem_config)
+    configs = _spec_runtime_configs(spec_path)
+    configs["filesystem_config"] = configs["filesystem_config"] or filesystem_config
+    configs.pop("subagents_config", None)  # depth 1: a leaf never delegates
+
+    profile_name = raw.get("profile")
+    if profile_name:
+        known = {**PROFILES, **SUBAGENT_PROFILES}
+        if profile_name not in known:
+            raise KeyError(
+                f"Subagent spec {spec_name!r} names unknown profile {profile_name!r}. "
+                f"Known: {sorted(known)}"
+            )
+        allowed = tuple(
+            cap
+            for cap in known[profile_name].capability_names
+            if cap not in LEAF_EXCLUDED_CAPABILITIES
+        )
+        capabilities = build_runtime_capabilities(
+            AgentProfile(name=f"subagent:{name}", capability_names=allowed),
+            **configs,
+            agent_name=agent_name,
+        )
+    else:
+        capabilities = [_build_filesystem(store, configs["filesystem_config"])]
     # `instructions=` APPENDS to the spec's own `instructions:` (from_spec merges
     # them), so only the TL;DR line is passed. The previous builder also passed
     # the spec text as `system_prompt=`, which sent the writer its full prompt
@@ -121,7 +178,7 @@ def load_leaf(spec_name: str, *, store: Any, filesystem_config: dict | None) -> 
         description=spec.description,
         instructions=TLDR_INSTRUCTION,
         model_settings=cast(Any, spec.model_settings),
-        capabilities=[shared_fs],
+        capabilities=capabilities,
     )
     return Leaf(
         name=name,
