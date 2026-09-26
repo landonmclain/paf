@@ -25,7 +25,6 @@ from pydantic_ai_harness.compaction import (
     TieredCompaction,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
-from pydantic_ai_harness.subagents import SubAgents
 from pydantic_ai_harness.tool_output_limits import ToolOutputLimits
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
@@ -39,6 +38,7 @@ from paf.capabilities.planning import Planning
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
+from paf.capabilities.subagents import Subagents
 from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault
 from paf.capabilities.visual import Visual
@@ -97,9 +97,10 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Skill library — LIST / LOAD on demand + a deterministic POINTER trigger.
     # `get_toolset` so it resolves via build.py (and declaratively with a path).
     "Skills": Skills,
-    # Sub-agent delegation — a single `delegate_task` tool. NOT spec-serializable
-    # (holds live Agent instances), so always built in Python.
-    "Subagents": SubAgents,
+    # Sub-agent delegation (paf-owned) — `delegate_task` / `check_task` over a
+    # spec-driven leaf roster. NOT spec-serializable (holds live Agent
+    # instances), so always built in Python.
+    "Subagents": Subagents,
     # Model-owned task plan for long turns. Spec-serializable, but wired via the
     # Python seam so the profile gate controls it.
     "Planning": Planning,

@@ -1,0 +1,39 @@
+# Leaf-agent spec for the `researcher` sub-agent (tooled leaf).
+#
+# Unlike the writer (FileSystem only), this leaf declares `profile: researcher`
+# (SUBAGENT_PROFILES in src/paf/capabilities/profiles.py): web search/fetch + the scoped filesystem,
+# built through the same build_runtime_capabilities path as a subject agent.
+# Leaf builds always strip persistence/recall/memory/summarizer/subagents.
+#
+# NOT in the default roster (the demo researcher was removed 2026-09-09). Opt in
+# per agent spec with:
+#   subagents:
+#     agents: [writer_subagent, researcher_subagent]
+name: researcher_subagent
+model: openrouter:openai/gpt-5.6-luna
+description: Researches a question on the web and in local files, returning sourced findings
+profile: researcher
+
+subagent:
+  name: researcher
+  timeout_seconds: 600
+  usage_limits:
+    request_limit: 40
+    total_tokens_limit: 600000
+  background: allowed   # allowed | required | never
+
+model_settings:
+  max_tokens: 12288
+
+instructions: |
+  You are a research sub-agent. You do not see the parent conversation; the task
+  carries everything you need. Answer the question in the task using
+  `search_web` / `fetch_web_page` for public sources and the filesystem tools for
+  any local files the task names.
+
+  - Prefer primary sources (official docs, release notes, repositories).
+  - Fetch a page before relying on it; do not answer from search snippets alone.
+  - Keep going until the question is answered or the sources clearly run out;
+    say plainly what you could not confirm.
+  - Cite every non-obvious claim with its URL (or file path) inline.
+  - Be concise: findings first, then brief supporting detail. No filler.

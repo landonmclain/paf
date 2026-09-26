@@ -22,7 +22,6 @@ from pydantic_ai_harness.compaction import (
     compact_now,
 )
 from pydantic_ai_harness.step_persistence import StepPersistence
-from pydantic_ai_harness.subagents import SubAgent, SubAgents
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
@@ -45,6 +44,7 @@ from paf.capabilities.profiles import (
     PROFILES,
 )
 from paf.capabilities.registry import CAPABILITY_TYPES
+from paf.capabilities.subagents import Subagents
 from paf.capabilities.visual import Visual
 
 
@@ -156,30 +156,27 @@ def test_cache_bust_warning_flips_active_span_to_error() -> None:
 
 @pytest.mark.live
 def test_subagents_cataloged_and_wired() -> None:
-    """Subagents is a cataloged BUILTIN and resolves on the demo profile with child agents.
+    """Subagents is the paf-owned capability and resolves on a profile with its roster.
 
-    Same BUILTIN drop-in pattern as WarnOnCacheBusts, but NOT spec-serializable
-    (holds live `Agent` instances; get_serialization_name -> None), so it must be
-    built in Python (`_build_subagents`) with explicit child entries. Assert the
-    demo build attaches a SubAgents capability whose toolset exposes exactly the
-    named demo leaf agent (`writer`; researcher removed per Landon 2026-09-09).
+    NOT spec-serializable (holds live `Agent` instances; get_serialization_name ->
+    None), so it must be built in Python (`_build_subagents`) from the leaf-spec
+    roster. Assert the build attaches a `Subagents` whose roster is the demo
+    `writer` leaf and whose toolset exposes the delegation tools.
     """
-    assert CAPABILITY_TYPES["Subagents"] is SubAgents
+    assert CAPABILITY_TYPES["Subagents"] is Subagents
+    assert Subagents.get_serialization_name() is None
 
     from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
 
     profile = AgentProfile(name="subagents-on", capability_names=("Subagents",))
     built = build_runtime_capabilities(profile)
-    subagents = next((c for c in built if type(c).__name__ == "SubAgents"), None)
+    subagents = next((c for c in built if isinstance(c, Subagents)), None)
     assert subagents is not None
-    assert isinstance(subagents, SubAgents)
-    # _by_name is built in __post_init__ from the explicit SubAgent entries.
-    assert set(subagents._by_name) == {"writer"}
-    assert all(isinstance(sa, SubAgent) for sa in subagents._by_name.values())
-    # A live toolset is produced so the delegate_task tool is actually exposed.
+    assert [leaf.name for leaf in subagents.leaves] == ["writer"]
     toolset = subagents.get_toolset()
     assert toolset is not None
+    assert {"delegate_task", "check_task"} <= set(toolset.tools)
 
 
 @pytest.mark.live

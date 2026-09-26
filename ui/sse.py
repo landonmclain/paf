@@ -124,12 +124,26 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
     return session
 
 
+def _notify_message(run_id: str, detail: str) -> str:
+    """The ``[system]`` text a completion notify delivers to the parent.
+
+    Subagent tasks (``subagent.<cid>.<n>``) hand over a ready-made message —
+    the whole output or a truncated head plus a ``check_task`` pointer, built by
+    ``paf.capabilities.subagents._notify`` — so it is delivered verbatim. Shell
+    processes pass a short detail (``exit 0``) that is wrapped here.
+    """
+    if run_id.startswith("subagent."):
+        return detail
+    return f"[system] Background process {run_id} finished: {detail}"
+
+
 async def _notify_agent(
     agent: str, run_id: str, conversation_id: str | None, ok: bool, detail: str
 ) -> None:
     """Deliver a background-process completion message to the originating lane.
 
-    The shell queue fires this when a ``notify_on_completion`` process finishes.
+    The shell queue fires this when a ``notify_on_completion`` process finishes,
+    and the Subagents capability when a background delegation settles.
     The queue passes the already-scoped cid (``{profile}:{cid}``); we strip the
     profile prefix and look up (or create) the registry Session so the notify
     lands in the SAME session the UI's ``/api/chat``/history reads — making the
@@ -145,17 +159,22 @@ async def _notify_agent(
         conversation_id.split(":", 1)[1] if ":" in conversation_id else conversation_id
     )
     session = await _get_session(raw_cid, agent)
+    # A NEW trace, grouped with the conversation by session id. This runs in the
+    # background worker, whose inherited current span is the turn that started
+    # the job (often long finished) — nesting under it buried the notify turn
+    # and everything it triggers (memory, summaries) inside that old trace. The
+    # notify turn's task is created inside this span, so it nests here instead.
     with root_span(
         f"paf.notify.{run_id}",
+        new_trace=True,
+        **{"langfuse.session.id": conversation_id},
         agent=agent,
         conversation_id=conversation_id,
         run_id=run_id,
         ok=ok,
         detail=detail,
     ):
-        started = session.notify(
-            f"[system] Background process {run_id} finished: {detail}"
-        )
+        started = session.notify(_notify_message(run_id, detail))
     # Only when the notify actually STARTED a new turn (idle lane) do we signal
     # the conversation-lane process feed so the UI re-attaches and streams the
     # model response. When it was steered into a live turn, that turn is already
@@ -842,6 +861,19 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
                     _publish(("task", frame))
             except Exception:
                 log.warning("shell process restore failed", exc_info=True)
+            # Subagent tasks live in their own store too; restore them the same
+            # way so running / recently finished rows survive a refresh.
+            try:
+                from paf.capabilities.subagents._store import (
+                    conversation_subagent_frames,
+                )
+
+                for frame in conversation_subagent_frames(
+                    PROJECT_ROOT / "data" / "processes", bg.agent_name, scope
+                ):
+                    _publish(("task", frame))
+            except Exception:
+                log.warning("subagent task restore failed", exc_info=True)
 
         # No wall-clock heartbeat: every background job is TURN-gated, so task
         # events (SKIPPED/PROCESSING) already fire on every ``after_turn`` and

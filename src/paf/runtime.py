@@ -718,10 +718,11 @@ class Session:
         # mid-stream model failure (see `except (ModelHTTPError, ...)` below).
         # Declared before the run so it's bound even if iter() itself raises.
         _active_run: AgentRun[Any, Any] | None = None
-        with root_span(
-            f"paf.run.{scoped or 'default'}",
-            **({"langfuse.observation.input": _run_input(prompt, scoped)}),
-        ) as _span:
+        # Typed so the dotted Langfuse key can't be mistaken for a keyword param.
+        run_attrs: dict[str, Any] = {
+            "langfuse.observation.input": _run_input(prompt, scoped)
+        }
+        with root_span(f"paf.run.{scoped or 'default'}", **run_attrs) as _span:
             # Tier A — turn-boundary compaction (routine trim). Run the window
             # trim over the settled prior-turn history BEFORE request #1 inside
             # the turn's root span, so the first request of the turn is small and

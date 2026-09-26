@@ -149,6 +149,20 @@ LONGMEMEVAL_PROFILE = AgentProfile(
 
 # Name lookup so a spec/CLI can reference a profile by a string that resolves
 # to the allowlist. Only used by spec-driven loaders; keep small.
+# Tool profile for the `researcher` SUBAGENT leaf (specs/sub_agents/
+# researcher_subagent.yaml), not a subject agent: web search/fetch plus the
+# scoped filesystem (root defaults to the parent's). Leaf builds always strip
+# persistence/recall/memory/summarizer/subagents regardless of the profile.
+RESEARCHER_PROFILE = AgentProfile(
+    name="researcher",
+    capability_names=(
+        "Web",
+        "FileSystem",
+        "ToolOutputLimits",
+    ),
+)
+
+
 PROFILES: dict[str, AgentProfile] = {
     profile.name: profile
     for profile in (
@@ -157,4 +171,11 @@ PROFILES: dict[str, AgentProfile] = {
         CONTEXTBENCH_PROFILE,
         LONGMEMEVAL_PROFILE,
     )
+}
+
+# Tool profiles for SUBAGENT leaves (a leaf spec's `profile:`), kept apart from
+# PROFILES — they are never selectable as a subject agent's profile. Leaf
+# profile lookup checks here first, then PROFILES.
+SUBAGENT_PROFILES: dict[str, AgentProfile] = {
+    profile.name: profile for profile in (RESEARCHER_PROFILE,)
 }

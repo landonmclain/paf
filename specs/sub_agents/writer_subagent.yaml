@@ -19,6 +19,17 @@ description: Drafts clear technical prose from material the delegating agent pro
 # filesystem:
 #   root_dir: "~/projects/foo"
 
+# Subagent run policy (paf-specific; read by paf.capabilities.subagents).
+# `name` is the runtime delegate_task key. The child always runs on its OWN
+# budget (never the parent's run usage), bounded by the timeout + usage limits.
+subagent:
+  name: writer
+  timeout_seconds: 300
+  usage_limits:
+    request_limit: 30
+    total_tokens_limit: 400000
+  background: allowed   # allowed | required | never
+
 model_settings:
   # Prose-generation leaf: a touch of temperature for naturalness/variety. The
   # deterministic 0 used by the tool-calling loop stays for the main agent; the
