@@ -158,8 +158,7 @@ def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:
     assert set(ts.tools.keys()) == {"append_memory"}
     # A non-journal Memory exposes NO toolset (the legacy 4-tool surface is gone).
     assert (
-        Memory(store=JournalViewStore(tmp_path), agent_name="a").get_toolset()
-        is None
+        Memory(store=JournalViewStore(tmp_path), agent_name="a").get_toolset() is None
     )
 
 
@@ -277,5 +276,3 @@ def test_iso_date_keeps_time() -> None:
     assert _iso_date(None) is None
     # Date-only (no time) -> midnight.
     assert _iso_date("2023/05/20") == "2023-05-20T00:00:00+00:00"
-
-
