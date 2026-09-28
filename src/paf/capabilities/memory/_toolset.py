@@ -641,8 +641,7 @@ class ReviewerToolset(_CurationToolset[AgentDepsT]):
 
             today = datetime.now(UTC).date().isoformat()
             born_by_id = {
-                line_id: rec.born_on
-                for line_id, rec in self._journal.read_all()
+                line_id: rec.born_on for line_id, rec in self._journal.read_all()
             }
             source_dates = [born_by_id[i] for i in ids if born_by_id.get(i)]
             born_on = max(source_dates) if source_dates else today
