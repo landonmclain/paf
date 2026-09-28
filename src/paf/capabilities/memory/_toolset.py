@@ -12,6 +12,7 @@ This module carries the memory tool surface:
 
 from __future__ import annotations
 
+import re
 from typing import Literal, NotRequired
 
 from pydantic_ai import ModelRetry
@@ -19,7 +20,7 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from typing_extensions import TypedDict
 
-from ._journal import MEMORY_TIERS, MEMORY_TYPES, JournalStore
+from ._journal import MEMORY_TIERS, MEMORY_TYPES, JournalStore, MemoryRecord
 from ._overrides import OverrideStore
 
 MAIN_FILENAME = "MEMORY.md"
@@ -268,15 +269,55 @@ class _CurationToolset(FunctionToolset[AgentDepsT]):
         write_render(JournalStore(directory), md_path, agent_name=self._agent_name)
 
 
-class OverrideToolset(_CurationToolset[AgentDepsT]):
-    """The assistant's ONE curation tool: ``memory_archive_suggestion``.
+# --- expand_memory: resolve a memory line to its source turns --------------
 
-    This is the narrow, modify-only curation channel. It does NOT append to the
-    journal or touch the index — it writes a **pending** intent to the override
-    sidecar (``memory-overrides.jsonl``), which the render pass reflects with a
-    ``*(archive pending review)*`` marker until a reviewer resolves it (archive /
-    tier_change / reject). The assistant remains read-only with respect to the
-    journal and index.
+_MAX_EXPAND_DEPTH = 20
+"""Recursion cap for expand_memory's merge walk (nested merges can chain)."""
+
+
+def _merge_source_ids(source_ref: str) -> list[int]:
+    """Extract journal line ids from a ``merge(#a,#b,...)`` ``source_ref``."""
+    if not source_ref or not source_ref.startswith("merge("):
+        return []
+    return [int(x) for x in re.findall(r"#(\d+)", source_ref)]
+
+
+def _resolve_memory_leaves(
+    by_line: dict[int, MemoryRecord],
+    line_id: int,
+    depth: int = 0,
+) -> list[tuple[int, MemoryRecord]]:
+    """Resolve a journal line to its leaf ``(line, record)`` pairs through merges.
+
+    A record whose ``source_ref`` is ``merge(...)`` expands into its source
+    lines (recursively, depth-capped); a record carrying a real turn ref is a
+    leaf. Unknown line ids and cycles yield nothing (bounded by ``depth``).
+    """
+    if depth > _MAX_EXPAND_DEPTH:
+        return []
+    rec = by_line.get(line_id)
+    if rec is None:
+        return []
+    if (rec.source_ref or "").startswith("merge("):
+        out: list[tuple[int, MemoryRecord]] = []
+        for source_id in _merge_source_ids(rec.source_ref):
+            out.extend(_resolve_memory_leaves(by_line, source_id, depth + 1))
+        return out
+    return [(line_id, rec)]
+
+
+class OverrideToolset(_CurationToolset[AgentDepsT]):
+    """The assistant's memory toolset: ``memory_archive_suggestion`` + ``expand_memory``.
+
+    ``memory_archive_suggestion`` is the narrow, modify-only curation channel. It
+    does NOT append to the journal or touch the index — it writes a **pending**
+    intent to the override sidecar (``memory-overrides.jsonl``), which the render
+    pass reflects with a ``*(archive pending review)*`` marker until a reviewer
+    resolves it (archive / tier_change / reject).
+
+    ``expand_memory`` is a READ tool: given a memory line id it resolves the line
+    (through nested merges) to its source turns + the memory behind each, so the
+    model can chase an aggregated fact to the raw turns without searching first.
     """
 
     def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
@@ -284,6 +325,7 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
         self.add_function(
             self.memory_archive_suggestion, name="memory_archive_suggestion"
         )
+        self.add_function(self.expand_memory, name="expand_memory")
 
     async def memory_archive_suggestion(
         self,
@@ -344,6 +386,46 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
                 "status": "pending_review",
                 "reason": reason,
             }
+
+    async def expand_memory(self, ctx: RunContext[AgentDepsT], line_id: int) -> str:
+        """Expand a memory line into the source turns and memory behind it.
+
+        A memory fact may be an aggregation -- a ``merge(...)`` of several earlier
+        facts, shown as ``[merged: N]`` in the rendered memory view. This tool
+        resolves that line, following nested merges, to the underlying source
+        turns it was extracted from and returns each source's turn ref plus its
+        memory fact. The surfaced memory may itself be the answer; pass any
+        returned ``turn <ref>`` to ``read_turn`` to read the full original turn.
+
+        Args:
+            line_id: The journal line id (the ``#N`` shown at the end of the
+                fact's line in the injected memory block) to expand.
+        """
+        with ctx.tracer.start_as_current_span(
+            "memory.expand", record_exception=False, set_status_on_exception=False
+        ) as span:
+            journal = JournalStore(self._overrides.directory)
+            by_line = {ln: rec for ln, rec in journal.read_all()}
+            leaves = _resolve_memory_leaves(by_line, line_id)
+            if not leaves:
+                return f"No memory found at journal line #{line_id}."
+            if span.is_recording():
+                span.set_attributes(
+                    {
+                        "memory.expand.line": line_id,
+                        "memory.expand.leaves": len(leaves),
+                    }
+                )
+            if len(leaves) == 1:
+                _ln, rec = leaves[0]
+                return f"turn {rec.source_ref} — memory: {rec.fact}"
+            parts = [
+                f"#{line_id} is a merge of {len(leaves)} source lines; "
+                "source turns and memory:"
+            ]
+            for _ln, rec in leaves:
+                parts.append(f"[#{_ln}] turn {rec.source_ref} — memory: {rec.fact}")
+            return "\n".join(parts)
 
 
 class ReviewerResult(TypedDict):
@@ -549,19 +631,28 @@ class ReviewerToolset(_CurationToolset[AgentDepsT]):
                     f"invalid memory type {type!r}; expected one of {sorted(MEMORY_TYPES)}"
                 )
 
-            # (1) Append the canonical merged record. born_on = today (the merge
-            # happens now and the canonical line should be current); source_ref
-            # records exactly which lines it absorbed so it is fully traceable.
+            # (1) Append the canonical merged record. born_on = the NEWEST of the
+            # absorbed sources' born_on dates — a merge is a union of existing
+            # facts, so its recency is the max of theirs (consistent with the
+            # recency-wins rule); falls back to today only if no source has a
+            # date. source_ref records exactly which lines it absorbed so it is
+            # fully traceable.
             from datetime import UTC, datetime
 
             today = datetime.now(UTC).date().isoformat()
+            born_by_id = {
+                line_id: rec.born_on
+                for line_id, rec in self._journal.read_all()
+            }
+            source_dates = [born_by_id[i] for i in ids if born_by_id.get(i)]
+            born_on = max(source_dates) if source_dates else today
             new_id = self._journal.count() + 1
             try:
                 self._journal.append(
                     type=type,
                     fact=fact,
                     tier=tier,
-                    born_on=today,
+                    born_on=born_on,
                     source_ref="merge(" + ",".join(f"#{i}" for i in ids) + ")",
                 )
             except ValueError as exc:

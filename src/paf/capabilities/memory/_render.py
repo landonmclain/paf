@@ -30,6 +30,7 @@ the same bytes.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from ._journal import JournalStore, MemoryRecord
@@ -115,6 +116,23 @@ def _apply_overrides(
     return kept, pending
 
 
+def _merge_count_suffix(record: MemoryRecord) -> str:
+    """Return a ``[merged: N] `` marker for a merged record, else ``""``.
+
+    A record whose ``source_ref`` is ``merge(#a,#b,...)`` is an aggregation the
+    reviewer produced from N source facts; the render marks it so the subject
+    knows it may be a compressed value it can expand (via ``expand_memory``).
+    Kept BEFORE the ``#N`` provenance at the line's end so the reviewer's
+    "the #N shown at the end of each line" addressing is undisturbed.
+    """
+    src = record.source_ref or ""
+    if src.startswith("merge("):
+        ids = re.findall(r"#\d+", src)
+        if ids:
+            return f"[merged: {len(ids)}] "
+    return ""
+
+
 def render_journal_memory(
     store: JournalStore | list[MemoryRecord],
     overrides: dict[int, OverrideState] | None = None,
@@ -154,9 +172,10 @@ def render_journal_memory(
             prov = provenance.get(id(r)) or r.source_ref
             marker = _PENDING_MARKER if id(r) in pending else ""
             lines.append(
-                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}{marker}"
+                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}"
+                f"{_merge_count_suffix(r)}{prov}{marker}"
                 if r.born_on
-                else f"- {_encode(r.fact)}{_SEP}{prov}{marker}"
+                else f"- {_encode(r.fact)}{_SEP}{_merge_count_suffix(r)}{prov}{marker}"
             )
         sections.append(f"## {tier}\n" + "\n".join(lines))
 
@@ -232,9 +251,10 @@ def render_index_memory(
             prov = f"#{ln}" if ln is not None else r.source_ref
             marker = _PENDING_MARKER if ln in pending else ""
             lines.append(
-                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}{prov}{marker}"
+                f"- {_encode(r.fact)}{_SEP}{_date_only(r.born_on)}{_SEP}"
+                f"{_merge_count_suffix(r)}{prov}{marker}"
                 if r.born_on
-                else f"- {_encode(r.fact)}{_SEP}{prov}{marker}"
+                else f"- {_encode(r.fact)}{_SEP}{_merge_count_suffix(r)}{prov}{marker}"
             )
         sections.append(f"## {tier}\n" + "\n".join(lines))
 

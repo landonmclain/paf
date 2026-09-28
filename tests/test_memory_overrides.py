@@ -330,7 +330,7 @@ def test_override_toolset_exposes_one_tool(tmp_path):
     from paf.capabilities.memory._toolset import OverrideToolset
 
     ts = OverrideToolset(OverrideStore(tmp_path))
-    assert set(ts.tools.keys()) == {"memory_archive_suggestion"}
+    assert set(ts.tools.keys()) == {"memory_archive_suggestion", "expand_memory"}
 
 
 def test_override_tool_writes_pending_archive(tmp_path):

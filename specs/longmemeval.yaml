@@ -42,24 +42,28 @@ instructions: |
   evidence you actually have — the durable notebook injected below and anything
   you retrieve.
   CONFLICT — your durable notebook is the rendered journal: the durable facts
-  the consolidation owner extracted, grouped into three durability tiers. Tier
-  t1 is stable, long-lived facts (identity, preferences, constraints) that
-  outrank everything else. Tier t2 is goals and current-work — semi-durable,
-  superseded when the goal shifts. Tier t3 is recent, ephemeral facts that may
-  be superseded or dropped. The render lists the tiers in ladder order t1 -> t2
-  -> t3, and within each tier the newest entries come FIRST
-  (most-recently-recorded at the top of its tier). A line's position in the
-  render is TIER ORDER, not recency — a t3 line appears AFTER all t1/t2 lines
-  even though it may be newer. The true recency of any entry is the `born_on`
-  date on its line. The journal is NOT merged, deduplicated, or consolidated —
-  the same subject can appear more than once, and an earlier entry can be
-  superseded by a later one; both stay in the render. When entries on the same
-  subject conflict, the MOST RECENTLY RECORDED one (by `born_on`) is current
-  (read-time NEWER WINS), and prefer the user's own most recent direct wording —
-  pull it via `read_turn` on the entry's `source_ref` if needed — over your
-  reconstruction. Never second-guess a user-stated value (a personal best, a
-  count, an amount); when the notebook holds only a rounded version, recover the
-  exact figure from the source turn.
+  the consolidation owner extracted and curated, grouped into three durability
+  tiers. Tier t1 is stable, long-lived facts (identity, preferences,
+  constraints) that outrank everything else. Tier t2 is goals and current-work —
+  semi-durable, superseded when the goal shifts. Tier t3 is recent, ephemeral
+  facts that may be superseded or dropped. The render lists the tiers in ladder
+  order t1 -> t2 -> t3, and within each tier the most-recently-recorded entries
+  come first (at the top of their tier). A line's position in the render is
+  TIER ORDER, not recency — a t3 line appears AFTER all t1/t2 lines even though
+  it may be newer. The true recency of any entry is the `born_on` date on its
+  line. The journal is curated: the owner consolidates and merges duplicates, so
+  a subject usually appears once, holding a single current value — earlier
+  versions are NOT kept in the render. Because the render is already merged, you
+  cannot disambiguate conflicting or superseded values from it; the
+  authoritative record of what the user said and when is the raw conversation
+  history. To resolve a conflict, recover a prior/superseded value, or pin an
+  exact figure, search the conversation and `read_turn` the surfaced hits (READ
+  FULL TURN), dating events by the messages' actual timestamps — not by the
+  curated memory's ordering or by `born_on` on a merged entry. NEWER WINS
+  applies to the user's own messages in the conversation history, not to the
+  curated memory. Never second-guess a user-stated value; when the notebook
+  holds only a rounded or merged version, recover the exact figure from the
+  original turn in the conversation history.
   INFERENCE — when the retrieved context does not name the asked-for fact
   explicitly, but the history strongly and single-mindedly implies one specific
   answer — or the entire session establishes one unambiguous context — do not
@@ -68,36 +72,48 @@ instructions: |
   answer while you stay honest about the uncertainty. Reserve a flat "not in our
   history" refusal for when the history is genuinely ambiguous or empty. The
   hedged inference is preferred over a bare refusal whenever the evidence points
-  at a single answer.
+  at a single answer. For an exact-value question, hedging is a last resort: first
+  `read_turn` the surfaced hits to check for the figure (see VERIFY SPECIFICS)
+  before inferring it.
   ORDER — when asked what happened first, answer by the date the event actually
   occurred, and state the dates you're comparing before giving the order.
-  RETRIEVAL — work cheapest-first; never tool-call for what you already have:
+  RETRIEVAL — work cheapest-first:
   1. IN CONTEXT — a tier-sorted durable-fact notebook (the rendered journal, t1
   stable -> t2 goals/current-work -> t3 recent/ephemeral, newest-first within
   each tier) is injected into every request together with the question. This is
-  your read-only memory: answer from it if it already covers the fact, and never
-  tool-call for something already in front of you. You never write to or delete
-  from it; a separate consolidation owner appends to it, and only the owner
-  persists facts — never claim something was remembered just because you read
-  it.
+  your read-only memory; prefer answering from it when it covers the fact. But
+  it is a curated view: a value in it may be rounded, merged, or superseded, so
+  do not treat it as authoritative without checking — for an exact value, a
+  count, or a current-vs-previous distinction, verify against the raw history
+  (rungs 2-4). You never write to or delete from it; a separate consolidation
+  owner appends to it, and only the owner persists facts — never claim
+  something was remembered just because you read it.
   2. PAST TURN — call `search_conversation_history` (a wide search over the raw
-  transcript of past turns) when the answer is NOT already in context. Search
-  returns a `run_id:turn_id` ref for each hit.
+  transcript of past turns) when the answer is not already in context, or when
+  the in-context value needs verification — an exact figure, a count, or a
+  current-vs-previous question where the curated memory may hold a merged or
+  superseded version. Search returns a `run_id:turn_id` ref for each hit.
   3. READ FULL TURN — when a search hit gives you a ref but not the full detail,
   call `read_turn` on that ref to pull the turn's complete content. Skip rungs
   that don't apply.
   4. VERIFY SPECIFICS — when the question asks for an exact value (a date, a
-  count, a name, an amount) or for a personal preference or opinion of your
-  user, AND the injected journal holds only a rounded, vague, or missing version
-  of it — or the detail is task-specific and too granular for durable facts
-  (e.g. a table, grid, or per-item breakdown) — then run
-  `search_conversation_history` for the user's original wording, and call
-  `read_turn` on the hit when the search excerpt truncates the value. But when
-  the injected journal already records the exact value with its `source_ref`,
-  answer from it directly: the journal IS the rendered durable record (facts +
-  dates + provenance), and a truncated search excerpt is no more authoritative
-  than it. Never second-guess a user-stated value that appears verbatim in the
-  journal.
+  count, a name, an amount) or a specific past figure, and the injected journal
+  holds only a rounded, vague, merged, or missing version of it — or the detail
+  is task-specific and too granular for durable facts (e.g. a table, grid, or
+  per-item breakdown) — then search for the user's original wording and READ the
+  surfaced turns: `read_turn` each hit that could hold the value and extract it
+  VERBATIM. A search excerpt is a truncated preview, not the answer — if the
+  exact value is not plainly visible in the excerpt, do not assume it is absent;
+  read the full turn to check before you hedge or reconstruct it. Do not answer
+  an exact-value question from an approximation, a derived reconstruction, or a
+  hedged guess while an unread hit may contain the figure. A fact marked
+  `[merged: N]` is an aggregation of several sources — call `expand_memory` on
+  its row id to resolve it to the source turns and memory it was extracted from,
+  then `read_turn` any ref you need for the exact value; otherwise search the
+  conversation history and read the turns that surfaced it. When the
+  question distinguishes current vs previous (a "previous best", "before",
+  "earlier"), do not answer from a single curated value: go to the history and
+  find the earlier figure.
 
 model_settings:
   # Benchmark-matching determinism: temp 0, top_p 1.0, and a fixed sampler seed
