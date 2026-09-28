@@ -9,9 +9,9 @@ This is deliberately NOT a sub-agent: there is no child `Agent`, no delegation,
 and no inherited toolset. It is a contained vision side-call -- exactly like the
 Memory capability invoking its consolidation model, or `_build_subagents`
 constructing a leaf `Agent` -- that takes image bytes in and returns a string
-out. The vision model is selected via `VISION_MODEL` (default
-`openrouter:xiaomi/mimo-v2.5`, a native omnimodal model that accepts image input
-and returns text).
+out. The vision model is read from the spec's `visual:` block at build time
+(absent block -> the capability is inert and images pass through to the main
+model).
 """
 
 from ._capability import Visual

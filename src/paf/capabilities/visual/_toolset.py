@@ -4,10 +4,11 @@ A single tool that takes a stored screenshot reference (produced by the
 `Visual` capability's ``before_model_request`` hook, which stashes raw
 `screenshot`/`navigate` captures under a `shot_...` ref) plus a text prompt,
 sends the referenced PNG to a vision-capable model, and returns the model's
-text description. The vision model and `pydantic-ai` are loaded lazily at call
-time (via `VISION_MODEL` / `os.getenv`), so the toolset constructs without a
-key and degrades to a clear, model-visible message on a missing model or a
-decode/API error -- the same recoverable-tool convention as `WebToolset`.
+text description. The vision model is passed in at construction (from the
+capability's spec `visual:` model) and `pydantic-ai` is loaded lazily at call
+time, so the toolset constructs without a key and degrades to a clear,
+model-visible message on a missing model or a decode/API error -- the same
+recoverable-tool convention as `WebToolset`.
 
 This is intentionally NOT a sub-agent: no child run, no delegation. It is a
 contained side-call that returns `str(result.output)` straight to the parent
@@ -20,7 +21,6 @@ itself, which keeps a text-only main model from crashing on BinaryContent.
 from __future__ import annotations
 
 import functools
-import os
 from collections.abc import Awaitable, Callable
 from typing import Concatenate, ParamSpec
 
@@ -31,10 +31,6 @@ from paf.degeneration_guard import run_guarded
 from ._store import _store
 
 _P = ParamSpec("_P")
-
-# Default vision model for `describe_screenshot` -- a native omnimodal model that
-# accepts image input and returns text. Override via VISION_MODEL / .env.
-_VISION_MODEL_DEFAULT = "openrouter:xiaomi/mimo-v2.5"
 
 
 def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate signature-preserving decorator; PEP 695 inline type params can't express it
@@ -58,13 +54,8 @@ def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate signature-preserving d
     return wrapper
 
 
-def _vision_model() -> str:
-    """The vision model slug from `VISION_MODEL` (default Xiaomi MiMo-V2.5)."""
-    return os.getenv("VISION_MODEL", _VISION_MODEL_DEFAULT)
-
-
-async def _run_vision(images: list[bytes], prompt: str) -> str:
-    """Send `images` + `prompt` to the vision model and return its text.
+async def _run_vision(model: str, images: list[bytes], prompt: str) -> str:
+    """Send `images` + `prompt` to `model` and return its text.
 
     The one vision side-call, kept here so the capability and toolset never
     duplicate it. The `Agent` and message types are imported lazily so this
@@ -79,7 +70,7 @@ async def _run_vision(images: list[bytes], prompt: str) -> str:
     content: list[TextContent | BinaryContent] = [TextContent(prompt)]
     content.extend(BinaryContent(data=raw, media_type="image/png") for raw in images)
 
-    agent = Agent(_vision_model())
+    agent = Agent(model)
     result = await run_guarded(agent, content)
     return str(result.output)
 
@@ -87,13 +78,14 @@ async def _run_vision(images: list[bytes], prompt: str) -> str:
 class VisualToolset(FunctionToolset):
     """Vision-description tools for an agent.
 
-    Exposes `describe_screenshot`. The vision model is read from `VISION_MODEL`
-    at call time; `pydantic-ai` is imported lazily inside the tool so this
-    module imports without a live key.
+    Exposes `describe_screenshot`. The vision model is passed in at construction
+    (from the Visual capability's spec `visual:` model); `pydantic-ai` is
+    imported lazily inside the tool so this module imports without a live key.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model: str | None = None) -> None:
         super().__init__()
+        self._model = model
         self.add_function(self.describe_screenshot, name="describe_screenshot")
 
     @_recoverable
@@ -117,4 +109,10 @@ class VisualToolset(FunctionToolset):
                 f'"{ref}". Use the ref shown in the [screenshot captured] stub '
                 "text from an earlier browser capture. Do not fabricate a ref."
             )
-        return await _run_vision([images], prompt)
+        if not self._model:
+            return (
+                "describe_screenshot: no vision model is configured for this "
+                "agent (the spec's `visual:` block has no model), so it cannot "
+                "inspect screenshots."
+            )
+        return await _run_vision(self._model, [images], prompt)

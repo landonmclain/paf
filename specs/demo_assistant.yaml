@@ -173,6 +173,17 @@ browser:
   block_private_addresses: false   # local troubleshooting: release the SSRF guard for loopback only
 
 # ---------------------------------------------------------------------------
+# Vision model (lives in the spec — the source of truth). Read by
+# `build_agent` -> `_spec_visual_config` -> the Visual capability's
+# `describe_screenshot` side-call + the before_model_request routing hook.
+#
+# `model` is the vision-capable model that inspects captured screenshots when
+# the main model is text-only. Absent block -> the Visual capability is inert
+# (images pass through to the main model untouched).
+visual:
+  model: openrouter:xiaomi/mimo-v2.5
+
+# ---------------------------------------------------------------------------
 # Per-assistant root scoping. Read
 # by `build_agent` -> `_spec_{filesystem,shell,git,codebase_map}_config` -> the
 # root-bearing builders in build.py. These point each capability at a working

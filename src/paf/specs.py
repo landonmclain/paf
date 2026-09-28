@@ -638,6 +638,34 @@ def _spec_subagents_config(spec_path: Path) -> dict | None:
     return config or None
 
 
+def _spec_visual_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``visual:`` block (vision model slug).
+
+    Shape::
+
+        visual:
+          model: openrouter:xiaomi/mimo-v2.5
+
+    Returns ``{"model": <str>}`` when the block names a model, ``{"model": None}``
+    when a `visual:` block is present but omits `model` (a misconfiguration the
+    builder hard-errors on), or ``None`` when the block is absent / unreadable.
+    Absent -> the Visual capability is inert: no separate vision model, images
+    pass through to the main model untouched.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    block = raw.get("visual") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return None
+    model = block.get("model")
+    if isinstance(model, str) and model.strip():
+        return {"model": model}
+    return {"model": None}
+
+
 def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
     """Every per-capability config block a spec can carry, as build kwargs.
 
@@ -667,6 +695,8 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "mcp_config": _spec_mcp_config(spec_path),
         # Subagent roster + background cap from the spec's `subagents:` block.
         "subagents_config": _spec_subagents_config(spec_path),
+        # Vision model slug from the spec's `visual:` block.
+        "visual_config": _spec_visual_config(spec_path),
     }
 
 

@@ -81,8 +81,8 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Tavily-backed web search + page extraction. Reads TAVILY_API_KEY at call
     # time; fetch_web_page is domain-gated.
     "Web": Web,
-    # Vision-model description of captured screenshots. Reads VISION_MODEL at
-    # call time. Built via build.py.
+    # Vision-model description of captured screenshots. Configured via the spec
+    # `visual:` block (build-time); built via build.py.
     "Visual": Visual,
     # Mobile-first Chromium browser automation over a headless Chromium.
     # `from_spec` AND `get_toolset`. Requires the harness[playwright] extra +

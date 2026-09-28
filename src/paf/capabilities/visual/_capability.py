@@ -5,7 +5,8 @@ paf-owned capability in the standard seam (`AbstractCapability` +
 configured:
 
 1. **Hook (``before_model_request``)** -- the safety net. When the main agent
-   model is text-only (i.e. a separate `VISION_MODEL` is configured), a
+   model is text-only (i.e. a separate vision model is configured via the spec's
+   `visual:` block), a
    screenshot taken by a harness browser tool (`screenshot` / `navigate`)
    arrives as raw `BinaryContent` bytes the text-only model would crash on
    (ModelHTTPError 404 "image input"). The hook intercepts each such captured
@@ -22,18 +23,17 @@ configured:
    vision model exactly what it wants ("is the padding OK?") about a captured
    screenshot reference.
 
-The vision model and `pydantic-ai` are loaded lazily at call time (via
-`VISION_MODEL` / `os.getenv`), so the capability constructs and registers even
-before a key is configured, and the tool reports a clear message rather than
-failing hard when decoding fails or the model call errors. The describe call is
-a contained "image in, text out" side-call -- NOT a sub-agent: no child run, no
-delegation, no inherited tools -- keeping the parent model (deepseek) on its
-pinned, reproducible path.
+The vision model is read from the spec's `visual:` block at build time;
+`pydantic-ai` is loaded lazily at call time, so the capability constructs and
+registers even before a key is configured, and the tool reports a clear message
+rather than failing hard when decoding fails or the model call errors. The
+describe call is a contained "image in, text out" side-call -- NOT a sub-agent:
+no child run, no delegation, no inherited tools -- keeping the parent model
+(deepseek) on its pinned, reproducible path.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -155,14 +155,17 @@ class Visual(AbstractCapability):
     Provides the `describe_screenshot` tool (ask a targeted question about a
     captured screenshot) and the `before_model_request` hook that stashes raw
     capture pixels as refs so a text-only main model never crashes on
-    BinaryContent. When `VISION_MODEL` is unset the hook passes images through
-    untouched (presumed multimodal main model). The vision model and
-    `pydantic-ai` are loaded lazily from the environment at call time.
+    BinaryContent. `model` is the vision model slug from the spec's `visual:`
+    block; when it is unset the capability is inert — the hook passes images
+    through untouched (presumed multimodal main model) and the tool reports a
+    clear message rather than failing hard.
     """
+
+    model: str | None = None
 
     def get_toolset(self) -> VisualToolset:
         """Build and return the visual toolset."""
-        return VisualToolset()
+        return VisualToolset(model=self.model)
 
     async def before_model_request(
         self,
@@ -171,12 +174,13 @@ class Visual(AbstractCapability):
     ) -> ModelRequestContext:
         """Stash captured screenshot pixels as refs when a vision model is set.
 
-        Only active when `VISION_MODEL` is configured -- that is the signal that
-        the main model is text-only and a separate vision backend handles image
-        inspection. When it is unset, images pass through untouched so a
-        genuinely multimodal main model sees them natively.
+        Only active when a vision model is configured (the capability's `model`
+        from the spec `visual:` block) -- that is the signal that the main model
+        is text-only and a separate vision backend handles image inspection.
+        When none is set, images pass through untouched so a genuinely
+        multimodal main model sees them natively.
         """
-        if not os.getenv("VISION_MODEL"):
+        if not self.model:
             return request_context
 
         messages = list(request_context.messages)

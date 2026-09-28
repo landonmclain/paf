@@ -432,26 +432,35 @@ def _build_vault(store, vault_config: dict | None = None) -> _Vault:
     return _Vault(vault_root=root, allow=allow, deny=deny)
 
 
-def _build_visual(store) -> _Visual:
+def _build_visual(store, visual_config: dict | None = None) -> _Visual:
     """Vision routing for captured screenshots (a tool + a before_model_request hook).
 
     `store` is accepted for a uniform builder signature but unused — vision
-    state is just the model slug, read lazily from `VISION_MODEL` at call time
-    (default `openrouter:xiaomi/mimo-v2.5`), so the capability constructs and
-    registers even before a key is configured and the tool reports a clear
-    message rather than failing hard. The capability provides two behaviors:
+    state is just the model slug, read from the spec's `visual:` block
+    (`visual_config`) at build time. The capability provides two behaviors:
 
     - ``describe_screenshot`` tool — the model asks the vision model a TARGETED
       question ("is the padding OK?") about a captured screenshot ref.
-    - ``before_model_request`` hook — when `VISION_MODEL` is set (text-only main
-      model), stashes raw capture pixels as `shot_...` refs and swaps them for
-      text stubs so the text-only model never crashes on BinaryContent. When
-      `VISION_MODEL` is unset the hook passes images through untouched.
+    - ``before_model_request`` hook — when a vision model is configured
+      (`visual.model` set), stashes raw capture pixels as `shot_...` refs and
+      swaps them for text stubs so a text-only model never crashes on
+      BinaryContent. When no vision model is configured the hook passes images
+      through untouched.
 
     A contained image-in/text-out side-call, deliberately NOT a sub-agent: no
     child run, no delegation, no inherited tools.
     """
-    return _Visual()
+    if visual_config is None:
+        # No `visual:` block — the capability is inert: no separate vision
+        # model, images pass through to the main model untouched.
+        return _Visual(model=None)
+    model = visual_config.get("model")
+    if not model:
+        raise ValueError(
+            "Spec declares a `visual:` block but no `model` — the Visual "
+            "capability needs a vision model to route screenshots to."
+        )
+    return _Visual(model=model)
 
 
 def _build_browser(store, browser_config: dict | None = None) -> _Browser:
@@ -848,6 +857,7 @@ def build_runtime_capabilities(
     agent_name: str | None = None,
     on_complete=None,
     subagents_config: dict | None = None,
+    visual_config: dict | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -960,6 +970,10 @@ def build_runtime_capabilities(
                     store, filesystem_config, agent_name, on_complete, subagents_config
                 )
             )
+        elif name == "Visual":
+            # Vision model slug from the spec's `visual:` block. Absent -> the
+            # capability builds inert (images pass through to the main model).
+            capabilities.append(_build_visual(store, visual_config))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

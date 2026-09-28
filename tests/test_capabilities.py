@@ -329,27 +329,24 @@ def test_browser_private_guard_default_and_override() -> None:
 
 
 def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
-    """When VISION_MODEL is set, a screenshot BinaryContent becomes a text stub.
+    """When a vision model is configured, a screenshot BinaryContent becomes a text stub.
 
     A text-only main model must never receive raw pixels (it 404s on image
     input). The hook stashes the bytes and replaces the BinaryContent with a
     `[screenshot captured: shot_...]` stub naming the ref, so the model can call
-    `describe_screenshot` with a targeted question.
+    `describe_screenshot` with a targeted question. The hook is keyed on the
+    capability's `model` (from the spec `visual:` block), not the environment.
     """
     import asyncio
-    import os
 
     from paf.capabilities.visual._capability import Visual
     from paf.capabilities.visual._store import _store
 
     png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-    vis = Visual()
+    vis_on = Visual(model="openrouter:xiaomi/mimo-v2.5")
+    vis_off = Visual()
 
-    def _ctx(messages, *, vision):
-        if vision:
-            os.environ["VISION_MODEL"] = "openrouter:xiaomi/mimo-v2.5"
-        else:
-            os.environ.pop("VISION_MODEL", None)
+    def _ctx(messages):
         return ModelRequestContext(
             model="openrouter:deepseek/deepseek-v4-flash-0731",
             messages=messages,
@@ -367,9 +364,9 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
     )
 
     async def _run() -> None:
-        # VISION_MODEL set -> pixels stashed, stub left behind, ref resolvable.
-        ctx = _ctx([ModelRequest(parts=[tool_return])], vision=True)
-        out = await vis.before_model_request(None, ctx)
+        # Vision model configured -> pixels stashed, stub left behind, ref resolvable.
+        ctx = _ctx([ModelRequest(parts=[tool_return])])
+        out = await vis_on.before_model_request(None, ctx)
         content = out.messages[0].parts[0].content
         assert not any(isinstance(p, BinaryContent) for p in content)
         stub = next(
@@ -384,9 +381,9 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
         ref = stub.content.split("shot_")[1].split("]")[0].strip()
         assert _store.get(f"shot_{ref}") == png
 
-        # VISION_MODEL unset -> passthrough (image preserved for a multimodal main model).
-        ctx2 = _ctx([ModelRequest(parts=[tool_return])], vision=False)
-        out2 = await vis.before_model_request(None, ctx2)
+        # No vision model -> passthrough (image preserved for a multimodal main model).
+        ctx2 = _ctx([ModelRequest(parts=[tool_return])])
+        out2 = await vis_off.before_model_request(None, ctx2)
         content2 = out2.messages[0].parts[0].content
         assert any(isinstance(p, BinaryContent) for p in content2)
 
@@ -397,8 +394,8 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
         user_part = UserPromptPart(
             content=[BinaryContent(data=ascii_png, media_type="image/png")]
         )
-        ctx3 = _ctx([ModelRequest(parts=[user_part])], vision=True)
-        out3 = await vis.before_model_request(None, ctx3)
+        ctx3 = _ctx([ModelRequest(parts=[user_part])])
+        out3 = await vis_on.before_model_request(None, ctx3)
         new_parts = out3.messages[0].parts
         assert len(new_parts) == 1
         assert not any(
