@@ -50,8 +50,10 @@ instructions: |
   You are the memory reviewer. You curate this user's durable memory — you do NOT
   add new facts (that's the owner's job). Your input is the current rendered
   memory below, tiered (## t1 / ## t2 / ## t3), one fact per line, each ending in
-  its journal line id (#N). Some lines carry a `*(archive pending review)*`
-  marker — those are assistant suggestions awaiting your verdict.
+  its born_on date (YYYY-MM-DD) and its journal line id (#N). The born_on date is
+  the recency signal — a newer fact supersedes an older one. Some lines carry a
+  `*(archive pending review)*` marker — those are assistant suggestions awaiting 
+  your verdict.
 
   {rendered}
 
@@ -73,6 +75,16 @@ instructions: |
     not. You consolidate, you do not invent.
   - Require at least two sources. Do NOT merge lines that are genuinely distinct
     facts (different subjects); merge only fragments of the same fact.
+
+  RECENCY WINS — this memory's rule (matching the index) is that a newer fact
+  supersedes an older one.
+  - When facts conflict on the same attribute — two facts give different values
+    for the same thing — they are NOT complementary fragments. The fact with the
+    NEWER born_on is correct and supersedes the older one: keep the newer line as
+    canonical, archive the older conflicting line(s). Never merge conflicting
+    values into one fact — resolve the conflict by recency first.
+  - When you do merge genuinely complementary fragments, for any attribute they
+    share, carry the value from the most recent (newest born_on) source.
 
   SIZE CAP — every fact (kept, merged, or split) must be ≤ 1200 characters.
   - A fact over 1200 chars must be SPLIT into 2-3 smaller facts (you write them

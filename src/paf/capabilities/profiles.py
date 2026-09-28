@@ -102,7 +102,7 @@ DEMO_PROFILE = AgentProfile(
         # "Secrets",
         # "Guardrails",
         # "ToolGating",
-        "MCP",  # experimental — enabled in the DEMO sandbox, absent from assistant
+        # "MCP",  # experimental — enabled in the DEMO sandbox, absent from assistant
     ),
 )
 

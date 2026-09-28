@@ -70,11 +70,11 @@ services:
       LANGFUSE_INIT_ORG_NAME: Landon
       LANGFUSE_INIT_PROJECT_ID: paf-project
       LANGFUSE_INIT_PROJECT_NAME: paf-framework
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: lf_pk_test_paf
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: lf_sk_test_paf
-      LANGFUSE_INIT_USER_EMAIL: you@example.com
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL}
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD}
-      LANGFUSE_INIT_USER_NAME: Landon McLain
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME}
     healthcheck:
       test: ["CMD-SHELL", "wget --spider -q \"http://$(hostname):3000/api/public/health\""]
       interval: 5s
