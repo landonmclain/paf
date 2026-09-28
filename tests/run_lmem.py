@@ -771,6 +771,11 @@ def main(argv: list[str] | None = None) -> dict:
         # gating below always sees `restored` / `fresh_memory` bound, even when
         # MEMORY is off (then no durable memory exists -> owner enabled).
         fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
+        # LME_NO_REVIEWER=1 skips the reviewer pass below (extractor-only
+        # memory, no archive/merge/retier curation) — the reviewer ablation
+        # arm. Requires PAF_FRESH_MEMORY=1 so memory is regenerated without
+        # the reviewer (existing durable snapshots have curation baked in).
+        no_reviewer = bool(os.environ.get("LME_NO_REVIEWER"))
         restored = 0
         if MEMORY:
             from paf.capabilities.memory._view import JournalViewStore
@@ -857,20 +862,28 @@ def main(argv: list[str] | None = None) -> dict:
                 # Reviewer pass: curate the rendered memory (archive stale
                 # facts, merge fragments, retier) before recall. Reads the
                 # render just written above; re-renders after each verdict.
-                from paf.capabilities.memory._overrides import OverrideStore
-                from paf.capabilities.memory._review import review
-
-                _verdicts = asyncio.run(
-                    review(
-                        str(mem_dir),
-                        overrides=OverrideStore(mem_dir),
-                        agent_name="assistant",
+                # LME_NO_REVIEWER=1 skips this (extractor-only memory).
+                if no_reviewer:
+                    print(
+                        f"[lmem]   q{qi} LME_NO_REVIEWER=1 -> skipped reviewer "
+                        f"(extractor-only memory)",
+                        flush=True,
                     )
-                )
-                print(
-                    f"[lmem]   q{qi} reviewer issued {_verdicts} verdicts",
-                    flush=True,
-                )
+                else:
+                    from paf.capabilities.memory._overrides import OverrideStore
+                    from paf.capabilities.memory._review import review
+
+                    _verdicts = asyncio.run(
+                        review(
+                            str(mem_dir),
+                            overrides=OverrideStore(mem_dir),
+                            agent_name="assistant",
+                        )
+                    )
+                    print(
+                        f"[lmem]   q{qi} reviewer issued {_verdicts} verdicts",
+                        flush=True,
+                    )
                 _persist_durable_memory(q["question_id"], mem_dir)
 
         # ---- Recall: cold-start the question -------------------------

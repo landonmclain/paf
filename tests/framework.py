@@ -217,11 +217,20 @@ def _build_agent(
         # lets one agent serve every question's notebook without a rebuild.
         # For a single-conversation runner `_CURRENT_MEMORY_DIR` stays
         # None so the store defaults to `mem_dir` as before.
+        from paf.capabilities.memory._overrides import OverrideStore as _OverrideStore
         from paf.capabilities.memory._view import JournalViewStore as _JournalViewStore
 
         def _mem_store(_ctx):
             root = _CURRENT_MEMORY_DIR or mem_dir
             return _JournalViewStore(root)
+
+        # The subject carries OverrideToolset (memory_archive_suggestion +
+        # expand_memory) so it can chase a [merged: N] fact to its source turns.
+        # overrides is checked first in get_toolset (expose_tools=False only
+        # gates the journal-append/plain-inject branches), and the recall agent
+        # is rebuilt per question, so a static OverrideStore at the per-question
+        # dir lets expand_memory read that question's journal.
+        overrides_store = _OverrideStore(_CURRENT_MEMORY_DIR or mem_dir)
 
         caps.append(
             Memory(
@@ -229,10 +238,11 @@ def _build_agent(
                 store_resolver=_mem_store,
                 agent_name="assistant",
                 inject_memory=True,
-                # The recall/assistant carries NO memory tools: the journal-
-                # rendered notebook is injected in-context, and the recall
-                # ladder is search_conversation_history/read_turn (Conversation-
-                # Search), not memory tools. Inject-only memory.
+                # The journal-rendered notebook is injected in-context and the
+                # recall ladder is search_conversation_history/read_turn; the
+                # only memory tools are the OverrideToolset read/curation pair
+                # above (expand_memory + archive suggestion).
+                overrides=overrides_store,
                 expose_tools=False,
                 # The journal view is a finite, curated render of the journal —
                 # never a growing legacy notebook. Inject it WHOLE: the
