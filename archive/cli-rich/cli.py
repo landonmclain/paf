@@ -1,4 +1,8 @@
-"""Interactive paf CLI — streams agent turns inside Rich panels (tool activity
+"""ARCHIVED 2026-09-29 — superseded by ``ui/chat.py`` (inline scrollback CLI:
+Session-owned turns, Ctrl-C cancel, background notify, markdown, piped one-shot
+mode). Kept for reference; not maintained. Paths below are pre-archive.
+
+Interactive paf CLI — streams agent turns inside Rich panels (tool activity
 in a fit-width "tools" box above the Markdown-rendered assistant answer, both
 redrawn per token via `Live`), with a persistent right-hand sidebar showing
 background processes and the model's current plan.

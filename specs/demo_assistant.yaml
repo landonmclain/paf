@@ -1,7 +1,7 @@
 # Demo/live-testing agent spec — the "EVERYTHING" sandbox.
 #
 # The surface for building out and tuning the FULL stack in the CLI (`python
-# ui/cli.py demo_assistant`): persistence, recall, durable memory (journal),
+# ui/chat.py demo_assistant`): persistence, recall, durable memory (journal),
 # and context compaction.
 #
 # The `demo` profile (src/paf/capabilities/profiles.py) allowlists the harness
@@ -13,7 +13,7 @@ name: demo_assistant
 
 # The profile (capability allowlist) this spec belongs to. Read by the CLI
 # (`resolve_profile_name`) to choose the default profile for a one-arg
-# invocation like `python ui/cli.py demo_assistant`.
+# invocation like `python ui/chat.py demo_assistant`.
 profile: demo
 
 # Provider-qualified model string. Same default as the assistant: DeepSeek V4

@@ -69,10 +69,15 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 
 ## Other entry points
 
-- **CLIs:** `ui/cli2.py demo_assistant` = demo profile (fs/shell/git/web);
-  bare `ui/cli2.py` = assistant profile (search_conversation_history + read_turn
-  only, by design). `ui/cli.py` is the base for the streaming StepStream/
-  TurnStream lives, and the runner for the **contextbench** profile.
+- **CLI:** `ui/chat.py [agent] [--new | --id CID] [--profile P]` — inline chat
+  that streams into normal scrollback (default agent `demo_assistant`, lane
+  `chat-<agent>`). Runs turns in-process via `Session.start_turn` — it does NOT
+  need `paf-sse` running. Ctrl-C cancels a turn; background shell/subagent
+  completions stream their follow-up turn at the prompt; `/help` lists slash
+  commands. Piped stdin = one-shot (whole stdin is one message, then exit). It
+  needs a real tty for interactive mode — to drive it from an agent, pipe the
+  prompt in. Also the runner for the **contextbench** profile. The old Rich
+  `Live` CLI is archived at `archive/cli-rich/cli.py`.
 - **Benchmarks:** `tests/run_lmem.py` (LongMemEval) — **read `tests/AGENTS.md`
   first**; live LLM, costs real tokens. Run as a module from the repo root
   (`PYTHONPATH= .venv/bin/python -m tests.run_lmem`) so `tests.framework`
@@ -85,7 +90,7 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 
 The benchmark that tests **paf's codebase-map as NAVIGATION over search**. Gold
 contexts are exact line-ranges required to produce a passing fix. Current phase:
-a **hand-driven live run** on one easy instance (`flask-5014`) via cli.py, the map
+a **hand-driven live run** on one easy instance (`flask-5014`) via chat.py, the map
 vs cold-start-shell A/B. Not yet the standalone `tests/run_lmem.py`-style harness
 — that comes later.
 
@@ -99,16 +104,18 @@ the model MUST navigate purely by the codebase-map ladder.
 
 ```bash
 cd /home/alice/projects/Personal/pydantic-agent-framework
-# 1. Bump CONV_EPOCH (ui/cli.py) by 1 → fresh conversation lane (no resume)
-# 2. Run:
-set -a && . ./.env && set +a && PYTHONPATH= .venv/bin/python ui/cli.py contextbench
-# 3. Send the flask-5014 task as the user message (NOT baked into the spec)
-# 4. Check the trace in Langfuse/ClickHouse (project cmsi71sj00003mp07im3de6ke)
+# 1. Run on a fresh conversation lane (--new = no resume of prior turns):
+set -a && . ./.env && set +a && PYTHONPATH= .venv/bin/python ui/chat.py contextbench --new
+# 2. Send the flask-5014 task as the user message (NOT baked into the spec)
+#    — or one-shot: cat task.md | PYTHONPATH= .venv/bin/python ui/chat.py contextbench --new
+# 3. Check the trace in Langfuse/ClickHouse (project cmsi71sj00003mp07im3de6ke)
 ```
 
 The profile is `contextbench`; `resolve_profile_name()` reads the spec's
-`profile:` key so a one-arg `cli.py contextbench` picks the RIGHT (Memory-less)
-profile — no hardcoded fallback needed. `CONV_EPOCH` gates conversation resets.
+`profile:` key so a one-arg `chat.py contextbench` picks the RIGHT (Memory-less)
+profile — no hardcoded fallback needed. `--new` mints a fresh lane id
+(`chat-contextbench-<hex>`, printed at startup) per run/arm — it replaces the old
+cli.py `CONV_EPOCH` bump; `--id <cid>` reopens a specific run's lane.
 
 **Why this tests NAVIGATION, and what the ladder expects:**
 

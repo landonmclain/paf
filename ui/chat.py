@@ -15,6 +15,7 @@ their follow-up turn streams here even while you sit at the prompt.
 
 Usage:
     python ui/chat.py [agent] [--profile P] [--id CID | --new] [--window N]
+    cat task.md | python ui/chat.py contextbench --new   # one-shot: stdin = one message
 
 Keys: Enter sends · Alt+Enter (or Esc, Enter) inserts a newline · Ctrl-C
 during a turn cancels it (twice = hard stop) · Ctrl-D exits. /help for commands.
@@ -403,13 +404,16 @@ class ChatApp:
 
         hist = _DATA / "chat" / "input-history"
         hist.parent.mkdir(parents=True, exist_ok=True)
-        self.ps: PromptSession = PromptSession(
-            history=FileHistory(str(hist)),
-            key_bindings=kb,
-            multiline=True,
-            prompt_continuation="  ",
-            bottom_toolbar=self._toolbar,
-        )
+        # No line editor for piped input (one-shot mode never prompts).
+        self.ps: PromptSession | None = None
+        if sys.stdin.isatty():
+            self.ps = PromptSession(
+                history=FileHistory(str(hist)),
+                key_bindings=kb,
+                multiline=True,
+                prompt_continuation="  ",
+                bottom_toolbar=self._toolbar,
+            )
         get_agent_emitter(agent).on_any(self._on_process)
 
     # -- session lifecycle -----------------------------------------------------
@@ -517,7 +521,7 @@ class ChatApp:
         await self.refresh_status()
 
     def _invalidate(self) -> None:
-        if self.ps.app.is_running:
+        if self.ps is not None and self.ps.app.is_running:
             self.ps.app.invalidate()
 
     def _toolbar(self) -> HTML:
@@ -552,7 +556,7 @@ class ChatApp:
             return
         self.notices.append(f"background {run_id} {'finished' if ok else 'failed'}")
         started = session.notify(_notify_message(run_id, detail))
-        if started is None and self.ps.app.is_running:
+        if started is None and self.ps is not None and self.ps.app.is_running:
             # Idle at the prompt: stash the draft, pop the prompt, stream it.
             self.draft = self.ps.default_buffer.text
             self.ps.default_buffer.reset()
@@ -607,6 +611,14 @@ class ChatApp:
     # -- main loop -----------------------------------------------------------
 
     async def run(self) -> int:
+        if not sys.stdin.isatty():
+            # Piped input (e.g. `cat task.md | chat.py contextbench --new`):
+            # the whole of stdin is one message; stream the turn and exit.
+            prompt = sys.stdin.read().strip()
+            if prompt:
+                await self.send(prompt)
+            return 0
+        assert self.ps is not None
         _out(
             f"{DIM}Enter sends · Alt+Enter newline · Ctrl-C cancels a turn · /help{RESET}\n"
         )

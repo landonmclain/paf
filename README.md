@@ -121,8 +121,9 @@ memory-write tool (recording is the owner's job).
 
 All UIs drive the same `Session`/`Runtime` underneath.
 
-- `ui/cli.py` — Rich live render with streaming thinking/tool status and a
-  background-process sidebar.
+- `ui/chat.py` — inline terminal chat: streams thinking, tool calls, and a
+  markdown-rendered answer into normal scrollback, with a bottom toolbar for
+  background processes and plan progress. Runs in-process (no server needed).
 - `ui/sse.py` — SSE server exposing the background-process feed.
 - `ui/web.py` — **Gradio web UI.** Serves a single-lane conversation for the
   chosen agent; defaults to `demo_assistant`.
@@ -166,7 +167,7 @@ src/paf/
   specs.py        spec loader (agent name → YAML → Agent)
   config.py       pydantic-settings config + spec/root anchoring
 specs/            declarative agent specs (*.yaml)
-ui/               cli.py (Rich live render), sse.py (background-process feed),
+ui/               chat.py (inline terminal chat), sse.py (background-process feed),
                   web.py (Gradio)
 tests/            unit tests + benchmark harness (run_lmem, ...)
 ```
@@ -181,9 +182,9 @@ cp .env.example .env        # OPENROUTER_API_KEY + optional Langfuse keys
 PYTHONPATH= .venv/bin/pip install -e .   # or: uv sync
 
 # interactive CLI — defaults to the demo_assistant "everything sandbox"
-python ui/cli.py
-# or the leaner production assistant
-python ui/cli.py assistant
+python ui/chat.py
+# or the leaner production assistant, on a fresh conversation
+python ui/chat.py assistant --new
 ```
 
 Prepend `set -a && . ./.env && set +a;` to export secrets for the runner. The
