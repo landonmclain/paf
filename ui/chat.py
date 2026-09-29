@@ -2,7 +2,9 @@
 
 No full-screen UI and no redrawn frames: the turn prints top-to-bottom as it
 streams (dim thinking, one line per tool call, then the answer), so the
-terminal's own scrollback, search, and copy/paste all work. Input is a
+terminal's own scrollback, search, and copy/paste all work. The answer streams
+raw token-by-token and each finished markdown block is swapped in place for
+its rendered form (``MarkdownStream``; ``/markdown`` toggles). Input is a
 prompt_toolkit line editor with a bottom toolbar showing background processes
 and plan progress.
 
@@ -29,7 +31,7 @@ import signal
 import sys
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
@@ -43,6 +45,9 @@ from pydantic_ai.messages import (
     ToolCallPart,
     UserPromptPart,
 )
+from rich.cells import cell_len
+from rich.console import Console, JustifyMethod
+from rich.markdown import Heading, Markdown, MarkdownElement
 
 from paf.background_processes._events import get_agent_emitter
 from paf.capabilities import PROFILES
@@ -55,6 +60,7 @@ from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnHandle
 DEFAULT_AGENT = "demo_assistant"
 _DATA = PROJECT_ROOT / "data"
 _DATE_STAMP = re.compile(r"^\[date: [^\]]*\]\s*")
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _ACTIVE = {"queued", "running", "processing"}
 _COORDINATOR_JOBS = {"consolidation", "review", "thread_summarize"}
 _NOTIFY = object()  # prompt result: a background notify started a turn
@@ -93,6 +99,133 @@ def _safe(s: str) -> str:
     return s.encode("utf-8", errors="replace").decode("utf-8")
 
 
+# --- markdown ------------------------------------------------------------------
+
+
+class _LeftHeading(Heading):
+    LEVEL_ALIGN: ClassVar[dict[str, JustifyMethod]] = {
+        **Heading.LEVEL_ALIGN,
+        "h1": "left",
+    }
+
+
+class _Markdown(Markdown):
+    elements: ClassVar[dict[str, type[MarkdownElement]]] = {
+        **Markdown.elements,
+        "heading_open": _LeftHeading,
+    }
+
+
+def render_markdown(text: str) -> str:
+    """Render one finished markdown block to ANSI text (Rich as a formatter only)."""
+    console = Console(
+        width=_width(), force_terminal=_COLOR, no_color=not _COLOR, highlight=False
+    )
+    with console.capture() as cap:
+        console.print(_Markdown(text, code_theme="ansi_dark", hyperlinks=False))
+    # Rich pads lists/code/tables with blank rows; blocks are spaced by the
+    # stream (one blank line between), so trim blank edge rows.
+    lines = cap.get().split("\n")
+    blank = [not _ANSI.sub("", ln).strip() for ln in lines]
+    if all(blank):
+        return ""
+    first = blank.index(False)
+    last = len(blank) - blank[::-1].index(False)
+    return "\n".join(lines[first:last]) + "\n"
+
+
+def _block_end(text: str) -> int | None:
+    """Index where the first finished markdown block ends, or None if still open.
+
+    A block ends at a blank line or a closing code fence; text before an opening
+    fence is its own block. Blank lines inside a fence don't end it. Only
+    complete lines count, so a half-streamed line never splits a block.
+    """
+    fence: str | None = None
+    pos = 0
+    for line in text.splitlines(keepends=True):
+        if not line.endswith("\n"):
+            return None
+        s = line.strip()
+        if fence is not None:
+            if s.startswith(fence):
+                return pos + len(line)
+        elif s.startswith(("```", "~~~")):
+            if pos:
+                return pos
+            fence = s[:3]
+        elif not s and pos:
+            return pos
+        pos += len(line)
+    return None
+
+
+def _rows(text: str, width: int) -> int:
+    """Terminal rows ``text`` occupies above the cursor (which sits at its end)."""
+    lines = text.split("\n")
+    up = sum(max(1, -(-cell_len(ln) // width)) for ln in lines[:-1])
+    return up + max(0, -(-cell_len(lines[-1]) // width) - 1)
+
+
+class MarkdownStream:
+    """Stream answer text raw, then swap each finished block for its rendering.
+
+    Tokens print as they arrive. When a block completes, the raw rows are
+    erased (cursor-up + clear-to-end) and the rendered block is printed in
+    their place — so output stays in normal scrollback with no redraw loop.
+    A block taller than the screen can't be erased (its top has scrolled
+    off), so it stays raw. With ``enabled=False`` (or no tty) text passes
+    through untouched.
+    """
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled and _COLOR
+        self.tail = ""  # text of the unfinished block(s)
+        self.shown = ""  # prefix of ``tail`` already printed raw
+
+    @property
+    def col0(self) -> bool:
+        return not self.shown or self.shown.endswith("\n")
+
+    def feed(self, text: str) -> None:
+        text = text.replace("\t", "    ")
+        if not self.enabled:
+            self.shown += text
+            _out(text)
+            return
+        self.tail += text
+        if not self.shown:
+            self.tail = self.tail.lstrip("\n")
+        while (cut := _block_end(self.tail)) is not None:
+            block, self.tail = self.tail[:cut], self.tail[cut:].lstrip("\n")
+            self._emit(block, last=False)
+        _out(self.tail[len(self.shown) :])
+        self.shown = self.tail
+
+    def finish(self) -> None:
+        if self.enabled and self.tail.strip():
+            self._emit(self.tail, last=True)
+        elif not self.col0:
+            _out("\n")
+        self.tail = self.shown = ""
+
+    def _emit(self, block: str, *, last: bool) -> None:
+        up = _rows(self.shown, _width()) if self.shown else 0
+        if up >= shutil.get_terminal_size((100, 24)).lines - 1:
+            # Its top has scrolled off: keep the raw text, just finish printing it.
+            rest = block[len(self.shown) :]
+            _out(rest)
+            if not (rest or self.shown).endswith("\n"):
+                _out("\n")
+        else:
+            if self.shown:
+                _out("\r" + (f"\x1b[{up}A" if up else "") + "\x1b[J")
+            _out(render_markdown(block.strip("\n")))
+        if not last:
+            _out("\n")
+        self.shown = ""
+
+
 # --- turn rendering ----------------------------------------------------------
 
 
@@ -106,8 +239,9 @@ class TurnPrinter:
     shows whether a ``ToolError`` for it follows.
     """
 
-    def __init__(self, show_thinking: bool) -> None:
+    def __init__(self, show_thinking: bool, markdown: bool) -> None:
         self.show_thinking = show_thinking
+        self.md = MarkdownStream(markdown)
         self.mode: str | None = None  # "thinking" | "text" | "tool"
         self.col0 = True  # cursor at column 0
         self.open_step: str | None = None  # tool whose line is still open
@@ -121,6 +255,9 @@ class TurnPrinter:
             self.col0 = s.endswith("\n")
 
     def _newline(self) -> None:
+        if self.mode == "text":
+            self.md.finish()  # render the answer's last block
+            self.mode, self.col0 = "text-done", True
         if self.open_step is not None:
             self.open_step = None
         if not self.col0:
@@ -175,7 +312,8 @@ class TurnPrinter:
                 if self.mode is not None:
                     self._write("\n")
                 self.mode = "text"
-            self._write(_safe(ev.text))
+            self.md.feed(_safe(ev.text))
+            self.col0 = self.md.col0
         elif ev.kind == "tool_call":
             self._newline()
             name = ev.tool_name or "?"
@@ -221,7 +359,7 @@ def print_history(history: list[Any], turns: int | None = None) -> None:
                     )
                     _out(f"  {DIM}● {part.tool_name}({args}){RESET}\n")
                 elif isinstance(part, TextPart) and part.content.strip():
-                    _out(f"\n{_safe(part.content.strip())}\n")
+                    _out(f"\n{render_markdown(_safe(part.content.strip()))}")
 
 
 # --- the app ------------------------------------------------------------------
@@ -243,6 +381,7 @@ class ChatApp:
         self.session: Session | None = None
         self.scoped = cid
         self.show_thinking = True
+        self.markdown = True
         self.draft = ""
         self.notices: list[str] = []
         # process row id -> (label, status, detail)
@@ -427,7 +566,7 @@ class ChatApp:
         loop = asyncio.get_running_loop()
         self._turn, self._sigints = handle, 0
         loop.add_signal_handler(signal.SIGINT, self._on_sigint)
-        printer = TurnPrinter(self.show_thinking)
+        printer = TurnPrinter(self.show_thinking, self.markdown)
         try:
             async for ev in handle.subscribe():
                 printer.feed(ev)
@@ -540,6 +679,9 @@ class ChatApp:
         elif cmd == "/thinking":
             self.show_thinking = not self.show_thinking
             _out(f"thinking {'shown' if self.show_thinking else 'hidden'}\n")
+        elif cmd == "/markdown":
+            self.markdown = not self.markdown
+            _out(f"markdown {'rendered' if self.markdown else 'raw'}\n")
         elif cmd == "/memory":
             _show_memory()
         elif cmd == "/debug":
@@ -572,6 +714,7 @@ _HELP = """\
   /plan            show the model's current plan
   /tasks           show background processes
   /thinking        toggle showing reasoning
+  /markdown        toggle rendering answers as markdown (vs raw text)
   /memory          show durable memory (MEMORY.md)
   /debug           session plumbing: model, profile, store
   /quit            exit (or Ctrl-D)
