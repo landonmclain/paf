@@ -1979,6 +1979,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "gradio" },
+    { name = "prompt-toolkit" },
     { name = "pydantic-ai" },
     { name = "pydantic-graph" },
     { name = "pydantic-settings" },
@@ -2003,6 +2004,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "gradio", specifier = ">=6,<7" },
+    { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "pydantic-ai" },
     { name = "pydantic-graph" },
     { name = "pydantic-settings" },

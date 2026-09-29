@@ -26,6 +26,8 @@ dependencies = [
     # changes — i.e. no package the repo's own code imports may be ad-hoc only.
     "pyyaml",
     "rich",
+    # ui/chat.py's line editor + bottom toolbar (was transitive-only).
+    "prompt-toolkit>=3.0",
     "python-dotenv",
     "typing-extensions",
     # The Web capability (src/paf/capabilities/web/) — search_web_docs /
