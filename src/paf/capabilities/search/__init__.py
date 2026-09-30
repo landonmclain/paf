@@ -1,17 +1,4 @@
-"""paf-owned full-context search -- the wide `search_conversation_history` tool.
-
-This package owns the "last-resort" rung of the recall ladder so the WHOLE
-recall surface shares one strip convention. The harness `ConversationSearch`
-renders `UserPromptPart` blocks verbatim and has no marker-aware `TextContent`
-exclusion, so injected `<turn-index>` / `<memory>` blocks leaked into its BM25
-corpus. Here the corpus is rendered with the injected-artifact strip
-(`_render`), so search never surfaces derived artifacts.
-
-- `_ranking` — dependency-free BM25 core (originally copied from the harness, MIT).
-- `_render` — message rendering with the injected-artifact strip.
-- `_toolset` — the `search_conversation_history` tool.
-- `_capability` — the `ConversationSearch` capability (drop-in for the harness).
-"""
+"""paf-owned full-context search -- the wide `search_conversation_history` tool."""
 
 from __future__ import annotations
 

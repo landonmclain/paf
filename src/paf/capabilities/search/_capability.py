@@ -86,6 +86,14 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
     add_instructions: bool = False
     """Emit a short instruction telling the model the recall tool exists."""
 
+    include_read_turn: bool = True
+    """Expose the `read_turn` full-turn expansion tool alongside search.
+
+    When `False`, only `search_conversation_history` is registered (a pure-BM25
+    arm that must answer from truncated excerpts) and the read_turn-keyed search
+    loop guard is bypassed, since `read_turn` no longer exists to clear its streak.
+    """
+
     def get_toolset(self) -> AgentToolset[AgentDepsT] | None:
         """Provide the `search_conversation_history` tool over the source."""
         return ConversationSearchToolset(
@@ -96,6 +104,7 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
             bm25_k1=self.bm25_k1,
             bm25_b=self.bm25_b,
             scope=self.scope,
+            include_read_turn=self.include_read_turn,
         )
 
     def get_instructions(self) -> AgentInstructions[AgentDepsT] | None:

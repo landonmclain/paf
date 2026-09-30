@@ -12,16 +12,28 @@ from pydantic_ai.exceptions import (
     UnexpectedModelBehavior,
     UsageLimitExceeded,
 )
-from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent
+from pydantic_ai.messages import (
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    PartDeltaEvent,
+    ThinkingPartDelta,
+)
 from pydantic_ai_harness.step_persistence import FileStepStore, StepPersistence
 
 from paf.capabilities import AgentProfile
 from paf.capabilities.search import ConversationSearch, SnapshotHistorySource
+from paf.degeneration_guard import DegenerationError, DegenerationGuard, ToolCallGuard
 from paf.observability.instrumentation import (
     _json_dumps,
     root_span,
 )
-from paf.specs import load_agent_spec
+from paf.specs import (
+    _spec_search_config,
+    _spec_search_only_instructions,
+    _spec_search_only_no_readturn_instructions,
+    get_spec_path,
+    load_agent_spec,
+)
 
 # ---------------------------------------------------------------------------
 # Test profile
@@ -150,6 +162,11 @@ def _openrouter_model_settings(
 # arm. Set MEMORY=0 for a no-memory ablation run (`MEMORY=0 ...`).
 MEMORY = os.environ.get("MEMORY", "1") == "1"
 
+# No-read_turn knob: NO_READ_TURN=1 exposes search WITHOUT the read_turn
+# full-turn expansion tool — a pure-BM25-truncated floor arm. Only meaningful
+# with MEMORY=0 (search-only); selects the search_only_no_readturn prompt.
+NO_READ_TURN = os.environ.get("NO_READ_TURN", "0") == "1"
+
 # Per-question memory store for the running question (run_lmem only). The
 # subject agent is built once but must read the SAME per-question notebook the
 # consolidation owner writes. run_lmem sets this to `<memory_dir> /
@@ -189,6 +206,35 @@ def _build_agent(
     by the runner (``run_lmem``) at seed time over the full haystack.
     """
     spec = load_agent_spec("longmemeval")
+    # The spec's `search:` block drives the recall knobs (context_lines /
+    # max_matches), so tuning the benchmark prompt lands in the spec, not here.
+    # scope stays hardcoded "conversation" (each LME question runs in its own
+    # isolated conversation) — deliberately not spec-driven.
+    search_cfg = _spec_search_config(get_spec_path("longmemeval")) or {}
+    # Prompt switch: the memory arm uses the spec's `instructions:` (the
+    # notebook/CONFLICT-tier prompt); the MEMORY=0 search-only arm uses the spec's
+    # `search_only_instructions:` (pure-retrieval, no notebook content). A
+    # search-only run hard-errors if that block is missing so it can never
+    # silently reuse the memory prompt.
+    if MEMORY:
+        system_prompt = spec.instructions
+    else:
+        if NO_READ_TURN:
+            system_prompt = _spec_search_only_no_readturn_instructions(
+                get_spec_path("longmemeval")
+            )
+            if system_prompt is None:
+                raise RuntimeError(
+                    "NO_READ_TURN=1 run requires a `search_only_no_readturn_instructions:` "
+                    "block in specs/longmemeval.yaml; refusing to reuse the read_turn prompt."
+                )
+        else:
+            system_prompt = _spec_search_only_instructions(get_spec_path("longmemeval"))
+            if system_prompt is None:
+                raise RuntimeError(
+                    "MEMORY=0 search-only run requires a `search_only_instructions:` "
+                    "block in specs/longmemeval.yaml; refusing to reuse the memory prompt."
+                )
     source = SnapshotHistorySource(store)
     caps = [
         StepPersistence(store=store),
@@ -199,6 +245,9 @@ def _build_agent(
             source=source,
             scope="conversation",
             add_instructions=False,
+            context_lines=search_cfg.get("context_lines", 5),
+            max_matches=search_cfg.get("max_matches", 10),
+            include_read_turn=not NO_READ_TURN,
         ),
     ]
     if MEMORY:
@@ -259,7 +308,7 @@ def _build_agent(
         name="locomo-subject",
         # Single system prompt owns all retrieval guidance (ladder + answer
         # rules + read-only memory contract). Capability instructions are off.
-        system_prompt=spec.instructions,
+        system_prompt=system_prompt,
         capabilities=caps,
         model_settings=spec.model_settings,
     )
@@ -329,7 +378,31 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                         conversation_id=cid,
                         usage_limits=UsageLimits(**_ul),
                     ) as es:
+                        # Degeneration guards for the read_turn-less arm
+                        # (NO_READ_TURN=1): a stuck pure-BM25 loop shows up as
+                        # the model re-issuing the same search (ToolCallGuard)
+                        # or narrating in a thinking loop (DegenerationGuard).
+                        # They fire far sooner than the 50-request bender, which
+                        # stays as the builtin safety backstop.
+                        think_guard = DegenerationGuard() if NO_READ_TURN else None
+                        tool_guard = ToolCallGuard() if NO_READ_TURN else None
                         async for event in es:
+                            if think_guard is not None and tool_guard is not None:
+                                if isinstance(event, FunctionToolCallEvent):
+                                    tg = tool_guard.add_tool_call(
+                                        str(event.part.tool_name or ""),
+                                        event.part.args,
+                                    )
+                                    if tg is not None:
+                                        raise DegenerationError(tg)
+                                elif isinstance(event, PartDeltaEvent) and isinstance(
+                                    event.delta, ThinkingPartDelta
+                                ):
+                                    rg = think_guard.stream_thinking(
+                                        event.delta.content_delta or ""
+                                    )
+                                    if rg is not None:
+                                        raise DegenerationError(rg)
                             if isinstance(event, FunctionToolCallEvent):
                                 tools.append(str(event.part.tool_name or ""))
                             elif isinstance(event, FunctionToolResultEvent):
@@ -372,6 +445,28 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     repaired = _repair_dangling_tool_calls(
                         history, repair_last_response=True
                     )
+                    res = await cutoff_agent.run(
+                        "Conclude your answer now, based only on the context above.",
+                        message_history=repaired,
+                    )
+                    text = res.output
+                    usage["requests"] = len(history) if history else 1
+
+                except DegenerationError:
+                    # Degeneration guard fired (thinking loop / exact tool-call
+                    # repeat) on the read_turn-less arm: the subject is stuck
+                    # re-searching, not converging. Like the bender handlers,
+                    # don't let one question fail the turn — force a graceful
+                    # answer from the captured history via the zero-tool fallback.
+                    bailed = True  # noqa: F841  # read via `nonlocal bailed` -> returned in `out`
+                    try:
+                        from pydantic_ai._agent_graph import _repair_dangling_tool_calls
+
+                        repaired = _repair_dangling_tool_calls(
+                            history, repair_last_response=True
+                        )
+                    except Exception:
+                        repaired = history
                     res = await cutoff_agent.run(
                         "Conclude your answer now, based only on the context above.",
                         message_history=repaired,

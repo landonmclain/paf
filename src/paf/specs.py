@@ -285,6 +285,85 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     return cfg
 
 
+def _spec_search_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``search:`` block into a config dict.
+
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
+    reads the raw YAML separately. Absent members fall back to their defaults
+    in ``_build_conversation_search`` (max_matches=10, context_lines=5,
+    bm25_k1=1.5, bm25_b=0.75, scope="conversation"), so a block is purely
+    additive and never silently weakens a secure default. Unknown keys inside
+    ``search:`` are ignored so the schema can grow without breaking older spec
+    files.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("search")
+    if not isinstance(block, dict):
+        return None
+    cfg: dict[str, object] = {}
+    for key in ("max_matches", "context_lines"):
+        value = block.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            cfg[key] = value
+    for key in ("bm25_k1", "bm25_b"):
+        value = block.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            cfg[key] = value
+    scope = block.get("scope")
+    if isinstance(scope, str) and scope in ("all", "conversation"):
+        cfg["scope"] = scope
+    if not cfg:
+        return None
+    return cfg
+
+
+def _spec_top_level_str(spec_path: Path, key: str) -> str | None:
+    """Read a top-level ``<key>:`` string block from a spec's raw YAML.
+
+    pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so harness-prompt
+    blocks are read from the raw YAML separately, the same way the ``search:``
+    block is. Returns ``None`` when absent or not a non-empty string.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get(key)
+    if isinstance(block, str) and block.strip():
+        return block
+    return None
+
+
+def _spec_search_only_instructions(spec_path: Path) -> str | None:
+    """Read the spec's top-level ``search_only_instructions:`` block.
+
+    The search-only (no-memory, ``MEMORY=0``) arm's prompt is read from the raw
+    YAML separately. Returns ``None`` when absent so a ``MEMORY=0`` run can
+    hard-error rather than silently reuse the memory prompt.
+    """
+    return _spec_top_level_str(spec_path, "search_only_instructions")
+
+
+def _spec_search_only_no_readturn_instructions(spec_path: Path) -> str | None:
+    """Read the spec's top-level ``search_only_no_readturn_instructions:`` block.
+
+    The pure-BM25-truncated floor arm (``NO_READ_TURN=1``): the search tool is
+    exposed without ``read_turn``, so the subject must answer from truncated
+    excerpts. Returns ``None`` when absent so a no-read-turn run can hard-error
+    rather than silently reuse the read_turn prompt.
+    """
+    return _spec_top_level_str(spec_path, "search_only_no_readturn_instructions")
+
+
 def resolve_memory_config(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
@@ -684,6 +763,9 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "vault_config": _spec_vault_config(spec_path),
         # Memory tuning (e.g. consolidate_every) from the spec's `memory:` block.
         "memory_config": _spec_memory_config(spec_path),
+        # Conversation-search knobs (max_matches/context_lines/bm25/scope) from
+        # the spec's `search:` block.
+        "search_config": _spec_search_config(spec_path),
         # Root scoping for the root-bearing capabilities from their spec blocks.
         "filesystem_config": _spec_filesystem_config(spec_path),
         "shell_config": _spec_shell_config(spec_path),

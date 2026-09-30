@@ -65,6 +65,36 @@ When NOT to use:
 - You have a ref from a search hit and only need one turn (use read_turn)
 - You need external or real-time information (use web tools instead)"""
 
+# Tool description for a read_turn-less search arm (`include_read_turn=False`):
+# the model must answer from the truncated excerpts alone, and is told not to
+# re-search hoping for more (there is no expand step; the transcript is static).
+_SEARCH_NO_READTURN_DESCRIPTION = """\
+Search all persisted conversation history: earlier turns of this conversation \
+(including messages that context compaction dropped from the live context) and \
+past runs persisted in the same store.
+
+When the conversation is compacted, older messages are replaced by a summary in \
+the active context, but the persisted step history keeps the originals. Use this \
+tool to find specific details the live context no longer carries.
+
+Results are ranked by relevance using BM25 -- rare terms and exact matches score \
+higher. Multi-word queries search each word independently. Each result carries a \
+`turn: <run_id>:<turn_id>` ref and a `recency: N` label (1 = most recent); the \
+results are shown most-recent-first. There is no full-turn expansion tool in this \
+configuration: answer directly from the excerpts returned. Re-searching the same \
+theme will not change the results -- the transcript is static. Pass `run_id` to \
+search only one run, e.g. a run a compaction receipt references as its full \
+transcript.
+
+When to use:
+- You need to recall exact details from earlier in the conversation
+- The conversation summary or a compaction receipt lacks a detail you need
+- You need specific code, file paths, or decisions from a past run
+
+When NOT to use:
+- The information is still in the current conversation context
+- You need external or real-time information (use web tools instead)"""
+
 _CONVERSATION_SCOPE_NOTE = (
     "\n\nThis search covers only the current conversation; runs belonging to other "
     "conversations in the same store are not reachable."
@@ -133,6 +163,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         bm25_k1: float,
         bm25_b: float,
         scope: SearchScope = "all",
+        include_read_turn: bool = True,
     ) -> None:
         super().__init__(id=tool_id)
         if max_matches < 0:
@@ -152,6 +183,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         self._context_lines = context_lines
         self._params = Bm25Params(k1=bm25_k1, b=bm25_b)
         self._scope: SearchScope = scope
+        self._include_read_turn = include_read_turn
         self._finder = TurnFinder(source)
         # Per-run search-loop guard state (see `_guard_search`): counts consecutive
         # `search_conversation_history` calls with no `read_turn` in between, reset
@@ -162,7 +194,11 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             str
         ] = []  # query sig of each consecutive search since last read_turn/reset
 
-        description = SEARCH_HISTORY_DESCRIPTION
+        description = (
+            SEARCH_HISTORY_DESCRIPTION
+            if include_read_turn
+            else _SEARCH_NO_READTURN_DESCRIPTION
+        )
         if scope == "conversation":
             description += _CONVERSATION_SCOPE_NOTE
         self.add_function(
@@ -174,13 +210,14 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # Expose the shared full-content read tool (owned by `search`). Because
         # search is the permanent retrieval layer, its search hits can hand the
         # model a `run_id:turn_id` ref to expand -- the model reaches the full
-        # turn directly.
-        self.add_function(
-            self.read_turn,
-            name="read_turn",
-            description=READ_TURN_DESCRIPTION,
-            retries=_READ_TOOL_RETRIES,
-        )
+        # turn directly. Omitted in a read_turn-less arm (`include_read_turn=False`).
+        if include_read_turn:
+            self.add_function(
+                self.read_turn,
+                name="read_turn",
+                description=READ_TURN_DESCRIPTION,
+                retries=_READ_TOOL_RETRIES,
+            )
 
     async def read_turn(
         self,
@@ -268,7 +305,12 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 another tool or a compaction receipt referenced.
         """
         # Loop guard: nudge / ModelRetry an agent re-searching without reading a hit.
-        nudge = self._guard_search(ctx, sig=f"search:{query.strip()}")
+        # Only when read_turn exists (it is the progress signal that clears the
+        # streak). A read_turn-less tool has no expand step, so skip the guard and
+        # let the harness degeneration guards / bender backstop catch a real loop.
+        nudge = None
+        if self._include_read_turn:
+            nudge = self._guard_search(ctx, sig=f"search:{query.strip()}")
         if nudge is not None:
             return nudge
         conversation_id: str | None = None
@@ -364,14 +406,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             doc_idx = item["doc_idx"]
             score = item["score"]  # unchanged BM25 score (recency never re-scores)
             section_idx, line_idx = locations[doc_idx]
-            if (section_idx, line_idx) in shown:
-                continue
-            shown_rank += 1
             section = sections[section_idx]
-            start = max(0, line_idx - self._context_lines)
-            end = min(len(section.display_lines), line_idx + self._context_lines + 1)
-            shown.update((section_idx, idx) for idx in range(start, end))
-            excerpt = "\n".join(section.display_lines[start:end])
             # Surface the matched message's source-session id on the label so a
             # retrieval can be scored by ID-membership (LongMemEval recall@k).
             sid = (
@@ -380,7 +415,6 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 and line_idx < len(section.session_ids)
                 else None
             )
-            label = section.label + (f" | session: {sid}" if sid else "")
             # Surface the matched message's turn ref so the model can expand it to
             # the FULL turn via `read_turn`. This is the "expand a search hit to
             # full content" path that keeps full-content questions from looping on
@@ -390,7 +424,32 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
                 if section.turn_refs is not None and line_idx < len(section.turn_refs)
                 else None
             )
-            label += f" | turn: {tref}" if tref else ""
+            if (section_idx, line_idx) in shown:
+                # This hit's line already falls inside an earlier hit's displayed
+                # context window, so it has no excerpt of its own. But its
+                # source-session/turn identity still counts for scoring (LongMemEval
+                # recall is ID-membership over surfaced session ids), so emit a
+                # compact ref line instead of dropping the hit entirely.
+                label = section.label + (f" | session: {sid}" if sid else "")
+                if self._include_read_turn and tref:
+                    label += f" | turn: {tref}"
+                hint = (
+                    f' -> read_turn("{tref}")'
+                    if self._include_read_turn and tref
+                    else ""
+                )
+                results.append(
+                    f"[score: {score:.1f} | {label}]{hint}  (within excerpt above)"
+                )
+                continue
+            shown_rank += 1
+            start = max(0, line_idx - self._context_lines)
+            end = min(len(section.display_lines), line_idx + self._context_lines + 1)
+            shown.update((section_idx, idx) for idx in range(start, end))
+            excerpt = "\n".join(section.display_lines[start:end])
+            label = section.label + (f" | session: {sid}" if sid else "")
+            if self._include_read_turn and tref:
+                label += f" | turn: {tref}"
             dso = (
                 section.dates[line_idx]
                 if section.dates is not None and line_idx < len(section.dates)
@@ -404,8 +463,13 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
             # shapes only presentation order + this label, never the BM25 score).
             label += f" | recency: {shown_rank}"
             header_line = f"[score: {score:.1f} | {label}]"
-            # Give the model an explicit, copy-paste-able ref for the shared tool.
-            hint = f'\n  -> read_turn("{tref}") for the full turn' if tref else ""
+            # Give the model an explicit, copy-paste-able ref for the shared tool
+            # (skipped when read_turn isn't registered — the pure-BM25 floor arm).
+            hint = (
+                f'\n  -> read_turn("{tref}") for the full turn'
+                if self._include_read_turn and tref
+                else ""
+            )
             results.append(f"{header_line}{hint}\n{excerpt}")
 
         header = f"Found {len(results)} match(es) for '{query}' in {total_messages} persisted messages:\n\n"
