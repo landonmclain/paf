@@ -114,9 +114,25 @@ def _build_step_persistence(store: FileStepStore) -> StepPersistence:
     return StepPersistence(store=store)
 
 
-def _build_conversation_search(store: FileStepStore) -> ConversationSearch:
-    """Lossless recall over the SAME store StepPersistence writes to."""
-    return ConversationSearch(source=build_history_source(store), scope="conversation")
+def _build_conversation_search(
+    store: FileStepStore, search_config: dict | None = None
+) -> ConversationSearch:
+    """Lossless recall over the SAME store StepPersistence writes to.
+
+    ``search_config`` (the spec's ``search:`` block, resolved by
+    ``_spec_search_config``) overrides the recall knobs; only the keys present
+    are applied, so an absent block keeps the defaults. ``scope`` defaults to
+    "conversation" here (not the dataclass "all") so production stays isolated
+    to the current conversation unless a spec opts into ``all``.
+    """
+    cfg = search_config or {}
+    kwargs = {}
+    for key in ("max_matches", "context_lines", "bm25_k1", "bm25_b", "scope"):
+        if key in cfg:
+            kwargs[key] = cfg[key]
+    if "scope" not in kwargs:
+        kwargs["scope"] = "conversation"
+    return ConversationSearch(source=build_history_source(store), **kwargs)
 
 
 # Name -> builder, keyed by the same names a profile allowlists. The profile is

@@ -858,6 +858,7 @@ def build_runtime_capabilities(
     on_complete=None,
     subagents_config: dict | None = None,
     visual_config: dict | None = None,
+    search_config: dict | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -974,6 +975,11 @@ def build_runtime_capabilities(
             # Vision model slug from the spec's `visual:` block. Absent -> the
             # capability builds inert (images pass through to the main model).
             capabilities.append(_build_visual(store, visual_config))
+        elif name == "ConversationSearch":
+            # Spec-driven recall knobs from the `search:` block (max_matches /
+            # context_lines / bm25_k1 / bm25_b / scope). Absent -> the builder
+            # applies its defaults (scope=conversation, 10/5/1.5/0.75).
+            capabilities.append(builders["ConversationSearch"](store, search_config))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
