@@ -42,8 +42,8 @@ model_settings:
   # 'thinking forever' loops (see assistant.yaml:108). `frequency_penalty` breaks
   # output-repetition/thinking loops (assistant uses 1.0).
   openrouter_reasoning:
-    effort: low
-  frequency_penalty: 1.0
+    effort: high
+  # frequency_penalty: 1.0
 max_item_chars: 1200
 retries: 5
 instructions: |

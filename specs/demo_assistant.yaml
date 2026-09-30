@@ -345,7 +345,15 @@ compact:
 memory:
   consolidate_every: 10
   tier_caps:
-    t1: 50
+    t1: 75
     t2: 25
     t3: 15
   # max_memory_size: 65536
+
+# Subagent roster. `agents:` REPLACES the default roster (build.py
+# `_SUBAGENT_ROSTER` = writer only), so list every leaf this agent may
+# delegate to. Each name is a leaf spec under specs/sub_agents/. The
+# `code_reviewer` leaf is review-and-report only (filesystem tools, no writes).
+subagents:
+  agents: [writer_subagent, code_reviewer_subagent]
+  max_concurrent: 5
