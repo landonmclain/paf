@@ -249,6 +249,7 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
             t1: 75
             t2: 25
             t3: 15
+          review: false              # optional; turn the background reviewer off
 
     ``consolidate_every`` is the background-consolidation cadence in **minutes**;
     ``max_memory_size`` bounds how much of the rendered journal is injected per
@@ -280,6 +281,8 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
         value = block.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             cfg[key] = value
+    if isinstance(block.get("review"), bool):
+        cfg["review"] = block["review"]
     if not cfg:
         return None
     return cfg
@@ -377,7 +380,8 @@ def resolve_memory_config(
     from the ``Memory`` capability's ``consolidate_every``.
 
     Returns ``{"consolidate_every": int, "review_every": int, "consolidate_turns":
-    int, "review_turns": int}`` (always present, defaults applied). The minute
+    int, "review_turns": int, "review_enabled": bool}`` (always present, defaults
+    applied; the reviewer is on unless the spec sets ``memory.review: false``). The minute
     cadences remain for explicitness/back-compat; the TURN-count values are the
     active gate. ``review_turns`` defaults to ``DEFAULT_REVIEW_TURNS``.
     """
@@ -392,6 +396,7 @@ def resolve_memory_config(
     review_every = DEFAULT_REVIEW_EVERY  # reviewer runs less often than the owner
     turns = DEFAULT_CONSOLIDATE_TURNS
     review_turns = DEFAULT_REVIEW_TURNS
+    review_enabled = True
     try:
         cfg = _spec_memory_config(get_spec_path(agent_name, spec_directory))
     except Exception:  # noqa: BLE001 - spec read is best-effort sugar
@@ -411,11 +416,14 @@ def resolve_memory_config(
             and review_candidate > 0
         ):
             review_every = review_candidate
+        if isinstance(cfg.get("review"), bool):
+            review_enabled = cfg["review"]
     return {
         "consolidate_every": every,
         "review_every": review_every,
         "consolidate_turns": turns,
         "review_turns": review_turns,
+        "review_enabled": review_enabled,
     }
 
 

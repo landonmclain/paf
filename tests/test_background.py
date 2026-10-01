@@ -242,7 +242,7 @@ def test_job_status_summary_returns_idle_rows_when_idle() -> None:
 
     bg = BackgroundCoordinator(
         FileStepStore(directory=mkdtemp()),  # real store, no runs yet
-        agent_name="demo_assistant",
+        agent_name="spec-less-agent",  # code defaults: all 3 processes on
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",  # loads a fresh watermark
     )
@@ -332,7 +332,7 @@ def test_job_status_summary_degrades_when_store_fails() -> None:
 
     bg = BackgroundCoordinator(
         _BrokenStore(),
-        agent_name="demo_assistant",
+        agent_name="spec-less-agent",  # code defaults: all 3 processes on
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",
     )

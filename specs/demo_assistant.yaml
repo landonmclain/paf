@@ -344,6 +344,10 @@ compact:
 #   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
   consolidate_every: 10
+  # Old reviewer OFF (2026-10-01): it merges/over-archives and its memory_merge
+  # writes v1 rows that drop scope/project. Replaced by the pairwise reviewer —
+  # see vault Designs/Memory-Pipeline-v2-Plan.
+  review: false
   tier_caps:
     t1: 75
     t2: 25

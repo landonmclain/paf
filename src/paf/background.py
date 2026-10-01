@@ -477,6 +477,8 @@ class BackgroundCoordinator:
         self.review_turns = (
             review_turns if review_turns is not None else _mem_cfg["review_turns"]
         )
+        # Spec `memory.review: false` turns the background reviewer off.
+        self.review_enabled = bool(_mem_cfg.get("review_enabled", True))
 
         # Per-agent scope dirs.
         self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
@@ -539,7 +541,7 @@ class BackgroundCoordinator:
                 ProcessDefinition(
                     id_namespace="review",
                     label="Reviewing memory",
-                    enabled=lambda c: has_memory,
+                    enabled=lambda c: has_memory and c.review_enabled,
                     trigger=self._maybe_trigger_review,
                     idle_row=self._review_idle_row,
                 ),

@@ -641,3 +641,31 @@ def test_injected_marker_blocks_do_not_anchor_turns() -> None:
     msgs = [real_req, injected_req, listwrapped_req]
     # the real prompt appears twice (clean + listwrapped) -> collapses to one
     assert distinct_user_turn_texts(msgs) == ["real question"]
+
+
+def test_spec_review_false_disables_the_review_process(tmp_path: Path) -> None:
+    """`memory.review: false` in a spec turns the background reviewer off; the
+    consolidation process is unaffected. Default (no key) keeps it on."""
+    from paf.specs import _spec_memory_config, resolve_memory_config
+
+    spec = tmp_path / "agent.yaml"
+    spec.write_text("memory:\n  review: false\n", encoding="utf-8")
+    assert _spec_memory_config(spec) == {"review": False}
+    spec.write_text("memory:\n  consolidate_every: 10\n", encoding="utf-8")
+    assert "review" not in (_spec_memory_config(spec) or {})
+
+    # The shipped agents have it off; the coordinator honors the flag.
+    assert resolve_memory_config("demo_assistant")["review_enabled"] is False
+    from paf.background import BackgroundCoordinator
+    from paf.capabilities.profiles import AgentProfile
+
+    bg = BackgroundCoordinator(
+        store=_store(tmp_path, {}),
+        agent_name="demo_assistant",
+        memory_directory=str(tmp_path / "mem"),
+        profile=AgentProfile(name="review-off", capability_names=("Memory",)),
+        lane="agent",
+    )
+    enabled = {p.id_namespace for p in bg._processes if p.enabled and p.enabled(bg)}
+    assert "consolidation" in enabled
+    assert "review" not in enabled
