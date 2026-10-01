@@ -230,7 +230,7 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
             return _CM()
 
     def _fake_build_owner(
-        store, *, agent_name, namespace, inject_memory=False, journal=None
+        store, *, agent_name, namespace, inject_memory=False, journal=None, **_kw
     ):
         return _FakeOwner(), None
 

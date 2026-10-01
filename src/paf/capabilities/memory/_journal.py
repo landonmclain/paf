@@ -12,7 +12,8 @@ downstream.
 
 Design decisions:
 
-- **Record shape** — immutable ``{type, fact, tier, born_on, source_ref}``.
+- **Record shape** — immutable ``{type, fact, tier, born_on, source_ref}`` (v1);
+  v2 rows add ``{v, scope, project, source}`` (see :class:`MemoryRecord`).
   ``id`` is the 1-based JSONL line number (stable forever because the journal is
   never rewritten; no stored id field, no counter -- just position).
 - **No ``entity`` field** — the subject lives inline in ``fact`` prose; ``fact``
@@ -50,37 +51,78 @@ from paf.capabilities._storage import _append_jsonl_atomic
 
 _JOURNAL_FILENAME = "memory-journal.jsonl"
 
-# Semantic memory types. These are NOT the render's tier sections; the render
-# groups by `tier`, and `type` is a search tag only.
-MEMORY_TYPES: frozenset[str] = frozenset(
+# Semantic memory types (v2). The extractor writes only these; the list is
+# first-match ordered in its prompt and ends in "skip" — there is no catch-all.
+WRITE_TYPES: frozenset[str] = frozenset(
+    {"identity", "rule", "preference", "decision", "context", "event"}
+)
+# v1 types still present in old journal rows (and still written by the legacy
+# reviewer's memory_merge). Readable forever; never written by the extractor.
+LEGACY_TYPES: frozenset[str] = frozenset(
     {"identity", "preference", "fact", "event", "task", "current"}
 )
+# Every type a journal row may carry (validation on read / reconstruct).
+MEMORY_TYPES: frozenset[str] = WRITE_TYPES | LEGACY_TYPES
 
-# Permanence tiers, set by the owner's importance rubric. Perpendicular to `type`:
-# type says *what kind of thing* a fact is (for search), tier says *how permanent /
-# how central to knowing the user* (for bounded, tier-sorted injection).
-# t1 = stable person (identity/preferences/constraints/skills/milestones; supersede-only)
-# t2 = goals / current work (active projects, current objective; superseded when it shifts)
-# t3 = ephemeral (one-off events, transient details, technical minutiae; ages out of inject)
+# Permanence tiers. v1 rows carry a model-chosen tier; v2 rows carry a tier
+# DERIVED in code from type + scope (see derive_tier) — a bridge so the current
+# tier-grouped render keeps working until the scope-aware render replaces it.
+# t1 = stable person / user-wide; t2 = project knowledge; t3 = events.
 MEMORY_TIERS: frozenset[str] = frozenset({"t1", "t2", "t3"})
+
+# v2: does the fact matter in a conversation about a DIFFERENT project?
+#   global  -> yes: about the user everywhere (identity, personal preferences, setup)
+#   project -> no: belongs to the conversation's project (``project`` names it;
+#              None = "unfiled", filed later once the conversation is tagged)
+MEMORY_SCOPES: frozenset[str] = frozenset({"global", "project"})
+
+# v2: how the fact came to be known.
+MEMORY_SOURCES: frozenset[str] = frozenset({"stated", "observed", "inferred"})
+
+RECORD_VERSION = 2
+
+
+def derive_tier(type: str, scope: str) -> str:
+    """The tier bridge for v2 rows: events age out (t3); global facts are
+    always-on (t1); project facts are project knowledge (t2)."""
+    if type == "event":
+        return "t3"
+    return "t1" if scope == "global" else "t2"
 
 
 class MemoryRecord:
     """One immutable journal record: a durable fact, append-only.
 
-    Fields:
-      type       -- one of ``MEMORY_TYPES`` (identity|preference|fact|event|task|current)
+    Fields (all rows):
+      type       -- one of ``MEMORY_TYPES``; v2 rows use ``WRITE_TYPES``
       fact       -- the durable statement; subject lives inline (no entity field)
-      tier       -- one of ``MEMORY_TIERS`` (t1|t2|t3); permanence for bounded injection.
-                    REQUIRED.
-      born_on    -- ISO datetime of the source message (corpus clock, not wall-clock)
+      tier       -- one of ``MEMORY_TIERS``; model-chosen on v1 rows, derived
+                    (``derive_tier``) on v2 rows. REQUIRED.
+      born_on    -- ISO datetime of the source message, stored as UTC
       source_ref -- ``{run_id}:{turn_id}`` turn addressing, read_turn-resolvable
+
+    v2-only fields (``None`` on v1 rows):
+      scope      -- one of ``MEMORY_SCOPES`` (global | project)
+      project    -- project slug (code-stamped from the conversation); ``None``
+                    for global facts and for unfiled project facts
+      source     -- one of ``MEMORY_SOURCES`` (stated | observed | inferred)
+      v          -- row version: 1 for legacy rows, 2 for rows with the fields above
 
     ``id`` is NOT stored -- it is the record's 1-based JSONL line number, assigned
     by :meth:`JournalStore.append`/``.append_many``.
     """
 
-    __slots__ = ("type", "fact", "tier", "born_on", "source_ref")
+    __slots__ = (
+        "type",
+        "fact",
+        "tier",
+        "born_on",
+        "source_ref",
+        "scope",
+        "project",
+        "source",
+        "v",
+    )
 
     def __init__(
         self,
@@ -90,6 +132,10 @@ class MemoryRecord:
         tier: str,
         born_on: str | datetime | None = None,
         source_ref: str,
+        scope: str | None = None,
+        project: str | None = None,
+        source: str | None = None,
+        v: int | None = None,
     ) -> None:
         if type not in MEMORY_TYPES:
             raise ValueError(
@@ -98,6 +144,14 @@ class MemoryRecord:
         if tier not in MEMORY_TIERS:
             raise ValueError(
                 f"invalid memory tier {tier!r}; expected one of {sorted(MEMORY_TIERS)}"
+            )
+        if scope is not None and scope not in MEMORY_SCOPES:
+            raise ValueError(
+                f"invalid scope {scope!r}; expected one of {sorted(MEMORY_SCOPES)}"
+            )
+        if source is not None and source not in MEMORY_SOURCES:
+            raise ValueError(
+                f"invalid source {source!r}; expected one of {sorted(MEMORY_SOURCES)}"
             )
         fact = (fact or "").strip()
         if not fact:
@@ -110,13 +164,30 @@ class MemoryRecord:
         self.tier = tier
         self.born_on = _normalize_born_on(born_on)
         self.source_ref = source_ref
+        self.scope = scope
+        self.project = project or None
+        self.source = source
+        self.v = v if v is not None else (RECORD_VERSION if scope is not None else 1)
 
     # --- serialization -----------------------------------------------------
 
     def to_row(self) -> dict:
+        if self.v < RECORD_VERSION:
+            return {
+                "type": self.type,
+                "fact": self.fact,
+                "tier": self.tier,
+                "born_on": self.born_on,
+                "source_ref": self.source_ref,
+            }
+        # v2: always write scope/project (null = global or unfiled) explicitly.
         return {
+            "v": self.v,
             "type": self.type,
             "fact": self.fact,
+            "scope": self.scope,
+            "project": self.project,
+            "source": self.source,
             "tier": self.tier,
             "born_on": self.born_on,
             "source_ref": self.source_ref,
@@ -130,24 +201,25 @@ class MemoryRecord:
             tier=row["tier"],
             born_on=row["born_on"],
             source_ref=row["source_ref"],
+            scope=row.get("scope"),
+            project=row.get("project"),
+            source=row.get("source"),
+            v=row.get("v", 1),
         )
+
+    def with_tier(self, tier: str) -> MemoryRecord:
+        """A copy at a different tier (reviewer demotion), keeping every field."""
+        row = self.to_row()
+        row["tier"] = tier
+        return MemoryRecord.from_row(row)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MemoryRecord):
             return NotImplemented
-        return (
-            self.type == other.type
-            and self.fact == other.fact
-            and self.tier == other.tier
-            and self.born_on == other.born_on
-            and self.source_ref == other.source_ref
-        )
+        return self.to_row() == other.to_row()
 
     def __repr__(self) -> str:
-        return (
-            f"MemoryRecord(type={self.type!r}, fact={self.fact!r}, tier={self.tier!r}, "
-            f"born_on={self.born_on!r}, source_ref={self.source_ref!r})"
-        )
+        return f"MemoryRecord({self.to_row()!r})"
 
 
 def _normalize_born_on(value: str | datetime | None) -> str:
@@ -224,24 +296,31 @@ class JournalStore:
         tier: str,
         born_on: str | datetime,
         source_ref: str,
+        scope: str | None = None,
+        project: str | None = None,
+        source: str | None = None,
     ) -> MemoryRecord:
-        """Append one record; returns it. Its id is the new line number."""
+        """Append one record; returns it. Its id is the new line number.
+
+        Passing ``scope`` makes it a v2 row (scope/project/source); without it
+        the row keeps the v1 shape (the legacy reviewer's merges)."""
         record = MemoryRecord(
-            type=type, fact=fact, tier=tier, born_on=born_on, source_ref=source_ref
+            type=type,
+            fact=fact,
+            tier=tier,
+            born_on=born_on,
+            source_ref=source_ref,
+            scope=scope,
+            project=project,
+            source=source,
         )
-        with self._lock:
-            _append_jsonl_atomic(self._path, [record.to_row()])
-        return record
+        return self.append_record(record)
 
     def append_record(self, record: MemoryRecord) -> MemoryRecord:
         """Append an already-constructed :class:`MemoryRecord`."""
-        return self.append(
-            type=record.type,
-            fact=record.fact,
-            tier=record.tier,
-            born_on=record.born_on,
-            source_ref=record.source_ref,
-        )
+        with self._lock:
+            _append_jsonl_atomic(self._path, [record.to_row()])
+        return record
 
     def append_many(self, records: list[MemoryRecord]) -> list[MemoryRecord]:
         """Append ``records`` as ONE atomic block (a chunk's extraction).

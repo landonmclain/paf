@@ -40,6 +40,7 @@ from paf.capabilities.memory._consolidate import (
     _strip_inline_date,
     resident_consolidate_text,
 )
+from paf.capabilities.memory._toolset import ExtractionContext
 from paf.capabilities.memory._view import JournalViewStore
 
 # --- null tracer/context (mirrors test_memory.py) -------------------------
@@ -83,67 +84,109 @@ def test_append_toolset_exposes_only_append_memory(tmp_path: Path) -> None:
     assert set(ts.tools.keys()) == {"append_memory"}
 
 
+_REF = "seed-lmem-3f9a:12"
+_CTX = ExtractionContext(ref_dates={_REF: "2026-08-17T05:00:00-05:00"}, project="paf")
+
+
+def _append(ts, **kw):
+    args = {
+        "type": "preference",
+        "fact": "The user prefers flat-file storage.",
+        "scope": "global",
+        "source": "stated",
+        "source_ref": _REF,
+    }
+    args.update(kw)
+    return asyncio.run(ts.append_memory(_FakeCtx(), **args))
+
+
 def test_append_toolset_appends_to_journal(tmp_path: Path) -> None:
-    """append_memory writes one immutable record to the journal."""
+    """append_memory writes one v2 record; code stamps born_on/project/tier."""
     journal = JournalStore(tmp_path)
-    ts = JournalAppendToolset(journal)
-    result = asyncio.run(
-        ts.append_memory(
-            _FakeCtx(),
-            type="preference",
-            fact="user prefers flat-file storage",
-            tier="t1",
-            born_on="2026-08-17T10:00:00+00:00",
-            source_ref="seed-lmem-3f9a:12",
-        )
-    )
+    ts = JournalAppendToolset(journal, _CTX)
+    result = _append(ts)
     assert result["status"] == "appended"
-    assert result["memory"] == "user prefers flat-file storage"
-    assert journal.count() == 1
-    recs = journal.read_all()
-    assert recs[0][1] == MemoryRecord(
+    assert result["memory"] == "The user prefers flat-file storage."
+    rec = journal.read_all()[0][1]
+    assert rec == MemoryRecord(
         type="preference",
-        fact="user prefers flat-file storage",
-        tier="t1",
-        born_on="2026-08-17T10:00:00+00:00",
-        source_ref="seed-lmem-3f9a:12",
+        fact="The user prefers flat-file storage.",
+        tier="t1",  # global, non-event -> t1
+        born_on="2026-08-17T10:00:00+00:00",  # the turn's date, stored as UTC
+        source_ref=_REF,
+        scope="global",
+        project=None,  # global facts carry no project
+        source="stated",
     )
+    assert rec.v == 2
+
+
+def test_project_scope_stamps_the_conversation_project(tmp_path: Path) -> None:
+    journal = JournalStore(tmp_path)
+    _append(
+        JournalAppendToolset(journal, _CTX),
+        type="context",
+        scope="project",
+        fact="The paf test suite should run in under a minute.",
+    )
+    _append(
+        JournalAppendToolset(journal, _CTX),
+        type="event",
+        scope="project",
+        fact="The user shipped the projects sidebar.",
+    )
+    _append(
+        JournalAppendToolset(journal, ExtractionContext(ref_dates={_REF: ""})),
+        type="context",
+        scope="project",
+        fact="An unfiled project fact.",
+    )
+    recs = [r for _, r in journal.read_all()]
+    assert (recs[0].project, recs[0].tier) == ("paf", "t2")
+    assert recs[1].tier == "t3"  # events age out
+    assert (recs[2].project, recs[2].scope, recs[2].born_on) == (None, "project", "")
 
 
 def test_append_toolset_is_append_only(tmp_path: Path) -> None:
     """Two appends of the same fact make two records (dump, no dedup)."""
     journal = JournalStore(tmp_path)
-    ts = JournalAppendToolset(journal)
-    for _ in range(2):
-        asyncio.run(
-            ts.append_memory(
-                _FakeCtx(),
-                type="fact",
-                fact="same fact twice",
-                tier="t1",
-                born_on="2026-08-17T10:00:00+00:00",
-                source_ref="seed-lmem-3f9a:12",
-            )
-        )
+    ts = JournalAppendToolset(journal, _CTX)
+    _append(ts)
+    _append(ts)
     assert journal.count() == 2
 
 
-def test_append_toolset_rejects_bad_type(tmp_path: Path) -> None:
-    """An unknown semantic type raises ModelRetry (the owner is re-prompted)."""
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"type": "fact"},  # legacy type: readable, never written
+        {"type": "not-a-type"},
+        {"scope": "user"},
+        {"source": "guessed"},
+        {"fact": "x" * 401},
+        {"fact": "The user is currently on the paf repo."},
+        {"source_ref": "made-up:9"},  # not a label in this slice
+    ],
+)
+def test_append_toolset_retries_bad_fields(tmp_path: Path, bad: dict) -> None:
+    """Every invalid field re-prompts the owner (ModelRetry), nothing is written."""
     from pydantic_ai import ModelRetry
 
-    ts = JournalAppendToolset(JournalStore(tmp_path))
+    journal = JournalStore(tmp_path)
     with pytest.raises(ModelRetry):
-        asyncio.run(
-            ts.append_memory(
-                _FakeCtx(),
-                type="not-a-type",
-                fact="anything",
-                tier="t1",
-                born_on="2026-08-17T10:00:00+00:00",
-                source_ref="seed-lmem-3f9a:12",
-            )
-        )
+        _append(JournalAppendToolset(journal, _CTX), **bad)
+    assert journal.count() == 0
+
+
+def test_legacy_v1_rows_still_load(tmp_path: Path) -> None:
+    (tmp_path / "memory-journal.jsonl").write_text(
+        '{"type": "fact", "fact": "old fact", "tier": "t2", '
+        '"born_on": "2026-08-01T00:00:00+00:00", "source_ref": "r:1"}\n',
+        encoding="utf-8",
+    )
+    rec = JournalStore(tmp_path).read_all()[0][1]
+    assert (rec.v, rec.type, rec.scope, rec.project) == (1, "fact", None, None)
+    assert set(rec.to_row()) == {"type", "fact", "tier", "born_on", "source_ref"}
 
 
 def test_capability_journal_swaps_toolset(tmp_path: Path) -> None:

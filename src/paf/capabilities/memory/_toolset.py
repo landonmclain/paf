@@ -13,6 +13,7 @@ This module carries the memory tool surface:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Literal, NotRequired
 
 from pydantic_ai import ModelRetry
@@ -20,7 +21,16 @@ from pydantic_ai.tools import AgentDepsT, RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from typing_extensions import TypedDict
 
-from ._journal import MEMORY_TIERS, MEMORY_TYPES, JournalStore, MemoryRecord
+from ._journal import (
+    MEMORY_SCOPES,
+    MEMORY_SOURCES,
+    MEMORY_TIERS,
+    MEMORY_TYPES,
+    WRITE_TYPES,
+    JournalStore,
+    MemoryRecord,
+    derive_tier,
+)
 from ._overrides import OverrideStore
 
 MAIN_FILENAME = "MEMORY.md"
@@ -151,6 +161,26 @@ def _render_sections(
     return "\n\n".join(sections)
 
 
+FACT_MAX_CHARS = 400
+"""Per-fact cap for extracted facts: one claim, not a paragraph."""
+
+_TIME_WORDS = re.compile(r"\b(currently|as of|right now)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ExtractionContext:
+    """What code knows about the slice being extracted (the model never fills it).
+
+    ``ref_dates`` maps every message label in the slice (``run_id:turn_id``) to
+    its turn's date (``""`` when the turn carries none) — the receipt list for
+    ``source_ref`` and the source of ``born_on``. ``project`` is the
+    conversation's project slug (``None`` = untagged conversation).
+    """
+
+    ref_dates: dict[str, str] = field(default_factory=dict)
+    project: str | None = None
+
+
 class JournalAppendToolset(FunctionToolset[AgentDepsT]):
     """The owner's ONLY tool: ``append_memory`` -> :class:`JournalStore`.
 
@@ -158,11 +188,19 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
     nothing through tools and edits nothing in place. It inspects the labeled
     conversation slice in its prompt and calls ``append_memory`` once per
     durable fact, writing an immutable record to the append-only journal.
+
+    The model supplies only what it alone can judge — ``type``, ``fact``,
+    ``scope``, ``source`` — plus the ``source_ref`` label it copies. Code
+    stamps the rest from :class:`ExtractionContext`: ``born_on`` (the turn's
+    date), ``project`` (the conversation's), and ``tier`` (``derive_tier``).
     """
 
-    def __init__(self, journal: JournalStore) -> None:
+    def __init__(
+        self, journal: JournalStore, context: ExtractionContext | None = None
+    ) -> None:
         super().__init__(id="memory")
         self._journal = journal
+        self._context = context or ExtractionContext()
         self.add_function(self.append_memory, name="append_memory")
 
     async def append_memory(
@@ -170,53 +208,84 @@ class JournalAppendToolset(FunctionToolset[AgentDepsT]):
         ctx: RunContext[AgentDepsT],
         type: str,
         fact: str,
-        tier: str,
-        born_on: str,
+        scope: str,
+        source: str,
         source_ref: str,
     ) -> MemoryWriteResult:
         """Append ONE durable fact to the append-only memory journal.
 
         The journal is write-once and never edited, moved, or deleted: each call
-        records a new immutable entry, and the memory notebook (``MEMORY.md``)
-        is re-rendered from the journal later (recency-wins, dedup handled by the
-        render pass — never by you). Write one fact per call, in the order you
+        records a new immutable entry. Write one fact per call, in the order you
         encounter it.
 
         Args:
-            type: One of the six semantic kinds — ``identity``, ``preference``,
-                ``fact``, ``event``, ``task``, ``current``.
-            fact: A COMPLETE, self-contained, canonically-worded durable
-                statement, subject inline ("user prefers dark roast coffee").
-            tier: Permanence tier — ``t1`` stable person, ``t2`` goals/current
-                work, ``t3`` ephemeral (may age out of the injected view).
-            born_on: The ISO date the fact was stated, from the message's label.
-            source_ref: The message's ``{run_id}:{turn_id}`` label, so the fact
-                can be traced and verified via ``read_turn``.
+            type: The FIRST that fits — ``identity``, ``rule``, ``preference``,
+                ``decision``, ``context``, ``event``.
+            fact: ONE complete, self-contained claim, subject inline, under
+                ~300 characters, with no time words ("currently", "as of").
+            scope: ``global`` if it would still matter in a conversation about
+                a different project; otherwise ``project``.
+            source: ``stated`` (the user said it), ``observed`` (the assistant
+                reported it from its own work), or ``inferred`` (concluded,
+                not said outright).
+            source_ref: The message's ``{run_id}:{turn_id}`` label, copied
+                exactly.
         """
         with ctx.tracer.start_as_current_span(
             "memory.append", record_exception=False, set_status_on_exception=False
         ) as span:
-            if type not in MEMORY_TYPES:
+            ctx_ = self._context
+            source_ref = (source_ref or "").strip()
+            if type not in WRITE_TYPES:
                 raise ModelRetry(
-                    f"invalid memory type {type!r}; expected one of {sorted(MEMORY_TYPES)}"
+                    f"invalid type {type!r}; use the first that fits of "
+                    "identity, rule, preference, decision, context, event — "
+                    "or skip the fact if none fits"
                 )
-            if tier not in MEMORY_TIERS:
+            if scope not in MEMORY_SCOPES:
+                raise ModelRetry(f"invalid scope {scope!r}; use global or project")
+            if source not in MEMORY_SOURCES:
                 raise ModelRetry(
-                    f"invalid memory tier {tier!r}; expected one of {sorted(MEMORY_TIERS)}"
+                    f"invalid source {source!r}; use stated, observed, or inferred"
                 )
+            fact = (fact or "").strip()
+            if len(fact) > FACT_MAX_CHARS:
+                raise ModelRetry(
+                    f"fact is {len(fact)} characters; split it into separate "
+                    f"one-claim facts under ~300 characters each"
+                )
+            if _TIME_WORDS.search(fact):
+                raise ModelRetry(
+                    "remove time words (currently / as of / right now) from the "
+                    "fact; the date is recorded separately"
+                )
+            if ctx_.ref_dates and source_ref not in ctx_.ref_dates:
+                raise ModelRetry(
+                    f"source_ref {source_ref!r} is not a message label in this "
+                    "slice; copy the run_id:turn_id label exactly"
+                )
+            project = ctx_.project if scope == "project" else None
             try:
                 self._journal.append(
                     type=type,
                     fact=fact,
-                    tier=tier,
-                    born_on=born_on,
+                    tier=derive_tier(type, scope),
+                    born_on=ctx_.ref_dates.get(source_ref, ""),
                     source_ref=source_ref,
+                    scope=scope,
+                    project=project,
+                    source=source,
                 )
             except ValueError as exc:
                 raise ModelRetry(str(exc)) from exc
             if span.is_recording():
                 span.set_attributes(
-                    {"memory.append.type": type, "memory.append.tier": tier}
+                    {
+                        "memory.append.type": type,
+                        "memory.append.scope": scope,
+                        "memory.append.source": source,
+                        "memory.append.project": project or "",
+                    }
                 )
             return {
                 "memory": fact,

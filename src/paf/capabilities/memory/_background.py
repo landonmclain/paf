@@ -259,6 +259,10 @@ class ConsolidationJob:
     turn_id: int
     messages: list[ModelMessage] | None = None
     watermark: MemoryWatermark | None = None
+    project: str | None = None
+    """The conversation's project slug, resolved by the trigger when it
+    schedules the span (a reassignment after that applies to the NEXT span).
+    ``None`` = untagged conversation."""
 
 
 #: Type of the span-source seam: resolve "(run_id, up_to_turn_id)" into the
@@ -378,7 +382,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             new_records = await self.consolidate_span(messages, directory, watermark)
         else:
             new_records = await self._default_consolidate_span(
-                messages, directory, watermark
+                messages, directory, watermark, project=job.project
             )
 
         # THE WATERMARK CONTRACT: advance when the fold COMPLETED WITHOUT
@@ -427,6 +431,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         messages: list[ModelMessage],
         directory: str,
         watermark: MemoryWatermark,
+        project: str | None = None,
     ) -> int:
         """Real fold: run the owner over ``messages`` into the journal.
 
@@ -446,6 +451,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             namespace="",
             keep_tail=0,
             journal=journal,
+            project=project,
         )
         return journal.count() - before
 

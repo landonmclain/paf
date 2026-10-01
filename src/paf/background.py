@@ -1434,6 +1434,8 @@ class BackgroundCoordinator:
                 task.detail = "consolidation already in flight"
                 await self._publish_task(task)
                 return
+            from paf.conversations import project_for_conversation
+
             mq.enqueue(
                 self.agent_name,
                 ConsolidationJob(
@@ -1441,6 +1443,13 @@ class BackgroundCoordinator:
                     turn_id=tip_turn,
                     messages=span.messages,
                     watermark=span.watermark,
+                    # The span is one conversation's, so it has one project;
+                    # the extractor stamps it on project-scoped facts.
+                    project=project_for_conversation(
+                        self.agent_name,
+                        cid,
+                        profile=getattr(self.profile, "name", None),
+                    ),
                 ),
             )
             task.status = PROCESSING  # job handed to the worker

@@ -31,6 +31,8 @@ from pydantic_ai import Agent, ModelSettings
 
 from paf.degeneration_guard import run_guarded
 
+from ._toolset import ExtractionContext
+
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
 
@@ -40,10 +42,24 @@ logger = logging.getLogger(__name__)
 
 
 CONSOLIDATION_PROMPT = """\
-Here are messages from a conversation. Remember anything durable from them:
+PROJECT: {project}
 
+MESSAGES:
 {evicted_text}
 """
+
+
+def render_consolidation_prompt(evicted_text: str, project: str | None = None) -> str:
+    """The owner's user message: the conversation's project, then the slice.
+
+    Per-call content lives here (not in the spec instructions) so the
+    instructions stay static and cacheable. ``project`` is ``None`` for an
+    untagged conversation (rendered ``none``).
+    """
+    return CONSOLIDATION_PROMPT.format(
+        project=project or "none", evicted_text=evicted_text
+    )
+
 
 # Resolved lazily to avoid a circular import at module load: _consolidate
 # imports Memory (for the owner's capability construct).
@@ -58,6 +74,7 @@ def _build_owner_memory(
     inject_memory: bool = False,
     journal=None,
     guidance: str = "",
+    extraction: ExtractionContext | None = None,
 ) -> Memory:
     """Build the single-writer Memory capability the owner carries.
 
@@ -86,6 +103,7 @@ def _build_owner_memory(
         inject_memory=inject_memory,
         guidance=guidance,
         journal=journal,
+        extraction=extraction,
     )
 
 
@@ -129,7 +147,13 @@ def _owner_spec_config() -> tuple[str, ModelSettings, str]:
 
 
 def _build_owner(
-    store, *, agent_name: str, namespace: str, inject_memory: bool = False, journal=None
+    store,
+    *,
+    agent_name: str,
+    namespace: str,
+    inject_memory: bool = False,
+    journal=None,
+    extraction: ExtractionContext | None = None,
 ):
     """Construct the sole-writer owner agent (read-via-tools).
 
@@ -152,6 +176,7 @@ def _build_owner(
         inject_memory=inject_memory,
         journal=journal,
         guidance=owner_guidance,
+        extraction=extraction,
     )
     owner = Agent(
         model,
@@ -166,6 +191,25 @@ def _build_owner(
 async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
     """Render a message list for the owner prompt; None if there's nothing to fold.
 
+    Thin wrapper over :func:`consolidation_view` for callers that only need the
+    text (see there for the full contract).
+    """
+    text, _ref_dates = await consolidation_view(messages)
+    return text
+
+
+async def consolidation_view(
+    messages: list[ModelMessage],
+) -> tuple[str | None, dict[str, str]]:
+    """Render a message list for the owner prompt, plus each label's turn date.
+
+    Returns ``(text, ref_dates)``: ``text`` is the labeled slice (``None`` if
+    there's nothing to fold); ``ref_dates`` maps every ``run_id:turn_id``
+    label in it to that TURN's date (``""`` when the turn carries none). The
+    date is a property of the turn, not the message — an assistant reply
+    inherits its turn's user-message date — so ``append_memory`` can stamp
+    ``born_on`` in code instead of asking the model to copy it.
+
     Deliberately a *dedicated* owner view rather than reusing the search / read_turn
     renderers (`_render.py` / `_reader.py`) or the harness token estimator
     (`_collect_text`): the owner extracts durable facts, so it sees ONLY the
@@ -178,10 +222,10 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
     Each emitted message is labeled with its ``{run_id}:{turn_id}`` turn address
     (the SAME convention :func:`search_conversation_history` labels and
     :func:`read_turn` resolves — turn_id = ordinal of the message's user-prompt
-    anchor) and, when the message carries a ``source_date`` in its metadata, its
-    date. This is what lets the owner fill ``source_ref`` / ``born_on`` correctly:
-    it copies the label verbatim into ``append_memory`` so the journal record is
-    read_turn-resolvable and date-grounded.
+    anchor) and its turn's date when known. The owner copies the label into
+    ``append_memory``'s ``source_ref`` (receipt-checked against ``ref_dates``),
+    so the journal record is read_turn-resolvable; ``born_on`` is stamped from
+    ``ref_dates`` in code.
 
     Injected artifacts (`<memory>` / `<turn-index>` user-prompt blocks tag their
     ``TextContent`` with a marker) are stripped via
@@ -241,44 +285,59 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
             f"{run_id}:{tid}" if run_id is not None and tid is not None else None
         )
 
-    def _label(role: str, idx: int, inline_date: str | None = None) -> str:
-        ref = turn_refs[idx]
-        date = ""
-        md = getattr(messages[idx], "metadata", None) or {}
-        src_date = md.get("source_date")
-        if src_date:
-            date = f" [{src_date}]"
-        elif inline_date:
-            # No metadata ``source_date`` (production path — the harness prepends
-            # a ``[date: ...]`` prefix instead of stamping metadata). Derive the
-            # date from that inline prefix so ``born_on`` is still real
-            # provenance, never a model-invented value.
-            date = f" [{inline_date}]"
-        return f"{role} {ref}{date}:"
-
-    lines: list[str] = []
+    # Pass 1: collect the durable lines, and each turn's date (metadata
+    # ``source_date`` first, else the inline ``[date: ...]`` prefix the harness
+    # puts on user messages).
+    # (role, message index, text, the message's own date)
+    entries: list[tuple[str, int, str, str]] = []
+    ref_dates: dict[str, str] = {}
     for idx, message in enumerate(messages):
+        md = getattr(message, "metadata", None) or {}
+        ref = turn_refs[idx]
         if isinstance(message, ModelRequest):
             for part in message.parts:
                 if isinstance(part, UserPromptPart):
                     content = _user_text(part)
                     if content:
-                        lines.append(
-                            f"{_label('User', idx, _inline_date(content))} "
-                            f"{_strip_inline_date(content)}"
+                        date = md.get("source_date") or _inline_date(content)
+                        if ref is not None and date and not ref_dates.get(ref):
+                            ref_dates[ref] = str(date)
+                        entries.append(
+                            ("User", idx, _strip_inline_date(content), str(date or ""))
                         )
                 # Everything else a request can carry (system prompt, tool return,
                 # retry, thinking, native / tool-search / capability-load traffic,
                 # file) is not durable user text — dropped.
         elif isinstance(message, ModelResponse):
+            if ref is not None and md.get("source_date") and not ref_dates.get(ref):
+                ref_dates[ref] = str(md["source_date"])
             for part in message.parts:
                 if isinstance(part, TextPart):
-                    lines.append(f"{_label('Assistant', idx)} {part.content}")
+                    entries.append(
+                        (
+                            "Assistant",
+                            idx,
+                            part.content,
+                            str(md.get("source_date") or ""),
+                        )
+                    )
                 # Tool calls, thinking, compaction — all dropped.
 
+    # Pass 2: label every line with its turn address and the TURN's date.
+    lines: list[str] = []
+    for role, idx, text, own_date in entries:
+        ref = turn_refs[idx]
+        if ref is not None:
+            ref_dates.setdefault(ref, "")
+        # The turn's date when addressable; a message with no turn address
+        # (no run_id) still shows its own date.
+        date = ref_dates.get(ref, "") if ref is not None else own_date
+        label = f"{role} {ref}" + (f" [{date}]" if date else "") + ":"
+        lines.append(f"{label} {text}")
+
     if not lines:
-        return None
-    return "\n".join(lines)
+        return None, ref_dates
+    return "\n".join(lines), ref_dates
 
 
 def _inline_date(text: str) -> str | None:
@@ -321,6 +380,7 @@ async def consolidate(
     namespace: str,
     keep_tail: int,
     journal=None,
+    project: str | None = None,
 ) -> None:
     """Fold the about-to-be-evicted slice into the store via the owner agent.
 
@@ -342,10 +402,14 @@ async def consolidate(
         return  # nothing about to be evicted
 
     evicted = messages[:cutoff]
+    evicted_text, ref_dates = await consolidation_view(evicted)
     owner, _owner_memory = _build_owner(
-        store, agent_name=agent_name, namespace=namespace, journal=journal
+        store,
+        agent_name=agent_name,
+        namespace=namespace,
+        journal=journal,
+        extraction=ExtractionContext(ref_dates=ref_dates, project=project),
     )
-    evicted_text = await resident_consolidate_text(evicted)
     if not evicted_text:
         # No durable user/assistant text in the span (pure tool/empty traffic).
         # Run the owner anyway over a minimal synthesized view so it always
@@ -363,6 +427,6 @@ async def consolidate(
         )
     result = await run_guarded(
         owner,
-        CONSOLIDATION_PROMPT.format(evicted_text=evicted_text),
+        render_consolidation_prompt(evicted_text, project),
     )
     logger.info("consolidated %d evicted msgs: %s", len(evicted), result.output)

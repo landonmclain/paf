@@ -32,10 +32,11 @@ from pydantic_ai.exceptions import (
 )
 
 from paf.capabilities.memory._consolidate import (
-    CONSOLIDATION_PROMPT,
     _build_owner,
-    resident_consolidate_text,
+    consolidation_view,
+    render_consolidation_prompt,
 )
+from paf.capabilities.memory._toolset import ExtractionContext
 from paf.degeneration_guard import run_guarded
 
 if TYPE_CHECKING:
@@ -66,18 +67,21 @@ async def consolidate_conversation(
     append-only model (``append_memory`` only); ``MEMORY.md`` is rendered from
     the journal at recall time.
     """
+    # born_on is stamped in code from each label's turn date (the benchmark's
+    # ``[date: …]`` prefixes / ``source_date`` metadata), never by the model.
+    text, ref_dates = await consolidation_view(messages)
+    if not text:
+        return
     owner, _owner_memory = _build_owner(
         store,
         agent_name=agent_name,
         namespace=namespace,
         journal=journal,
+        extraction=ExtractionContext(ref_dates=ref_dates),
     )
-    text = await resident_consolidate_text(messages)
-    if not text:
-        return
     result = await run_guarded(
         owner,
-        CONSOLIDATION_PROMPT.format(evicted_text=text),
+        render_consolidation_prompt(text),
     )
     logger.info(
         "consolidated %d msgs (full conversation): %s",
@@ -175,23 +179,24 @@ async def consolidate_conversation_chunked(
     ONLY tool) instead of in-place editing, and ``MEMORY.md`` is rendered from
     the journal later (at recall time), not here.
     """
+    text, ref_dates = await consolidation_view(messages)
+    if not text:
+        return
     owner, _owner_memory = _build_owner(
         store,
         agent_name=agent_name,
         namespace=namespace,
         inject_memory=True,
         journal=journal,
+        extraction=ExtractionContext(ref_dates=ref_dates),
     )
-    text = await resident_consolidate_text(messages)
-    if not text:
-        return
     budget = chunk_max_tokens or _CHUNK_MAX_TOKENS
     chunks = _split_chunks(text, max_tokens=budget)
     for i, chunk in enumerate(chunks, start=1):
         try:
             result = await run_guarded(
                 owner,
-                CONSOLIDATION_PROMPT.format(evicted_text=chunk),
+                render_consolidation_prompt(chunk),
             )
         except (UsageLimitExceeded, UnexpectedModelBehavior, ModelHTTPError) as exc:
             # Mirror the recall-side resilience: a single owner failure must not

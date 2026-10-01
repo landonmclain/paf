@@ -103,13 +103,7 @@ def _apply_overrides(
             continue  # reviewer archived — drop from injection
         if st.is_applied_tier and st.tier and st.tier != rec.tier:
             # reviewer demoted — rebuild the record at the new tier
-            rec = MemoryRecord(
-                type=rec.type,
-                fact=rec.fact,
-                tier=st.tier,
-                born_on=rec.born_on,
-                source_ref=rec.source_ref,
-            )
+            rec = rec.with_tier(st.tier)
         if st.is_pending:
             pending.add(line)
         kept.append((line, rec))

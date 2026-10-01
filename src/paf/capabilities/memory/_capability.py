@@ -27,6 +27,7 @@ from ._overrides import OverrideStore
 from ._store import MemoryStore, validate_store_path
 from ._toolset import (
     MAIN_FILENAME,
+    ExtractionContext,
     JournalAppendToolset,
     OverrideToolset,
     ReviewerToolset,
@@ -129,6 +130,11 @@ class Memory(AbstractCapability[AgentDepsT]):
     (``_render.write_render``) produces ``MEMORY.md`` from it at recall time.
     """
 
+    extraction: ExtractionContext | None = field(default=None, kw_only=True)
+    """For the OWNER: what code knows about the slice being extracted (turn
+    dates for ``born_on``, the conversation's project). Handed to
+    ``append_memory`` so the model never supplies those values."""
+
     overrides: OverrideStore | None = field(default=None, kw_only=True)
     """Optional append-only override sidecar the assistant proposes archives to.
 
@@ -209,7 +215,7 @@ class Memory(AbstractCapability[AgentDepsT]):
             # ConversationSearch (search_conversation_history/read_turn).
             return None
         if self.journal is not None:
-            return JournalAppendToolset(self.journal)
+            return JournalAppendToolset(self.journal, self.extraction)
         return None
 
     def get_instructions(self) -> AgentInstructions[AgentDepsT] | None:
