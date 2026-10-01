@@ -14,7 +14,7 @@ background shell/subagent completions are delivered via ``Session.notify`` and
 their follow-up turn streams here even while you sit at the prompt.
 
 Usage:
-    python ui/chat.py [agent] [--profile P] [--id CID | --new] [--window N]
+    python ui/chat.py [agent] [--profile P] [--id CID | --new | --resume N|NAME] [--window N]
     cat task.md | python ui/chat.py contextbench --new   # one-shot: stdin = one message
 
 Keys: Enter sends · Alt+Enter (or Esc, Enter) inserts a newline · Ctrl-C
@@ -30,6 +30,7 @@ import re
 import shutil
 import signal
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any, ClassVar
@@ -39,6 +40,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -60,6 +62,7 @@ from paf.conversations import (
     ProjectExistsError,
     default_conversation_meta_store,
     default_project_store,
+    list_conversations,
 )
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnHandle
 
@@ -70,6 +73,21 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _ACTIVE = {"queued", "running", "processing"}
 _COORDINATOR_JOBS = {"consolidation", "review", "thread_summarize"}
 _NOTIFY = object()  # prompt result: a background notify started a turn
+
+# Prompt-toolkit styling. The default bottom toolbar is reverse video (a solid
+# white bar); this keeps it in the terminal's own colors, dimmed, with state
+# colors only where they carry meaning.
+_PT_STYLE = Style.from_dict(
+    {
+        "bottom-toolbar": "noreverse #808080",
+        "bottom-toolbar.text": "",
+        "toolbar.active": "#5fafd7",
+        "toolbar.failed": "#d75f5f",
+        "rule": "#444444",
+        "marker": "#d75fd7 bold",
+        "placeholder": "#626262 italic",
+    }
+)
 
 # --- terminal styling -------------------------------------------------------
 
@@ -386,6 +404,8 @@ class ChatApp:
         self.cid = cid
         self.meta = default_conversation_meta_store(agent)
         self.projects = default_project_store()
+        # Numbered rows from the last /list, so `/resume 3` means what was shown.
+        self._listing: list[dict[str, Any]] = []
         self.session: Session | None = None
         self.scoped = cid
         self.show_thinking = True
@@ -420,6 +440,8 @@ class ChatApp:
                 multiline=True,
                 prompt_continuation="  ",
                 bottom_toolbar=self._toolbar,
+                style=_PT_STYLE,
+                placeholder=HTML("<placeholder>Message paf · /help</placeholder>"),
             )
         get_agent_emitter(agent).on_any(self._on_process)
 
@@ -444,11 +466,13 @@ class ChatApp:
         self.procs.clear()
 
         restored = await self.session.restore()
+        title = self.meta.get(cid).get("title")
+        label = f"{title} ({cid})" if title else cid
         if restored:
             print_history(self.session.history)
-            _out(f"\n{CYAN}resumed {restored} message(s) · {cid}{RESET}\n")
+            _out(f"\n{CYAN}resumed {restored} message(s) · {label}{RESET}\n")
         else:
-            _out(f"{GREEN}new conversation · {cid}{RESET}\n")
+            _out(f"{GREEN}new conversation · {label}{RESET}\n")
         await self.refresh_status()
 
     def _close_session(self) -> None:
@@ -535,11 +559,13 @@ class ChatApp:
         active = [(lbl, d) for lbl, st, d in self.procs.values() if st in _ACTIVE]
         failed = [lbl for lbl, st, _ in self.procs.values() if st == "error"]
         if active:
-            procs = " · ".join(f"◐ {lbl}" for lbl, _ in active)
+            busy = " · ".join(f"◐ {lbl}" for lbl, _ in active)
+            procs = f"<toolbar.active>{_esc(busy)}</toolbar.active>"
         else:
             procs = "background idle" if self.procs else "no background jobs"
         if failed:
-            procs += " · ✗ " + ", ".join(failed)
+            gone = "✗ " + ", ".join(failed)
+            procs += f" · <toolbar.failed>{_esc(gone)}</toolbar.failed>"
         plan = ""
         if self.plan:
             done = sum(1 for i in self.plan if _status(i) == "completed")
@@ -547,9 +573,13 @@ class ChatApp:
             plan = f" │ plan {done}/{len(self.plan)}"
             if cur is not None:
                 plan += f": {cur.active_form or cur.content}"
-        project = self.meta.project_for(self.cid)
-        where = f"{self.agent} · {self.cid}" + (f" · [{project}]" if project else "")
-        return HTML(f" {_esc(where)} │ {_esc(procs)}{_esc(plan)}")
+        saved = self.meta.get(self.cid)
+        project = saved.get("project")
+        where = f"{self.agent} · {saved.get('title') or self.cid}" + (
+            f" · [{project}]" if project else ""
+        )
+        # Leading newline: a blank line between the input and the status line.
+        return HTML(f"\n {_esc(where)} │ {procs}{_esc(plan)}")
 
     # -- background notify -----------------------------------------------------
 
@@ -635,9 +665,7 @@ class ChatApp:
             self.notices.clear()
             await self.drain_detached()
             try:
-                text = await self.ps.prompt_async(
-                    HTML("<ansimagenta>›</ansimagenta> "), default=self.draft
-                )
+                text = await self.ps.prompt_async(_prompt_message, default=self.draft)
             except KeyboardInterrupt:
                 self.draft = ""
                 continue
@@ -678,6 +706,12 @@ class ChatApp:
                 await self.open(arg)
             else:
                 _out(f"{self.cid}  (store: {self.scoped})\n")
+        elif cmd == "/list":
+            await self._list_command(show_all=arg.lower() == "all")
+        elif cmd == "/resume":
+            await self._resume_command(arg)
+        elif cmd == "/name":
+            self._name_command(arg)
         elif cmd == "/history":
             n = int(arg) if arg.isdigit() else None
             assert self.session is not None
@@ -719,6 +753,66 @@ class ChatApp:
         else:
             _out(_HELP)
         return True
+
+    async def _conversations(self) -> list[dict[str, Any]]:
+        return await list_conversations(
+            self.agent, profile=getattr(self.session.profile, "name", None)
+        )
+
+    async def _list_command(self, *, show_all: bool) -> None:
+        """``/list`` recent visible conversations · ``/list all`` incl. hidden."""
+        rows = await self._conversations()
+        if not show_all:
+            rows = [r for r in rows if not r["hidden"]]
+        shown = rows if show_all else rows[:_LIST_LIMIT]
+        self._listing = shown
+        if not shown:
+            _out(f"{DIM}no saved conversations yet{RESET}\n")
+            return
+        for n, row in enumerate(shown, start=1):
+            _out(_list_row(n, row, current=row["conversation_id"] == self.cid))
+        if len(rows) > len(shown):
+            _out(f"{DIM}  … {len(rows) - len(shown)} more (/list all){RESET}\n")
+        _out(f"{DIM}/resume <n | name | id>{RESET}\n")
+
+    async def _resume_command(self, arg: str) -> None:
+        """``/resume <n | name | id>`` — reopen a saved conversation."""
+        if not arg:
+            await self._list_command(show_all=False)
+            return
+        rows = self._listing if arg.isdigit() and self._listing else None
+        if rows is None:
+            rows = await self._conversations()
+            if arg.isdigit():  # no prior /list: number the default view
+                rows = [r for r in rows if not r["hidden"]][:_LIST_LIMIT]
+        cid, matches = match_conversation(rows, arg)
+        if cid is None:
+            if matches:
+                _out(f"{YELLOW}{len(matches)} conversations match {arg!r}:{RESET}\n")
+                for n, row in enumerate(matches, start=1):
+                    _out(_list_row(n, row, current=row["conversation_id"] == self.cid))
+                self._listing = matches
+                _out(f"{DIM}/resume <n> to pick one{RESET}\n")
+            else:
+                _out(f"{RED}no conversation matches {arg!r}{RESET} (/list)\n")
+            return
+        if cid == self.cid:
+            _out(f"{DIM}already in {cid}{RESET}\n")
+            return
+        await self.open(cid)
+
+    def _name_command(self, arg: str) -> None:
+        """``/name`` show · ``/name <title>`` set · ``/name -`` clear."""
+        if not arg:
+            title = self.meta.get(self.cid).get("title")
+            _out(f"{title}\n" if title else f"{DIM}unnamed · /name <title>{RESET}\n")
+            return
+        if arg == "-":
+            self.meta.set_title(self.cid, None)
+            _out("name cleared\n")
+            return
+        self.meta.set_title(self.cid, arg)
+        _out(f"named: {arg}\n")
 
     def _project_command(self, arg: str) -> None:
         """``/project`` show · ``/project <slug>`` assign · ``/project none`` unassign."""
@@ -785,6 +879,9 @@ class ChatApp:
 _HELP = """\
   /new [id]        start a fresh conversation (optionally with an id)
   /id [id]         show the conversation id, or switch to another
+  /list [all]      saved conversations, newest first ('all' includes hidden)
+  /resume <n|name> reopen one: number from /list, part of its name, or an id
+  /name [title]    show or set this conversation's name ('-' clears it)
   /project [slug]  show this conversation's project, assign one, or 'none'
   /projects        list projects · /projects add <name> [-- description]
   /history [n]     reprint the last n turns (default: all loaded)
@@ -809,8 +906,75 @@ def _row_key(row_id: str) -> str:
     return ns if ns in _COORDINATOR_JOBS else row_id
 
 
+_LIST_LIMIT = 20
+
+
+def match_conversation(
+    rows: list[dict[str, Any]], arg: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Resolve ``/resume``'s argument against listed rows.
+
+    A number picks that row (1-based); otherwise an exact id wins, then a
+    case-insensitive substring of the name or id. Returns ``(cid, [])`` on a
+    unique hit, else ``(None, candidates)`` — several matches, or none.
+    """
+    arg = arg.strip()
+    if arg.isdigit():
+        n = int(arg)
+        return (
+            (rows[n - 1]["conversation_id"], []) if 1 <= n <= len(rows) else (None, [])
+        )
+    for row in rows:
+        if row["conversation_id"] == arg:
+            return row["conversation_id"], []
+    needle = arg.lower()
+    hits = [
+        r
+        for r in rows
+        if needle in (r.get("title") or "").lower()
+        or needle in r["conversation_id"].lower()
+    ]
+    if len(hits) == 1:
+        return hits[0]["conversation_id"], []
+    # Prefer an exact (case-insensitive) name when a substring is ambiguous.
+    exact = [r for r in hits if (r.get("title") or "").lower() == needle]
+    if len(exact) == 1:
+        return exact[0]["conversation_id"], []
+    return None, hits
+
+
+def _ago(epoch: float | None) -> str:
+    if not epoch:
+        return ""
+    s = max(0.0, time.time() - epoch)
+    if s < 3600:
+        return f"{int(s // 60)}m ago"
+    if s < 86400:
+        return f"{int(s // 3600)}h ago"
+    return f"{int(s // 86400)}d ago"
+
+
+def _list_row(n: int, row: dict[str, Any], *, current: bool) -> str:
+    title = row.get("title")
+    name = title if title else f"{DIM}{row['conversation_id']}{RESET}"
+    project = f"{CYAN}[{row['project']}]{RESET} " if row.get("project") else ""
+    hidden = f"{DIM}(hidden) {RESET}" if row.get("hidden") else ""
+    mark = f"{MAGENTA}●{RESET}" if current else " "
+    return f"  {n:>2} {mark} {name}  {project}{hidden}{DIM}{_ago(row.get('updated_at'))}{RESET}\n"
+
+
 def _status(item: PlanItem) -> str:
     return getattr(item.status, "value", str(item.status))
+
+
+def _prompt_message() -> HTML:
+    """A dim rule across the terminal, then the input marker.
+
+    A callable so the rule re-measures on resize. The rule stays in scrollback
+    after Enter, separating turns.
+    """
+    rule = "─" * max(10, _width() - 1)
+    return HTML(f"<rule>{rule}</rule>\n<marker>›</marker> ")
 
 
 def _esc(s: str) -> str:
@@ -838,6 +1002,9 @@ def main() -> int:
     lane = ap.add_mutually_exclusive_group()
     lane.add_argument("--id", help="conversation id to open or resume")
     lane.add_argument("--new", action="store_true", help="start a fresh conversation")
+    lane.add_argument(
+        "--resume", metavar="N|NAME", help="reopen a saved conversation (see /list)"
+    )
     ap.add_argument("--window", type=int, default=15, help="resume window (messages)")
     ap.add_argument("--project", help="assign this conversation to a project (slug)")
     args = ap.parse_args()
@@ -856,9 +1023,25 @@ def main() -> int:
             known = sorted(p["slug"] for p in default_project_store().list())
             print(f"unknown project {args.project!r}; known: {known}")
             return 2
-        default_conversation_meta_store(args.agent).set_project(cid, args.project)
 
     async def _amain() -> int:
+        nonlocal cid
+        if args.resume:
+            rows = await list_conversations(
+                args.agent, profile=getattr(profile, "name", None)
+            )
+            visible = [r for r in rows if not r["hidden"]][:_LIST_LIMIT]
+            found, matches = match_conversation(
+                visible if args.resume.isdigit() else rows, args.resume
+            )
+            if found is None:
+                print(f"no unique conversation for {args.resume!r}")
+                for n, row in enumerate(matches, start=1):
+                    print(_list_row(n, row, current=False), end="")
+                return 2
+            cid = found
+        if args.project:
+            default_conversation_meta_store(args.agent).set_project(cid, args.project)
         app = ChatApp(args.agent, profile, cid, args.window)
         try:
             await app.open(cid)
