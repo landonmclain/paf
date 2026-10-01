@@ -69,9 +69,11 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 
 ## Other entry points
 
-- **CLI:** `ui/chat.py [agent] [--new | --id CID] [--profile P]` — inline chat
-  that streams into normal scrollback (default agent `demo_assistant`, lane
-  `chat-<agent>`). Runs turns in-process via `Session.start_turn` — it does NOT
+- **CLI:** `ui/chat.py [agent] [--new | --id CID | --resume N|NAME] [--profile P]`
+  — inline chat that streams into normal scrollback (default agent
+  `demo_assistant`). With no conversation flag an interactive run reopens the
+  conversation last open in the CLI (piped runs use lane `chat-<agent>`);
+  `/list`, `/resume`, `/name` manage conversations. Runs turns in-process via `Session.start_turn` — it does NOT
   need `paf-sse` running. Ctrl-C cancels a turn; background shell/subagent
   completions stream their follow-up turn at the prompt; `/help` lists slash
   commands. Piped stdin = one-shot (whole stdin is one message, then exit). It

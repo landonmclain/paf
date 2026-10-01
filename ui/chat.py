@@ -15,6 +15,9 @@ their follow-up turn streams here even while you sit at the prompt.
 
 Usage:
     python ui/chat.py [agent] [--profile P] [--id CID | --new | --resume N|NAME] [--window N]
+
+With no conversation flag, an interactive run reopens the conversation last
+open in the CLI (per agent + profile); piped input uses the default lane.
     cat task.md | python ui/chat.py contextbench --new   # one-shot: stdin = one message
 
 Keys: Enter sends · Alt+Enter (or Esc, Enter) inserts a newline · Ctrl-C
@@ -101,6 +104,9 @@ def _sgr(code: str) -> str:
 DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, RESET = (
     _sgr(c) for c in ("2", "31", "32", "33", "36", "35", "0")
 )
+# Thinking text: an explicit mid-gray. Terminals render the faint attribute
+# (DIM) inconsistently — often barely distinct from normal text.
+THINK = _sgr("38;5;244")
 
 
 def _out(s: str) -> None:
@@ -327,9 +333,11 @@ class TurnPrinter:
                 return
             if self.mode != "thinking":
                 self._newline()
+                if self.mode is not None:  # space it off tool calls / answer text
+                    self._write("\n")
                 self._write(f"{CYAN}thinking:{RESET} ")
                 self.mode = "thinking"
-            self._write(f"{DIM}{_safe(ev.text)}{RESET}")
+            self._write(f"{THINK}{_safe(ev.text)}{RESET}")
         elif ev.kind == "text" and ev.text:
             if self.mode != "text":
                 self._newline()
@@ -466,6 +474,7 @@ class ChatApp:
         self.procs.clear()
 
         restored = await self.session.restore()
+        _remember_last(self.agent, getattr(self.profile, "name", None), cid)
         title = self.meta.get(cid).get("title")
         label = f"{title} ({cid})" if title else cid
         if restored:
@@ -996,6 +1005,28 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _last_path(agent: str, profile: str | None) -> Path:
+    return _DATA / "chat" / f"last-{agent}{'-' + profile if profile else ''}"
+
+
+def _remember_last(agent: str, profile: str | None, cid: str) -> None:
+    """Record the conversation just opened so a bare `chat.py` can reopen it."""
+    try:
+        path = _last_path(agent, profile)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(cid, encoding="utf-8")
+    except OSError:
+        pass  # a convenience — never block opening a conversation
+
+
+def _last_conversation(agent: str, profile: str | None) -> str | None:
+    try:
+        cid = _last_path(agent, profile).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return cid or None
+
+
 def _new_cid(agent: str) -> str:
     return f"chat-{agent}-{uuid.uuid4().hex[:8]}"
 
@@ -1032,6 +1063,13 @@ def main() -> int:
             print(f"unknown profile {args.profile!r}; known: {sorted(PROFILES)}")
             return 2
     cid = args.id or (_new_cid(args.agent) if args.new else f"chat-{args.agent}")
+    # A bare interactive `chat.py` reopens the conversation last open in the CLI
+    # (piped one-shot runs keep the fixed default lane, so scripts stay stable).
+    auto_resumed = False
+    if not (args.id or args.new or args.resume) and sys.stdin.isatty():
+        last = _last_conversation(args.agent, getattr(profile, "name", None))
+        if last:
+            cid, auto_resumed = last, True
     if args.project:
         entry = default_project_store().get(args.project)
         if entry is None or entry.get("archived"):
@@ -1060,6 +1098,10 @@ def main() -> int:
         app = ChatApp(args.agent, profile, cid, args.window)
         try:
             await app.open(cid)
+            if auto_resumed:
+                _out(
+                    f"{DIM}reopened your last conversation · /new for a fresh one{RESET}\n"
+                )
             return await app.run()
         finally:
             await app.shutdown()
