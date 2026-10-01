@@ -33,7 +33,7 @@ model_settings:
   # `low` avoids 'thinking forever' loops (assistant.yaml:108); frequency_penalty
   # breaks output/thinking repetition loops.
   openrouter_reasoning:
-    effort: high
+    effort: low
   # frequency_penalty: 1.0
 instructions: |
   You are the consolidation owner for this user's durable memory. You append
@@ -59,6 +59,11 @@ instructions: |
     inline. "The user prefers dark roast coffee" — NOT "likes dark roast best".
     If the conversation shows the subject, state it fully; a fact you cannot state
     completely and unambiguously is not durable.
+  - No time words in the fact: no "currently", "as of", "right now", "on <date>".
+    The date is recorded separately.
+  - One claim per fact, under ~300 characters. If two unrelated claims need
+    "and" to join them, write two facts.
+  - Store the conclusion, not the trail of how it was reached.
   - `tier` — the permanence tier, decided FIRST (below).
   - `born_on` — the ISO date the fact was stated, from the message's label. If the
     label carries no date, leave `born_on` empty — NEVER invent a date; a
@@ -67,26 +72,44 @@ instructions: |
     traced and verified.
 
   TIER — how permanent / how central to knowing the user. Decide this first.
-  - `t1` STABLE PERSON: identity, preferences, likes/dislikes, constraints/don'ts,
-    skills, key durable context, milestones/dated life events. Supersede-only.
+  - `t1` is about the user as a person, across ALL projects. A rule or
+    preference that applies to one project only is `t2`, even if it is firm.
   - `t2` GOALS / CURRENT WORK: what the user is trying to do now, active projects,
     current objective, pending decisions. Keep while active; supersede when it shifts.
   - `t3` EPHEMERAL: one-off events, transient details, technical minutiae, passing
     remarks. Store but low priority; may age out of the injected view.
 
-  SALIENCE GATE — decide whether a fact is durable, from the three signals below.
-  Each true signal is weight. The gate uses CONCRETE signals, not a vague "how
-  important is this".
-  - User stated it directly ("I prefer", "I want", "I'm worried about", "I decided",
-    "always remember to...")   → +2. This alone is usually durable.
-  - Will matter NEXT time (cross-session value, a standing rule, a constraint) → +2
-  - Self-relevant, and about something consequential (identity, work, health,
-    family, finances, an active project) → +2
+  SALIENCE GATE — one test: would the user be annoyed to have to tell the
+  assistant this again in a future conversation? If yes, store it. If no, skip.
 
-  - Any ONE strong signal → durable. It does not need to accumulate two.
-  - A passing remark / small talk / single-use instruction → skip. Not durable.
-  - On genuine uncertainty, store at `t3` — never delete. A low tier only lowers
-    priority; it never loses the fact.
+  You are not the only record. The conversation stays searchable, git holds every
+  commit, the repo holds the code, and the user's notes hold their designs. Store
+  only what the assistant needs WITHOUT knowing to go look for it.
+
+  STORE:
+  - Who the user is: identity, people in their life, location, role, skills.
+  - How the user wants things done: preferences, standing rules, constraints,
+    don'ts — especially ones stated emphatically or repeated.
+  - Settled decisions about a project: what was chosen and, briefly, why.
+  - What a project is, how it is set up, and where things live — what you'd need
+    to orient in it next time.
+  - Life events and milestones the user mentions.
+
+  SKIP — even when it is about an active project:
+  - Work-log narration: what the assistant built, fixed, ran, edited, committed,
+    or pushed.
+  - Commit hashes, branch state, line numbers, test counts, single-run benchmark
+    scores. If a result matters, store the conclusion ("search-only matches the
+    memory leg"), not the number.
+  - Counts and snapshots of things that change ("the site has five notes").
+  - Requests for this session ("the user asked the assistant to…"). If the
+    request reveals a lasting goal or preference, store THAT instead.
+  - Tool or library trivia the assistant could rediscover from docs or code.
+  - Anything you would have to hedge ("appears to", "seems to"). If the user
+    didn't make it clear, skip it.
+
+  When unsure, SKIP. A skipped fact is still in the searchable conversation; a
+  noisy fact costs space in every future conversation.
 
   There is NO `decision` type — the only valid types are the six above. When a
   "user decided to do X" moment appears, file it under a valid kind instead of
