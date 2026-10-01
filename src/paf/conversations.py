@@ -20,10 +20,11 @@ the journal. Projects are archived, never deleted (journal records point at
 slugs); an archived project is hidden from listings but its slug stays taken.
 
 **Conversation meta** — per-agent map ``conversation_id -> {title?, project?,
-updated_at}``. The filename stays ``conversation-titles.json`` for backward
+hidden?, updated_at}``. The filename stays ``conversation-titles.json`` for backward
 compatibility with existing data. Keyed by the bare lane id (the per-agent
 file already scopes it). Clearing a title removes only the ``title`` key; an
-entry is dropped only when it carries neither a title nor a project.
+entry is dropped only when it carries no title, project, or hidden flag.
+``hidden`` only hides a lane from the default sidebar view; nothing is deleted.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from typing import Any
 from paf.capabilities._storage import FlatFileStorage
 
 _META_KIND = "conversation-titles"
+_META_FIELDS = ("title", "project", "hidden")
 _PROJECTS_KIND = "projects"
 _PROJECTS_KEY = "projects"
 
@@ -137,7 +139,7 @@ class ProjectStore:
 
 
 class ConversationMetaStore:
-    """One agent's conversation meta: ``conversation_id -> {title?, project?, updated_at}``."""
+    """One agent's conversation meta: ``conversation_id -> {title?, project?, hidden?, updated_at}``."""
 
     def __init__(self, storage: FlatFileStorage, agent: str) -> None:
         self._storage = storage
@@ -152,8 +154,8 @@ class ConversationMetaStore:
         entry = self.load().get(conversation_id)
         return entry if isinstance(entry, dict) else {}
 
-    def _put(self, conversation_id: str, **fields: str | None) -> dict[str, Any]:
-        """Set (value) or clear (None) fields; drop the entry once it is empty."""
+    def _put(self, conversation_id: str, **fields: str | bool | None) -> dict[str, Any]:
+        """Set (truthy) or clear (falsy) fields; drop the entry once it is empty."""
         meta = self.load()
         entry = dict(meta.get(conversation_id) or {})
         for key, value in fields.items():
@@ -161,7 +163,7 @@ class ConversationMetaStore:
                 entry[key] = value
             else:
                 entry.pop(key, None)
-        if entry.get("title") or entry.get("project"):
+        if any(entry.get(k) for k in _META_FIELDS):
             entry["updated_at"] = time.time()
             meta[conversation_id] = entry
         else:
@@ -177,6 +179,10 @@ class ConversationMetaStore:
     def set_project(self, conversation_id: str, project: str | None) -> dict[str, Any]:
         """Assign a project slug, or unassign (None). Callers validate the slug."""
         return self._put(conversation_id, project=project or None)
+
+    def set_hidden(self, conversation_id: str, hidden: bool) -> dict[str, Any]:
+        """Hide a lane from the default sidebar view, or show it again."""
+        return self._put(conversation_id, hidden=bool(hidden))
 
     def project_for(self, conversation_id: str) -> str | None:
         project = self.get(conversation_id).get("project")

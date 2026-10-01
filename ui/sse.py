@@ -111,7 +111,10 @@ def _session_key(agent: str, conversation_id: str) -> str:
 
 
 def _now() -> float:
-    return time.monotonic()
+    # Wall clock, not monotonic: last-used doubles as the lane's `updated_at`,
+    # which is compared against persisted run start times (epoch) and shown in
+    # the UI. The idle sweeper only needs differences, which this still gives.
+    return time.time()
 
 
 async def _get_session(conversation_id: str, agent: str) -> Session:
@@ -641,27 +644,49 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
         elif not lane.get("title"):
             lane["title"] = "New conversation"
         lane["project"] = saved.get("project") or None
+        lane["hidden"] = bool(saved.get("hidden"))
     out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
     return {"conversations": out}
 
 
 @app.post("/api/conversations")
-async def create_conversation(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+async def create_conversation(
+    agent: str = DEFAULT_AGENT, project: str | None = None
+) -> dict[str, Any]:
     """Allocate a fresh conversation lane id for the \"New conversation\" flow.
 
     The session itself is lazily created on first /api/chat; here we just mint a
     stable id and register its last-used timestamp so it appears in the list.
+    ``project`` (optional) assigns the new lane to a registered project.
     """
+    if project:
+        _require_assignable_project(project)
     conversation_id = f"paf-{uuid.uuid4().hex[:12]}"
     _sessions_last_used[_session_key(agent, conversation_id)] = _now()
-    return {"conversation_id": conversation_id, "agent": agent}
+    if project:
+        _meta_store(agent).set_project(conversation_id, project)
+    return {"conversation_id": conversation_id, "agent": agent, "project": project}
+
+
+def _require_assignable_project(slug: str) -> None:
+    """404 for an unknown project, 400 for an archived one."""
+    entry = _project_store().get(slug)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown project {slug!r}"
+        )
+    if entry.get("archived"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"project {slug!r} is archived",
+        )
 
 
 @app.patch("/api/conversations/{conversation_id}")
 async def update_conversation(
     conversation_id: str, body: dict[str, Any], agent: str = DEFAULT_AGENT
 ) -> dict[str, Any]:
-    """Set (or clear) a conversation's title and/or project, durably.
+    """Set (or clear) a conversation's title, project, and/or hidden flag, durably.
 
     Persists to the per-agent ``conversation-titles.json`` sidecar under
     ``data/conversations/<agent>/`` — kept OUT of ``data/memory/`` — so a change
@@ -672,11 +697,13 @@ async def update_conversation(
       clears it back to the auto-derived title (the project is kept).
     - ``project``: a registered, non-archived project slug assigns it; ``null``
       or ``""`` unassigns. Assignment affects memory extraction from here on.
+    - ``hidden``: true hides the lane from the default sidebar view; false
+      shows it again. Nothing is deleted.
     """
-    if "title" not in body and "project" not in body:
+    if not any(k in body for k in ("title", "project", "hidden")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="title or project required",
+            detail="title, project, or hidden required",
         )
     if "title" in body and body["title"] is None:
         raise HTTPException(
@@ -687,17 +714,7 @@ async def update_conversation(
     if "project" in body:
         project = str(body["project"] or "").strip() or None
         if project is not None:
-            entry = _project_store().get(project)
-            if entry is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"unknown project {project!r}",
-                )
-            if entry.get("archived"):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"project {project!r} is archived",
-                )
+            _require_assignable_project(project)
 
     store = _meta_store(agent)
     saved = store.get(conversation_id)
@@ -705,12 +722,15 @@ async def update_conversation(
         saved = store.set_title(conversation_id, str(body["title"]))
     if "project" in body:
         saved = store.set_project(conversation_id, project)
+    if "hidden" in body:
+        saved = store.set_hidden(conversation_id, bool(body["hidden"]))
 
     return {
         "conversation_id": conversation_id,
         "agent": agent,
         "title": saved.get("title") or None,
         "project": saved.get("project") or None,
+        "hidden": bool(saved.get("hidden")),
     }
 
 

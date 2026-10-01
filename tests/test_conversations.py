@@ -413,3 +413,44 @@ def test_clearing_title_keeps_project(tmp_path, monkeypatch) -> None:
         lane = client.get("/api/conversations").json()["conversations"][0]
         assert lane["title"] == "origin"
         assert lane["project"] == "paf"
+
+
+def test_hide_and_unhide_conversation(tmp_path, monkeypatch) -> None:
+    _reset_registry()
+    sse._sessions_last_used[sse._session_key(sse.DEFAULT_AGENT, "conv-h")] = 100.0
+
+    with _empty_store(tmp_path, monkeypatch), _temp_titles_dir(tmp_path):
+        client = TestClient(sse.app)
+        resp = client.patch("/api/conversations/conv-h", json={"hidden": True})
+        assert resp.json()["hidden"] is True
+        lane = client.get("/api/conversations").json()["conversations"][0]
+        assert lane["hidden"] is True  # still listed; the UI decides visibility
+
+        client.patch("/api/conversations/conv-h", json={"hidden": False})
+        lane = client.get("/api/conversations").json()["conversations"][0]
+        assert lane["hidden"] is False
+
+
+def test_create_conversation_in_project(tmp_path, monkeypatch) -> None:
+    _reset_registry()
+    with (
+        _empty_store(tmp_path, monkeypatch),
+        _temp_titles_dir(tmp_path),
+        _temp_projects(tmp_path),
+    ):
+        client = TestClient(sse.app)
+        client.post("/api/projects", json={"name": "paf"})
+        resp = client.post("/api/conversations", params={"project": "paf"})
+        assert resp.status_code == 200
+        cid = resp.json()["conversation_id"]
+        lane = next(
+            c
+            for c in client.get("/api/conversations").json()["conversations"]
+            if c["conversation_id"] == cid
+        )
+        assert lane["project"] == "paf"
+
+        assert (
+            client.post("/api/conversations", params={"project": "nope"}).status_code
+            == 404
+        )

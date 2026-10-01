@@ -94,3 +94,15 @@ def test_meta_reads_legacy_title_entries(tmp_path) -> None:
     meta = _meta(tmp_path)
     assert meta.get("c1")["title"] == "old"
     assert meta.project_for("c1") is None
+
+
+def test_meta_hidden_flag(tmp_path) -> None:
+    meta = _meta(tmp_path)
+    meta.set_hidden("c1", True)
+    assert meta.get("c1")["hidden"] is True
+    meta.set_project("c1", "paf")
+    meta.set_hidden("c1", False)
+    assert "hidden" not in meta.get("c1")
+    assert meta.project_for("c1") == "paf"
+    meta.set_project("c1", None)
+    assert "c1" not in meta.load()
