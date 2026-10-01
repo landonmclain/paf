@@ -189,6 +189,48 @@ class ConversationMetaStore:
         return project if isinstance(project, str) and project else None
 
 
+def lane_id(conversation_id: str, profile: str | None) -> str:
+    """Strip a ``{profile}:`` scope prefix back to the bare lane id.
+
+    ``Session._scoped_cid`` stores conversations as ``{profile}:{cid}``
+    (``demo:paf-e4b3ff13d560``), while conversation meta is keyed by the bare
+    lane id. Only the known profile prefix is stripped — lane ids are arbitrary
+    (``chat.py --id``) and may themselves contain a colon. An id without that
+    prefix is returned unchanged, so bare ids pass straight through.
+    """
+    prefix = f"{profile}:" if profile else ""
+    if prefix and conversation_id.startswith(prefix):
+        return conversation_id[len(prefix) :]
+    return conversation_id
+
+
+def project_for_conversation(
+    agent: str,
+    conversation_id: str | None,
+    *,
+    profile: str | None = None,
+    store: ConversationMetaStore | None = None,
+) -> str | None:
+    """The project slug assigned to a conversation, or ``None``.
+
+    The single lookup every consumer (memory extraction, injection, backfill)
+    uses, so none of them handles the scope prefix itself. ``conversation_id``
+    may be profile-scoped (what ``ctx.conversation_id``, the background
+    triggers, and persisted runs carry) or bare. ``profile`` is the session's
+    profile name; when omitted it is resolved from the agent's spec (its
+    ``profile:`` key) — pass it explicitly when the session runs under an
+    override (``chat.py --profile``).
+    """
+    if not conversation_id:
+        return None
+    if profile is None:
+        from paf.specs import resolve_profile_name
+
+        profile = resolve_profile_name(agent)
+    meta = store if store is not None else default_conversation_meta_store(agent)
+    return meta.project_for(lane_id(conversation_id, profile))
+
+
 def default_project_store() -> ProjectStore:
     """The registry at ``<project_root>/data/projects/projects.json``."""
     from paf.config import PROJECT_ROOT

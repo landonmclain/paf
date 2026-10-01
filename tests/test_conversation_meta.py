@@ -106,3 +106,40 @@ def test_meta_hidden_flag(tmp_path) -> None:
     assert meta.project_for("c1") == "paf"
     meta.set_project("c1", None)
     assert "c1" not in meta.load()
+
+
+def test_lane_id_strips_only_the_profile_prefix() -> None:
+    from paf.conversations import lane_id
+
+    assert lane_id("demo:paf-1", "demo") == "paf-1"
+    assert lane_id("paf-1", "demo") == "paf-1"  # bare ids pass through
+    assert lane_id("other:paf-1", "demo") == "other:paf-1"  # not our prefix
+    assert lane_id("demo:a:b", "demo") == "a:b"  # lane ids may contain colons
+    assert lane_id("demo:paf-1", None) == "demo:paf-1"  # no profile, no strip
+
+
+def test_project_for_conversation_scoped_and_bare(tmp_path) -> None:
+    from paf.conversations import project_for_conversation
+
+    meta = _meta(tmp_path, "demo_assistant")
+    meta.set_project("paf-1", "paf")
+
+    def lookup(cid, **kw):
+        return project_for_conversation(
+            "demo_assistant", cid, profile="demo", store=meta, **kw
+        )
+
+    assert lookup("demo:paf-1") == "paf"
+    assert lookup("paf-1") == "paf"
+    assert lookup("demo:paf-2") is None
+    assert lookup(None) is None
+
+
+def test_project_for_conversation_resolves_profile_from_spec(tmp_path) -> None:
+    """Without an explicit profile, the agent spec's `profile:` key is used
+    (demo_assistant.yaml declares `profile: demo`)."""
+    from paf.conversations import project_for_conversation
+
+    meta = _meta(tmp_path, "demo_assistant")
+    meta.set_project("paf-1", "paf")
+    assert project_for_conversation("demo_assistant", "demo:paf-1", store=meta) == "paf"
