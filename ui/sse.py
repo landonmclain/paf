@@ -60,6 +60,13 @@ from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
 from paf.capabilities.planning._store import FilePlanStore
 from paf.config import PROJECT_ROOT
+from paf.conversations import (
+    ConversationMetaStore,
+    ProjectExistsError,
+    ProjectNotFoundError,
+    ProjectStore,
+    default_project_store,
+)
 from paf.observability.instrumentation import root_span
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
 
@@ -208,47 +215,37 @@ async def _emit_turn_started(agent: str, conversation_id: str, run_id: str) -> N
 
 
 # ---------------------------------------------------------------------------
-# Conversation titles store
+# Conversation meta + project registry stores
 #
-# The ONE durable store of user-set conversation names. It is a proper
-# consumer of the shared storage seam (``paf.capabilities._storage``) — not a
-# flat-file-fixed write — so its backend is swappable like any other stored
-# artifact. It lives OUTSIDE ``data/memory/`` deliberately: conversation titles
-# are a UI/conversation concern, not agent memory, so they must not be coupled
-# to the memory capability (which can be disabled or re-architected). Home:
-# ``<project_root>/data/conversations/<agent>/conversation-titles.json``.
-# Keyed by bare conversation_id because the per-agent key already scopes it
-# (namespaced by agent, so a rename can never bleed into another agent's lane
-# of the same id). Survives restarts; default edit is ``write`` (atomic
-# rewrite of the id -> {title, updated_at} map).
+# User-owned stores (``paf.conversations``) behind the shared storage seam,
+# kept OUT of ``data/memory/`` — conversation titles/projects are a
+# UI/conversation concern, not agent memory. Conversation meta is per agent:
+# ``<project_root>/data/conversations/<agent>/conversation-titles.json``, keyed
+# by bare conversation_id (the per-agent file already scopes it, so a rename
+# can never bleed into another agent's lane of the same id). The project
+# registry is global: ``<project_root>/data/projects/projects.json``.
 # ---------------------------------------------------------------------------
-
-_TITLES_KIND = "conversation-titles"
 
 
 def _title_store(agent: str) -> FlatFileStorage:
-    """A seam-backed store rooted at the neutral conversations dir, per agent.
+    """The seam-backed storage rooted at the neutral conversations dir.
 
-    <project_root>/data/conversations/<agent>/conversation-titles.json — a
-    dedicated home that shares NO location or import with the memory
-    capability, routed through the shared StorageService (FlatFileStorage).
+    Tests swap this for a temp-rooted ``FlatFileStorage`` — the storage root is
+    the only thing the seam needs to change.
     """
     from paf.capabilities._storage import FlatFileStorage
-    from paf.config import PROJECT_ROOT
 
-    root = PROJECT_ROOT / "data" / "conversations"
-    return FlatFileStorage(root)
+    return FlatFileStorage(PROJECT_ROOT / "data" / "conversations")
 
 
-def _load_titles(agent: str) -> dict[str, dict[str, Any]]:
-    """Read the agent's titles (None -> {}); never raises."""
-    data = _title_store(agent).read(_TITLES_KIND, agent)
-    return data if isinstance(data, dict) else {}
+def _meta_store(agent: str) -> ConversationMetaStore:
+    """One agent's conversation meta (title + project per lane)."""
+    return ConversationMetaStore(_title_store(agent), agent)
 
 
-def _save_titles(agent: str, titles: dict[str, dict[str, Any]]) -> None:
-    """Write the agent's titles atomically through the storage seam."""
-    _title_store(agent).write(_TITLES_KIND, agent, titles)
+def _project_store() -> ProjectStore:
+    """The global project registry."""
+    return default_project_store()
 
 
 def _session_is_busy(session: Session) -> bool:
@@ -632,15 +629,18 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
 
     out = list(by_lane.values())
 
-    # 3. Overlay user-set titles (conversation-titles.json) — the user's rename
-    #    always wins over the auto-derived one, and survives daemon restarts.
-    titles = _load_titles(agent)
+    # 3. Overlay user-set meta (conversation-titles.json) — the user's rename
+    #    always wins over the auto-derived title, and survives daemon restarts;
+    #    the assigned project (if any) rides along on every lane.
+    meta = _meta_store(agent).load()
     for lane in out:
-        saved = titles.get(lane["conversation_id"])
-        if saved and isinstance(saved, dict) and saved.get("title"):
+        saved = meta.get(lane["conversation_id"])
+        saved = saved if isinstance(saved, dict) else {}
+        if saved.get("title"):
             lane["title"] = saved["title"]
         elif not lane.get("title"):
             lane["title"] = "New conversation"
+        lane["project"] = saved.get("project") or None
     out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
     return {"conversations": out}
 
@@ -658,36 +658,122 @@ async def create_conversation(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
 
 
 @app.patch("/api/conversations/{conversation_id}")
-async def set_conversation_title(
+async def update_conversation(
     conversation_id: str, body: dict[str, Any], agent: str = DEFAULT_AGENT
 ) -> dict[str, Any]:
-    """Set (or clear) a conversation's user-facing title, durably.
+    """Set (or clear) a conversation's title and/or project, durably.
 
     Persists to the per-agent ``conversation-titles.json`` sidecar under
-    ``data/conversations/<agent>/`` — kept OUT of ``data/memory/`` so titles are
-    not coupled to the memory capability — so a rename is exclusive to one
-    agent's lane and survives restarts. A non-empty title replaces the
-    derived one; an empty string clears it back to the auto-derived title.
-    """
-    raw = body.get("title")
-    if raw is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="title required"
-        )
-    title = str(raw).strip()
+    ``data/conversations/<agent>/`` — kept OUT of ``data/memory/`` — so a change
+    is exclusive to one agent's lane and survives restarts. Each field is
+    applied only when its key is present:
 
-    titles = _load_titles(agent)
-    if title:
-        titles[conversation_id] = {"title": title, "updated_at": _now()}
-    else:
-        titles.pop(conversation_id, None)
-    _save_titles(agent, titles)
+    - ``title``: a non-empty title replaces the derived one; an empty string
+      clears it back to the auto-derived title (the project is kept).
+    - ``project``: a registered, non-archived project slug assigns it; ``null``
+      or ``""`` unassigns. Assignment affects memory extraction from here on.
+    """
+    if "title" not in body and "project" not in body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="title or project required",
+        )
+    if "title" in body and body["title"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="title must be a string"
+        )
+
+    project: str | None = None
+    if "project" in body:
+        project = str(body["project"] or "").strip() or None
+        if project is not None:
+            entry = _project_store().get(project)
+            if entry is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"unknown project {project!r}",
+                )
+            if entry.get("archived"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"project {project!r} is archived",
+                )
+
+    store = _meta_store(agent)
+    saved = store.get(conversation_id)
+    if "title" in body:
+        saved = store.set_title(conversation_id, str(body["title"]))
+    if "project" in body:
+        saved = store.set_project(conversation_id, project)
 
     return {
         "conversation_id": conversation_id,
         "agent": agent,
-        "title": title or None,
+        "title": saved.get("title") or None,
+        "project": saved.get("project") or None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Projects — the user's registry (create / list / edit / archive)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/projects")
+async def list_projects(include_archived: bool = False) -> dict[str, Any]:
+    """Registered projects, sorted by name; archived ones only when asked."""
+    return {"projects": _project_store().list(include_archived=include_archived)}
+
+
+@app.post("/api/projects", status_code=status.HTTP_201_CREATED)
+async def create_project(body: dict[str, Any]) -> dict[str, Any]:
+    """Register a project. The slug is derived from ``name`` and never changes."""
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="name required"
+        )
+    try:
+        return _project_store().create(name, str(body.get("description") or ""))
+    except ProjectExistsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"project {exc.args[0]!r} already exists",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+
+@app.patch("/api/projects/{slug}")
+async def update_project(slug: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Edit a project's name/description, or (un)archive it. Never deletes."""
+    if not any(k in body for k in ("name", "description", "archived")):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="name, description, or archived required",
+        )
+    name, description, archived = (
+        body.get("name"),
+        body.get("description"),
+        body.get("archived"),
+    )
+    try:
+        return _project_store().update(
+            slug,
+            name=None if name is None else str(name),
+            description=None if description is None else str(description),
+            archived=None if archived is None else bool(archived),
+        )
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown project {slug!r}"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
 
 @app.get("/api/conversations/{conversation_id}/tasks")

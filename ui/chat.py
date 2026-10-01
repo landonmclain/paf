@@ -56,6 +56,11 @@ from paf.capabilities.planning import FilePlanStore, PlanItem
 from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
 from paf.config import PROJECT_ROOT
+from paf.conversations import (
+    ProjectExistsError,
+    default_conversation_meta_store,
+    default_project_store,
+)
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnHandle
 
 DEFAULT_AGENT = "demo_assistant"
@@ -379,6 +384,8 @@ class ChatApp:
         self.profile = profile
         self.window = window
         self.cid = cid
+        self.meta = default_conversation_meta_store(agent)
+        self.projects = default_project_store()
         self.session: Session | None = None
         self.scoped = cid
         self.show_thinking = True
@@ -540,9 +547,9 @@ class ChatApp:
             plan = f" │ plan {done}/{len(self.plan)}"
             if cur is not None:
                 plan += f": {cur.active_form or cur.content}"
-        return HTML(
-            f" {_esc(self.agent)} · {_esc(self.cid)} │ {_esc(procs)}{_esc(plan)}"
-        )
+        project = self.meta.project_for(self.cid)
+        where = f"{self.agent} · {self.cid}" + (f" · [{project}]" if project else "")
+        return HTML(f" {_esc(where)} │ {_esc(procs)}{_esc(plan)}")
 
     # -- background notify -----------------------------------------------------
 
@@ -658,7 +665,14 @@ class ChatApp:
         if cmd in ("/quit", "/q", "/exit"):
             return False
         if cmd == "/new":
-            await self.open(arg or _new_cid(self.agent))
+            # A fresh conversation stays in the current project.
+            project = self.meta.project_for(self.cid)
+            new_cid = arg or _new_cid(self.agent)
+            if project:
+                self.meta.set_project(new_cid, project)
+            await self.open(new_cid)
+            if project:
+                _out(f"{DIM}project: {project}{RESET}\n")
         elif cmd == "/id":
             if arg:
                 await self.open(arg)
@@ -694,6 +708,10 @@ class ChatApp:
         elif cmd == "/markdown":
             self.markdown = not self.markdown
             _out(f"markdown {'rendered' if self.markdown else 'raw'}\n")
+        elif cmd == "/project":
+            self._project_command(arg)
+        elif cmd == "/projects":
+            self._projects_command(arg)
         elif cmd == "/memory":
             _show_memory()
         elif cmd == "/debug":
@@ -702,6 +720,50 @@ class ChatApp:
             _out(_HELP)
         return True
 
+    def _project_command(self, arg: str) -> None:
+        """``/project`` show · ``/project <slug>`` assign · ``/project none`` unassign."""
+        if not arg:
+            project = self.meta.project_for(self.cid)
+            _out(f"{project}\n" if project else f"{DIM}none{RESET}\n")
+            return
+        if arg.lower() == "none":
+            self.meta.set_project(self.cid, None)
+            _out("project cleared\n")
+            return
+        entry = self.projects.get(arg)
+        if entry is None or entry.get("archived"):
+            known = ", ".join(p["slug"] for p in self.projects.list()) or "none yet"
+            _out(f"{RED}unknown project {arg!r}{RESET} (known: {known})\n")
+            return
+        self.meta.set_project(self.cid, arg)
+        _out(f"project: {arg}\n")
+
+    def _projects_command(self, arg: str) -> None:
+        """``/projects`` list · ``/projects add <name> [-- description]`` create."""
+        sub, _, rest = arg.partition(" ")
+        if sub.lower() == "add":
+            name, _, description = rest.partition("--")
+            try:
+                entry = self.projects.create(name, description)
+            except ProjectExistsError as exc:
+                _out(f"{RED}project {exc.args[0]!r} already exists{RESET}\n")
+                return
+            except ValueError as exc:
+                _out(f"{RED}{exc}{RESET}\n")
+                return
+            _out(f"created {entry['slug']} — assign with /project {entry['slug']}\n")
+            return
+        current = self.meta.project_for(self.cid)
+        rows = self.projects.list()
+        if not rows:
+            _out(
+                f"{DIM}no projects yet — /projects add <name> [-- description]{RESET}\n"
+            )
+        for p in rows:
+            mark = "●" if p["slug"] == current else " "
+            desc = f"  {DIM}{p['description']}{RESET}" if p.get("description") else ""
+            _out(f"  {mark} {CYAN}{p['slug']}{RESET}{desc}\n")
+
     def _show_debug(self) -> None:
         s = self.session
         assert s is not None
@@ -709,6 +771,7 @@ class ChatApp:
             "agent": s.agent_name,
             "profile": getattr(s.profile, "name", s.profile),
             "conversation": f"{self.cid}  (store: {self.scoped})",
+            "project": self.meta.project_for(self.cid) or "none",
             "model": getattr(s.agent, "model", None),
             "resume_window": s.resume_window,
             "restored": s.restored_count,
@@ -722,6 +785,8 @@ class ChatApp:
 _HELP = """\
   /new [id]        start a fresh conversation (optionally with an id)
   /id [id]         show the conversation id, or switch to another
+  /project [slug]  show this conversation's project, assign one, or 'none'
+  /projects        list projects · /projects add <name> [-- description]
   /history [n]     reprint the last n turns (default: all loaded)
   /plan            show the model's current plan
   /tasks           show background processes
@@ -774,6 +839,7 @@ def main() -> int:
     lane.add_argument("--id", help="conversation id to open or resume")
     lane.add_argument("--new", action="store_true", help="start a fresh conversation")
     ap.add_argument("--window", type=int, default=15, help="resume window (messages)")
+    ap.add_argument("--project", help="assign this conversation to a project (slug)")
     args = ap.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env", override=False)
@@ -784,6 +850,13 @@ def main() -> int:
             print(f"unknown profile {args.profile!r}; known: {sorted(PROFILES)}")
             return 2
     cid = args.id or (_new_cid(args.agent) if args.new else f"chat-{args.agent}")
+    if args.project:
+        entry = default_project_store().get(args.project)
+        if entry is None or entry.get("archived"):
+            known = sorted(p["slug"] for p in default_project_store().list())
+            print(f"unknown project {args.project!r}; known: {known}")
+            return 2
+        default_conversation_meta_store(args.agent).set_project(cid, args.project)
 
     async def _amain() -> int:
         app = ChatApp(args.agent, profile, cid, args.window)

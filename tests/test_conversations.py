@@ -309,3 +309,107 @@ def test_patch_title_requires_title_param(tmp_path, monkeypatch) -> None:
         client = TestClient(sse.app)
         resp = client.patch("/api/conversations/conv-x", json={})
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Projects + conversation project assignment
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _temp_projects(tmp_path):
+    """Redirect the project registry to a temp dir (never the real data/projects)."""
+    from paf.conversations import ProjectStore
+
+    real = sse._project_store
+    sse._project_store = lambda: ProjectStore(FlatFileStorage(tmp_path / "reg"))
+    try:
+        yield
+    finally:
+        sse._project_store = real
+
+
+def test_project_routes_create_list_update(tmp_path) -> None:
+    with _temp_projects(tmp_path):
+        client = TestClient(sse.app)
+        resp = client.post("/api/projects", json={"name": "paf", "description": "x"})
+        assert resp.status_code == 201
+        assert resp.json()["slug"] == "paf"
+
+        assert client.post("/api/projects", json={"name": "PAF"}).status_code == 409
+        assert client.post("/api/projects", json={}).status_code == 400
+
+        resp = client.patch("/api/projects/paf", json={"description": "framework"})
+        assert resp.json()["description"] == "framework"
+        assert client.patch("/api/projects/nope", json={"name": "y"}).status_code == 404
+
+        client.patch("/api/projects/paf", json={"archived": True})
+        assert client.get("/api/projects").json()["projects"] == []
+        archived = client.get("/api/projects", params={"include_archived": True})
+        assert [p["slug"] for p in archived.json()["projects"]] == ["paf"]
+
+
+def test_assign_project_to_conversation(tmp_path, monkeypatch) -> None:
+    _reset_registry()
+    key = sse._session_key(sse.DEFAULT_AGENT, "conv-p")
+    sse._sessions[key] = _FakeSession([_mk_user("derived")])
+    sse._sessions_last_used[key] = 100.0
+
+    with (
+        _empty_store(tmp_path, monkeypatch),
+        _temp_titles_dir(tmp_path),
+        _temp_projects(tmp_path),
+    ):
+        client = TestClient(sse.app)
+        client.post("/api/projects", json={"name": "paf"})
+
+        resp = client.patch("/api/conversations/conv-p", json={"project": "paf"})
+        assert resp.status_code == 200
+        assert resp.json()["project"] == "paf"
+
+        lane = client.get("/api/conversations").json()["conversations"][0]
+        assert lane["project"] == "paf"
+        assert lane["title"] == "derived"  # project-only patch leaves the title alone
+
+        # Unknown project -> 404; unassign with null.
+        resp = client.patch("/api/conversations/conv-p", json={"project": "nope"})
+        assert resp.status_code == 404
+        resp = client.patch("/api/conversations/conv-p", json={"project": None})
+        assert resp.json()["project"] is None
+
+
+def test_assign_archived_project_rejected(tmp_path, monkeypatch) -> None:
+    _reset_registry()
+    with (
+        _empty_store(tmp_path, monkeypatch),
+        _temp_titles_dir(tmp_path),
+        _temp_projects(tmp_path),
+    ):
+        client = TestClient(sse.app)
+        client.post("/api/projects", json={"name": "old"})
+        client.patch("/api/projects/old", json={"archived": True})
+        resp = client.patch("/api/conversations/c", json={"project": "old"})
+        assert resp.status_code == 400
+
+
+def test_clearing_title_keeps_project(tmp_path, monkeypatch) -> None:
+    """Regression: clearing a title used to pop the whole entry."""
+    _reset_registry()
+    key = sse._session_key(sse.DEFAULT_AGENT, "conv-k")
+    sse._sessions[key] = _FakeSession([_mk_user("origin")])
+    sse._sessions_last_used[key] = 100.0
+
+    with (
+        _empty_store(tmp_path, monkeypatch),
+        _temp_titles_dir(tmp_path),
+        _temp_projects(tmp_path),
+    ):
+        client = TestClient(sse.app)
+        client.post("/api/projects", json={"name": "paf"})
+        client.patch(
+            "/api/conversations/conv-k", json={"title": "Temp", "project": "paf"}
+        )
+        client.patch("/api/conversations/conv-k", json={"title": ""})
+        lane = client.get("/api/conversations").json()["conversations"][0]
+        assert lane["title"] == "origin"
+        assert lane["project"] == "paf"
