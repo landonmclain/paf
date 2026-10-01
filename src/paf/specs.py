@@ -686,6 +686,27 @@ def _spec_codebase_map_config(spec_path: Path) -> dict | None:
     return _spec_rooted_config(spec_path, "codebase_map", "scan_root")
 
 
+def _spec_workspace_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``workspace:`` block (extra always-present lines).
+
+        workspace:
+          notes:
+            - Projects live under ~/projects/Personal.
+
+    Returns ``{"notes": [...]}`` or ``None`` when absent / empty.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    block = data.get("workspace") if isinstance(data, dict) else None
+    if not isinstance(block, dict):
+        return None
+    notes = [n for n in block.get("notes") or [] if isinstance(n, str) and n.strip()]
+    return {"notes": notes} if notes else None
+
+
 def _spec_subagents_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``subagents:`` block (roster + concurrency cap).
 
@@ -779,6 +800,8 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "subagents_config": _spec_subagents_config(spec_path),
         # Vision model slug from the spec's `visual:` block.
         "visual_config": _spec_visual_config(spec_path),
+        # Extra <workspace> lines from the spec's `workspace:` block.
+        "workspace_config": _spec_workspace_config(spec_path),
     }
 
 

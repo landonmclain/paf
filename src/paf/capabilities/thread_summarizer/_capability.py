@@ -42,6 +42,7 @@ from paf.capabilities.thread_summarizer._store import (
     ThreadSummaryRecord,
     ThreadSummaryStore,
 )
+from paf.clock import to_local
 
 #: Default capture root (name matches memory's per-agent convention).
 _DEFAULT_CAPTURE_ROOT = "data/summaries"
@@ -73,14 +74,15 @@ def capture_directory_for(agent_name: str | None) -> Path:
 
 
 def _fmt_dt(iso: str, fmt: str = "%m/%d %H:%M") -> str:
-    """Format an ISO timestamp for the render (safe against bad/empty input)."""
+    """Format an ISO timestamp for the render, in the user's zone (paf.clock).
+
+    Safe against bad/empty input. Stored times are UTC; the model reads local
+    wall-clock time, matching the per-message ``[date: …]`` stamps.
+    """
     if not iso:
         return ""
-    try:
-        dt = datetime.fromisoformat(iso)
-    except (ValueError, TypeError):
-        return iso
-    return dt.strftime(fmt)
+    dt = to_local(iso)
+    return dt.strftime(fmt) if dt is not None else iso
 
 
 def _relative_label(iso: str) -> str:

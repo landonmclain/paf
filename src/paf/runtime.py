@@ -18,7 +18,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Literal
 
 from opentelemetry import trace as _otel_trace
@@ -67,6 +66,7 @@ from paf.background import (
 from paf.capabilities import PROFILES
 from paf.capabilities.compaction import build_boundary_compaction_for_agent
 from paf.capabilities.persistence import _build_store
+from paf.clock import now_local
 from paf.degeneration_guard import (
     DegenerationError,
     DegenerationGuard,
@@ -683,7 +683,8 @@ class Session:
         tool_call, FunctionToolResult -> tool_result).
 
         Behavior:
-        - ``[date: ...]`` UTC stamp on every user prompt (born_on provenance).
+        - ``[date: ...]`` stamp on every user prompt, in the user's zone with
+          its UTC offset (born_on provenance; the journal stores it as UTC).
         - ONE root span per turn with ``langfuse.observation.input`` (set up
           front) and ``langfuse.observation.output`` (set once the settled
           ``run.result`` is known, before the span closes).
@@ -706,12 +707,13 @@ class Session:
         self._token = _token if _token is not None else CancellationToken()
         await self._ensure_resumed(scoped)
 
-        # Stamp the current UTC timestamp onto the start of EVERY user message,
-        # so the model always has an explicit date+time anchor and the
-        # consolidation owner can derive a real ``born_on`` instead of
-        # inventing one. Second precision, ``+00:00`` suffix.
-        now = datetime.now(UTC).replace(microsecond=0)
-        prompt = f"[date: {now.isoformat()}] {prompt}"
+        # Stamp the current time onto the start of EVERY user message, so the
+        # model always has an explicit date+time anchor and the consolidation
+        # owner can derive a real ``born_on`` instead of inventing one. Shown in
+        # the user's zone (paf.clock) with its offset — the model reads local
+        # wall-clock time; the journal converts born_on back to UTC. Nothing
+        # else may go inside the brackets: the extractor parses it as ISO.
+        prompt = f"[date: {now_local().isoformat()}] {prompt}"
 
         result: AgentRunResult | None = None
         # Local ref to the live AgentRun for partial-state recovery on a

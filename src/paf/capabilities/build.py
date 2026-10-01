@@ -859,6 +859,7 @@ def build_runtime_capabilities(
     subagents_config: dict | None = None,
     visual_config: dict | None = None,
     search_config: dict | None = None,
+    workspace_config: dict | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -984,6 +985,16 @@ def build_runtime_capabilities(
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
         capabilities.append(build_compaction(compaction_config))
+    # Workspace context: where each built tool family's paths start, the user's
+    # time zone, and spec `workspace.notes`. Built LAST, from the capabilities
+    # above, so it lists only tools this agent actually has. Profile-gated like
+    # everything else.
+    if "Workspace" in profile.capability_names:
+        from paf.capabilities.workspace import build_workspace
+
+        capabilities.append(
+            build_workspace(capabilities, (workspace_config or {}).get("notes"))
+        )
     # NOTE: the ThreadSummarizer no longer captures evictions — the
     # capture-WAL wiring (attach_to_window) was removed. The
     # runtime trigger resolves the unsummarized span directly from the step

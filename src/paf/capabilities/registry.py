@@ -43,6 +43,7 @@ from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault
 from paf.capabilities.visual import Visual
 from paf.capabilities.web import Web
+from paf.capabilities.workspace import Workspace
 
 # name -> capability type. The name is the serialization form used in a spec's
 # `capabilities:` entry and the key a profile allowlists against.
@@ -78,6 +79,10 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Navigation-first note ladder over a markdown vault. Built in Python (needs
     # a real vault_root + allow/deny), not spec-serialized.
     "Vault": Vault,
+    # Static <workspace> block: where each built tool family's paths start, the
+    # user's time zone, spec `workspace.notes`. Built in Python from the other
+    # capabilities' live roots; the profile allowlist is its on/off switch.
+    "Workspace": Workspace,
     # Tavily-backed web search + page extraction. Reads TAVILY_API_KEY at call
     # time; fetch_web_page is domain-gated.
     "Web": Web,

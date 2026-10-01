@@ -28,6 +28,7 @@ import yaml
 
 from paf.capabilities._storage import FlatJsonlStore, write_atomic
 from paf.capabilities._storage._flat_file import _safe_key_segment
+from paf.clock import local_iso
 
 KIND = "subagent_tasks"
 OUTPUTS_DIR = "subagent_outputs"
@@ -261,7 +262,8 @@ def _render_output(rec: dict[str, Any], output: str) -> str:
         "task_id": rec.get("task_id"),
         "agent": rec.get("agent"),
         "mode": rec.get("mode"),
-        "created": rec.get("created_at"),
+        # Shown to the model: the user's zone, like message stamps (stored UTC).
+        "created": local_iso(rec.get("created_at")) or None,
         "conversation_id": rec.get("conversation_id"),
         "parent_run_id": rec.get("parent_run_id"),
         "trace_id": rec.get("trace_id"),

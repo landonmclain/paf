@@ -154,7 +154,10 @@ def _normalize_born_on(value: str | datetime | None) -> str:
     """Normalize ``born_on`` to a UTC ISO-8601 string (string out for dump/read ease).
 
     Accepts a ``datetime`` (naive is assumed UTC per the corpus-clock convention)
-    or an ISO string. Stored in ISO order so chronological sort is lexical.
+    or an ISO string. Offset-bearing values (the runtime stamps messages in the
+    user's zone, e.g. ``-05:00``) are CONVERTED to UTC: recency ordering sorts
+    ``born_on`` lexically, which is only chronological if every value shares
+    one offset.
 
     An empty/``None`` value is allowed and stored as ``""``: a fact with no
     derivable date (no label, no metadata, no inline prefix) is recorded with
@@ -167,7 +170,7 @@ def _normalize_born_on(value: str | datetime | None) -> str:
         dt = value
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
-        return dt.isoformat()
+        return dt.astimezone(UTC).isoformat()
     # String: try to normalize, else keep as-is (ISO already sorts lexically).
     text = value.strip()
     if not text:
@@ -176,7 +179,7 @@ def _normalize_born_on(value: str | datetime | None) -> str:
         dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)
-        return dt.isoformat()
+        return dt.astimezone(UTC).isoformat()
     except ValueError:
         return text
 

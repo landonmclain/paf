@@ -34,5 +34,10 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
 
+    # The user's time zone (IANA name, e.g. America/Chicago). Times the model
+    # reads are shown in this zone; storage stays UTC (see paf.clock). Blank =
+    # the machine's zone.
+    timezone: str = ""
+
 
 settings = Settings()

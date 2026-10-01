@@ -177,6 +177,21 @@ class VaultToolset(FunctionToolset):
         if self._storage.read_index(self._root) is None:
             build_index(self._root, self._scope, self._storage)
 
+    def _from_absolute(self, ref: str) -> str | None:
+        """An absolute path inside the vault root → vault-relative; else ``None``.
+
+        Other tools take absolute paths, so the model passes them here too. One
+        INSIDE the root is translated (symlinks resolved first); anything outside
+        stays rejected. Non-absolute refs are returned unchanged.
+        """
+        if not (ref.startswith("/") or ref.startswith("~")):
+            return ref
+        real = Path(os.path.realpath(os.path.expanduser(ref)))
+        try:
+            return real.relative_to(self._root).as_posix()
+        except ValueError:
+            return None
+
     def _resolve(self, ref: str) -> str | None:
         """Resolve a note reference: a path, a title, or a [[wikilink]] target.
 
@@ -187,12 +202,16 @@ class VaultToolset(FunctionToolset):
         read a *different* note that happens to share the target's basename.
         A **bare title/wikilink** (no ``/``) falls back to the case-insensitive
         basename matcher (Obsidian semantics). Returns a repo-relative path or
-        ``None`` (the latter only for traversal/absolute rejects). Refuses
-        path-traversal and absolute refs outright.
+        ``None`` (the latter only for traversal/out-of-root rejects). Refuses
+        path-traversal; an absolute path is accepted only inside the root.
         """
         ref = ref.strip()
         if ref.startswith("[[") and ref.endswith("]]"):
             ref = ref[2:-2].split("|")[0].strip()
+        translated = self._from_absolute(ref)
+        if translated is None:
+            return None  # absolute, but outside the vault root
+        ref = translated
         # Hard traversal guard: no absolute paths, no parent-dir segments, no
         # window-style drive traversal. A bare title/wikilink is fine.
         if ref.startswith("/") or "\\" in ref:
@@ -430,8 +449,8 @@ class VaultToolset(FunctionToolset):
         ``ScanScope`` would not include (allow/deny). Returns the confined
         absolute path (the note need not exist yet for create).
         """
-        rel = rel.strip()
-        if rel.startswith("/") or "\\" in rel:
+        rel = self._from_absolute(rel.strip())
+        if rel is None or rel.startswith("/") or "\\" in rel:
             return None
         parts = Path(rel).parts
         if not parts or ".." in parts or parts[0].endswith(":"):

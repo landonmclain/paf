@@ -60,6 +60,7 @@ ASSISTANT_PROFILE = AgentProfile(
         "Git",
         "CodebaseMap",
         "Vault",
+        "Workspace",
         "Web",
         "Visual",
         "Browser",
@@ -90,6 +91,7 @@ DEMO_PROFILE = AgentProfile(
         "Git",
         "CodebaseMap",
         "Vault",
+        "Workspace",
         "Web",
         "Visual",
         "Browser",
@@ -119,6 +121,7 @@ CONTEXTBENCH_PROFILE = AgentProfile(
         "Shell",
         "FileSystem",
         "Git",
+        "Workspace",
     ),
 )
 
@@ -158,6 +161,7 @@ RESEARCHER_PROFILE = AgentProfile(
     capability_names=(
         "Web",
         "FileSystem",
+        "Workspace",
         "ToolOutputLimits",
     ),
 )

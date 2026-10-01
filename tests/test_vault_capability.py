@@ -840,3 +840,30 @@ def test_write_atomic_is_thread_safe() -> None:
     # no temp debris left behind
     leftover = [p.name for p in d.glob("*.tmp") or d.glob(".*.tmp")]
     assert leftover == [], f"leftover temp files: {leftover}"
+
+
+def test_read_note_accepts_absolute_path_inside_root(
+    vault: tuple[Path, VaultToolset],
+) -> None:
+    """Other tools take absolute paths, so the vault does too — inside its root."""
+    root, toolset = vault
+    out = toolset.read_note(str(root / "Concepts" / "Memory Design.md"))
+    assert out is not None and "Owner -> organizer" in out
+
+
+def test_absolute_path_outside_root_still_rejected(
+    vault: tuple[Path, VaultToolset], tmp_path: Path
+) -> None:
+    _, toolset = vault
+    outside = tmp_path / "elsewhere.md"
+    outside.write_text("# secret\n", encoding="utf-8")
+    assert toolset.read_note(str(outside)) is None
+    assert toolset._in_scope_path(str(outside)) is None
+
+
+def test_note_create_accepts_absolute_path_inside_root(
+    vault: tuple[Path, VaultToolset],
+) -> None:
+    root, toolset = vault
+    target = toolset._in_scope_path(str(root / "Concepts" / "New Note.md"))
+    assert target == (root / "Concepts" / "New Note.md").resolve()
