@@ -866,7 +866,7 @@ class ChatApp:
             "profile": getattr(s.profile, "name", s.profile),
             "conversation": f"{self.cid}  (store: {self.scoped})",
             "project": self.meta.project_for(self.cid) or "none",
-            "model": getattr(s.agent, "model", None),
+            "model": _model_label(getattr(s.agent, "model", None)),
             "resume_window": s.resume_window,
             "restored": s.restored_count,
             "history msgs": len(s.history),
@@ -975,6 +975,21 @@ def _prompt_message() -> HTML:
     """
     rule = "─" * max(10, _width() - 1)
     return HTML(f"<rule>{rule}</rule>\n<marker>›</marker> ")
+
+
+def _model_label(model: Any) -> str | None:
+    """``provider:model-name`` (e.g. ``openrouter:deepseek/deepseek-v4-flash-0731``).
+
+    pydantic-ai model objects don't name themselves in their repr; ``system`` is
+    the provider and ``model_name`` the model id. A bare string passes through.
+    """
+    if model is None or isinstance(model, str):
+        return model
+    name = getattr(model, "model_name", None)
+    system = getattr(model, "system", None)
+    if name and system:
+        return f"{system}:{name}"
+    return name or repr(model)
 
 
 def _esc(s: str) -> str:
