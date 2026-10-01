@@ -6,6 +6,7 @@ at our self-hosted Langfuse and instrument pydantic-ai. Fully local.
 
 from __future__ import annotations
 
+import atexit
 import base64
 import json
 import os
@@ -235,43 +236,42 @@ def setup_observability() -> bool:
     # prompt-cache collapse shows up as a red error observation in Langfuse
     # (it's suppressed by default otherwise). Idempotent; never aborts a turn.
     _install_cache_bust_error_hook()
+    # The global provider can never be replaced (OTel rejects a second
+    # set_tracer_provider), so it lives until process exit: shut it down then,
+    # not when the last Session closes (see shutdown_observability).
+    atexit.register(provider.shutdown)
     _setup_active = True
     _setup_refs += 1
     return True
 
 
 def shutdown_observability() -> None:
-    """Flush + shut down the tracer so short-lived processes don't lose spans.
+    """Flush pending spans when a Session closes; never tear the provider down.
 
-    **Ref-counted:** every ``setup_observability()`` (Session constructor) must
-    be balanced by one ``shutdown_observability()`` (Session.close). We only
-    call ``provider.shutdown()`` on the LAST release — a per-lane Session.close
-    must flush but must never tear down the global provider that other
-    concurrent sessions are still tracing into. On a long-lived server the
-    last ref (process shutdown) is what flushes+shuts down.
+    **Ref-counted:** every ``setup_observability()`` (Session constructor) is
+    balanced by one ``shutdown_observability()`` (Session.close), and each
+    release force-flushes so a closing session's spans aren't lost.
+
+    The provider itself is NOT shut down on the last release. OTel refuses to
+    replace a global provider once set, so a process that closes its last
+    Session and then opens another (``chat.py`` ``/resume``/``/new``, the SSE
+    server after the idle sweep evicts every lane) would otherwise keep the
+    shut-down provider as the global one and silently drop every later span —
+    with an "Overriding of current TracerProvider is not allowed" warning on
+    the re-setup. Shutdown happens once, at process exit (``atexit``, registered
+    by ``setup_observability``); the final force-flush here covers short-lived
+    processes (benchmarks) that call this explicitly before exiting.
     """
-    global _setup_active, _setup_refs
+    global _setup_refs
     if not _setup_active or _setup_refs <= 0:
         return
     _setup_refs -= 1
-    if _setup_refs > 0:
-        # Other sessions still active — DO NOT shut the provider down. Just
-        # force pending spans to flush so THIS session's spans aren't lost on
-        # idle eviction.
-        try:
-            from opentelemetry import trace
+    try:
+        from opentelemetry import trace
 
-            provider = trace.get_tracer_provider()
-            force_flush = getattr(provider, "force_flush", None)
-            if force_flush is not None:
-                force_flush()
-        except Exception:  # noqa: BLE001 - flush must never break close
-            pass
-        return
-    from opentelemetry import trace
-
-    provider = trace.get_tracer_provider()
-    shutdown = getattr(provider, "shutdown", None)
-    if shutdown is not None:
-        shutdown()
-    _setup_active = False
+        provider = trace.get_tracer_provider()
+        force_flush = getattr(provider, "force_flush", None)
+        if force_flush is not None:
+            force_flush()
+    except Exception:  # noqa: BLE001 - flush must never break close
+        pass
