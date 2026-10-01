@@ -66,6 +66,8 @@ from paf.conversations import (
     ProjectNotFoundError,
     ProjectStore,
     default_project_store,
+    overlay_meta,
+    persisted_lanes,
 )
 from paf.observability.instrumentation import root_span
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
@@ -586,8 +588,7 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
        included so CLI/smoke/benchmark/UUID lanes in the shared store are not
        surfaced.
     """
-    profile = _profile_for(agent)
-    store_prefix = f"{getattr(profile, 'name', agent)}:"
+    profile_name = getattr(_profile_for(agent), "name", agent)
     agent_prefix = f"{agent}:"
 
     by_lane: dict[str, dict[str, Any]] = {}
@@ -607,15 +608,7 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
 
     # 2. Persisted store backstop (durability across restarts).
     try:
-        from paf.capabilities.persistence import _build_store
-
-        store = _build_store()
-        for run in await store.list_runs():
-            cid = run.conversation_id
-            if not cid or not cid.startswith(store_prefix):
-                continue
-            lane_id = cid[len(store_prefix) :]
-            started = run.started_at.timestamp() if run.started_at else 0.0
+        for lane_id, started in (await persisted_lanes(profile_name)).items():
             cur = by_lane.get(lane_id)
             if cur is not None and (cur.get("updated_at") or 0) >= started:
                 continue  # live registry already has this lane, at least as fresh
@@ -635,16 +628,10 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     # 3. Overlay user-set meta (conversation-titles.json) — the user's rename
     #    always wins over the auto-derived title, and survives daemon restarts;
     #    the assigned project (if any) rides along on every lane.
-    meta = _meta_store(agent).load()
+    overlay_meta(out, _meta_store(agent).load())
     for lane in out:
-        saved = meta.get(lane["conversation_id"])
-        saved = saved if isinstance(saved, dict) else {}
-        if saved.get("title"):
-            lane["title"] = saved["title"]
-        elif not lane.get("title"):
+        if not lane.get("title"):
             lane["title"] = "New conversation"
-        lane["project"] = saved.get("project") or None
-        lane["hidden"] = bool(saved.get("hidden"))
     out.sort(key=lambda c: c.get("updated_at") or 0, reverse=True)
     return {"conversations": out}
 

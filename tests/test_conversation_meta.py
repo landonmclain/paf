@@ -143,3 +143,48 @@ def test_project_for_conversation_resolves_profile_from_spec(tmp_path) -> None:
     meta = _meta(tmp_path, "demo_assistant")
     meta.set_project("paf-1", "paf")
     assert project_for_conversation("demo_assistant", "demo:paf-1", store=meta) == "paf"
+
+
+class _Run:
+    def __init__(self, cid, ts):
+        from datetime import UTC, datetime
+
+        self.conversation_id = cid
+        self.started_at = datetime.fromtimestamp(ts, UTC)
+
+
+class _FakeStepStore:
+    def __init__(self, runs):
+        self._runs = runs
+
+    async def list_runs(self):
+        return self._runs
+
+
+def test_list_conversations_profile_scoped_newest_first_with_meta(tmp_path) -> None:
+    import asyncio
+
+    from paf.conversations import list_conversations
+
+    store = _FakeStepStore(
+        [
+            _Run("demo:a", 100),
+            _Run("demo:a", 300),  # newest run of a wins
+            _Run("demo:b", 200),
+            _Run("other:c", 999),  # another profile's lane: excluded
+        ]
+    )
+    meta = _meta(tmp_path, "demo_assistant")
+    meta.set_title("b", "Bee")
+    meta.set_project("b", "paf")
+    meta.set_hidden("a", True)
+
+    rows = asyncio.run(
+        list_conversations(
+            "demo_assistant", profile="demo", step_store=store, meta_store=meta
+        )
+    )
+    assert [r["conversation_id"] for r in rows] == ["a", "b"]
+    assert rows[0]["updated_at"] == 300 and rows[0]["hidden"] is True
+    assert rows[0]["title"] is None
+    assert rows[1]["title"] == "Bee" and rows[1]["project"] == "paf"

@@ -231,6 +231,71 @@ def project_for_conversation(
     return meta.project_for(lane_id(conversation_id, profile))
 
 
+async def persisted_lanes(profile: str | None, step_store=None) -> dict[str, float]:
+    """Lane id -> newest run start (epoch seconds) for one profile's lanes.
+
+    Reads the persisted step store, keeping only runs scoped ``{profile}:`` so
+    CLI/smoke/benchmark/UUID lanes of other profiles in the shared store never
+    surface. ``step_store`` defaults to the canonical store
+    (``paf.capabilities.persistence._build_store``).
+    """
+    if step_store is None:
+        from paf.capabilities.persistence import _build_store
+
+        step_store = _build_store()
+    prefix = f"{profile}:" if profile else ""
+    lanes: dict[str, float] = {}
+    for run in await step_store.list_runs():
+        cid = run.conversation_id
+        if not cid or (prefix and not cid.startswith(prefix)):
+            continue
+        lane = cid[len(prefix) :]
+        started = run.started_at.timestamp() if run.started_at else 0.0
+        lanes[lane] = max(started, lanes.get(lane, 0.0))
+    return lanes
+
+
+def overlay_meta(lanes: list[dict[str, Any]], meta: dict[str, dict[str, Any]]) -> None:
+    """Fill ``title`` (when user-set), ``project``, ``hidden`` on each lane in place."""
+    for lane in lanes:
+        saved = meta.get(lane["conversation_id"])
+        saved = saved if isinstance(saved, dict) else {}
+        if saved.get("title"):
+            lane["title"] = saved["title"]
+        lane["project"] = saved.get("project") or None
+        lane["hidden"] = bool(saved.get("hidden"))
+
+
+async def list_conversations(
+    agent: str,
+    *,
+    profile: str | None = None,
+    step_store=None,
+    meta_store: ConversationMetaStore | None = None,
+) -> list[dict[str, Any]]:
+    """An agent's persisted conversations, newest first, with their meta.
+
+    Each row: ``{conversation_id, title, project, hidden, updated_at}`` where
+    ``title`` is the user-set name or ``None``. Persisted lanes only — a lane
+    appears once it has at least one run. ``profile`` defaults to the agent
+    spec's ``profile:`` key, matching how ``Session`` scopes its lanes.
+    """
+    if profile is None:
+        from paf.specs import resolve_profile_name
+
+        profile = resolve_profile_name(agent)
+    lanes = [
+        {"conversation_id": lane, "title": None, "updated_at": started}
+        for lane, started in (await persisted_lanes(profile, step_store)).items()
+    ]
+    meta = (
+        meta_store if meta_store is not None else default_conversation_meta_store(agent)
+    )
+    overlay_meta(lanes, meta.load())
+    lanes.sort(key=lambda r: r["updated_at"] or 0.0, reverse=True)
+    return lanes
+
+
 def default_project_store() -> ProjectStore:
     """The registry at ``<project_root>/data/projects/projects.json``."""
     from paf.config import PROJECT_ROOT
