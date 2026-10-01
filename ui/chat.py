@@ -33,6 +33,7 @@ import re
 import shutil
 import signal
 import sys
+import textwrap
 import time
 import uuid
 from pathlib import Path
@@ -87,7 +88,7 @@ _PT_STYLE = Style.from_dict(
         "toolbar.active": "#5fafd7",
         "toolbar.failed": "#d75f5f",
         "rule": "#444444",
-        "marker": "#d75fd7 bold",
+        "marker": "#d787ff bold",
         "placeholder": "#626262 italic",
     }
 )
@@ -107,6 +108,11 @@ DIM, RED, GREEN, YELLOW, CYAN, MAGENTA, RESET = (
 # Thinking text: an explicit mid-gray. Terminals render the faint attribute
 # (DIM) inconsistently — often barely distinct from normal text.
 THINK = _sgr("38;5;244")
+# User messages: their own color + a bolder marker, so they stand apart from
+# the agent's output when scrolling back.
+USER_FG = _sgr("38;5;183")  # light purple
+USER_MARK = _sgr("1;38;5;177")  # bold, brighter purple
+PROMPT_GLYPH = "❯"
 
 
 def _out(s: str) -> None:
@@ -374,6 +380,24 @@ def _user_text(msg: Any) -> str | None:
     return None
 
 
+def render_user(text: str) -> str:
+    """A user message: a bold purple ``❯`` and light-purple text, wrapped.
+
+    Without color (NO_COLOR / not a tty) it is a plain ``❯ text``.
+    """
+    if not _COLOR:
+        return f"\n{PROMPT_GLYPH} {text}\n"
+    body: list[str] = []
+    for para in text.splitlines() or [""]:
+        body += textwrap.wrap(para, max(10, _width() - 3)) or [""]
+    rows = [
+        (f"{USER_MARK}{PROMPT_GLYPH}{RESET} " if i == 0 else "  ")
+        + f"{USER_FG}{line}{RESET}"
+        for i, line in enumerate(body)
+    ]
+    return "\n" + "\n".join(rows) + "\n"
+
+
 def print_history(history: list[Any], turns: int | None = None) -> None:
     """Print prior turns compactly: prompt, tool one-liners, answer text."""
     starts = [i for i, m in enumerate(history) if _user_text(m) is not None]
@@ -382,14 +406,14 @@ def print_history(history: list[Any], turns: int | None = None) -> None:
     for msg in history:
         text = _user_text(msg)
         if text is not None:
-            _out(f"\n{MAGENTA}›{RESET} {text}\n")
+            _out(render_user(text))
         elif isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, ToolCallPart):
                     args = _clip(
                         str(part.args or ""), _width() - len(part.tool_name) - 10
                     )
-                    _out(f"  {DIM}● {part.tool_name}({args}){RESET}\n")
+                    _out(f"  {YELLOW}●{RESET} {part.tool_name}{DIM}({args}){RESET}\n")
                 elif isinstance(part, TextPart) and part.content.strip():
                     _out(f"\n{render_markdown(_safe(part.content.strip()))}")
 
@@ -449,6 +473,9 @@ class ChatApp:
                 prompt_continuation="  ",
                 bottom_toolbar=self._toolbar,
                 style=_PT_STYLE,
+                # The raw input is erased on Enter and re-printed in the user
+                # style (render_user), so messages stand out in scrollback.
+                erase_when_done=True,
                 placeholder=HTML("<placeholder>Message paf · /help</placeholder>"),
             )
         get_agent_emitter(agent).on_any(self._on_process)
@@ -606,7 +633,6 @@ class ChatApp:
             # Idle at the prompt: stash the draft, pop the prompt, stream it.
             self.draft = self.ps.default_buffer.text
             self.ps.default_buffer.reset()
-            self.ps.app.erase_when_done = True  # don't leave an empty prompt line
             self.ps.app.exit(result=_NOTIFY)
 
     # -- turns -------------------------------------------------------------------
@@ -681,16 +707,17 @@ class ChatApp:
             except EOFError:
                 return 0
             if text is _NOTIFY:
-                self.ps.app.erase_when_done = False
                 continue  # draft was stashed by _on_complete; re-offered next prompt
             self.draft = ""
             text = text.strip()
             if not text:
                 continue
             if text.startswith("/"):
+                _out(f"{DIM}{PROMPT_GLYPH} {text}{RESET}\n")
                 if not await self.command(text):
                     return 0
                 continue
+            _out(render_user(text))
             await self.send(text)
 
     # -- slash commands --------------------------------------------------------
@@ -983,7 +1010,7 @@ def _prompt_message() -> HTML:
     after Enter, separating turns.
     """
     rule = "─" * max(10, _width() - 1)
-    return HTML(f"<rule>{rule}</rule>\n<marker>›</marker> ")
+    return HTML(f"<rule>{rule}</rule>\n<marker>{PROMPT_GLYPH}</marker> ")
 
 
 def _model_label(model: Any) -> str | None:
