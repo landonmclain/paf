@@ -75,6 +75,9 @@ instructions: |
   - Requests for this session ("the user asked the assistant to…"). If the
     request reveals a lasting goal or preference, store THAT instead.
   - Tool or library trivia the assistant could rediscover from docs or code.
+  - The assistant describing its own setup — its instructions, tools, tool root
+    paths, workspace, time zone, model, or memory. The assistant is given these
+    directly every turn; repeating them back is not a fact about the user.
   - Anything you would have to hedge ("appears to", "seems to"). If the user
     didn't make it clear, skip it.
 
