@@ -291,3 +291,55 @@ def test_two_store_join_key_is_run_id(tmp_path: Path) -> None:
             return True
 
     assert asyncio.run(scenario()) is True
+
+
+def test_background_output_is_durable_paged_and_notified(tmp_path: Path) -> None:
+    """Output lands in shell_outputs/<run_id>.log (not /tmp), the notify carries
+    the tail with a pointer, and check_command pages the file."""
+    from paf.capabilities._sandbox import LocalProcessExecutor
+    from paf.capabilities.shell._background import ShellBackgroundQueue, ShellRun
+
+    notes: list[tuple[str, bool, str]] = []
+
+    async def on_complete(run_id, cid, ok, detail):
+        notes.append((run_id, ok, detail))
+
+    store = ShellCommandStore.open(
+        str(_processes(tmp_path)), "demo_assistant", conversation_id="c1"
+    )
+    queue = ShellBackgroundQueue(
+        executor=LocalProcessExecutor(),
+        cwd=tmp_path,
+        agent="demo_assistant",
+        shell_cmds=store,
+        on_complete=on_complete,
+    )
+    cmd = "seq 1 2000; echo boom >&2"
+    run = ShellRun(
+        run_id="shell.c1.1", command=cmd, conversation_id="c1",
+        notify_on_completion=True,
+    )  # fmt: skip
+    asyncio.run(queue.process_job("s", run, None))
+
+    path = store.output_path("shell.c1.1")
+    assert path is not None and path.parent.name == "shell_outputs"
+    text = path.read_text()
+    assert text.startswith("1\n2\n") and text.rstrip().endswith("boom")
+    last = store.recent("shell.c1.1")
+    assert last["status"] == "done" and last["output_chars"] == len(text)
+
+    (run_id, ok, msg) = notes[0]
+    assert ok and msg.startswith("[system] Background command shell.c1.1 (exit 0)")
+    assert "boom" in msg and "check_command('shell.c1.1', offset=0)" in msg
+    assert "\n1\n2\n" not in msg  # the head is not in the excerpt
+
+    async def check():
+        async with _toolset(tmp_path, conversation_id="c1") as t:
+            tail = await t.check_command("shell.c1.1", max_chars=100)
+            head = await t.check_command("shell.c1.1", offset=0, max_chars=10)
+            return tail, head
+
+    tail, head = asyncio.run(check())
+    assert "[status: finished]" in tail and "[exit code: 0]" in tail
+    assert tail.rstrip().endswith("boom") and "offset=" in tail
+    assert "1\n2\n3\n4\n5" in head and "more chars; check_command" in head

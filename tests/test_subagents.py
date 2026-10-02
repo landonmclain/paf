@@ -723,13 +723,15 @@ def test_notify_turn_is_not_linked_to_the_spawning_run(tmp_path: Path) -> None:
     assert runs[notify_runs[0]].parent_run_id is None
 
 
-def test_sse_notify_message_verbatim_for_subagents() -> None:
+def test_sse_notify_message_verbatim_for_subagents_and_shell() -> None:
     from ui import sse
 
     text = "[system] Subagent writer task subagent.demo:c1.1 finished (ok):\n\nhi"
     assert sse._notify_message("subagent.demo:c1.1", text) == text
-    assert sse._notify_message("shell.demo:c1.3", "exit 0") == (
-        "[system] Background process shell.demo:c1.3 finished: exit 0"
+    shell = "[system] Background command shell.demo:c1.3 (exit 0): ls\n\nok"
+    assert sse._notify_message("shell.demo:c1.3", shell) == shell
+    assert sse._notify_message("other.1", "exit 0") == (
+        "[system] Background process other.1 finished: exit 0"
     )
 
 

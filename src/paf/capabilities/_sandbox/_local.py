@@ -33,10 +33,11 @@ class _LocalBackgroundState:
     __slots__ = ("proc", "stdout_path", "stderr_path", "finished", "exit_code")
 
     def __init__(
-        self, proc: anyio.abc.Process, stdout_path: str, stderr_path: str
+        self, proc: anyio.abc.Process, stdout_path: str, stderr_path: str | None
     ) -> None:
         self.proc = proc
         self.stdout_path = stdout_path
+        # None = stderr is merged into a caller-owned stdout file (never deleted).
         self.stderr_path = stderr_path
         self.finished = False
         self.exit_code: int | None = None
@@ -102,8 +103,22 @@ class LocalProcessExecutor:
         *,
         cwd: Path,
         env: dict[str, str] | None,
+        output_path: Path | None = None,
     ) -> BackgroundHandle:
         command_id = uuid.uuid4().hex[:12]
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "wb") as out:
+                proc = await anyio.open_process(
+                    command,
+                    cwd=cwd,
+                    stdout=out,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    env=env,
+                )
+            state = _LocalBackgroundState(proc, str(output_path), None)
+            return BackgroundHandle(command_id=command_id, state=state)
         stdout_file = tempfile.NamedTemporaryFile(
             mode="w+b", prefix=f"harness_{command_id}_out_", delete=False
         )
@@ -213,6 +228,8 @@ class LocalProcessExecutor:
             )
         except OSError:
             stdout = ""
+        if state.stderr_path is None:
+            return stdout, ""
         try:
             stderr = Path(state.stderr_path).read_text(
                 encoding="utf-8", errors="replace"
@@ -222,6 +239,8 @@ class LocalProcessExecutor:
         return stdout, stderr
 
     def _cleanup_bg_files(self, state: _LocalBackgroundState) -> None:
+        if state.stderr_path is None:
+            return  # caller-owned output file: kept
         try:
             os.unlink(state.stdout_path)
         except OSError:

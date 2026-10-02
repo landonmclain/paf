@@ -41,7 +41,7 @@ from paf.capabilities._sandbox import (
 )
 
 from ._background import ShellBackgroundQueue, ShellRun
-from ._output import truncate_tail
+from ._output import CHECK_MAX_CHARS, page, truncate_tail
 from ._store import ShellCommandStore
 
 _P = ParamSpec("_P")
@@ -369,10 +369,13 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         The command runs as a DETACHED subprocess via the background queue, and
         its lifecycle (status, pid, exit code) is logged durably to both the
         run-event feed and the shell command store. Callers make a later
-        ``check_command`` / ``stop_command`` with this returned run id.
+        ``check_command`` / ``stop_command`` with this returned run id. Its
+        combined stdout/stderr is saved; ``check_command`` pages through it.
 
         Args:
             command: The shell command to run in the background.
+            notify_on_completion: When True, a message arrives when the command
+                finishes, with its exit code and output (the tail, if long).
 
         Returns:
             A message containing the unique run id for later check/stop calls.
@@ -437,8 +440,17 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         return max_seq + 1
 
     @_recoverable
-    async def check_command(self, command_id: str) -> str:
-        """Check the status and recent output of a background command.
+    async def check_command(
+        self,
+        command_id: str,
+        offset: int | None = None,
+        max_chars: int = CHECK_MAX_CHARS,
+    ) -> str:
+        """Check the status and output of a background command.
+
+        Output is paged: by default you get the LAST ``max_chars`` characters
+        (progress, the summary, the error); pass ``offset`` to read from a
+        character position instead (``offset=0`` for the start).
 
         Works for both live (in-memory) handles and detached survivors: when no
         live executor handle is present, status is derived from the durable
@@ -451,9 +463,11 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
 
         Args:
             command_id: The id returned by start_command.
+            offset: Character offset to read the output from (default: the tail).
+            max_chars: Maximum characters of output to return.
 
         Returns:
-            Status and available output/exit code of the background command.
+            Status, exit code, and a page of the command's output.
         """
         # Fastest, richest path: a live executor handle in this instance.
         handle = self._background.get(command_id)
@@ -469,7 +483,30 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
         if status.status == "finished" and last.get("status") in ("running", None):
             # Supervisor never wrote the terminal line; journal it now.
             await self._append_terminal(command_id, status)
-        return self._format_check(status)
+        parts = [f"[status: {status.status}]"]
+        if status.status == "finished" and exit_code is not None:
+            parts.append(f"[exit code: {exit_code}]")
+        parts.append(self._output_page(lines, command_id, offset, max_chars))
+        return "\n".join(parts)
+
+    @staticmethod
+    def _output_page(
+        lines: list[dict[str, Any]],
+        run_id: str,
+        offset: int | None,
+        max_chars: int,
+    ) -> str:
+        """A page of a durable command's output file (path from its store rows)."""
+        path = next((r["output_path"] for r in lines if r.get("output_path")), None)
+        if path is None:
+            return "(no output recorded for this command)"
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return f"(output file missing: {path})"
+        if not text:
+            return "(no output yet)"
+        return page(text, run_id, offset, max_chars)
 
     @_recoverable
     async def stop_command(self, command_id: str) -> str:
@@ -505,8 +542,8 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
             BackgroundStatus(status="finished", stdout="", stderr="", exit_code=0),
             detail=f"stopped: {last.get('command', '')}",
         )
-        return self._format_stop(
-            BackgroundStatus(status="finished", stdout="", stderr="", exit_code=0)
+        return "[stopped]\n" + self._output_page(
+            lines, command_id, None, CHECK_MAX_CHARS
         )
 
     def _derive_status(

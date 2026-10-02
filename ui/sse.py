@@ -139,12 +139,12 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
 def _notify_message(run_id: str, detail: str) -> str:
     """The ``[system]`` text a completion notify delivers to the parent.
 
-    Subagent tasks (``subagent.<cid>.<n>``) hand over a ready-made message —
-    the whole output or a truncated head plus a ``check_task`` pointer, built by
-    ``paf.capabilities.subagents._notify`` — so it is delivered verbatim. Shell
-    processes pass a short detail (``exit 0``) that is wrapped here.
+    Subagent tasks (``subagent.<cid>.<n>``) and shell commands (``shell.<cid>.<n>``)
+    hand over a ready-made message — the output whole, or an excerpt plus a
+    ``check_task`` / ``check_command`` pointer (``subagents._notify``,
+    ``shell._output``) — delivered verbatim. Anything else is wrapped here.
     """
-    if run_id.startswith("subagent."):
+    if run_id.startswith(("subagent.", "shell.")):
         return detail
     return f"[system] Background process {run_id} finished: {detail}"
 

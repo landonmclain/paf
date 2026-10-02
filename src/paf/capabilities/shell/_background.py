@@ -36,6 +36,7 @@ from paf.background_processes._events import (
     get_agent_emitter,
 )
 from paf.capabilities._sandbox import BackgroundHandle, SandboxedExecutor
+from paf.capabilities.shell._output import notify_text
 from paf.capabilities.shell._store import ShellCommandStore
 
 log = logging.getLogger(__name__)
@@ -186,13 +187,19 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
             # append a second one here.
             cwd = Path(job.cwd).resolve() if job.cwd else self.cwd or Path(".")
             env = job.env
-            handle = await self.executor.start(job.command, cwd=cwd, env=env)
+            # Output goes to a durable file next to the store (not the
+            # backend's temp files): it survives this server and the process.
+            output_path = self.shell_cmds.output_path(job.run_id)
+            handle = await self.executor.start(
+                job.command, cwd=cwd, env=env, output_path=output_path
+            )
             pid = _pid_of(handle)
             self._record_rich(
                 job,
                 status="running",
                 pid=pid,
                 cwd=str(cwd),
+                **({"output_path": str(output_path)} if output_path else {}),
             )
 
             # Supervise while this session's loop is alive. A long-running
@@ -202,10 +209,18 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                 await asyncio.sleep(_POLL_S)
                 status = await self.executor.check(handle)
                 if status.status == "finished":
+                    # Release the backend's side (temp files, container); a
+                    # caller-owned output file is kept.
+                    try:
+                        status = await self.executor.stop(handle)
+                    except Exception:  # noqa: BLE001 - cleanup is best-effort
+                        log.exception("shell: cleanup failed for %s", job.run_id)
+                    output = _combined(status.stdout, status.stderr)
                     self._record_rich(
                         job,
                         status="done" if status.exit_code == 0 else "error",
                         exit_code=status.exit_code,
+                        output_chars=len(output),
                     )
                     await self._emit(
                         job.run_id,
@@ -215,15 +230,31 @@ class ShellBackgroundQueue(BackgroundQueueService[ShellRun]):
                     )
                     if job.notify_on_completion and self.on_complete is not None:
                         await self._notify(
-                            job, status.exit_code == 0, f"exit {status.exit_code}"
+                            job,
+                            status.exit_code == 0,
+                            notify_text(
+                                job.run_id, job.command, status.exit_code, output
+                            ),
                         )
                     return
         except Exception as exc:
             self._record_rich(job, status="error")
             await self._emit(job.run_id, "error", f"shell: {job.command}", str(exc))
             if job.notify_on_completion and self.on_complete is not None:
-                await self._notify(job, False, str(exc))
+                await self._notify(
+                    job,
+                    False,
+                    f"[system] Background command {job.run_id} failed to run: "
+                    f"{job.command}\n\n{exc}",
+                )
             raise
+
+
+def _combined(stdout: str, stderr: str) -> str:
+    """One output text: stdout, then stderr (already merged when file-backed)."""
+    if not stderr:
+        return stdout
+    return f"{stdout}\n[stderr]\n{stderr}" if stdout else stderr
 
 
 def _detail(stdout: str, stderr: str, exit_code: int | None) -> str:

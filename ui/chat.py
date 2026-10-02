@@ -422,8 +422,8 @@ def print_history(history: list[Any], turns: int | None = None) -> None:
 
 
 def _notify_message(run_id: str, detail: str) -> str:
-    """Same wording ui/sse.py delivers: subagents hand over a ready message."""
-    if run_id.startswith("subagent."):
+    """Same wording ui/sse.py delivers: subagents and shell hand over a ready message."""
+    if run_id.startswith(("subagent.", "shell.")):
         return detail
     return f"[system] Background process {run_id} finished: {detail}"
 

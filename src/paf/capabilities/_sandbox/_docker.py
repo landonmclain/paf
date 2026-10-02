@@ -64,6 +64,18 @@ class _DockerBackgroundState:
     """State for a background process: the detached container's name/id."""
 
     container_id: str
+    output_path: Path | None = None
+
+
+def _save_logs(state: _DockerBackgroundState, out: str, err: str) -> tuple[str, str]:
+    """Mirror the container's logs into the caller-owned output file (combined),
+    returning the (stdout, stderr) to report — merged when there is a file."""
+    if state.output_path is None:
+        return out, err
+    text = out + (err if not out or out.endswith("\n") else "\n" + err)
+    state.output_path.parent.mkdir(parents=True, exist_ok=True)
+    state.output_path.write_text(text, encoding="utf-8")
+    return text, ""
 
 
 class DockerExecutor:
@@ -257,6 +269,7 @@ class DockerExecutor:
         *,
         cwd: Path,
         env: dict[str, str] | None,
+        output_path: Path | None = None,
     ) -> BackgroundHandle:
         command_id = uuid.uuid4().hex[:12]
         name = f"paf-bg-{command_id}"
@@ -282,7 +295,7 @@ class DockerExecutor:
             raise RuntimeError(
                 f"Failed to start background container: {err.strip() or out.strip()}"
             )
-        state = _DockerBackgroundState(container_id=name)
+        state = _DockerBackgroundState(container_id=name, output_path=output_path)
         return BackgroundHandle(command_id=command_id, state=state)
 
     async def check(self, handle: BackgroundHandle) -> BackgroundStatus:
@@ -304,6 +317,7 @@ class DockerExecutor:
                 exit_code = int(code_out.strip())
             except ValueError:
                 exit_code = None
+        logs_out, logs_err = _save_logs(state, logs_out, logs_err)
         return BackgroundStatus(
             status=status, stdout=logs_out, stderr=logs_err, exit_code=exit_code
         )
@@ -322,6 +336,7 @@ class DockerExecutor:
             exit_code = int(code_out.strip())
         except ValueError:
             exit_code = None
+        logs_out, logs_err = _save_logs(state, logs_out, logs_err)
         return BackgroundStatus(
             status="finished", stdout=logs_out, stderr=logs_err, exit_code=exit_code
         )

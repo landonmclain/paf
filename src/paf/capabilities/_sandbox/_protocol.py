@@ -74,7 +74,16 @@ class SandboxedExecutor(Protocol):
         *,
         cwd: Path,
         env: dict[str, str] | None,
-    ) -> BackgroundHandle: ...
+        output_path: Path | None = None,
+    ) -> BackgroundHandle:
+        """Start a detached process.
+
+        With ``output_path`` its combined stdout+stderr goes to that file, which
+        the caller owns (``check``/``stop`` read it; ``stop`` never deletes it),
+        so the output outlives the process and this server. Without it the
+        backend keeps output wherever it likes and cleans it up on ``stop``.
+        """
+        ...
 
     async def check(self, handle: BackgroundHandle) -> BackgroundStatus: ...
 

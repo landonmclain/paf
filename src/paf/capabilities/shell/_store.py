@@ -21,22 +21,39 @@ module's callers.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 from paf.capabilities._storage import AppendOnlyStore, FlatJsonlStore
 
 DEFAULT_KIND = "shell_cmds"
+OUTPUTS_DIR = "shell_outputs"
 
 
 class ShellCommandStore:
     """Dumb append-only event store for one agent's shell commands."""
 
     def __init__(
-        self, store: AppendOnlyStore, *, agent: str, kind: str = DEFAULT_KIND
+        self,
+        store: AppendOnlyStore,
+        *,
+        agent: str,
+        kind: str = DEFAULT_KIND,
+        outputs_dir: Path | None = None,
     ) -> None:
         self._store = store
         self._agent = agent
         self._kind = kind
+        # Where background commands write their combined output, one
+        # ``<run_id>.log`` per command (next to the JSONL, like subagent outputs).
+        self.outputs_dir = outputs_dir
+
+    def output_path(self, run_id: str) -> Path | None:
+        """The durable output file for ``run_id`` (None for a store with no dir)."""
+        if self.outputs_dir is None:
+            return None
+        return self.outputs_dir / f"{re.sub(r'[^A-Za-z0-9._-]', '_', run_id)}.log"
 
     @classmethod
     def open(
@@ -54,14 +71,18 @@ class ShellCommandStore:
         the basic ``runs.jsonl`` for the same conversation); otherwise it is the
         per-agent journal ``<root>/<agent>/shell_cmds.jsonl``.
         """
-        if conversation_id is None:
-            return cls(FlatJsonlStore(root), agent=agent, kind=kind)
-        # Lazy import: background_processes._store transitively re-enters
-        # paf.capabilities, so a top-level import here would be circular.
-        from paf.background_processes._store import _safe_cid
+        from paf.capabilities._storage._flat_file import _safe_key_segment
 
-        key = f"{agent}/conversations/{_safe_cid(conversation_id)}"
-        return cls(FlatJsonlStore(root), agent=key, kind=kind)
+        if conversation_id is None:
+            key = agent
+        else:
+            # Lazy import: background_processes._store transitively re-enters
+            # paf.capabilities, so a top-level import here would be circular.
+            from paf.background_processes._store import _safe_cid
+
+            key = f"{agent}/conversations/{_safe_cid(conversation_id)}"
+        outputs = Path(root) / _safe_key_segment(key) / OUTPUTS_DIR
+        return cls(FlatJsonlStore(root), agent=key, kind=kind, outputs_dir=outputs)
 
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         """Append one rich shell record. No interpretation — just a record."""
