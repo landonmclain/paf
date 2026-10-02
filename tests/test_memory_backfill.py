@@ -139,3 +139,38 @@ def test_backfill_dry_run_then_apply(world) -> None:
     assert (facts[4].type, facts[4].project) == ("rule", None)  # unknown slug: unfiled
     # Resumable: nothing legacy left.
     assert asyncio.run(_backfill.legacy_facts(str(mem), agent_name=agent)) == []
+
+
+def test_refile_moves_only_labeled_facts_and_keeps_type(world) -> None:
+    from paf.capabilities.memory._backfill import RefileLabel, refile
+
+    mem, agent = world
+    store = OverrideStore(mem)
+    for line, fields in [
+        (3, {"type": "context", "scope": "project", "project": "paf"}),
+        (4, {"type": "rule", "scope": "project", "project": "paf"}),
+    ]:
+        store.append(op="reclassify", target_line=line, by="reviewer", fields=fields)
+    projects = conversations.default_project_store()
+    with pytest.raises(ValueError, match="no description"):
+        asyncio.run(refile(str(mem), agent_name=agent, source="paf", target="site"))
+    projects.update("site", description="The user's website.")
+
+    async def refiler(batch, src, dst):
+        assert (src["slug"], dst["slug"]) == ("paf", "site")
+        return [RefileLabel(id=ln, reason="r", move=(ln == 3)) for ln, _r in batch]
+
+    report = asyncio.run(
+        refile(
+            str(mem),
+            agent_name=agent,
+            source="paf",
+            target="site",
+            refiler=refiler,
+            dry_run=False,
+        )  # fmt: skip
+    )
+    assert [ln for ln, _r, _w in report.moved] == [3]
+    facts = current_facts(str(mem))
+    assert (facts[3].project, facts[3].type) == ("site", "context")
+    assert (facts[4].project, facts[4].type) == ("paf", "rule")

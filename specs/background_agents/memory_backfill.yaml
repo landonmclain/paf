@@ -90,3 +90,24 @@ instructions: |
   fact says. If no listed project fits, use null. Global facts: null.
 
   Give a short reason (under 15 words) before each label.
+# `refile_instructions` (a paf-specific key, read by _backfill.refile) is the
+# narrower pass that splits a project: for facts filed under FROM, does each
+# belong to the newer project TO instead? move -> reclassify to TO.
+refile_instructions: |
+  A project was split: some facts filed under project FROM really belong to
+  the newer project TO. For each fact, decide whether to MOVE it to TO. You
+  only label — you never rewrite a fact.
+
+  INPUT:
+  - FROM and TO: each as `slug — description`.
+  - FACTS: one per line: `#id (date) fact`.
+
+  Label EVERY fact, in order, with its `#id`:
+  - move — the fact is specifically about TO: its code, design, behavior,
+           setup, or how the user wants TO built or used.
+  - stay — anything else: FROM in general, FROM's own parts, or facts that
+           only mention TO in passing.
+
+  When unsure, stay.
+
+  Give a short reason (under 15 words) before each label.
