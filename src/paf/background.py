@@ -33,7 +33,7 @@ import logging
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import Context, ContextVar, copy_context
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
@@ -305,6 +305,9 @@ class BackgroundTask:
     status: StepStatus = QUEUED
     progress: float | None = None
     detail: str = ""
+    # Itemized result lines (e.g. each fact the reviewer archived), shown
+    # expandable under the row.
+    lines: list[str] = field(default_factory=list)
     updated_at: str = ""
     # Monotonic per-coordinator publish revision, stamped by _publish_task. A
     # strictly-increasing counter, so "which publish is newest" is unambiguous
@@ -354,6 +357,12 @@ class JobIdleStatus:
     status: Literal["idle", "done", "skipped", "running", "queued", "error"] = "idle"
     progress: float | None = None
     detail: str = ""
+    # Itemized result of the run this row reports (see BackgroundTask.lines).
+    lines: tuple[str, ...] = ()
+    # The last completed run, kept on an idle row so its result outlives the
+    # status hold window: its detail and when it finished (ISO 8601).
+    last: str = ""
+    last_at: str | None = None
 
 
 @dataclass
@@ -698,18 +707,19 @@ class BackgroundCoordinator:
         if self._run_events is None:
             return row
         rec = self._run_events.recent(prefix, conversation_id)
+        idle = self._with_last_run(row, prefix, conversation_id)
         if rec is None:
-            return row
+            return idle
         try:
             updated = datetime.fromisoformat(rec["timestamp"])
         except (TypeError, ValueError, KeyError):
-            return row
+            return idle
         # The journal always writes a real StepStatus, but a corrupt/older
         # line could omit it — in that case fall back to plain idle rather
         # than passing None into JobIdleStatus.
         raw_status = rec.get("status")
         if raw_status is None:
-            return row
+            return idle
         status = cast(StepStatus, raw_status)
         # An ACTIVE task (queued/running) is live: its last publish timestamp
         # only records when the job was handed off, not its progress, so a long
@@ -722,7 +732,7 @@ class BackgroundCoordinator:
             not is_active
             and (datetime.now(UTC) - updated).total_seconds() > _PROCESS_STATUS_HOLD_S
         ):
-            return row
+            return idle
         if is_active:
             # An in-flight fold carries NO idle cadence text: the
             # "n/N turns to a fold/review" countdown describes how far the
@@ -738,12 +748,43 @@ class BackgroundCoordinator:
                 progress=rec.get("progress"),
                 detail=rec.get("detail") or "",
             )
-        return JobIdleStatus(
-            id=row.id,
-            label=row.label,
+        if status == DONE:
+            # The finished run itself: its detail and lines are the result.
+            return JobIdleStatus(
+                id=row.id,
+                label=row.label,
+                status=status,
+                progress=rec.get("progress"),
+                detail=rec.get("detail") or row.detail,
+                lines=tuple(rec.get("lines") or ()),
+            )
+        # A skip/error says nothing about what the job last did: keep that.
+        return replace(
+            idle,
             status=status,
             progress=rec.get("progress"),
             detail=rec.get("detail") or row.detail,
+        )
+
+    def _with_last_run(
+        self, row: JobIdleStatus, prefix: str, conversation_id: str
+    ) -> JobIdleStatus:
+        """``row`` plus the job's last completed run, from the durable run journal.
+
+        The finished outcome only holds the row for ``_PROCESS_STATUS_HOLD_S``,
+        and the next turn's "skipped" record replaces it sooner than that. An
+        idle row that still says what the job last did -- and what it changed
+        -- keeps that result visible until the next run completes.
+        """
+        assert self._run_events is not None
+        done = self._run_events.recent(prefix, conversation_id, status=DONE)
+        if done is None:
+            return row
+        return replace(
+            row,
+            last=done.get("detail") or "",
+            last_at=done.get("timestamp"),
+            lines=tuple(done.get("lines") or ()),
         )
 
     async def job_status_summary(
@@ -979,6 +1020,7 @@ class BackgroundCoordinator:
             detail=task.detail,
             lane=cast(Literal["agent", "conversation"], self.lane or "agent"),
             scope=self.conversation_id,
+            lines=list(task.lines),
         )
 
     def _journal_event(self, task: BackgroundTask) -> dict:
@@ -996,6 +1038,7 @@ class BackgroundCoordinator:
             "status": task.status,
             "detail": task.detail,
             "progress": task.progress,
+            "lines": list(task.lines),
             "agent": self.agent_name,
             "conversation_id": parts[1] if len(parts) >= 3 else None,
             "timestamp": task.updated_at,
@@ -1007,13 +1050,16 @@ class BackgroundCoordinator:
         """Build the self-contained worker queue, bound to ``self._store``."""
         if self._memory_queue is None:
             from paf.capabilities.memory._background import (
+                FoldOutcome,
                 MemoryConsolidationQueue,
                 resolve_unseen_span,
             )
             from paf.capabilities.memory._watermark import MemoryWatermark
             from paf.capabilities.persistence import build_history_source
 
-            async def _complete(kind: StepStatus, detail: str = "") -> None:
+            async def _complete(
+                kind: StepStatus, detail: str = "", lines: list[str] | None = None
+            ) -> None:
                 for task_id, task in list(self._background_tasks.items()):
                     if task_id.startswith("consolidation.") and task.status in (
                         QUEUED,
@@ -1021,8 +1067,41 @@ class BackgroundCoordinator:
                     ):
                         task.status = kind
                         task.detail = detail
+                        task.lines = list(lines or [])
                         task.progress = 1.0 if kind == DONE else None
                         await self._publish_task(task)
+
+            async def _progress(detail: str) -> None:
+                """Update the running row's detail without finishing it."""
+                for task_id, task in list(self._background_tasks.items()):
+                    if task_id.startswith("consolidation.") and task.status in (
+                        QUEUED,
+                        PROCESSING,
+                    ):
+                        task.detail = detail
+                        await self._publish_task(task)
+
+            # The fold's count, for the review-phase and finished details.
+            folded = {"n": 0}
+
+            async def on_reviewing() -> None:
+                await _progress(f"{folded['n']} records folded · reviewing new facts")
+
+            async def on_finished(outcome: FoldOutcome) -> None:
+                """Finish the row once the whole job -- fold AND review -- is over."""
+                detail = f"{outcome.records} records folded"
+                lines: list[str] = []
+                if outcome.error is not None:
+                    await _complete(ERROR, f"{detail}, then failed: {outcome.error}")
+                    return
+                if outcome.review is not None:
+                    from paf.capabilities.memory._pairwise import describe_actions
+
+                    detail += f" · {outcome.review.outcome()}"
+                    lines = describe_actions(outcome.review, self._memory_directory)
+                elif outcome.review_error is not None:
+                    detail += f" · review failed: {outcome.review_error}"
+                await _complete(DONE, detail, lines)
 
             source = build_history_source(self._store)
 
@@ -1050,7 +1129,10 @@ class BackgroundCoordinator:
                             watermark,
                             project=queue_ref.current_project,
                         )
-                    await _complete(DONE, f"{n} records folded")
+                    # Not done yet: the pairwise reviewer may still run in this
+                    # job. `on_finished` closes the row once the job is over.
+                    folded["n"] = n
+                    await _progress(f"{n} records folded")
                     return n
                 except Exception as exc:
                     await _complete(ERROR, str(exc))
@@ -1062,6 +1144,8 @@ class BackgroundCoordinator:
                 span_source=span_source,
                 consolidate_span=publish_fold,
                 pairwise_review=self.pairwise_review,
+                on_reviewing=on_reviewing,
+                on_finished=on_finished,
             )
             queue.history_source = source
             queue_ref = queue

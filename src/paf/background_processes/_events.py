@@ -18,7 +18,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from paf.events import GenericEventEmitter, Listener
 
@@ -54,6 +54,8 @@ class ProcessEvent(BaseModel):
             so the feed routes it to the right panel.
         scope: The conversation id for a conversation-lane process, or None
             for an agent-lane (per-agent) process.
+        lines: Optional itemized result, one readable line per item (e.g. each
+            fact the memory reviewer archived), for a UI to expand under the row.
     """
 
     id: str
@@ -63,6 +65,7 @@ class ProcessEvent(BaseModel):
     detail: str = ""
     lane: Literal["agent", "conversation"] = "agent"
     scope: str | None = None
+    lines: list[str] = Field(default_factory=list)
 
 
 EventCallback = Listener[ProcessEvent]

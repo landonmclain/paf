@@ -208,6 +208,7 @@ def test_worker_passes_project_and_reviews_what_it_folded(
         pairwise_review=True,
     )
     ref["q"] = q
+
     async def scenario():  # enqueue starts a worker task: needs a running loop
         q.enqueue(
             "pairwise-test",
@@ -221,3 +222,137 @@ def test_worker_passes_project_and_reviews_what_it_folded(
     st = load_overrides(d)
     assert st[1].is_superseded and st[1].superseded_by == 5
     assert load_watermark(d) == 5
+
+
+# --- status reporting: the job's review phase and outcome ----------------------
+
+
+def _fold_bentonville(directory, *_args) -> int:
+    JournalStore(directory).append(
+        type="identity",
+        fact="The user lives in Bentonville.",
+        tier="t1",
+        born_on="2026-09-30T12:00:00+00:00",
+        source_ref="r:9",
+        scope="global",
+        source="stated",
+    )
+    return 1
+
+
+def _run_job(d: str, **hooks) -> list:
+    """Run one fold job (writing fact #5) with the pairwise reviewer on."""
+    from paf.capabilities.memory._background import (
+        ConsolidationJob,
+        MemoryConsolidationQueue,
+    )
+
+    async def fold(messages, directory, watermark) -> int:
+        return _fold_bentonville(directory)
+
+    q = MemoryConsolidationQueue(
+        memory_directory=d,
+        agent_name="pairwise-test",
+        consolidate_span=fold,
+        pairwise_review=True,
+        **hooks,
+    )
+
+    async def scenario():
+        q.enqueue("pairwise-test", ConsolidationJob(run_id="r", turn_id=0, messages=[]))
+        await q.drain("pairwise-test")
+
+    asyncio.run(scenario())
+
+
+def test_job_reports_review_phase_then_outcome(tmp_path: Path, monkeypatch) -> None:
+    """The row must not finish when the fold returns: the reviewer is still to
+    run. The finish hook fires once, after the review, with its result."""
+    from paf.capabilities.memory import _pairwise
+    from paf.capabilities.memory._pairwise import describe_actions
+
+    d = _journal(tmp_path, FACTS[:4])
+    monkeypatch.setattr(
+        _pairwise, "deepseek_judge", ScriptedJudge({(5, 1): ("update", None)})
+    )
+    calls: list = []
+
+    async def on_reviewing() -> None:
+        calls.append("reviewing")
+
+    async def on_finished(outcome) -> None:
+        calls.append(outcome)
+
+    _run_job(d, on_reviewing=on_reviewing, on_finished=on_finished)
+
+    assert calls[0] == "reviewing" and len(calls) == 2
+    outcome = calls[1]
+    assert outcome.records == 1 and outcome.error is None
+    assert outcome.review.outcome() == "reviewed 1: 1 superseded"
+    assert describe_actions(outcome.review, d) == [
+        'superseded "The user lives in Tulsa." by "The user lives in Bentonville."'
+        " — scripted"
+    ]
+
+
+def test_job_finishes_row_when_review_fails(tmp_path: Path, monkeypatch) -> None:
+    from paf.capabilities.memory import _pairwise
+
+    async def broken(*_a, **_k):
+        raise RuntimeError("judge offline")
+
+    monkeypatch.setattr(_pairwise, "review_new_facts", broken)
+    finished: list = []
+
+    async def on_finished(outcome) -> None:
+        finished.append(outcome)
+
+    _run_job(_journal(tmp_path, FACTS[:4]), on_finished=on_finished)
+
+    assert [o.review_error for o in finished] == ["judge offline"]
+    assert finished[0].records == 1 and finished[0].review is None
+
+
+def test_job_finishes_row_when_post_fold_step_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failure between the fold and the review must still close the row."""
+    from paf.capabilities.memory import _render
+
+    def broken(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_render, "write_render", broken)
+    finished: list = []
+
+    async def on_finished(outcome) -> None:
+        finished.append(outcome)
+
+    _run_job(_journal(tmp_path, FACTS[:4]), on_finished=on_finished)
+
+    assert [o.error for o in finished] == ["disk full"]
+
+
+def test_describe_actions_quotes_facts_and_reasons(tmp_path: Path) -> None:
+    from paf.capabilities.memory._pairwise import (
+        Action,
+        ReviewReport,
+        describe_actions,
+    )
+
+    d = _journal(tmp_path, FACTS)
+    report = ReviewReport(
+        reviewed=[6],
+        actions=[
+            Action("archive", 2, 6, "same", "covered by #6: new adds 'black'"),
+            Action("approve", 3, None, "approve", "stale"),
+        ],
+    )
+    assert report.outcome() == "reviewed 1: 1 archived, 1 suggestion(s) approved"
+    assert describe_actions(report, d) == [
+        'archived "The user prefers dark roast coffee." (same as '
+        "\"The user prefers dark roast coffee, black.\") — new adds 'black'",
+        'archived "The paf test suite takes about a minute." (approved suggestion)'
+        " — stale",
+    ]
+    assert ReviewReport(reviewed=[1, 2]).outcome() == "reviewed 2: no changes"

@@ -112,6 +112,60 @@ class ReviewReport:
             ", ".join(f"{n} {op}" for op, n in sorted(counts.items())) or "no actions"
         )
 
+    def outcome(self) -> str:
+        """Short past-tense tally for a status line: ``reviewed 5: 2 archived``."""
+        counts: dict[str, int] = {}
+        for a in self.actions:
+            counts[a.op] = counts.get(a.op, 0) + 1
+        tally = ", ".join(
+            f"{counts[op]} {label}" for op, label in _OUTCOME.items() if op in counts
+        )
+        return f"reviewed {len(self.reviewed)}: {tally or 'no changes'}"
+
+
+_OUTCOME = {
+    "archive": "archived",
+    "supersede": "superseded",
+    "approve": "suggestion(s) approved",
+    "reject": "suggestion(s) rejected",
+}
+
+
+def describe_actions(
+    report: ReviewReport, directory: str, *, width: int = 100
+) -> list[str]:
+    """One readable line per action, naming facts by their text, not line number.
+
+    For a status panel: the reader wants to see *what* was archived or replaced
+    and why, without opening the journal. The judge's reason follows the dash
+    (its ``covered by #N:`` / ``superseded by #N:`` prefix is dropped, since
+    the other fact is already quoted).
+    """
+    if not report.actions:
+        return []
+    records = dict(JournalStore(directory).read_all())
+
+    def quote(line: int | None) -> str:
+        record = records.get(line) if line is not None else None
+        text = record.fact if record is not None else f"#{line}"
+        return f'"{text[: width - 1]}…"' if len(text) > width else f'"{text}"'
+
+    lines = []
+    for a in report.actions:
+        reason = a.reason
+        if reason.startswith(("covered by #", "superseded by #")) and ": " in reason:
+            reason = reason.split(": ", 1)[1]
+        if a.op == "archive":
+            line = f"archived {quote(a.target)} (same as {quote(a.other)})"
+        elif a.op == "supersede":
+            line = f"superseded {quote(a.target)} by {quote(a.other)}"
+        elif a.op == "approve":
+            line = f"archived {quote(a.target)} (approved suggestion)"
+        else:
+            line = f"kept {quote(a.target)} (rejected suggestion)"
+        lines.append(f"{line} — {reason}" if reason else line)
+    return lines
+
 
 # --- current facts + candidates ------------------------------------------------
 

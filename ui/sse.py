@@ -398,6 +398,7 @@ def _task_frame(got: Any) -> tuple[str, dict[str, Any]] | None:
             "status": status,
             "progress": got.progress,
             "detail": got.detail,
+            "lines": list(got.lines),
         },
     )
 
@@ -789,7 +790,7 @@ async def conversation_tasks(
 ) -> dict[str, Any]:
     """Background-task history for a conversation, newest first.
 
-    Background tasks (thread summarizer, memory reviewer, consolidation) can
+    Background tasks (thread summarizer, memory consolidation + review) can
     finish AFTER the turn's SSE stream closes, so a failure is never visible on
     the live turn channel. This endpoint lets a UI query "did anything fail for
     this conversation" — on load, on turn-end, or on-demand — and surface e.g.
@@ -906,6 +907,7 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
                             "status": task.status,
                             "progress": task.progress,
                             "detail": task.detail,
+                            "lines": list(task.lines),
                         },
                     )
                 )
@@ -931,6 +933,9 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
                                 "status": st.status,
                                 "progress": st.progress,
                                 "detail": st.detail,
+                                "lines": list(st.lines),
+                                "last": st.last,
+                                "last_at": st.last_at,
                             },
                         )
                     )

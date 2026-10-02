@@ -270,6 +270,7 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
             self.status = status
             self.progress = 0.5
             self.detail = "partial"
+            self.lines: list[str] = []
             self.updated_at = "2026-09-13T00:00:00"
 
     coord = _Coordinator([_Hist("consolidation.conv-1.1", "DONE")])

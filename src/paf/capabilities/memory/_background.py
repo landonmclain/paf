@@ -54,6 +54,8 @@ if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage  # noqa: F401
     from pydantic_ai_harness.conversation_search import HistorySource
 
+    from ._pairwise import ReviewReport
+
 log = logging.getLogger(__name__)
 
 
@@ -276,6 +278,29 @@ SpanSource = Callable[[str, int], Awaitable[ResolvedSpan]]
 ConsolidateSpan = Callable[[list["ModelMessage"], str, MemoryWatermark], Awaitable[int]]
 
 
+@dataclass
+class FoldOutcome:
+    """What one consolidation job did, reported once the whole job is over.
+
+    The pairwise reviewer runs inside the job, after the fold, so the fold's
+    return alone is not "done": a status row that says done at that point is
+    wrong for the minutes the reviewer is still working. ``error`` is a failure
+    after the fold committed (render/index); ``review_error`` is a reviewer
+    failure, which never fails the fold.
+    """
+
+    records: int
+    review: ReviewReport | None = None
+    review_error: str | None = None
+    error: str | None = None
+
+
+#: Notified just before the pairwise reviewer starts.
+OnReviewing = Callable[[], Awaitable[None]]
+#: Notified once a job that reached the fold is over, however it ended.
+OnFoldFinished = Callable[[FoldOutcome], Awaitable[None]]
+
+
 class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
     """Background owner queue fired by the watermark trigger.
 
@@ -315,6 +340,8 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         span_source: SpanSource | None = None,
         consolidate_span: ConsolidateSpan | None = None,
         pairwise_review: bool = False,
+        on_reviewing: OnReviewing | None = None,
+        on_finished: OnFoldFinished | None = None,
     ) -> None:
         super().__init__()
         self.name = name
@@ -325,6 +352,9 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         # Run the pairwise reviewer (memory/_pairwise.py) right after each fold
         # that wrote facts. Spec `memory: pairwise_review: true`.
         self.pairwise_review = pairwise_review
+        # Status hooks for the coordinator's process row (see FoldOutcome).
+        self.on_reviewing = on_reviewing
+        self.on_finished = on_finished
         # The job being processed's project — read by a coordinator-supplied
         # consolidate_span (which keeps the 3-arg hook signature) so the
         # extractor still gets the conversation's project. Jobs are FIFO on
@@ -408,61 +438,83 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
                 messages, directory, watermark, project=job.project
             )
 
-        # THE WATERMARK CONTRACT: advance when the fold COMPLETED WITHOUT
-        # ERROR, regardless of how many records it wrote. "Found nothing
-        # durable" (new_records == 0) is a successful, complete pass and MUST
-        # advance — only a throw / timeout / no-response holds the watermark
-        # back so that span is retried next cadence, never silently skipped.
-        # The worker is now the SOLE owner-watermark writer (the trigger only
-        # schedules; it no longer advances at fire-time).
-        watermark.run_id = advance_target.run_id
-        watermark.turn_id = advance_target.turn_id
-        watermark.consumed_ts = advance_target.consumed_ts
-        watermark.save(directory)
-        log.info(
-            "memory_consolidation_job session=%s success folded=%r "
-            "watermark=%s:%s ts=%s",
-            session_id,
-            new_records,
-            watermark.run_id,
-            watermark.turn_id,
-            watermark.consumed_ts,
-        )
-
-        # Re-render MEMORY.md (and the derived index) only when the fold actually
-        # wrote new facts — a successful 0-record fold changed nothing to render.
-        if new_records and new_records > 0:
-            # Materialize MEMORY.md deterministically from the append-only journal —
-            # the exact render the eviction path and benchmark produce.
-            from ._render import write_render
-
-            write_render(
-                journal,
-                str(Path(directory) / "MEMORY.md"),
-                agent_name=self.agent_name,
+        outcome = FoldOutcome(records=new_records or 0)
+        try:
+            # THE WATERMARK CONTRACT: advance when the fold COMPLETED WITHOUT
+            # ERROR, regardless of how many records it wrote. "Found nothing
+            # durable" (new_records == 0) is a successful, complete pass and MUST
+            # advance — only a throw / timeout / no-response holds the watermark
+            # back so that span is retried next cadence, never silently skipped.
+            # The worker is now the SOLE owner-watermark writer (the trigger only
+            # schedules; it no longer advances at fire-time).
+            watermark.run_id = advance_target.run_id
+            watermark.turn_id = advance_target.turn_id
+            watermark.consumed_ts = advance_target.consumed_ts
+            watermark.save(directory)
+            log.info(
+                "memory_consolidation_job session=%s success folded=%r "
+                "watermark=%s:%s ts=%s",
+                session_id,
+                new_records,
+                watermark.run_id,
+                watermark.turn_id,
+                watermark.consumed_ts,
             )
-            # Derived index of surviving facts (dedup winners, incremental, pure
-            # derivation from the journal) — regenerated beside MEMORY.md so they
-            # can't disagree. First fold on a journal with pre-existing history
-            # builds the full index.
-            from ._index import update_index
 
-            update_index(directory)
+            # Re-render MEMORY.md (and the derived index) only when the fold actually
+            # wrote new facts — a successful 0-record fold changed nothing to render.
+            if new_records and new_records > 0:
+                # Materialize MEMORY.md deterministically from the append-only journal —
+                # the exact render the eviction path and benchmark produce.
+                from ._render import write_render
 
-            if self.pairwise_review:
-                # Keep every current fact unique and up to date. A review
-                # failure never fails the fold (the watermark above already
-                # advanced; the next fold's review picks up from the reviewer's
-                # own watermark).
-                from ._pairwise import review_new_facts
+                write_render(
+                    journal,
+                    str(Path(directory) / "MEMORY.md"),
+                    agent_name=self.agent_name,
+                )
+                # Derived index of surviving facts (dedup winners, incremental, pure
+                # derivation from the journal) — regenerated beside MEMORY.md so they
+                # can't disagree. First fold on a journal with pre-existing history
+                # builds the full index.
+                from ._index import update_index
 
-                try:
-                    report = await review_new_facts(
-                        directory, agent_name=self.agent_name
-                    )
-                    log.info("pairwise review after fold: %s", report.summary())
-                except Exception:  # noqa: BLE001
-                    log.exception("pairwise review after fold failed")
+                update_index(directory)
+
+                if self.pairwise_review:
+                    # Keep every current fact unique and up to date. A review
+                    # failure never fails the fold (the watermark above already
+                    # advanced; the next fold's review picks up from the reviewer's
+                    # own watermark).
+                    from ._pairwise import review_new_facts
+
+                    await self._notify(self.on_reviewing)
+                    try:
+                        outcome.review = await review_new_facts(
+                            directory, agent_name=self.agent_name
+                        )
+                        log.info(
+                            "pairwise review after fold: %s", outcome.review.summary()
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        outcome.review_error = str(exc) or type(exc).__name__
+                        log.exception("pairwise review after fold failed")
+        except Exception as exc:
+            outcome.error = str(exc) or type(exc).__name__
+            raise
+        finally:
+            # Always close out the status row, so it can never be left showing
+            # "reviewing" after a failure between the fold and the review.
+            await self._notify(self.on_finished, outcome)
+
+    async def _notify(self, hook: Callable[..., Awaitable[None]] | None, *args) -> None:
+        """Call a status hook; a failing hook never fails the job."""
+        if hook is None:
+            return
+        try:
+            await hook(*args)
+        except Exception:  # noqa: BLE001
+            log.exception("memory consolidation status hook failed")
 
     async def _default_consolidate_span(
         self,
