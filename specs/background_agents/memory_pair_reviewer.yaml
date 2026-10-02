@@ -1,0 +1,74 @@
+# Leaf-agent spec for the `memory_pair_reviewer` background agent — the
+# pairwise memory reviewer's JUDGE (vault Designs/Memory-Pipeline-v2-Plan §2).
+#
+# The judge only LABELS. Code (memory/_pairwise.py) chooses which facts to
+# compare (each new fact vs its BM25 candidates among older current facts in
+# the same project + global) and maps labels to actions:
+#   same      -> archive whichever fact adds nothing
+#   update    -> supersede the older fact (it moves to history)
+#   different -> nothing (the default when unsure)
+#
+# Judge = DeepSeek, chosen from the labeled set (vault
+# Benchmark/Fact-Relation-Detection-Experiments, Experiment 4).
+#
+# `instructions` is the pair-comparison prompt; `suggestion_instructions` (a
+# paf-specific key, read by _pairwise.py) resolves the assistant's
+# memory_archive_suggestion proposals.
+name: memory_pair_reviewer
+model: openrouter:deepseek/deepseek-v4-flash-0731
+model_settings:
+  temperature: 0
+  top_p: 1.0
+  max_tokens: 8192
+  extra_body:
+    provider:
+      order:
+        - deepinfra
+        - parasail
+        - coreweave
+      quantizations:
+        - fp8
+  openrouter_reasoning:
+    effort: medium
+instructions: |
+  You compare one NEW memory fact with older stored facts and label how they
+  relate. You only label — you never edit or rewrite facts.
+
+  For EACH numbered older fact, choose one label:
+  - same      — one fact is fully covered by the other: they say the same
+                thing, OR one says everything the other does plus more.
+  - update    — the same specific attribute of the same specific thing, but the
+                value changed: a new place, number, date, version, status, or a
+                reversed decision. Both cannot be true now. ONLY if the new fact
+                replaces the older fact's ENTIRE claim: if the older fact also
+                says other things that are still true, choose `different`.
+  - different — anything else: same topic but each says something the other
+                doesn't, or a different topic entirely.
+
+  For `same`, also say which to KEEP:
+  - keep `new` — the new fact says everything the older one does (or they are
+    equal).
+  - keep `old` — the older fact says everything the new one does, plus more.
+
+  Rules:
+  - The thing a fact is about is specific — a project, tool, machine, place,
+    person, or area of preference — never just "the user"; almost every fact
+    mentions the user.
+  - `update` only when a VALUE changed. The same value restated is `same`.
+  - Same attribute but different projects (paf's tests vs the site's tests) →
+    different.
+  - Judge only from the text. Do not assume context the facts don't state.
+  - When unsure, choose `different`. A wrong `same` or `update` hides a fact
+    that is still true; a wrong `different` only leaves a duplicate.
+
+  Give a short reason (under 15 words) before each label.
+suggestion_instructions: |
+  The assistant suggested archiving a memory fact because it may be wrong or
+  no longer true. Decide whether to approve.
+
+  - approve — the reason, or a newer fact shown, makes clear this fact is wrong
+              or no longer true.
+  - reject  — the fact still looks true, or the reason is only that it is old,
+              minor, or redundant (duplicates are handled elsewhere).
+
+  When unsure, reject. Give a short reason (under 15 words) before the verdict.

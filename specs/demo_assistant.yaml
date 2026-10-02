@@ -348,6 +348,11 @@ memory:
   # writes v1 rows that drop scope/project. Replaced by the pairwise reviewer —
   # see vault Designs/Memory-Pipeline-v2-Plan.
   review: false
+  # Pairwise reviewer ON: after each fold, each new fact vs its BM25 candidates
+  # (same project + global); DeepSeek labels same/update/different, code
+  # archives/supersedes via the overrides sidecar. Starts at the journal tail
+  # (no backfill). Dry run: scripts/memory_review.py --last 30
+  pairwise_review: true
   tier_caps:
     t1: 75
     t2: 25

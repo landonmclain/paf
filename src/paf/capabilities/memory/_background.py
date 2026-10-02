@@ -314,6 +314,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         name: str = "memory-consolidation",
         span_source: SpanSource | None = None,
         consolidate_span: ConsolidateSpan | None = None,
+        pairwise_review: bool = False,
     ) -> None:
         super().__init__()
         self.name = name
@@ -321,6 +322,14 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         self.agent_name = agent_name
         self.span_source = span_source
         self.consolidate_span = consolidate_span
+        # Run the pairwise reviewer (memory/_pairwise.py) right after each fold
+        # that wrote facts. Spec `memory: pairwise_review: true`.
+        self.pairwise_review = pairwise_review
+        # The job being processed's project — read by a coordinator-supplied
+        # consolidate_span (which keeps the 3-arg hook signature) so the
+        # extractor still gets the conversation's project. Jobs are FIFO on
+        # one worker, so this never mixes two jobs.
+        self.current_project: str | None = None
 
     def job_trace(self, session_id: str, job: ConsolidationJob) -> tuple[str, dict]:
         """Each consolidation is its OWN trace: memory is per-agent, not part of
@@ -377,7 +386,17 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             advance_target = messages_span.watermark
         messages = messages_span.messages
 
+        # The reviewer's watermark must exist BEFORE the fold, so the facts this
+        # fold writes are reviewed (a first-ever review otherwise starts at the
+        # tail and would skip them).
+        if self.pairwise_review:
+            from ._pairwise import load_watermark, save_watermark
+
+            if load_watermark(directory) is None:
+                save_watermark(directory, journal.count())
+
         # Fold into the journal (append-only; dedup/supersede at render).
+        self.current_project = job.project
         if self.consolidate_span is not None:
             new_records = await self.consolidate_span(messages, directory, watermark)
         else:
@@ -425,6 +444,21 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             from ._index import update_index
 
             update_index(directory)
+
+            if self.pairwise_review:
+                # Keep every current fact unique and up to date. A review
+                # failure never fails the fold (the watermark above already
+                # advanced; the next fold's review picks up from the reviewer's
+                # own watermark).
+                from ._pairwise import review_new_facts
+
+                try:
+                    report = await review_new_facts(
+                        directory, agent_name=self.agent_name
+                    )
+                    log.info("pairwise review after fold: %s", report.summary())
+                except Exception:  # noqa: BLE001
+                    log.exception("pairwise review after fold failed")
 
     async def _default_consolidate_span(
         self,

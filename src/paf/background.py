@@ -477,8 +477,10 @@ class BackgroundCoordinator:
         self.review_turns = (
             review_turns if review_turns is not None else _mem_cfg["review_turns"]
         )
-        # Spec `memory.review: false` turns the background reviewer off.
+        # Spec `memory.review: false` turns the old background reviewer off;
+        # `memory.pairwise_review: true` runs the pairwise one after each fold.
         self.review_enabled = bool(_mem_cfg.get("review_enabled", True))
+        self.pairwise_review = bool(_mem_cfg.get("pairwise_review", False))
 
         # Per-agent scope dirs.
         self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
@@ -1043,7 +1045,10 @@ class BackgroundCoordinator:
                         # writes.
                         assert queue_ref is not None
                         n = await queue_ref._default_consolidate_span(
-                            messages, directory, watermark
+                            messages,
+                            directory,
+                            watermark,
+                            project=queue_ref.current_project,
                         )
                     await _complete(DONE, f"{n} records folded")
                     return n
@@ -1056,6 +1061,7 @@ class BackgroundCoordinator:
                 agent_name=self.agent_name,
                 span_source=span_source,
                 consolidate_span=publish_fold,
+                pairwise_review=self.pairwise_review,
             )
             queue_ref = queue
             self._memory_queue = queue

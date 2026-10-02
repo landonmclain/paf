@@ -42,7 +42,7 @@ _SCHEMA = 1
 
 # Ops by writer.
 _ASSISTANT_OPS = frozenset({"archive"})
-_REVIEWER_OPS = frozenset({"archive", "tier_change", "reject"})
+_REVIEWER_OPS = frozenset({"archive", "tier_change", "reject", "supersede"})
 
 # Derived per-target statuses (see module docstring).
 _STATUS_NONE = "none"
@@ -50,6 +50,7 @@ _STATUS_PENDING = "pending"
 _STATUS_APPLIED_ARCHIVE = "applied_archive"
 _STATUS_APPLIED_TIER = "applied_tier"
 _STATUS_REJECTED = "rejected"
+_STATUS_SUPERSEDED = "superseded"
 
 
 class OverrideState:
@@ -61,7 +62,7 @@ class OverrideState:
     for applied/rejected, the assistant intent for pending).
     """
 
-    __slots__ = ("status", "tier", "by", "reason", "at")
+    __slots__ = ("status", "tier", "by", "reason", "at", "superseded_by")
 
     def __init__(
         self,
@@ -71,12 +72,14 @@ class OverrideState:
         by: str = "",
         reason: str = "",
         at: str = "",
+        superseded_by: int | None = None,
     ) -> None:
         self.status = status
         self.tier = tier
         self.by = by
         self.reason = reason
         self.at = at
+        self.superseded_by = superseded_by
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
@@ -100,6 +103,12 @@ class OverrideState:
     def is_applied_tier(self) -> bool:
         """True when the reviewer moved the fact to a new tier."""
         return self.status == _STATUS_APPLIED_TIER
+
+    @property
+    def is_superseded(self) -> bool:
+        """True when a newer fact replaced this one's value (it leaves the
+        current sections; ``superseded_by`` names the replacement)."""
+        return self.status == _STATUS_SUPERSEDED
 
 
 def _now_iso() -> str:
@@ -136,12 +145,17 @@ class OverrideStore:
         reason: str = "",
         tier: str | None = None,
         at: str | None = None,
+        superseded_by: int | None = None,
+        detail: dict | None = None,
     ) -> dict:
         """Append one override record; returns it (echoed for the caller).
 
         ``op`` must be valid for ``by``: ``archive`` for the assistant;
-        ``archive``/``tier_change``/``reject`` for the reviewer. ``tier`` is
-        required for ``tier_change`` and rejected for others.
+        ``archive``/``tier_change``/``reject``/``supersede`` for the reviewer.
+        ``tier`` is required for ``tier_change`` and rejected for others;
+        ``superseded_by`` (the replacing line) is required for ``supersede``
+        and rejected for others. ``detail`` is a free-form audit dict (the
+        pairwise reviewer records label, judge model, and the pair).
         """
         if by == "assistant":
             if op not in _ASSISTANT_OPS:
@@ -161,6 +175,10 @@ class OverrideStore:
             raise ValueError("tier_change requires a target tier")
         if op != "tier_change" and tier is not None:
             raise ValueError(f"op {op!r} does not take a tier")
+        if op == "supersede" and (superseded_by is None or superseded_by < 1):
+            raise ValueError("supersede requires superseded_by (the replacing line)")
+        if op != "supersede" and superseded_by is not None:
+            raise ValueError(f"op {op!r} does not take superseded_by")
 
         record = {
             "v": _SCHEMA,
@@ -172,6 +190,10 @@ class OverrideStore:
         }
         if tier is not None:
             record["tier"] = tier
+        if superseded_by is not None:
+            record["superseded_by"] = int(superseded_by)
+        if detail:
+            record["detail"] = detail
 
         with self._lock:
             _append_jsonl_atomic(self._path, [record])
@@ -252,6 +274,14 @@ def fold_overrides(records: list[dict]) -> dict[int, OverrideState]:
                     by=by,
                     reason=rec.get("reason", ""),
                     at=rec.get("at", ""),
+                )
+            elif op == "supersede":
+                state[target] = OverrideState(
+                    _STATUS_SUPERSEDED,
+                    by=by,
+                    reason=rec.get("reason", ""),
+                    at=rec.get("at", ""),
+                    superseded_by=rec.get("superseded_by"),
                 )
     return state
 

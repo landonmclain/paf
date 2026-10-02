@@ -99,8 +99,11 @@ def _apply_overrides(
         if st is None:
             kept.append((line, rec))
             continue
-        if st.is_applied_archive:
-            continue  # reviewer archived — drop from injection
+        if st.is_applied_archive or st.is_superseded:
+            # reviewer archived, or a newer fact replaced this one's value —
+            # drop from the current view (superseded facts belong to the
+            # history section of the scope-aware render).
+            continue
         if st.is_applied_tier and st.tier and st.tier != rec.tier:
             # reviewer demoted — rebuild the record at the new tier
             rec = rec.with_tier(st.tier)
