@@ -44,6 +44,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The benchmark's project slug. LongMemEval questions run in their own isolated
+# conversations (not in the conversation registry), so the owner's
+# ``ExtractionContext`` must stamp it in code — otherwise every
+# ``scope="project"`` fact is filed with ``project=None`` and the scoped render
+# drops it as unfiled. Registered in the project registry (see
+# ``default_project_store``) so the recall render can name it.
+LME_PROJECT = "lmem"
+
 
 async def consolidate_conversation(
     messages: list[ModelMessage],
@@ -77,11 +85,11 @@ async def consolidate_conversation(
         agent_name=agent_name,
         namespace=namespace,
         journal=journal,
-        extraction=ExtractionContext(ref_dates=ref_dates),
+        extraction=ExtractionContext(ref_dates=ref_dates, project=LME_PROJECT),
     )
     result = await run_guarded(
         owner,
-        render_consolidation_prompt(text),
+        render_consolidation_prompt(text, project=LME_PROJECT),
     )
     logger.info(
         "consolidated %d msgs (full conversation): %s",
@@ -188,7 +196,7 @@ async def consolidate_conversation_chunked(
         namespace=namespace,
         inject_memory=True,
         journal=journal,
-        extraction=ExtractionContext(ref_dates=ref_dates),
+        extraction=ExtractionContext(ref_dates=ref_dates, project=LME_PROJECT),
     )
     budget = chunk_max_tokens or _CHUNK_MAX_TOKENS
     chunks = _split_chunks(text, max_tokens=budget)
@@ -196,7 +204,7 @@ async def consolidate_conversation_chunked(
         try:
             result = await run_guarded(
                 owner,
-                render_consolidation_prompt(chunk),
+                render_consolidation_prompt(chunk, project=LME_PROJECT),
             )
         except (UsageLimitExceeded, UnexpectedModelBehavior, ModelHTTPError) as exc:
             # Mirror the recall-side resilience: a single owner failure must not

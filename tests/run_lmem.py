@@ -46,7 +46,17 @@ import re
 import resource
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
+
+# LongMemEval seeds are stored UTC (``_iso_date`` stamps ``+00:00``) but
+# shown in the user's local zone; a session at 2023-05-21T00:00Z would render
+# as 2023-05-20 in America/Chicago and break temporal questions. Force UTC
+# BEFORE any paf import resolves the zone — ``paf.clock.local_zone()`` is
+# lru_cache'd on first use, so setting it here (module top) is the only point
+# that reliably sticks for the whole run. Env beats .env for pydantic-settings,
+# so this overrides any TIMEZONE in .env too.
+os.environ["TIMEZONE"] = "UTC"
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
@@ -69,6 +79,11 @@ from paf.observability.instrumentation import (
     shutdown_observability,
 )
 from paf.specs import load_agent_spec
+
+# The benchmark's project slug (stamped on extraction AND forced on recall so the
+# scoped render shows the lmem section even though per-question conversations are
+# never registered).
+from tests._lmem_consolidate import LME_PROJECT
 
 # Reuse the LoCoMo harness plumbing (agent assembly + turn runner).
 from tests.framework import (
@@ -97,10 +112,12 @@ from tests.lme_scoring import (
 # The subject model comes from the spec (specs/longmemeval.yaml), not here.
 JUDGE_MODEL = "openrouter:openai/gpt-4o-mini"
 
-# Benchmark data file — the reviewer-variant copy of the oracle split
+# Benchmark data file — v2 memory-system variant copy of the oracle split
 # (evidence-only sessions, ~1.9 sessions / ~22 turns per question). Hardcoded
-# (not env/spec): the renamed copy also forces a fresh durable-memory dir below.
-LME_DATA_FILE = "memory-reviewer-lme_oracle.json"
+# (not env/spec): the renamed copy also forces a fresh durable-memory dir below,
+# so the new (v2) memory system's runs never clobber the v1 snapshots that the
+# 0.9468/0.934 baselines came from.
+LME_DATA_FILE = "memory-v2-lme_oracle.json"
 DATA = Path(__file__).parent.parent / "data" / "benchmarks" / LME_DATA_FILE
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -900,6 +917,15 @@ def main(argv: list[str] | None = None) -> dict:
         agent = _build_agent(
             store,
             memory_dir=artifact_dir / "memory",
+            # v2 scoped-recall arm: force the lmem project section and anchor
+            # the recent-history window to the question date (the 2023 seeds
+            # would otherwise all fall outside now_local()'s 30-day window).
+            render_project=LME_PROJECT,
+            render_now=(
+                datetime.fromisoformat(_iso_date(q.get("question_date")))
+                if q.get("question_date")
+                else None
+            ),
         )
         qctx = (
             f"The date now is {q['question_date']}. " if q.get("question_date") else ""

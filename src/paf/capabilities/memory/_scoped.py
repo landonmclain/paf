@@ -34,7 +34,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, fields
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from paf.capabilities.search._ranking import Bm25Params, bm25_score, tokenize
@@ -382,9 +382,20 @@ async def render_scoped(
     conversation_id: str | None,
     query: str,
     budget: RenderBudget | None = None,
+    project: str | None = None,
+    now: datetime | None = None,
     step_store=None,
 ) -> str:
-    """The ``<memory>`` body for one conversation turn (empty string if nothing)."""
+    """The ``<memory>`` body for one conversation turn (empty string if nothing).
+
+    ``project`` and ``now`` are opt-in overrides for the benchmark/isolated
+    harness: ``project`` forces the conversation's project section instead of
+    resolving it from the conversation registry (``project_for_conversation``),
+    and ``now`` anchors the recent-history window to a fixed time instead of
+    ``now_local()`` (LongMemEval seeds are dated 2023; with no anchor every
+    2023 event falls outside the 30-day window and is dropped). Both default to
+    ``None`` = the live behavior (registry resolution / ``now_local()``).
+    """
     from paf.conversations import default_project_store, project_for_conversation
 
     budget = budget or RenderBudget()
@@ -392,7 +403,8 @@ async def render_scoped(
         directory, agent_name=agent_name, step_store=step_store
     )
 
-    project = project_for_conversation(agent_name, conversation_id)
+    if project is None:
+        project = project_for_conversation(agent_name, conversation_id)
     registry = default_project_store().list()
     mentioned = _mentioned(query, registry, project)[:2]
     names = {p["slug"]: p.get("name") or p["slug"] for p in registry}
@@ -437,7 +449,7 @@ async def render_scoped(
     # Recent history — events + replaced values, dated, newest first.
     # Undated rows (pre-born_on legacy) never count as recent: "undated" would
     # otherwise sort above every ISO date in the window check.
-    since = (now_local() - timedelta(days=budget.history_days)).date().isoformat()
+    since = ((now or now_local()) - timedelta(days=budget.history_days)).date().isoformat()
     visible = {None, project, *mentioned}
     items: list[tuple[str, str, str]] = []  # (date, kind, line)
     for ln, r, proj in filed.events:

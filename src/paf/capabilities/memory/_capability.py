@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic_ai.agent.abstract import AgentInstructions
@@ -205,6 +206,17 @@ class Memory(AbstractCapability[AgentDepsT]):
     and profile prefixes for. Separate from ``agent_name``, which is part of
     the injection marker and must stay stable across versions."""
 
+    render_project: str | None = field(default=None, kw_only=True)
+    """Force the scoped render's project section to this slug instead of
+    resolving it from the conversation registry. ``None`` = the live behavior.
+    The benchmark harness uses this because its per-question conversations are
+    never registered."""
+
+    render_now: datetime | None = field(default=None, kw_only=True)
+    """Anchor the scoped render's recent-history window to this time instead of
+    ``now_local()``. ``None`` = the live behavior. The benchmark harness uses
+    this so 2023 LongMemEval sessions keep their events inside the window."""
+
     overrides: OverrideStore | None = field(default=None, kw_only=True)
     """Optional append-only override sidecar the assistant proposes archives to.
 
@@ -283,6 +295,8 @@ class Memory(AbstractCapability[AgentDepsT]):
             conversation_id=ctx.conversation_id,
             query=_recent_user_text(messages),
             budget=self.render_budget,
+            project=self.render_project,
+            now=self.render_now,
         )
         return MemoryFile(content=text, version="scoped", truncated=False)
 

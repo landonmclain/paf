@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -28,6 +29,7 @@ from paf.observability.instrumentation import (
     root_span,
 )
 from paf.specs import (
+    _spec_memory_config,
     _spec_search_config,
     _spec_search_only_instructions,
     _spec_search_only_no_readturn_instructions,
@@ -179,6 +181,8 @@ def _build_agent(
     store: FileStepStore,
     *,
     memory_dir: Path | None = None,
+    render_project: str | None = None,
+    render_now: datetime | None = None,
 ) -> Agent:
     """Wire the full PAF pipeline (retrieval ladder + durable memory).
 
@@ -236,20 +240,25 @@ def _build_agent(
                     "block in specs/longmemeval.yaml; refusing to reuse the memory prompt."
                 )
     source = SnapshotHistorySource(store)
+    # ConversationSearch: BM25 wide fallback (add_instructions=False — the
+    # single system prompt owns the retrieval ladder; this tool is just
+    # registered and named by the prompt).
+    search_cap = ConversationSearch(
+        source=source,
+        scope="conversation",
+        add_instructions=False,
+        context_lines=search_cfg.get("context_lines", 5),
+        max_matches=search_cfg.get("max_matches", 10),
+        include_read_turn=not NO_READ_TURN,
+    )
     caps = [
         StepPersistence(store=store),
-        # ConversationSearch: BM25 wide fallback (add_instructions=False — the
-        # single system prompt owns the retrieval ladder; this tool is just
-        # registered and named by the prompt).
-        ConversationSearch(
-            source=source,
-            scope="conversation",
-            add_instructions=False,
-            context_lines=search_cfg.get("context_lines", 5),
-            max_matches=search_cfg.get("max_matches", 10),
-            include_read_turn=not NO_READ_TURN,
-        ),
+        search_cap,
     ]
+    # `read_turn("#N")` resolves memory ids when the agent has Memory: point
+    # ConversationSearch at this agent's memory dir (mirrors build.py).
+    if MEMORY:
+        search_cap.memory_directory = str(_CURRENT_MEMORY_DIR or memory_dir or Path("memory"))
     if MEMORY:
         # Memory arm: durable notebook injected every request. Per the M2 owner
         # model (_consolidate.py, design note §2c), the subject is READ-ONLY
@@ -280,6 +289,39 @@ def _build_agent(
         # per-question dir points at that question's journal.
         overrides_store = _OverrideStore(_CURRENT_MEMORY_DIR or mem_dir)
 
+        # v2 scoped render (opt-in): when the runner passes render_project /
+        # render_now (the LongMemEval v2 arms), switch injection from the static
+        # tier-capped MEMORY.md to the per-turn scoped render. The benchmark's
+        # per-question conversations are never registered, so the project must
+        # be forced in code; and the seeds are dated 2023, so the recent-history
+        # window must anchor to the question date instead of now_local().
+        # Default (both None) keeps the tier render — live behavior unchanged.
+        scoped = render_project is not None or render_now is not None
+        if scoped:
+            from paf.capabilities.memory._scoped import RenderBudget
+
+            # The spec's `memory: render:` block is the source of truth for the
+            # scoped-render knobs (mode/token budgets/history window), read the
+            # same way live _build_memory does (_spec_memory_config ->
+            # RenderBudget.from_config). mode: scoped in longmemeval.yaml gates
+            # the switch; the harness still activates it per-question via
+            # render_project/render_now.
+            memory_cfg = _spec_memory_config(get_spec_path("longmemeval")) or {}
+            render_cfg = (
+                memory_cfg.get("render")
+                if isinstance(memory_cfg.get("render"), dict)
+                else {}
+            )
+            render_budget = (
+                RenderBudget.from_config(render_cfg)
+                if render_cfg.get("mode") == "scoped"
+                else RenderBudget()
+            )
+            memory_directory = str(_CURRENT_MEMORY_DIR or mem_dir)
+        else:
+            render_budget = None
+            memory_directory = None
+
         caps.append(
             Memory(
                 store=_JournalViewStore(mem_dir),
@@ -291,6 +333,10 @@ def _build_agent(
                 # only memory tool is the OverrideToolset archive suggestion.
                 overrides=overrides_store,
                 expose_tools=False,
+                render_budget=render_budget,
+                memory_directory=memory_directory,
+                render_project=render_project,
+                render_now=render_now,
                 # The journal view is a finite, curated render of the journal —
                 # never a growing legacy notebook. Inject it WHOLE: the
                 # journal-rendered MEMORY.md is capped per-tier by the index
