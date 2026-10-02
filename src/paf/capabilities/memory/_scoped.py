@@ -1,0 +1,360 @@
+"""Scoped memory render — what one conversation sees, computed per turn.
+
+Replaces the tier-capped ``MEMORY.md`` injection when the spec opts in
+(``memory: render: {mode: scoped}``; vault Designs/Memory-Pipeline-v2-Plan §3).
+``MEMORY.md`` stays the static full view (``/memory``, legacy tooling); this
+render depends on the CONVERSATION (its project) and the CURRENT MESSAGE, so
+it is built at injection time.
+
+Sections, each with a token budget (spec-overridable, see :class:`RenderBudget`):
+
+- **About you** — global facts, everywhere. Ordered by type (identity, rules,
+  preferences, decisions, context), newest first within a type.
+- **<this project>** — the conversation's project, selected by BM25 against the
+  latest user turns, then recency; near-duplicates skipped; "+N more" pointer.
+- **<mentioned project>** — another registered project named in the current
+  message: its top few relevant facts only.
+- **Recent history** — dated, newest first: events plus "replaced" lines from
+  ``supersede`` overrides, within a day window; global + this/mentioned project.
+- **Other projects** — one line naming the rest, so the model knows they exist.
+
+**Render-time filing.** Facts without a project (all v1 rows; v2 facts from
+untagged conversations) are filed by their source turn: ``source_ref`` → run →
+conversation → that conversation's CURRENT project tag. Tagging a conversation
+later therefore files its facts on the next render. v1 rows: ``t1`` → global,
+``event`` → history, others → the source conversation's project (else unfiled,
+not injected — still searchable).
+
+Every line ends with its journal id ``#N`` (``read_turn("#N")`` reads the source).
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from dataclasses import dataclass, field, fields
+from datetime import timedelta
+from typing import Any
+
+from paf.capabilities.search._ranking import Bm25Params, bm25_score, tokenize
+from paf.clock import now_local, to_local
+
+from ._index import MemoryIndex, _tokens, update_index
+from ._journal import JournalStore, MemoryRecord
+from ._overrides import load_overrides
+
+_TYPE_RANK = {
+    "identity": 0,
+    "rule": 1,
+    "preference": 2,
+    "decision": 3,
+    "context": 4,
+    "fact": 5,
+    "current": 6,
+    "task": 7,
+    "event": 8,
+}
+_MERGE_REF = re.compile(r"#(\d+)")
+
+
+@dataclass(frozen=True)
+class RenderBudget:
+    """Token budgets + windows for the scoped render (spec ``memory.render``)."""
+
+    global_tokens: int = 2000
+    project_tokens: int = 2500
+    history_tokens: int = 1000
+    mentioned_tokens: int = 300
+    history_days: int = 30
+    mentioned_max: int = 5
+    redundancy: float = 0.8
+    """Skip a candidate whose content tokens are this covered by one already shown."""
+
+    @classmethod
+    def from_config(cls, cfg: dict | None) -> RenderBudget:
+        """Spec values override defaults; unknown/invalid keys are ignored."""
+        kw: dict[str, Any] = {}
+        for f in fields(cls):
+            v = (cfg or {}).get(f.name)
+            if isinstance(v, bool) or v is None:
+                continue
+            if f.name == "redundancy" and isinstance(v, int | float) and 0 < v <= 1:
+                kw[f.name] = float(v)
+            elif isinstance(v, int) and v >= 0:
+                kw[f.name] = v
+        return cls(**kw)
+
+
+def _tok(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+# --- run -> conversation (cached; refreshed on a miss at most once a minute) ----
+
+_RUN_CONV: dict[str, str] = {}
+_RUN_CONV_LOADED = 0.0
+
+
+async def _conversation_of_run(run_id: str, step_store=None) -> str | None:
+    global _RUN_CONV_LOADED
+    if run_id not in _RUN_CONV and time.monotonic() - _RUN_CONV_LOADED > 60:
+        if step_store is None:
+            from paf.capabilities.persistence import _build_store
+
+            step_store = _build_store()
+        for run in await step_store.list_runs():
+            if run.conversation_id:
+                _RUN_CONV[run.run_id] = run.conversation_id
+        _RUN_CONV_LOADED = time.monotonic()
+    return _RUN_CONV.get(run_id)
+
+
+# --- filing ---------------------------------------------------------------------
+
+
+@dataclass
+class _Filed:
+    globals: list[tuple[int, MemoryRecord]] = field(default_factory=list)
+    projects: dict[str, list[tuple[int, MemoryRecord]]] = field(default_factory=dict)
+    events: list[tuple[int, MemoryRecord, str | None]] = field(default_factory=list)
+
+
+async def _file(
+    current: list[tuple[int, MemoryRecord]],
+    records: dict[int, MemoryRecord],
+    *,
+    agent_name: str,
+    step_store=None,
+) -> _Filed:
+    from paf.conversations import default_conversation_meta_store, lane_id
+    from paf.specs import resolve_profile_name
+
+    meta = default_conversation_meta_store(agent_name).load()
+    profile = resolve_profile_name(agent_name)
+
+    async def project_of_ref(ref: str, depth: int = 0) -> str | None:
+        if ref.startswith("merge("):  # legacy merge row: file by its sources
+            if depth > 5:
+                return None
+            for m in _MERGE_REF.findall(ref):
+                src = records.get(int(m))
+                if src is not None:
+                    p = await project_of_ref(src.source_ref, depth + 1)
+                    if p:
+                        return p
+            return None
+        cid = await _conversation_of_run(ref.split(":", 1)[0], step_store)
+        if not cid:
+            return None
+        entry = meta.get(lane_id(cid, profile)) or {}
+        return entry.get("project") or None
+
+    filed = _Filed()
+    for line, rec in current:
+        if rec.type == "event":
+            proj = rec.project or (
+                await project_of_ref(rec.source_ref) if rec.scope != "global" else None
+            )
+            filed.events.append((line, rec, proj))
+            continue
+        if rec.scope == "global" or (rec.scope is None and rec.tier == "t1"):
+            filed.globals.append((line, rec))
+            continue
+        proj = rec.project or await project_of_ref(rec.source_ref)
+        if proj:
+            filed.projects.setdefault(proj, []).append((line, rec))
+        # else: unfiled — not injected, still searchable
+    return filed
+
+
+# --- selection -------------------------------------------------------------------
+
+
+class _Picker:
+    """Greedy fill to a token budget, skipping near-duplicates of shown lines."""
+
+    def __init__(self, budget: int, redundancy: float) -> None:
+        self.budget = budget
+        self.redundancy = redundancy
+        self.used = 0
+        self.lines: list[str] = []
+        self.shown: list[set[str]] = []
+        self.skipped = 0
+
+    def offer(self, text: str, line: str) -> bool:
+        toks = _tokens(text)
+        if toks and any(
+            len(toks & s) / len(toks) >= self.redundancy for s in self.shown
+        ):
+            self.skipped += 1
+            return True  # covered: counts as handled, costs nothing
+        cost = _tok(line)
+        if self.used + cost > self.budget:
+            return False
+        self.used += cost
+        self.lines.append(line)
+        self.shown.append(toks)
+        return True
+
+
+def _rank_by_query(
+    facts: list[tuple[int, MemoryRecord]], query: str
+) -> list[tuple[int, MemoryRecord]]:
+    """BM25 relevance to the query, then recency for the rest."""
+    import math
+
+    q = list(dict.fromkeys(tokenize(query)))
+    docs = {ln: tokenize(r.fact) for ln, r in facts}
+    n = max(1, len(facts))
+    avgdl = sum(map(len, docs.values())) / n if docs else 1.0
+    df: dict[str, int] = {}
+    for toks in docs.values():
+        for t in set(toks):
+            df[t] = df.get(t, 0) + 1
+    idf = {t: math.log((n - c + 0.5) / (c + 0.5) + 1) for t, c in df.items()}
+    params = Bm25Params()
+    scored = [
+        (bm25_score(q, docs[ln], idf, avgdl, params) if q else 0.0, r.born_on, ln, r)
+        for ln, r in facts
+    ]
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [(ln, r) for _s, _b, ln, r in scored]
+
+
+def _mentioned(query: str, projects: list[dict], exclude: str | None) -> list[str]:
+    text = query.lower()
+    hits = []
+    for p in projects:
+        slug = p["slug"]
+        if slug == exclude:
+            continue
+        names = {slug, slug.replace("-", " "), str(p.get("name") or "").lower()}
+        names |= {str(a).lower() for a in p.get("aliases") or []}
+        if any(
+            n and re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", text) for n in names
+        ):
+            hits.append(slug)
+    return hits
+
+
+def _date(born_on: str) -> str:
+    dt = to_local(born_on)
+    return dt.date().isoformat() if dt else "undated"
+
+
+# --- the render ------------------------------------------------------------------
+
+
+async def render_scoped(
+    directory: str,
+    *,
+    agent_name: str,
+    conversation_id: str | None,
+    query: str,
+    budget: RenderBudget | None = None,
+    step_store=None,
+) -> str:
+    """The ``<memory>`` body for one conversation turn (empty string if nothing)."""
+    from paf.conversations import default_project_store, project_for_conversation
+
+    from ._render import _apply_overrides, _select_index_winners
+
+    budget = budget or RenderBudget()
+    update_index(directory)
+    journal = JournalStore(directory)
+    records = dict(journal.read_all())
+    overrides = load_overrides(directory)
+    winners = _select_index_winners(journal, MemoryIndex.load(directory))
+    current, _pending = _apply_overrides(winners, overrides)
+    filed = await _file(current, records, agent_name=agent_name, step_store=step_store)
+
+    project = project_for_conversation(agent_name, conversation_id)
+    registry = default_project_store().list()
+    mentioned = _mentioned(query, registry, project)[:2]
+    names = {p["slug"]: p.get("name") or p["slug"] for p in registry}
+    out: list[str] = []
+
+    # About you — global, by type then recency.
+    g = _Picker(budget.global_tokens, budget.redundancy)
+    glob = sorted(
+        filed.globals,
+        key=lambda x: (_TYPE_RANK.get(x[1].type, 9), _neg(x[1].born_on)),
+    )
+    dropped = sum(1 for ln, r in glob if not g.offer(r.fact, f"- {r.fact} — #{ln}"))
+    if g.lines:
+        out += ["## About you", *g.lines]
+        if dropped:
+            out.append(f"(+{dropped} more about you; search to recall)")
+
+    # This conversation's project — relevance, then recency.
+    if project:
+        facts = _rank_by_query(filed.projects.get(project, []), query)
+        p = _Picker(budget.project_tokens, budget.redundancy)
+        more = sum(1 for ln, r in facts if not p.offer(r.fact, f"- {r.fact} — #{ln}"))
+        if p.lines:
+            out += ["", f"## {names.get(project, project)}", *p.lines]
+            if more:
+                out.append(
+                    f"(+{more} more {names.get(project, project)} facts; search to recall)"
+                )
+
+    # Projects the message names — top few relevant facts only.
+    for slug in mentioned:
+        facts = [
+            (ln, r) for ln, r in _rank_by_query(filed.projects.get(slug, []), query)
+        ][: budget.mentioned_max]
+        m = _Picker(budget.mentioned_tokens, budget.redundancy)
+        for ln, r in facts:
+            m.offer(r.fact, f"- {r.fact} — #{ln}")
+        if m.lines:
+            out += ["", f"## {names.get(slug, slug)} (mentioned)", *m.lines]
+
+    # Recent history — events + replaced values, dated, newest first.
+    since = (now_local() - timedelta(days=budget.history_days)).date().isoformat()
+    visible = {None, project, *mentioned}
+    items: list[tuple[str, str, str]] = []  # (date, kind, line)
+    for ln, r, proj in filed.events:
+        d = _date(r.born_on)
+        if proj in visible and d >= since:
+            items.append((d, "event", f"- {d}  {r.fact} — #{ln}"))
+    for target, st in overrides.items():
+        if not st.is_superseded or target not in records or st.superseded_by is None:
+            continue
+        old, new = records[target], records.get(st.superseded_by)
+        if new is None:
+            continue
+        d = _date(new.born_on)
+        proj = new.project or old.project
+        if proj in visible and d >= since:
+            items.append(
+                (
+                    d,
+                    "change",
+                    f"- {d}  replaced: {old.fact} — #{target} → #{st.superseded_by}",
+                )
+            )
+    items.sort(key=lambda x: x[0], reverse=True)
+    h = _Picker(budget.history_tokens, budget.redundancy)
+    for _d, _k, line in items:
+        if not h.offer(line, line):
+            break
+    if h.lines:
+        out += ["", "## Recent history", *h.lines]
+
+    # Other projects — one line so the model knows they exist.
+    others = [
+        f"{names[s]} ({len(filed.projects[s])} facts)"
+        for s in sorted(filed.projects, key=lambda s: -len(filed.projects[s]))
+        if s in names and s != project and s not in mentioned
+    ]
+    if others:
+        out += [
+            "",
+            f"Other projects: {', '.join(others)} — mention one to bring it in.",
+        ]
+    return "\n".join(out).strip()
+
+
+def _neg(born_on: str) -> str:
+    """Sort key making newer ISO dates sort first in an ascending sort."""
+    return "".join(chr(0x10FFFF - ord(c)) for c in (born_on or ""))

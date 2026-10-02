@@ -62,7 +62,9 @@ original turn -- the exact user prompt and assistant responses / tool calls --
 back into context.
 
 Pass ref='{run_id}' to fetch one run's entire durable history, or
-ref='{run_id}:{turn_id}' to fetch just the turn at that index. `turn_id` is the
+ref='{run_id}:{turn_id}' to fetch just the turn at that index. A memory id from
+the injected memory (ref='#6286') reads the turn(s) that fact came from — for a
+replaced value, both the old and the new statement. `turn_id` is the
 ordinal of the turn's user prompt within the run (0, 1, ...), so refs are stable.
 
 Tool calls and results are returned truncated by default (tool results ~500 chars,

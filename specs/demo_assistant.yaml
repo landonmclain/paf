@@ -353,6 +353,20 @@ memory:
   # archives/supersedes via the overrides sidecar. Starts at the journal tail
   # (no backfill). Dry run: scripts/memory_review.py --last 30
   pairwise_review: true
+  # Scoped render: per turn, inject About you (global) + this conversation's
+  # project (BM25 vs the latest user turns) + a mentioned project + Recent
+  # history (events and replaced values), each to a token budget. Every key
+  # below is optional; omitted keys use the defaults shown. mode: tiers
+  # restores the old tier-capped MEMORY.md injection.
+  render:
+    mode: scoped
+    global_tokens: 2000
+    project_tokens: 2500
+    history_tokens: 1000
+    mentioned_tokens: 300
+    history_days: 30
+    mentioned_max: 5
+    redundancy: 0.8      # skip a fact this covered by one already shown
   tier_caps:
     t1: 75
     t2: 25

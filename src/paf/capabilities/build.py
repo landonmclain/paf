@@ -152,6 +152,16 @@ def _build_memory(
 
     memory_dir = str(memory_dir_for(agent_name)) if agent_name else Path(_MEMORY_DIR)
 
+    # `memory: render: {mode: scoped, ...}` injects the per-turn scoped render
+    # (global / this project / mentioned / recent history) instead of the static
+    # tier-capped MEMORY.md; the other `render` keys override RenderBudget.
+    render_cfg = cfg.get("render") if isinstance(cfg.get("render"), dict) else {}
+    render_budget = None
+    if render_cfg.get("mode") == "scoped" and agent_name:
+        from paf.capabilities.memory._scoped import RenderBudget
+
+        render_budget = RenderBudget.from_config(render_cfg)
+
     return Memory(
         store=JournalViewStore(memory_dir),
         inject_memory=True,
@@ -164,6 +174,9 @@ def _build_memory(
         # The assistant's narrow curation tool: propose archiving a stale fact.
         # It writes only to the override sidecar (never the journal/index).
         overrides=OverrideStore(memory_dir),
+        render_budget=render_budget,
+        memory_directory=str(memory_dir),
+        render_agent=agent_name,
     )
 
 
@@ -985,6 +998,16 @@ def build_runtime_capabilities(
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:
         capabilities.append(build_compaction(compaction_config))
+    # `read_turn("#N")` resolves memory ids when the agent has Memory: point
+    # ConversationSearch at this agent's memory dir.
+    if agent_name and "Memory" in profile.capability_names:
+        from paf.capabilities.memory._window import memory_dir_for
+        from paf.capabilities.search import ConversationSearch as _CS
+
+        for cap in capabilities:
+            if isinstance(cap, _CS):
+                cap.memory_directory = str(memory_dir_for(agent_name))
+
     # Workspace context: where each built tool family's paths start, the user's
     # time zone, and spec `workspace.notes`. Built LAST, from the capabilities
     # above, so it lists only tools this agent actually has. Profile-gated like

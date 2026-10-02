@@ -164,8 +164,10 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         bm25_b: float,
         scope: SearchScope = "all",
         include_read_turn: bool = True,
+        memory_directory: str | None = None,
     ) -> None:
         super().__init__(id=tool_id)
+        self._memory_directory = memory_directory
         if max_matches < 0:
             raise ValueError(f"max_matches must be non-negative, got {max_matches!r}.")
         if context_lines < 0:
@@ -233,10 +235,46 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # Expanding a search hit to its full turn is retrieval PROGRESS — it clears
         # the search streak so a healthy read-search-read rhythm is never a stall.
         self._reset_search_streak(ctx)
+        if ref.strip().startswith("#"):
+            return await self._read_memory_turns(ctx, ref.strip(), full=full)
         run_id, _, _ = ref.partition(":")
         return await self._finder.resolve(
             ref, run_id=run_id, conversation_id=ctx.conversation_id, full=full
         )
+
+    async def _read_memory_turns(
+        self, ctx: RunContext[AgentDepsT], ref: str, *, full: bool
+    ) -> str:
+        """``#N`` (a memory id) -> the turn(s) that fact came from."""
+        from paf.capabilities.memory._provenance import memory_turn_refs
+
+        if not self._memory_directory:
+            raise ModelRetry(
+                f"'{ref}' is a memory id, but this agent has no memory to resolve it."
+            )
+        try:
+            line = int(ref.lstrip("#"))
+            refs = memory_turn_refs(self._memory_directory, line)
+        except (ValueError, KeyError):
+            raise ModelRetry(
+                f"'{ref}' is not a memory id. Use the #N shown at the end of a "
+                "memory line, or a 'run_id:turn_id' ref from a search hit."
+            ) from None
+        if not refs:
+            return f"{ref}: no source turn recorded for this memory."
+        parts = []
+        for label, turn_ref in refs:
+            try:
+                body = await self._finder.resolve(
+                    turn_ref,
+                    run_id=turn_ref.partition(":")[0],
+                    conversation_id=ctx.conversation_id,
+                    full=full,
+                )
+            except ModelRetry as exc:
+                body = f"(source turn {turn_ref} unavailable: {exc})"
+            parts.append(f"=== {label} — turn {turn_ref} ===\n{body}")
+        return "\n\n".join(parts)
 
     def _reset_search_streak(self, ctx: RunContext[AgentDepsT]) -> None:
         run_id = ctx.run_id

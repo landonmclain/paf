@@ -251,6 +251,12 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
             t3: 15
           review: false              # optional; turn the old background reviewer off
           pairwise_review: true      # optional; pairwise reviewer after each fold
+          render:                    # optional; scoped render + its token knobs
+            mode: scoped             #   scoped | tiers (default tiers)
+            global_tokens: 2000      #   any RenderBudget field overrides its default
+            project_tokens: 2500
+            history_tokens: 1000
+            history_days: 30
 
     ``consolidate_every`` is the background-consolidation cadence in **minutes**;
     ``max_memory_size`` bounds how much of the rendered journal is injected per
@@ -285,6 +291,8 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     for flag in ("review", "pairwise_review"):
         if isinstance(block.get(flag), bool):
             cfg[flag] = block[flag]
+    if isinstance(block.get("render"), dict):
+        cfg["render"] = dict(block["render"])
     if not cfg:
         return None
     return cfg

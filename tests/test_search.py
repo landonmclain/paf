@@ -812,8 +812,8 @@ def test_read_turn_bad_ref_is_graceful(tmp_path: Path) -> None:
 
 
 def test_read_turn_invalid_run_id_is_retryable(tmp_path: Path) -> None:
-    """A ref whose run_id the store rejects (e.g. a stale `#N` turn-index ref)
-    raises `ModelRetry` instead of crashing the run."""
+    """A `#N` ref with no memory to resolve it (it is a memory id since
+    read_turn("#N") landed) raises `ModelRetry` instead of crashing the run."""
     store = _mk_store(tmp_path, {"c1": [*_msg(user="hello", assistant="hi there")]})
     source = SnapshotHistorySource(store)
     ts = ConversationSearchToolset(
@@ -827,7 +827,7 @@ def test_read_turn_invalid_run_id_is_retryable(tmp_path: Path) -> None:
     )
 
     async def go():
-        with pytest.raises(ModelRetry, match="Failed to read history for run '#2'"):
+        with pytest.raises(ModelRetry, match="'#2' is a memory id"):
             await ts.read_turn(_FakeCtx("c1"), "#2")
 
     asyncio.run(go())

@@ -86,6 +86,10 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
     add_instructions: bool = False
     """Emit a short instruction telling the model the recall tool exists."""
 
+    memory_directory: str | None = None
+    """When set, `read_turn('#N')` resolves memory id N (a journal line) to the
+    turn(s) the fact came from. Set by the builder when the agent has Memory."""
+
     include_read_turn: bool = True
     """Expose the `read_turn` full-turn expansion tool alongside search.
 
@@ -105,6 +109,7 @@ class ConversationSearch(AbstractCapability[AgentDepsT]):
             bm25_b=self.bm25_b,
             scope=self.scope,
             include_read_turn=self.include_read_turn,
+            memory_directory=self.memory_directory,
         )
 
     def get_instructions(self) -> AgentInstructions[AgentDepsT] | None:
