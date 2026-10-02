@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, fields
 from datetime import timedelta
 from typing import Any
@@ -119,13 +120,11 @@ class _Filed:
     events: list[tuple[int, MemoryRecord, str | None]] = field(default_factory=list)
 
 
-async def _file(
-    current: list[tuple[int, MemoryRecord]],
-    records: dict[int, MemoryRecord],
-    *,
-    agent_name: str,
-    step_store=None,
-) -> _Filed:
+def project_resolver(
+    records: dict[int, MemoryRecord], *, agent_name: str, step_store=None
+) -> Callable[[str], Awaitable[str | None]]:
+    """``source_ref`` -> the source conversation's CURRENT project tag (or
+    ``None``). Legacy ``merge(...)`` refs resolve through their sources."""
     from paf.conversations import default_conversation_meta_store, lane_id
     from paf.specs import resolve_profile_name
 
@@ -148,6 +147,20 @@ async def _file(
             return None
         entry = meta.get(lane_id(cid, profile)) or {}
         return entry.get("project") or None
+
+    return project_of_ref
+
+
+async def _file(
+    current: list[tuple[int, MemoryRecord]],
+    records: dict[int, MemoryRecord],
+    *,
+    agent_name: str,
+    step_store=None,
+) -> _Filed:
+    project_of_ref = project_resolver(
+        records, agent_name=agent_name, step_store=step_store
+    )
 
     filed = _Filed()
     for line, rec in current:

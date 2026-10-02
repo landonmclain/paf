@@ -22,6 +22,10 @@ Derived state per ``target_line`` (a stable journal line number):
     applied_tier    -> reviewer tier_change; fact moves under the new tier
     rejected        -> reviewer reject; fact stays as-was, marker cleared
 
+``reclassify`` is a separate, field-level channel: it re-files a fact (``type``
+/ ``scope`` / ``project``, last write wins) without changing its status, so a
+re-filed fact can still be archived or superseded later.
+
 Nothing is destroyed: the journal holds every fact forever; an archive can be
 reverted by appending ``reject``. The sidecar is append-only; the *current*
 state is always derived from the log (same journal->index pattern, applied to
@@ -42,7 +46,10 @@ _SCHEMA = 1
 
 # Ops by writer.
 _ASSISTANT_OPS = frozenset({"archive"})
-_REVIEWER_OPS = frozenset({"archive", "tier_change", "reject", "supersede"})
+_REVIEWER_OPS = frozenset(
+    {"archive", "tier_change", "reject", "supersede", "reclassify"}
+)
+_RECLASSIFY_FIELDS = frozenset({"type", "scope", "project"})
 
 # Derived per-target statuses (see module docstring).
 _STATUS_NONE = "none"
@@ -59,10 +66,12 @@ class OverrideState:
     ``status`` is one of the ``_STATUS_*`` constants. ``tier`` is set only when
     ``status == applied_tier`` (the target tier for a tier_change). ``by`` /
     ``reason`` / ``at`` reflect the **resolving** record (the reviewer verdict
-    for applied/rejected, the assistant intent for pending).
+    for applied/rejected, the assistant intent for pending). ``fields`` is the
+    latest ``reclassify`` (``type``/``scope``/``project``), independent of
+    ``status``.
     """
 
-    __slots__ = ("status", "tier", "by", "reason", "at", "superseded_by")
+    __slots__ = ("status", "tier", "by", "reason", "at", "superseded_by", "fields")
 
     def __init__(
         self,
@@ -73,6 +82,7 @@ class OverrideState:
         reason: str = "",
         at: str = "",
         superseded_by: int | None = None,
+        fields: dict | None = None,
     ) -> None:
         self.status = status
         self.tier = tier
@@ -80,6 +90,7 @@ class OverrideState:
         self.reason = reason
         self.at = at
         self.superseded_by = superseded_by
+        self.fields = fields
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return (
@@ -147,6 +158,7 @@ class OverrideStore:
         at: str | None = None,
         superseded_by: int | None = None,
         detail: dict | None = None,
+        fields: dict | None = None,
     ) -> dict:
         """Append one override record; returns it (echoed for the caller).
 
@@ -154,7 +166,8 @@ class OverrideStore:
         ``archive``/``tier_change``/``reject``/``supersede`` for the reviewer.
         ``tier`` is required for ``tier_change`` and rejected for others;
         ``superseded_by`` (the replacing line) is required for ``supersede``
-        and rejected for others. ``detail`` is a free-form audit dict (the
+        and rejected for others. ``fields`` (``type``/``scope``/``project``) is
+        required for ``reclassify`` and rejected for others. ``detail`` is a free-form audit dict (the
         pairwise reviewer records label, judge model, and the pair).
         """
         if by == "assistant":
@@ -179,6 +192,12 @@ class OverrideStore:
             raise ValueError("supersede requires superseded_by (the replacing line)")
         if op != "supersede" and superseded_by is not None:
             raise ValueError(f"op {op!r} does not take superseded_by")
+        if op == "reclassify" and (not fields or set(fields) - _RECLASSIFY_FIELDS):
+            raise ValueError(
+                f"reclassify requires fields from {sorted(_RECLASSIFY_FIELDS)}"
+            )
+        if op != "reclassify" and fields is not None:
+            raise ValueError(f"op {op!r} does not take fields")
 
         record = {
             "v": _SCHEMA,
@@ -192,6 +211,8 @@ class OverrideStore:
             record["tier"] = tier
         if superseded_by is not None:
             record["superseded_by"] = int(superseded_by)
+        if fields is not None:
+            record["fields"] = dict(fields)
         if detail:
             record["detail"] = detail
 
@@ -238,11 +259,16 @@ def fold_overrides(records: list[dict]) -> dict[int, OverrideState]:
     any override.
     """
     state: dict[int, OverrideState] = {}
+    fields: dict[int, dict] = {}
     for rec in records:
         op = rec.get("op")
         target = rec.get("target_line")
         by = rec.get("by")
         if not isinstance(target, int) or op not in _REVIEWER_OPS:
+            continue
+        if by == "reviewer" and op == "reclassify":
+            if isinstance(rec.get("fields"), dict):
+                fields[target] = rec["fields"]
             continue
         if by == "assistant" and op == "archive":
             # pending until a reviewer resolves it
@@ -283,6 +309,8 @@ def fold_overrides(records: list[dict]) -> dict[int, OverrideState]:
                     at=rec.get("at", ""),
                     superseded_by=rec.get("superseded_by"),
                 )
+    for target, f in fields.items():
+        state.setdefault(target, OverrideState(_STATUS_NONE)).fields = f
     return state
 
 

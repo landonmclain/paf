@@ -99,6 +99,9 @@ def _apply_overrides(
         if st is None:
             kept.append((line, rec))
             continue
+        if st.fields:
+            # reclassified (backfill re-filing): new type/scope/project
+            rec = rec.with_fields(**st.fields)
         if st.is_applied_archive or st.is_superseded:
             # reviewer archived, or a newer fact replaced this one's value —
             # drop from the current view (superseded facts belong to the

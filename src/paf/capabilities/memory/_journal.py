@@ -213,6 +213,26 @@ class MemoryRecord:
         row["tier"] = tier
         return MemoryRecord.from_row(row)
 
+    def with_fields(
+        self,
+        *,
+        type: str | None = None,
+        scope: str | None = None,
+        project: str | None = None,
+    ) -> MemoryRecord:
+        """A re-filed copy (``reclassify`` override): new type/scope/project,
+        tier re-derived; the fact, date, and source stay. A legacy row comes
+        out v2-shaped (it now has a scope)."""
+        row = self.to_row()
+        row["type"] = type or self.type
+        row["scope"] = scope or self.scope
+        row["project"] = project if row["scope"] == "project" else None
+        row["source"] = self.source
+        if row["scope"]:
+            row["tier"] = derive_tier(row["type"], row["scope"])
+            row["v"] = RECORD_VERSION
+        return MemoryRecord.from_row(row)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MemoryRecord):
             return NotImplemented
