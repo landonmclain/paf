@@ -246,7 +246,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         self, ctx: RunContext[AgentDepsT], ref: str, *, full: bool
     ) -> str:
         """``#N`` (a memory id) -> the turn(s) that fact came from."""
-        from paf.capabilities.memory._provenance import memory_turn_refs
+        from paf.capabilities.memory._provenance import memory_turn_refs, repair_ref
 
         if not self._memory_directory:
             raise ModelRetry(
@@ -263,7 +263,12 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         if not refs:
             return f"{ref}: no source turn recorded for this memory."
         parts = []
-        for label, turn_ref in refs:
+        for label, turn_ref, fact in refs:
+            # Legacy refs were numbered in the wrong frame; move them onto the
+            # run's own turn (refs written since the fix are left as-is).
+            turn_ref, repaired = await repair_ref(turn_ref, fact, self._source)
+            if repaired:
+                label += " (source turn re-resolved)"
             try:
                 body = await self._finder.resolve(
                     turn_ref,

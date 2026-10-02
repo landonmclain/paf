@@ -218,9 +218,9 @@ def test_memory_turn_refs_follows_merges_and_supersedes(tmp_path: Path) -> None:
     OverrideStore(tmp_path).append(
         op="supersede", target_line=4, by="reviewer", superseded_by=1
     )
-    assert [r for _, r in memory_turn_refs(str(tmp_path), 3)] == ["r1:0", "r2:3"]
-    assert [r for _, r in memory_turn_refs(str(tmp_path), 4)] == ["r3:1", "r1:0"]
-    assert [r for _, r in memory_turn_refs(str(tmp_path), 1)] == ["r1:0", "r3:1"]
+    assert [r for _, r, _f in memory_turn_refs(str(tmp_path), 3)] == ["r1:0", "r2:3"]
+    assert [r for _, r, _f in memory_turn_refs(str(tmp_path), 4)] == ["r3:1", "r1:0"]
+    assert [r for _, r, _f in memory_turn_refs(str(tmp_path), 1)] == ["r1:0", "r3:1"]
     with pytest.raises(KeyError):
         memory_turn_refs(str(tmp_path), 99)
 
@@ -245,3 +245,67 @@ def test_read_turn_memory_id_without_memory_retries() -> None:
 
     with pytest.raises(ModelRetry):
         asyncio.run(ts.read_turn(Ctx(), "#12"))
+
+
+def _turns_history(spec):
+    """[(run_id, user_text, reply)] -> a message list carrying run ids."""
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    out = []
+    for run, text, reply in spec:
+        u = ModelRequest(parts=[UserPromptPart(content=text)])
+        a = ModelResponse(parts=[TextPart(content=reply)])
+        u.run_id = a.run_id = run
+        out += [u, a]
+    return out
+
+
+class _Hist:
+    def __init__(self, histories):
+        self.h = histories
+
+    async def run_history(self, *, run_id):
+        return self.h[run_id]
+
+
+def test_repair_ref_moves_legacy_refs_onto_the_runs_own_turn() -> None:
+    from paf.capabilities.memory._provenance import repair_ref
+
+    src = _Hist(
+        {
+            # R resumed P's turn, then had its own.
+            "R": _turns_history(
+                [
+                    ("P", "earlier question", "earlier answer"),
+                    ("R", "where do I live", "Bentonville"),
+                ]
+            ),
+            # S has two own turns (e.g. a follow-up after a background job).
+            "S": _turns_history(
+                [
+                    ("S", "coffee?", "you like dark roast"),
+                    ("S", "home?", "you moved to Bentonville"),
+                ]
+            ),
+        }
+    )
+    run = asyncio.run
+    assert run(repair_ref("R:0", "anything", src)) == (
+        "R:1",
+        True,
+    )  # landed on P's turn
+    assert run(repair_ref("R:7", "anything", src)) == ("R:1", True)  # out of range
+    assert run(repair_ref("R:1", "anything", src)) == (
+        "R:1",
+        False,
+    )  # already own: kept
+    assert run(repair_ref("S:9", "The user moved to Bentonville.", src)) == (
+        "S:1",
+        True,
+    )
+    assert run(repair_ref("missing:0", "x", src)) == ("missing:0", False)
