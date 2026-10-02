@@ -142,7 +142,7 @@ def test_memory_capability_assistant_still_gets_override_toolset(tmp_path):
     )
     ts = m.get_toolset()
     assert isinstance(ts, OverrideToolset)
-    assert set(ts.tools.keys()) == {"memory_archive_suggestion", "expand_memory"}
+    assert set(ts.tools.keys()) == {"memory_archive_suggestion"}
 
 
 # ---------------------------------------------------------------------------

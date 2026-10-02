@@ -107,16 +107,14 @@ instructions: |
   read the full turn to check before you hedge or reconstruct it. Do not answer
   an exact-value question from an approximation, a derived reconstruction, or a
   hedged guess while an unread hit may contain the figure. A fact marked
-  `[merged: N]` is an aggregation of several sources — call `expand_memory` on
-  its row id to resolve it to the source turns and memory it was extracted from,
-  then `read_turn` any ref you need for the exact value; otherwise search the
-  conversation history and read the turns that surfaced it. When the
+  `[merged: N]` is an aggregation of several sources — for its exact values,
+  search the conversation history and read the turns that surfaced it. When the
   question distinguishes current vs previous (a "previous best", "before",
   "earlier"), do not answer from a single curated value: go to the history and
   find the earlier figure.
 
 # Search-only arm prompt (MEMORY=0 in the harness). A pure-retrieval variant of
-# `instructions` with no injected-notebook / CONFLICT-tier / expand_memory
+# `instructions` with no injected-notebook / CONFLICT-tier
 # content — the no-memory subject answers purely from what it retrieves.
 # Read by tests/framework.py via _spec_search_only_instructions (AgentSpec
 # drops unknown top-level keys, so the block is read from the raw YAML, same as

@@ -213,7 +213,7 @@ def test_budget_overflow_leaves_a_pointer(world) -> None:
     for f in facts:  # distinct facts (near-duplicates are skipped, not counted)
         _add(j, f, scope="project", project="paf")
     out = _render(mem, steps, "conv-paf", "reviewer", project_tokens=40)
-    assert "more paf facts; search to recall" in out
+    assert 'more paf facts; list_memory(project="paf"))' in out
 
 
 def test_budget_from_spec_config() -> None:
@@ -325,3 +325,72 @@ def test_repair_ref_moves_legacy_refs_onto_the_runs_own_turn() -> None:
         True,
     )
     assert run(repair_ref("missing:0", "x", src)) == ("missing:0", False)
+
+
+class _Ctx:
+    conversation_id = "conv-paf"
+
+
+@pytest.fixture()
+def browse(world, monkeypatch):
+    """About you, two projects, an old event; a toolset with browse tools."""
+    import time
+
+    from paf.capabilities.memory._toolset import OverrideToolset
+
+    mem, _steps = world
+    # Pre-seed run -> conversation so filing never loads a real step store.
+    monkeypatch.setattr(
+        _scoped, "_RUN_CONV", {"r-paf": "conv-paf", "r-site": "conv-site"}
+    )
+    monkeypatch.setattr(_scoped, "_RUN_CONV_LOADED", time.monotonic())
+    j = JournalStore(mem)
+    _add(j, "The user lives in Bentonville.", type="identity", scope="global", tier="t1")  # fmt: skip
+    _add(j, "The user prefers short sentences.", type="preference", scope="global", tier="t1")  # fmt: skip
+    _add(j, "paf uses BM25 for search.", scope="project", project="paf")
+    _add(j, "paf memory runs in the background.", type="decision", scope="project", project="paf")  # fmt: skip
+    _add(j, "The site uses Astro.", scope="project", project="site", ref="r-site:0")
+    _add(j, "The user ran a 5K race.", type="event", scope="global", tier="t3", days_ago=90)  # fmt: skip
+    return OverrideToolset(OverrideStore(mem), browse_agent=AGENT)
+
+
+def test_list_memory_pages_a_section(browse) -> None:
+    run = asyncio.run
+    out = run(browse.list_memory(_Ctx(), project="global"))
+    lines = out.splitlines()
+    assert lines[0] == "About you: facts 1-3 of 3"
+    assert "Bentonville. — #1" in lines[1]  # identity first
+    assert "5K race" in out  # events past the history window are still listed
+    page = run(browse.list_memory(_Ctx(), project="paf", type="decision"))
+    assert "background. — #4" in page and "BM25" not in page
+    from paf.capabilities.memory import _scoped
+
+    paged = run(
+        _scoped.list_memory(
+            browse._overrides.directory, agent_name=AGENT, project="paf", page_size=1
+        )
+    )
+    assert 'list_memory(project="paf", offset=1)' in paged
+    from pydantic_ai import ModelRetry
+
+    with pytest.raises(ModelRetry):
+        run(browse.list_memory(_Ctx(), project="nope"))
+
+
+def test_search_memory_scopes_to_global_and_this_project(browse) -> None:
+    run = asyncio.run
+    out = run(browse.search_memory(_Ctx(), query="search BM25 Astro"))
+    assert "[paf] paf uses BM25" in out and "Astro" not in out  # other project
+    out = run(browse.search_memory(_Ctx(), query="Astro", project="site"))
+    assert "[site] The site uses Astro. — #5" in out
+    assert "No memory facts match" in run(
+        browse.search_memory(_Ctx(), query="kubernetes")
+    )
+
+
+def test_browse_tools_only_with_browse_agent(tmp_path: Path) -> None:
+    from paf.capabilities.memory._toolset import OverrideToolset
+
+    assert "list_memory" not in OverrideToolset(OverrideStore(tmp_path)).tools
+    ts = OverrideToolset(OverrideStore(tmp_path), browse_agent="a")
+    assert {"list_memory", "search_memory"} <= set(ts.tools)

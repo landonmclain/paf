@@ -79,9 +79,11 @@ _SCOPED_MEMORY_GUIDANCE = (
     "\n"
     "Each fact ends with its id (#N). If a fact isn't enough — the exact wording, a "
     'number, the surrounding context — `read_turn("#N")` reads the conversation it came '
-    "from. A `(+N more …)` line means more is stored than shown: use "
-    "`search_conversation_history` to find it. Never invent a value memory is missing — "
-    "retrieve it, or say you aren't sure."
+    "from. The injected memory is a selection, not everything stored: a `(+N more …)` "
+    "line names the `list_memory` call that pages through the rest of that section, and "
+    "`search_memory` finds stored facts by keyword. For what was SAID in a conversation "
+    "(not a stored fact), use `search_conversation_history`. Never invent a value "
+    "memory is missing — retrieve it, or say you aren't sure."
 )
 
 
@@ -277,7 +279,12 @@ class Memory(AbstractCapability[AgentDepsT]):
                     agent_name=self.agent_name,
                     journal=self.journal,
                 )
-            return OverrideToolset(self.overrides, agent_name=self.agent_name)
+            scoped = self.render_budget is not None and self.memory_directory
+            return OverrideToolset(
+                self.overrides,
+                agent_name=self.agent_name,
+                browse_agent=(self.render_agent or self.agent_name) if scoped else None,
+            )
         if not self.expose_tools:
             # Injection-only memory: the assistant carries NO memory tools. The
             # rendered notebook is injected in-context and the recall ladder is

@@ -121,7 +121,7 @@ def _merge_count_suffix(record: MemoryRecord) -> str:
 
     A record whose ``source_ref`` is ``merge(#a,#b,...)`` is an aggregation the
     reviewer produced from N source facts; the render marks it so the subject
-    knows it may be a compressed value it can expand (via ``expand_memory``).
+    knows it may be a compressed value (``read_turn("#N")`` reads its sources).
     Kept BEFORE the ``#N`` provenance at the line's end so the reviewer's
     "the #N shown at the end of each line" addressing is undisturbed.
     """

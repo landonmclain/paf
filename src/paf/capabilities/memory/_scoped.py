@@ -180,6 +180,105 @@ async def _file(
     return filed
 
 
+async def filed_memory(
+    directory: str, *, agent_name: str, step_store=None
+) -> tuple[_Filed, dict[int, MemoryRecord], dict]:
+    """Current facts filed into global / per-project / events — the one view
+    the render, ``list_memory`` and ``search_memory`` all share. Also returns
+    every journal record and the folded overrides (for history lines)."""
+    from ._render import _apply_overrides, _select_index_winners
+
+    update_index(directory)
+    journal = JournalStore(directory)
+    records = dict(journal.read_all())
+    overrides = load_overrides(directory)
+    winners = _select_index_winners(journal, MemoryIndex.load(directory))
+    current, _pending = _apply_overrides(winners, overrides)
+    filed = await _file(current, records, agent_name=agent_name, step_store=step_store)
+    return filed, records, overrides
+
+
+def _pool(filed: _Filed, project: str) -> list[tuple[int, MemoryRecord]]:
+    """Facts in one section: ``"global"`` (About you) or a project slug —
+    including that section's events."""
+    if project == "global":
+        facts = list(filed.globals)
+    else:
+        facts = list(filed.projects.get(project, []))
+    key = None if project == "global" else project
+    facts += [(ln, r) for ln, r, p in filed.events if p == key]
+    return facts
+
+
+def _line(ln: int, r: MemoryRecord, label: str = "") -> str:
+    date = f"{_date(r.born_on)}  " if r.type == "event" else ""
+    return f"- {label}{date}{r.fact} — #{ln}"
+
+
+LIST_PAGE = 25
+SEARCH_TOP = 10
+
+
+async def list_memory(
+    directory: str,
+    *,
+    agent_name: str,
+    project: str,
+    type: str | None = None,
+    offset: int = 0,
+    page_size: int = LIST_PAGE,
+    step_store=None,
+) -> str:
+    """One page of a section's facts, in render order (type, newest first)."""
+    filed, _records, _ov = await filed_memory(
+        directory, agent_name=agent_name, step_store=step_store
+    )
+    facts = _pool(filed, project)
+    if type:
+        facts = [(ln, r) for ln, r in facts if r.type == type]
+    facts.sort(key=lambda x: (_TYPE_RANK.get(x[1].type, 9), _neg(x[1].born_on)))
+    total = len(facts)
+    where = "About you" if project == "global" else project
+    what = f"{where}" + (f", type={type}" if type else "")
+    if not total:
+        return f"No memory facts in {what}."
+    start = min(max(0, offset), total)
+    end = min(total, start + page_size)
+    out = [f"{what}: facts {start + 1}-{end} of {total}"]
+    out += [_line(ln, r) for ln, r in facts[start:end]]
+    if end < total:
+        args = f'project="{project}"' + (f', type="{type}"' if type else "")
+        out.append(f"(more: list_memory({args}, offset={end}))")
+    return "\n".join(out)
+
+
+async def search_memory(
+    directory: str,
+    *,
+    agent_name: str,
+    query: str,
+    sections: list[str],
+    top: int = SEARCH_TOP,
+    step_store=None,
+) -> str:
+    """BM25 over the facts in ``sections`` ("global" and/or project slugs);
+    only facts that match at least one query word."""
+    filed, _records, _ov = await filed_memory(
+        directory, agent_name=agent_name, step_store=step_store
+    )
+    labelled: dict[int, tuple[MemoryRecord, str]] = {}
+    for sec in sections:
+        tag = "[about you] " if sec == "global" else f"[{sec}] "
+        for ln, r in _pool(filed, sec):
+            labelled[ln] = (r, tag)
+    ranked = _rank_by_query([(ln, r) for ln, (r, _t) in labelled.items()], query)
+    q = set(tokenize(query))
+    hits = [(ln, r) for ln, r in ranked if q & set(tokenize(r.fact))][:top]
+    if not hits:
+        return f"No memory facts match {query!r} in {', '.join(sections)}."
+    return "\n".join(_line(ln, r, labelled[ln][1]) for ln, r in hits)
+
+
 # --- selection -------------------------------------------------------------------
 
 
@@ -270,16 +369,10 @@ async def render_scoped(
     """The ``<memory>`` body for one conversation turn (empty string if nothing)."""
     from paf.conversations import default_project_store, project_for_conversation
 
-    from ._render import _apply_overrides, _select_index_winners
-
     budget = budget or RenderBudget()
-    update_index(directory)
-    journal = JournalStore(directory)
-    records = dict(journal.read_all())
-    overrides = load_overrides(directory)
-    winners = _select_index_winners(journal, MemoryIndex.load(directory))
-    current, _pending = _apply_overrides(winners, overrides)
-    filed = await _file(current, records, agent_name=agent_name, step_store=step_store)
+    filed, records, overrides = await filed_memory(
+        directory, agent_name=agent_name, step_store=step_store
+    )
 
     project = project_for_conversation(agent_name, conversation_id)
     registry = default_project_store().list()
@@ -297,7 +390,7 @@ async def render_scoped(
     if g.lines:
         out += ["## About you", *g.lines]
         if dropped:
-            out.append(f"(+{dropped} more about you; search to recall)")
+            out.append(f'(+{dropped} more about you; list_memory(project="global"))')
 
     # This conversation's project — relevance, then recency.
     if project:
@@ -308,7 +401,8 @@ async def render_scoped(
             out += ["", f"## {names.get(project, project)}", *p.lines]
             if more:
                 out.append(
-                    f"(+{more} more {names.get(project, project)} facts; search to recall)"
+                    f"(+{more} more {names.get(project, project)} facts; "
+                    f'list_memory(project="{project}"))'
                 )
 
     # Projects the message names — top few relevant facts only.
@@ -358,14 +452,15 @@ async def render_scoped(
 
     # Other projects — one line so the model knows they exist.
     others = [
-        f"{names[s]} ({len(filed.projects[s])} facts)"
+        f"{s} ({len(filed.projects[s])} facts)"
         for s in sorted(filed.projects, key=lambda s: -len(filed.projects[s]))
         if s in names and s != project and s not in mentioned
     ]
     if others:
         out += [
             "",
-            f"Other projects: {', '.join(others)} — mention one to bring it in.",
+            f"Other projects: {', '.join(others)} — mention one to bring it in, "
+            'or list_memory(project="<slug>").',
         ]
     return "\n".join(out).strip()
 

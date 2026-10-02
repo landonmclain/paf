@@ -28,7 +28,6 @@ from ._journal import (
     MEMORY_TYPES,
     WRITE_TYPES,
     JournalStore,
-    MemoryRecord,
     derive_tier,
 )
 from ._overrides import OverrideStore
@@ -338,45 +337,12 @@ class _CurationToolset(FunctionToolset[AgentDepsT]):
         write_render(JournalStore(directory), md_path, agent_name=self._agent_name)
 
 
-# --- expand_memory: resolve a memory line to its source turns --------------
-
-_MAX_EXPAND_DEPTH = 20
-"""Recursion cap for expand_memory's merge walk (nested merges can chain)."""
-
-
-def _merge_source_ids(source_ref: str) -> list[int]:
-    """Extract journal line ids from a ``merge(#a,#b,...)`` ``source_ref``."""
-    if not source_ref or not source_ref.startswith("merge("):
-        return []
-    return [int(x) for x in re.findall(r"#(\d+)", source_ref)]
-
-
-def _resolve_memory_leaves(
-    by_line: dict[int, MemoryRecord],
-    line_id: int,
-    depth: int = 0,
-) -> list[tuple[int, MemoryRecord]]:
-    """Resolve a journal line to its leaf ``(line, record)`` pairs through merges.
-
-    A record whose ``source_ref`` is ``merge(...)`` expands into its source
-    lines (recursively, depth-capped); a record carrying a real turn ref is a
-    leaf. Unknown line ids and cycles yield nothing (bounded by ``depth``).
-    """
-    if depth > _MAX_EXPAND_DEPTH:
-        return []
-    rec = by_line.get(line_id)
-    if rec is None:
-        return []
-    if (rec.source_ref or "").startswith("merge("):
-        out: list[tuple[int, MemoryRecord]] = []
-        for source_id in _merge_source_ids(rec.source_ref):
-            out.extend(_resolve_memory_leaves(by_line, source_id, depth + 1))
-        return out
-    return [(line_id, rec)]
+FactType = Literal["identity", "rule", "preference", "decision", "context", "event"]
 
 
 class OverrideToolset(_CurationToolset[AgentDepsT]):
-    """The assistant's memory toolset: ``memory_archive_suggestion`` + ``expand_memory``.
+    """The assistant's memory toolset: ``memory_archive_suggestion``, plus
+    ``list_memory`` / ``search_memory`` for agents on the scoped render.
 
     ``memory_archive_suggestion`` is the narrow, modify-only curation channel. It
     does NOT append to the journal or touch the index — it writes a **pending**
@@ -384,17 +350,98 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
     pass reflects with a ``*(archive pending review)*`` marker until a reviewer
     resolves it (archive / tier_change / reject).
 
-    ``expand_memory`` is a READ tool: given a memory line id it resolves the line
-    (through nested merges) to its source turns + the memory behind each, so the
-    model can chase an aggregated fact to the raw turns without searching first.
+    ``list_memory`` pages through one section (About you or a project) and
+    ``search_memory`` ranks facts by a query — both over the scoped render's
+    filing, so they reach everything the render's budgets left out. They are
+    registered only when ``browse_agent`` is given (the scoped render's agent
+    name; the tier-render benchmark path has no browse tools).
     """
 
-    def __init__(self, overrides: OverrideStore, *, agent_name: str = "") -> None:
+    def __init__(
+        self,
+        overrides: OverrideStore,
+        *,
+        agent_name: str = "",
+        browse_agent: str | None = None,
+    ) -> None:
         super().__init__(overrides, agent_name=agent_name)
+        self._browse_agent = browse_agent
         self.add_function(
             self.memory_archive_suggestion, name="memory_archive_suggestion"
         )
-        self.add_function(self.expand_memory, name="expand_memory")
+        if browse_agent:
+            self.add_function(self.list_memory, name="list_memory")
+            self.add_function(self.search_memory, name="search_memory")
+
+    def _check_project(self, project: str) -> str:
+        from paf.conversations import default_project_store
+
+        slugs = [p["slug"] for p in default_project_store().list(include_archived=True)]
+        if project != "global" and project not in slugs:
+            raise ModelRetry(
+                f'Unknown project {project!r}. Use "global" (facts about the user) '
+                f"or a project slug: {', '.join(slugs) or '(none registered)'}."
+            )
+        return project
+
+    async def list_memory(
+        self,
+        ctx: RunContext[AgentDepsT],
+        project: str,
+        type: FactType | None = None,
+        offset: int = 0,
+    ) -> str:
+        """List stored memory facts for one section, a page at a time.
+
+        The injected memory shows only what fits; this lists everything stored
+        for a section, in the same order (by type, newest first). Events come
+        with their dates and are not limited to recent ones.
+
+        Args:
+            project: "global" for facts about the user (the About you section),
+                or a project slug (e.g. "paf") for that project's facts.
+            type: Only this type of fact (optional).
+            offset: Skip this many facts (from a previous page's "more" line).
+        """
+        from ._scoped import list_memory
+
+        return await list_memory(
+            self._overrides.directory,
+            agent_name=self._browse_agent or self._agent_name,
+            project=self._check_project(project),
+            type=type,
+            offset=offset,
+        )
+
+    async def search_memory(
+        self,
+        ctx: RunContext[AgentDepsT],
+        query: str,
+        project: str | None = None,
+    ) -> str:
+        """Search stored memory facts by keywords.
+
+        Finds facts the injected memory left out. Searches facts about the user
+        plus this conversation's project, unless you name a project.
+
+        Args:
+            query: Keywords to match against the facts.
+            project: Search only this section: "global" (facts about the user)
+                or a project slug.
+        """
+        from paf.conversations import project_for_conversation
+
+        from ._scoped import search_memory
+
+        agent = self._browse_agent or self._agent_name
+        if project is not None:
+            sections = [self._check_project(project)]
+        else:
+            current = project_for_conversation(agent, ctx.conversation_id)
+            sections = ["global", *([current] if current else [])]
+        return await search_memory(
+            self._overrides.directory, agent_name=agent, query=query, sections=sections
+        )
 
     async def memory_archive_suggestion(
         self,
@@ -455,46 +502,6 @@ class OverrideToolset(_CurationToolset[AgentDepsT]):
                 "status": "pending_review",
                 "reason": reason,
             }
-
-    async def expand_memory(self, ctx: RunContext[AgentDepsT], line_id: int) -> str:
-        """Expand a memory line into the source turns and memory behind it.
-
-        A memory fact may be an aggregation -- a ``merge(...)`` of several earlier
-        facts, shown as ``[merged: N]`` in the rendered memory view. This tool
-        resolves that line, following nested merges, to the underlying source
-        turns it was extracted from and returns each source's turn ref plus its
-        memory fact. The surfaced memory may itself be the answer; pass any
-        returned ``turn <ref>`` to ``read_turn`` to read the full original turn.
-
-        Args:
-            line_id: The journal line id (the ``#N`` shown at the end of the
-                fact's line in the injected memory block) to expand.
-        """
-        with ctx.tracer.start_as_current_span(
-            "memory.expand", record_exception=False, set_status_on_exception=False
-        ) as span:
-            journal = JournalStore(self._overrides.directory)
-            by_line = {ln: rec for ln, rec in journal.read_all()}
-            leaves = _resolve_memory_leaves(by_line, line_id)
-            if not leaves:
-                return f"No memory found at journal line #{line_id}."
-            if span.is_recording():
-                span.set_attributes(
-                    {
-                        "memory.expand.line": line_id,
-                        "memory.expand.leaves": len(leaves),
-                    }
-                )
-            if len(leaves) == 1:
-                _ln, rec = leaves[0]
-                return f"turn {rec.source_ref} — memory: {rec.fact}"
-            parts = [
-                f"#{line_id} is a merge of {len(leaves)} source lines; "
-                "source turns and memory:"
-            ]
-            for _ln, rec in leaves:
-                parts.append(f"[#{_ln}] turn {rec.source_ref} — memory: {rec.fact}")
-            return "\n".join(parts)
 
 
 class ReviewerResult(TypedDict):
