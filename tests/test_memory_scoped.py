@@ -394,3 +394,31 @@ def test_browse_tools_only_with_browse_agent(tmp_path: Path) -> None:
     assert "list_memory" not in OverrideToolset(OverrideStore(tmp_path)).tools
     ts = OverrideToolset(OverrideStore(tmp_path), browse_agent="a")
     assert {"list_memory", "search_memory"} <= set(ts.tools)
+
+
+def test_history_shows_only_global_and_this_project(world) -> None:
+    mem, steps = world
+    j = JournalStore(mem)
+    # A replaced pair from the paf conversation, no project on the rows (#1, #2).
+    _add(j, "paf default model is A.", ref="r-paf:0")
+    _add(j, "paf default model is B.", ref="r-paf:1")
+    # A replaced pair re-filed to paf by a reclassify override (#3, #4).
+    _add(j, "Old benchmark harness note.", ref="r-x:0")
+    _add(j, "New benchmark harness note.", ref="r-x:1")
+    # A project event from an untagged conversation: unfiled (#5).
+    _add(j, "Unfiled project event.", type="event", scope="project", tier="t3", ref="r-x:2")  # fmt: skip
+    _add(j, "The user moved house.", type="event", scope="global", tier="t3")  # 6
+    ov = OverrideStore(mem)
+    ov.append(op="supersede", target_line=1, by="reviewer", superseded_by=2)
+    for ln in (3, 4):
+        ov.append(op="reclassify", target_line=ln, by="reviewer",
+                  fields={"type": "context", "scope": "project", "project": "paf"})  # fmt: skip
+    ov.append(op="supersede", target_line=3, by="reviewer", superseded_by=4)
+
+    site = _render(mem, steps, "conv-site")
+    assert "moved house" in site
+    assert "replaced" not in site and "Unfiled project event" not in site
+    paf = _render(mem, steps, "conv-paf")
+    assert "replaced: paf default model is A." in paf
+    assert "replaced: Old benchmark harness note." in paf
+    assert "Unfiled project event" not in paf

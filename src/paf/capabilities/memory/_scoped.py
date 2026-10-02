@@ -118,6 +118,29 @@ class _Filed:
     globals: list[tuple[int, MemoryRecord]] = field(default_factory=list)
     projects: dict[str, list[tuple[int, MemoryRecord]]] = field(default_factory=dict)
     events: list[tuple[int, MemoryRecord, str | None]] = field(default_factory=list)
+    section: Callable[[MemoryRecord], Awaitable[str | None]] | None = None
+    """The filing rule, for rows outside ``current`` (history's replaced facts)."""
+
+
+GLOBAL = "global"
+
+
+def section_resolver(
+    project_of_ref: Callable[[str], Awaitable[str | None]],
+) -> Callable[[MemoryRecord], Awaitable[str | None]]:
+    """The ONE filing rule: a fact's section is ``GLOBAL``, a project slug, or
+    ``None`` (unfiled — never injected, still searchable). Global: scope
+    ``global``, or a legacy ``t1`` non-event. Otherwise the fact's project, else
+    its source conversation's current tag."""
+
+    async def section(rec: MemoryRecord) -> str | None:
+        if rec.scope == "global":
+            return GLOBAL
+        if rec.scope is None and rec.tier == "t1" and rec.type != "event":
+            return GLOBAL
+        return rec.project or await project_of_ref(rec.source_ref)
+
+    return section
 
 
 def project_resolver(
@@ -158,25 +181,20 @@ async def _file(
     agent_name: str,
     step_store=None,
 ) -> _Filed:
-    project_of_ref = project_resolver(
-        records, agent_name=agent_name, step_store=step_store
+    section = section_resolver(
+        project_resolver(records, agent_name=agent_name, step_store=step_store)
     )
-
-    filed = _Filed()
+    filed = _Filed(section=section)
     for line, rec in current:
+        sec = await section(rec)
+        if sec is None:
+            continue  # unfiled — not injected, still searchable
         if rec.type == "event":
-            proj = rec.project or (
-                await project_of_ref(rec.source_ref) if rec.scope != "global" else None
-            )
-            filed.events.append((line, rec, proj))
-            continue
-        if rec.scope == "global" or (rec.scope is None and rec.tier == "t1"):
+            filed.events.append((line, rec, None if sec == GLOBAL else sec))
+        elif sec == GLOBAL:
             filed.globals.append((line, rec))
-            continue
-        proj = rec.project or await project_of_ref(rec.source_ref)
-        if proj:
-            filed.projects.setdefault(proj, []).append((line, rec))
-        # else: unfiled — not injected, still searchable
+        else:
+            filed.projects.setdefault(sec, []).append((line, rec))
     return filed
 
 
@@ -426,15 +444,28 @@ async def render_scoped(
         d = _date(r.born_on)
         if proj in visible and d != "undated" and d >= since:
             items.append((d, "event", f"- {d}  {r.fact} — #{ln}"))
+
+    def refiled(line: int) -> MemoryRecord | None:
+        rec, st = records.get(line), overrides.get(line)
+        if rec is not None and st is not None and st.fields:
+            rec = rec.with_fields(**st.fields)
+        return rec
+
     for target, st in overrides.items():
         if not st.is_superseded or target not in records or st.superseded_by is None:
             continue
-        old, new = records[target], records.get(st.superseded_by)
-        if new is None:
+        old, new = refiled(target), refiled(st.superseded_by)
+        if old is None or new is None:
             continue
         d = _date(new.born_on)
-        proj = new.project or old.project
-        if proj in visible and d != "undated" and d >= since:
+        if d == "undated" or d < since:
+            continue
+        assert filed.section is not None
+        sec = await filed.section(new) or await filed.section(old)
+        if sec is None:
+            continue  # unfiled: shown nowhere
+        proj = None if sec == GLOBAL else sec
+        if proj in visible:
             items.append(
                 (
                     d,
