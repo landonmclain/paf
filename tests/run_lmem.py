@@ -771,9 +771,9 @@ def main(argv: list[str] | None = None) -> dict:
         # gating below always sees `restored` / `fresh_memory` bound, even when
         # MEMORY is off (then no durable memory exists -> owner enabled).
         fresh_memory = bool(os.environ.get("PAF_FRESH_MEMORY"))
-        # LME_NO_REVIEWER=1 skips the reviewer pass below (extractor-only
-        # memory, no archive/merge/retier curation) — the reviewer ablation
-        # arm. Requires PAF_FRESH_MEMORY=1 so memory is regenerated without
+        # LME_NO_REVIEWER=1 skips the pairwise reviewer pass below
+        # (extractor-only memory, no archive/supersede curation) — the
+        # reviewer ablation arm. Requires PAF_FRESH_MEMORY=1 so memory is regenerated without
         # the reviewer (existing durable snapshots have curation baked in).
         no_reviewer = bool(os.environ.get("LME_NO_REVIEWER"))
         restored = 0
@@ -859,9 +859,10 @@ def main(argv: list[str] | None = None) -> dict:
                     f"-> MEMORY.md ({len(_rendered)} chars) for recall",
                     flush=True,
                 )
-                # Reviewer pass: curate the rendered memory (archive stale
-                # facts, merge fragments, retier) before recall. Reads the
-                # render just written above; re-renders after each verdict.
+                # Pairwise reviewer pass before recall: every fact in this
+                # fresh journal vs the older facts it might duplicate or
+                # update (start_after=0 — the whole journal is new). It
+                # re-renders MEMORY.md when it changes anything.
                 # LME_NO_REVIEWER=1 skips this (extractor-only memory).
                 if no_reviewer:
                     print(
@@ -870,18 +871,15 @@ def main(argv: list[str] | None = None) -> dict:
                         flush=True,
                     )
                 else:
-                    from paf.capabilities.memory._overrides import OverrideStore
-                    from paf.capabilities.memory._review import review
+                    from paf.capabilities.memory._pairwise import review_new_facts
 
-                    _verdicts = asyncio.run(
-                        review(
-                            str(mem_dir),
-                            overrides=OverrideStore(mem_dir),
-                            agent_name="assistant",
+                    _report = asyncio.run(
+                        review_new_facts(
+                            str(mem_dir), start_after=0, agent_name="assistant"
                         )
                     )
                     print(
-                        f"[lmem]   q{qi} reviewer issued {_verdicts} verdicts",
+                        f"[lmem]   q{qi} pairwise reviewer: {_report.summary()}",
                         flush=True,
                     )
                 _persist_durable_memory(q["question_id"], mem_dir)

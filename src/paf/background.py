@@ -260,8 +260,7 @@ class BackgroundQueueService[JobT](ABC):
 # ---------------------------------------------------------------------------
 # BackgroundCoordinator — the session-level background orchestrator.
 #
-# Wires the concrete queue types (memory consolidation, memory review, thread
-# summarizer) to a session's cadence + watermark gating and exposes their
+# Wires the concrete queue types (memory consolidation, thread summarizer) to a session's cadence + watermark gating and exposes their
 # lifecycle as ``BackgroundTask`` rows -- the "what the UI sees" surface.
 # ``runtime.Session`` holds a ``background`` slot (a ``BackgroundCoordinator |
 # None``) and calls the single ``after_turn()`` seam at the end of ``stream()``.
@@ -345,7 +344,7 @@ class JobIdleStatus:
     """Read-only "idle" status for one background job, for the Processes panel.
 
     Produced by ``BackgroundCoordinator.job_status_summary()`` so a UI can show
-    the three background processes as persistent rows even when nothing is
+    the background processes as persistent rows even when nothing is
     running — with a count and a human reason ("2 turns since last fold ·
     next ~24 min") instead of an empty panel. ``id`` is the stable row key the
     frontend coalesces transitions against; when the real task fires later it
@@ -367,10 +366,10 @@ class JobIdleStatus:
 
 @dataclass
 class _IdleContext:
-    """Shared history material for idle-row computation (one pass, three rows).
+    """Shared history material for idle-row computation (one pass, every row).
 
     ``job_status_summary`` resolves the store/history seam ONCE and hands the
-    result to every registered process's ``idle_row``, so the three idle rows
+    result to every registered process's ``idle_row``, so the idle rows
     share a single pass over persisted runs instead of each re-reading history.
     """
 
@@ -413,9 +412,8 @@ class BackgroundCoordinator:
     Owns:
     - the task registry (``_background_tasks``, ``subscribe_tasks`` replay,
       ``_publish_task``, ``task_history``),
-    - the three lazy queues (memory consolidation, memory review, thread
-      summarizer),
-    - the three ``after_turn`` triggers (``_maybe_trigger_*``) scoped by
+    - the lazy queues (memory consolidation, thread summarizer),
+    - the ``after_turn`` triggers (``_maybe_trigger_*``) scoped by
       conversation + the owner-writes-watermark contract,
     - the ``_complete`` / ``on_complete`` seams that mutate task rows on
       worker completion.
@@ -437,9 +435,7 @@ class BackgroundCoordinator:
         processes_root: str | None = None,
         consolidate_span=None,
         consolidate_every: int | None = None,
-        review_every: int | None = None,
         consolidate_turns: int | None = None,
-        review_turns: int | None = None,
         thread_summarize_block=None,
         thread_summarize_span=None,
     ) -> None:
@@ -448,8 +444,8 @@ class BackgroundCoordinator:
         self._store = store
         self.agent_name = agent_name
         self.profile = profile
-        # Which lane this coordinator hosts: "agent" (memory consolidation +
-        # review, shared per-agent) or "conversation" (thread summarizer +
+        # Which lane this coordinator hosts: "agent" (memory consolidation,
+        # shared per-agent) or "conversation" (thread summarizer +
         # future conversation-scoped processes, per-conversation). None = a
         # legacy direct construction that registers every process.
         self.lane = lane
@@ -474,7 +470,7 @@ class BackgroundCoordinator:
 
         # Turn-count cadence (the active gate). Resolved from the spec's
         # `memory:` block; falls back to the same block's minute values reading
-        # as counts when an old spec only set `consolidate_every`/`review_every`.
+        # as counts when an old spec only set `consolidate_every`.
         from paf.specs import resolve_memory_config
 
         _mem_cfg = resolve_memory_config(agent_name)
@@ -483,13 +479,9 @@ class BackgroundCoordinator:
             if consolidate_turns is not None
             else _mem_cfg["consolidate_turns"]
         )
-        self.review_turns = (
-            review_turns if review_turns is not None else _mem_cfg["review_turns"]
-        )
-        # Spec `memory.review: false` turns the old background reviewer off;
-        # `memory.pairwise_review: true` runs the pairwise one after each fold.
-        self.review_enabled = bool(_mem_cfg.get("review_enabled", True))
-        self.pairwise_review = bool(_mem_cfg.get("pairwise_review", False))
+        # The pairwise reviewer runs after each fold unless the spec sets
+        # `memory.pairwise_review: false`.
+        self.pairwise_review = bool(_mem_cfg.get("pairwise_review", True))
 
         # Per-agent scope dirs.
         self._memory_directory = memory_directory or memory_dir_for(self.agent_name)
@@ -508,18 +500,16 @@ class BackgroundCoordinator:
         )
 
         # Consolidation seams (injected only by tests; production defaults the
-        # queue's real fold/reviewer).
+        # queue's real fold).
         self._consolidate_span = consolidate_span
 
         # Lazily-built queues (one per type) + their rows.
         self._memory_queue: Any | None = None
-        self._review_queue: Any | None = None
         self._thread_queue: Any | None = None
 
         # Task registry + subscriber list (+ seq counters for stable ids).
         self._background_tasks: dict[str, BackgroundTask] = {}
         self._consolidation_seq = 0
-        self._review_seq = 0
         self._thread_summarizer_seq = 0
 
         # Capability names (profile gating for process registration).
@@ -539,7 +529,8 @@ class BackgroundCoordinator:
         """
         has_memory = "Memory" in self._capability_names
         processes: list[ProcessDefinition] = []
-        # Agent lane: memory consolidation + review (per-agent).
+        # Agent lane: memory consolidation, with the pairwise reviewer run
+        # inside each fold job (per-agent).
         if self.lane != "conversation":
             processes += [
                 ProcessDefinition(
@@ -548,13 +539,6 @@ class BackgroundCoordinator:
                     enabled=lambda c: has_memory,
                     trigger=self._maybe_trigger_consolidation,
                     idle_row=self._consolidation_idle_row,
-                ),
-                ProcessDefinition(
-                    id_namespace="review",
-                    label="Reviewing memory",
-                    enabled=lambda c: has_memory and c.review_enabled,
-                    trigger=self._maybe_trigger_review,
-                    idle_row=self._review_idle_row,
                 ),
             ]
         # Conversation lane: thread summarizer (per-conversation).
@@ -580,7 +564,7 @@ class BackgroundCoordinator:
 
         The app/CLI attaches the result to ``session.background``. Returns a
         :class:`BackgroundLanes` facade holding the shared per-agent lane
-        (memory consolidation + review) and the per-session conversation lane
+        (memory consolidation) and the per-session conversation lane
         (thread summarizer), or ``None`` for a profile that needs no background
         machinery (no Memory, no ThreadSummarizer) -- e.g. ``contextbench`` --
         so those agents run truly bare. Reads only public/duck-typed session
@@ -624,11 +608,6 @@ class BackgroundCoordinator:
     def memory_queue(self):
         """The lazily-built background consolidation queue (None until first use)."""
         return self._memory_queue
-
-    @property
-    def review_queue(self):
-        """The lazily-built background reviewer queue (None until first use)."""
-        return self._review_queue
 
     @property
     def thread_summarizer_queue(self):
@@ -700,8 +679,7 @@ class BackgroundCoordinator:
         ``runs.jsonl``), not the in-memory task registry: the last line
         written for ``{prefix}.{conversation_id}`` is authoritative (file line
         order is truth, so no (seq, timestamp) tie-break is needed). ``prefix``
-        is the task-id namespace (``consolidation``, ``review``,
-        ``thread_summarize``). Read-only: never enqueues, mutates the
+        is the task-id namespace (``consolidation``, ``thread_summarize``). Read-only: never enqueues, mutates the
         registry, or advances state.
         """
         if self._run_events is None:
@@ -735,7 +713,7 @@ class BackgroundCoordinator:
             return idle
         if is_active:
             # An in-flight fold carries NO idle cadence text: the
-            # "n/N turns to a fold/review" countdown describes how far the
+            # "n/N turns to a fold/summary" countdown describes how far the
             # NEXT cadence has progressed since the last done watermark — it is
             # unrelated to the job currently running and would mislead under a
             # `running` status. Use the record's own detail (empty while the
@@ -912,40 +890,6 @@ class BackgroundCoordinator:
             return JobIdleStatus(
                 id=f"consolidation.{conversation_id}",
                 label="Consolidating memory",
-                detail="idle · status unavailable",
-            )
-
-    async def _review_idle_row(
-        self, conversation_id: str, ctx: _IdleContext
-    ) -> JobIdleStatus:
-        """Idle row for memory review (agent-scoped, TURN-count cadence, slower block)."""
-        from paf.capabilities.memory._watermark import MemoryWatermark
-
-        try:
-            wm = MemoryWatermark.load(
-                self._memory_directory, filename="memory-review-watermark.json"
-            )
-            # Memory is per-agent: count turns across ALL conversations (None =
-            # all runs), matching the cross-conversation trigger gate.
-            n = await self._span_count(ctx.source, wm, ctx.tip_run, ctx.tip_turn, None)
-            reason = (
-                f"{n}/{self.review_turns} turns to a review"
-                if n < self.review_turns
-                else "due for a review"
-            )
-            return self._reconcile_status(
-                JobIdleStatus(
-                    id=f"review.{conversation_id}",
-                    label="Reviewing memory",
-                    detail=f"idle · {reason}",
-                ),
-                "review",
-                conversation_id,
-            )
-        except Exception:
-            return JobIdleStatus(
-                id=f"review.{conversation_id}",
-                label="Reviewing memory",
                 detail="idle · status unavailable",
             )
 
@@ -1152,45 +1096,6 @@ class BackgroundCoordinator:
             self._memory_queue = queue
         return self._memory_queue
 
-    def _ensure_review_queue(self):
-        """Build the self-contained background reviewer queue."""
-        if self._review_queue is None:
-            from paf.capabilities.memory._background import MemoryReviewQueue
-            from paf.capabilities.memory._review import review as _default_review
-
-            async def _complete(kind: StepStatus, detail: str = "") -> None:
-                for task_id, task in list(self._background_tasks.items()):
-                    if task_id.startswith("review.") and task.status in (
-                        QUEUED,
-                        PROCESSING,
-                    ):
-                        task.status = kind
-                        task.detail = detail
-                        task.progress = 1.0 if kind == DONE else None
-                        await self._publish_task(task)
-
-            async def review_span(directory: str) -> int:
-                from paf.capabilities.memory._overrides import OverrideStore
-
-                try:
-                    n = await _default_review(
-                        directory,
-                        overrides=OverrideStore(directory),
-                        agent_name=self.agent_name,
-                    )
-                    await _complete(DONE, f"{n} verdict(s) applied")
-                    return n
-                except Exception as exc:
-                    await _complete(ERROR, str(exc))
-                    raise
-
-            self._review_queue = MemoryReviewQueue(
-                memory_directory=self._memory_directory,
-                agent_name=self.agent_name,
-                review_span=review_span,
-            )
-        return self._review_queue
-
     def _ensure_thread_summarizer_queue(self):
         """Build the conversation-scoped thread worker lazily."""
         if self._thread_queue is None:
@@ -1342,108 +1247,6 @@ class BackgroundCoordinator:
             task.detail = str(exc)
             await self._publish_task(task)
 
-    async def _maybe_trigger_review(self, cid: str | None) -> None:
-        """Fire the background reviewer hook, publishing task lifecycle.
-
-        Mirrors ``_maybe_trigger_consolidation``: publish a ``queued`` task row
-        first, then mark skipped / processing. Completion (done/error) is
-        published by the review span seam in ``_ensure_review_queue`` -- the
-        reviewer is now visible on the background-task timeline / Processes
-        panel just like consolidation and thread summarization.
-
-        Like consolidation: the trigger SCHEDULES only. It enqueues a ReviewJob
-        carrying the resolved tip position; the review worker is the SOLE
-        review-watermark writer and advances it only on a COMPLETED pass. A
-        failed/never-run review leaves the watermark behind so it retries next
-        cadence instead of being silently skipped.
-        """
-        if cid is None:
-            return
-        from paf.capabilities._turns import (
-            distinct_user_turn_texts,
-            user_anchor_indices,
-        )
-        from paf.capabilities.memory._background import ReviewJob, resolve_unseen_span
-        from paf.capabilities.memory._watermark import MemoryWatermark
-        from paf.capabilities.persistence import build_history_source
-
-        source = build_history_source(self._store)
-
-        self._review_seq += 1
-        task_id = f"review.{self.agent_name}.{self._review_seq}"
-        task = BackgroundTask(id=task_id, label="Reviewing memory")
-        await self._publish_task(task)  # queued
-        try:
-            runs = await self._store.list_runs(conversation_id=cid)
-            if not runs:
-                task.status = SKIPPED
-                task.detail = "no persisted runs yet"
-                await self._publish_task(task)
-                return
-            tip_run = runs[-1].run_id
-            tip_history = await source.run_history(run_id=tip_run)
-            anchors = user_anchor_indices(tip_history)
-            if not anchors:
-                task.status = SKIPPED
-                task.detail = "no persisted turns"
-                await self._publish_task(task)
-                return
-            tip_turn = len(anchors) - 1
-            wm = MemoryWatermark.load(
-                self._memory_directory,
-                run_id=tip_run,
-                filename="memory-review-watermark.json",
-            )
-            # TURN-COUNT gate: fire review only once >= `review_turns` complete
-            # turns have accrued since the last review, mirroring the
-            # summarizer's block gate. The reviewer is SLOW (~10 min
-            # archive/merge); 10 turns batches ~2 consolidation folds, and
-            # review never mid-races consolidation.
-            span = await resolve_unseen_span(
-                source,
-                wm,
-                tip_run=tip_run,
-                tip_turn=tip_turn,
-            )
-            span_turns = (
-                len(distinct_user_turn_texts(span.messages)) if span.messages else 0
-            )
-            if span_turns < self.review_turns:
-                task.status = SKIPPED
-                task.detail = (
-                    f"only {span_turns} unsettled turn(s); need >= {self.review_turns}"
-                )
-                await self._publish_task(task)
-                return
-            # Mirror the owner's worker-owns-watermark contract: the trigger
-            # SCHEDULES only. It enqueues a ReviewJob carrying the resolved tip
-            # position; the review worker is the SOLE review-watermark writer
-            # and advances it only on a COMPLETED (non-error) curation pass. A
-            # failed/never-run review leaves the watermark behind so it retries
-            # next cadence instead of being silently skipped.
-            advance = MemoryWatermark(
-                run_id=tip_run, turn_id=tip_turn, consumed_ts=runs[-1].started_at
-            )
-            rq = self._ensure_review_queue()
-            # Single-flight: skip if a review is already queued or running so a
-            # slow worker behind the cadence gate can't pile up duplicate passes.
-            rst = rq.status(self.agent_name)
-            if rst.queued > 0 or rst.running:
-                task.status = SKIPPED
-                task.detail = "memory review already in flight"
-                await self._publish_task(task)
-                return
-            rq.enqueue(
-                self.agent_name,
-                ReviewJob(run_id=tip_run, turn_id=tip_turn, watermark=advance),
-            )
-            task.status = PROCESSING  # job handed to the worker
-            await self._publish_task(task)
-        except Exception as exc:  # the review hook must not break the turn
-            task.status = ERROR
-            task.detail = str(exc)
-            await self._publish_task(task)
-
     async def _maybe_trigger_consolidation(self, cid: str | None) -> None:
         """Fire the background-consolidation hook, publishing task lifecycle.
 
@@ -1556,7 +1359,7 @@ class BackgroundCoordinator:
 # ---------------------------------------------------------------------------
 # BackgroundLanes — the two-lane facade a Session holds as ``session.background``.
 #
-# Wraps the agent lane (shared per-agent: memory consolidation + review) and the
+# Wraps the agent lane (shared per-agent: memory consolidation) and the
 # conversation lane (per-session: thread summarizer + future conversation-scoped
 # processes) behind one surface so the runtime and UI call sites are unchanged.
 # Each lane is a BackgroundCoordinator; the facade merges their task history,

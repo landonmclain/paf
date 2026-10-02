@@ -29,7 +29,6 @@ the same bytes.
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -331,33 +330,6 @@ def write_render(
         content = render_journal_memory(store, overrides=overrides)
     write_atomic(md_path, content)
     return content
-
-
-def read_render(directory: str, md_name: str = "MEMORY.md") -> str:
-    """Return the current rendered MEMORY.md for ``directory`` (full, unbounded).
-
-    Read path for the **memory reviewer**: unlike the injection seam
-    (``JournalViewStore`` / ``_view.read``), which trims to the message-bound
-    max_chars, this returns the *complete* rendered notebook so the reviewer
-    can curate every surviving fact (incl. tiers the bounded injection drops).
-
-    If ``MEMORY.md`` is missing (no render yet), it is **computed** from the
-    journal/index/overrides just as ``write_render`` would — so the reviewer
-    never depends on the file having been materialized by a prior pass. Read-only.
-    """
-    from ._overrides import load_overrides  # local import keeps top import-light
-
-    md_path = os.path.join(directory, md_name)
-    if os.path.exists(md_path):
-        with open(md_path, encoding="utf-8") as fh:
-            return fh.read()
-    # No materialized render yet -> compute it (index-aware, honors overrides).
-    journal = JournalStore(directory)
-    overrides = load_overrides(directory)
-    index = _load_index_beside(md_path)
-    if index is not None:
-        return render_index_memory(journal, index, overrides=overrides)
-    return render_journal_memory(journal, overrides=overrides)
 
 
 def _load_index_beside(md_path: str):

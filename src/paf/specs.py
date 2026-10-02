@@ -249,8 +249,7 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
             t1: 75
             t2: 25
             t3: 15
-          review: false              # optional; turn the old background reviewer off
-          pairwise_review: true      # optional; pairwise reviewer after each fold
+          pairwise_review: false     # optional; pairwise reviewer after each fold (default on)
           render:                    # optional; scoped render + its token knobs
             mode: scoped             #   scoped | tiers (default tiers)
             global_tokens: 2000      #   any RenderBudget field overrides its default
@@ -282,15 +281,13 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     cfg: dict[str, object] = {}
     for key in (
         "consolidate_every",
-        "review_every",
         "max_memory_size",
     ):
         value = block.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             cfg[key] = value
-    for flag in ("review", "pairwise_review"):
-        if isinstance(block.get(flag), bool):
-            cfg[flag] = block[flag]
+    if isinstance(block.get("pairwise_review"), bool):
+        cfg["pairwise_review"] = block["pairwise_review"]
     if isinstance(block.get("render"), dict):
         cfg["render"] = dict(block["render"])
     if not cfg:
@@ -389,25 +386,20 @@ def resolve_memory_config(
     same code-level default, so the Session's trigger cadence can never drift
     from the ``Memory`` capability's ``consolidate_every``.
 
-    Returns ``{"consolidate_every": int, "review_every": int, "consolidate_turns":
-    int, "review_turns": int, "review_enabled": bool}`` (always present, defaults
-    applied; the reviewer is on unless the spec sets ``memory.review: false``). The minute
-    cadences remain for explicitness/back-compat; the TURN-count values are the
-    active gate. ``review_turns`` defaults to ``DEFAULT_REVIEW_TURNS``.
+    Returns ``{"consolidate_every": int, "consolidate_turns": int,
+    "pairwise_review": bool}`` (always present, defaults applied; the pairwise
+    reviewer runs after each fold unless the spec sets
+    ``memory.pairwise_review: false``). The minute cadence remains for
+    explicitness/back-compat; the TURN count is the active gate.
     """
     from paf.capabilities.build import (
         DEFAULT_CONSOLIDATE_EVERY,
         DEFAULT_CONSOLIDATE_TURNS,
-        DEFAULT_REVIEW_EVERY,
-        DEFAULT_REVIEW_TURNS,
     )
 
     every = DEFAULT_CONSOLIDATE_EVERY
-    review_every = DEFAULT_REVIEW_EVERY  # reviewer runs less often than the owner
     turns = DEFAULT_CONSOLIDATE_TURNS
-    review_turns = DEFAULT_REVIEW_TURNS
-    review_enabled = True
-    pairwise_review = False
+    pairwise_review = True
     try:
         cfg = _spec_memory_config(get_spec_path(agent_name, spec_directory))
     except Exception:  # noqa: BLE001 - spec read is best-effort sugar
@@ -420,23 +412,11 @@ def resolve_memory_config(
             and candidate > 0
         ):
             every = candidate
-        review_candidate = cfg.get("review_every")
-        if (
-            isinstance(review_candidate, int)
-            and not isinstance(review_candidate, bool)
-            and review_candidate > 0
-        ):
-            review_every = review_candidate
-        if isinstance(cfg.get("review"), bool):
-            review_enabled = cfg["review"]
         if isinstance(cfg.get("pairwise_review"), bool):
             pairwise_review = cfg["pairwise_review"]
     return {
         "consolidate_every": every,
-        "review_every": review_every,
         "consolidate_turns": turns,
-        "review_turns": review_turns,
-        "review_enabled": review_enabled,
         "pairwise_review": pairwise_review,
     }
 
@@ -511,7 +491,7 @@ def resolve_background_spec(
 ) -> tuple[AgentSpec, dict[str, Any]]:
     """Resolve a background-agent leaf spec into ``(agent_spec, raw_dict)``.
 
-    Background agents (``memory_extractor`` / ``memory_reviewer`` / …) are
+    Background agents (``memory_extractor`` / ``memory_pair_reviewer`` / …) are
     leaf-agent specs under ``specs/background_agents/``, resolved by bare name
     via the recursive ``get_spec_path``. The returned ``AgentSpec`` carries the
     pydantic-ai fields (``model`` / ``model_settings`` / ``instructions``); the

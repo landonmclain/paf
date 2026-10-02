@@ -1,6 +1,6 @@
 """Pairwise memory reviewer — keep every current fact unique and up to date.
 
-Replaces the old whole-memory reviewer (``_review.py``), which merged and
+Replaces the old whole-memory reviewer (removed), which merged and
 over-archived to fit the render's count caps. This one is narrow by design
 (vault Designs/Memory-Pipeline-v2-Plan §2):
 

@@ -18,10 +18,11 @@ Three layers, journal -> index -> render:
   journal). The assistant's read-only ``JournalViewStore`` injects it.
 
 Curation runs through an append-only override sidecar (``_overrides``): the
-assistant proposes archives (pending), a reviewer resolves them. The owner
-(``_consolidate``) and the reviewer (``_review``) are background sub-agents,
-fired by the watermark trigger (``_watermark``) through the queues in
-``_background``.
+assistant proposes archives (pending), the pairwise reviewer (``_pairwise``)
+resolves them and archives/supersedes duplicate facts. The owner
+(``_consolidate``) is a background sub-agent fired by the watermark trigger
+(``_watermark``) through the queue in ``_background``; the reviewer runs inside
+the same job, after each fold.
 
 A ``Memory`` always carries a concrete backend (the ``store`` arg is required);
 the read path supplies the read-only ``JournalViewStore`` of the rendered

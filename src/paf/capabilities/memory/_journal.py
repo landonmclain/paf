@@ -56,8 +56,8 @@ _JOURNAL_FILENAME = "memory-journal.jsonl"
 WRITE_TYPES: frozenset[str] = frozenset(
     {"identity", "rule", "preference", "decision", "context", "event"}
 )
-# v1 types still present in old journal rows (and still written by the legacy
-# reviewer's memory_merge). Readable forever; never written by the extractor.
+# v1 types still present in old journal rows (including the removed legacy
+# reviewer's memory_merge rows). Readable forever; never written by the extractor.
 LEGACY_TYPES: frozenset[str] = frozenset(
     {"identity", "preference", "fact", "event", "task", "current"}
 )

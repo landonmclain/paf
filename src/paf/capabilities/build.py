@@ -84,22 +84,19 @@ _MEMORY_DIR = PROJECT_ROOT / Path(settings.memory_dir)
 
 # Default cadence for background memory consolidation, in MINUTES. The owner
 # runs on a **time** cadence (the watermark is time-anchored on the persisted
-# `started_at` — monotonic across runs, unlike a per-run turn ordinal). Owner
-# runs MORE often than the reviewer (owner 30m, reviewer 60m) so durable turns
-# never stall waiting on the slower reviewer. Memory owns this value; the
-# spec's `memory: {consolidate_every: N}` (minutes) overrides it per agent.
+# `started_at` — monotonic across runs, unlike a per-run turn ordinal). Memory
+# owns this value; the spec's `memory: {consolidate_every: N}` (minutes)
+# overrides it per agent.
 DEFAULT_CONSOLIDATE_EVERY = (
     30  # minutes; owner fires at least this often with new material
 )
-DEFAULT_REVIEW_EVERY = 60  # minutes; reviewer fires at most this often
 
-# Turn-count cadence (supersedes the minute-based defaults). Memory
-# consolidation is cheap extract+append (5 turns), the reviewer is slow
-# archive/merge (~10 min) and batches ~2 consolidation folds (10 turns), and the
-# thread summarizer keeps its narrative block (10 turns, thread_summarizer
-# _background.py). These are the defaults when a spec does not override.
+# Turn-count cadence (supersedes the minute-based default). Memory
+# consolidation is cheap extract+append (5 turns), with the pairwise reviewer
+# run inside the same job; the thread summarizer keeps its narrative block (10
+# turns, thread_summarizer _background.py). The default when a spec does not
+# override.
 DEFAULT_CONSOLIDATE_TURNS = 5
-DEFAULT_REVIEW_TURNS = 10
 
 # Default bounds for the assistant's Memory capability. `max_memory_size`
 # remains the per-read char cap JournalViewStore truncates MEMORY.md to (a

@@ -328,15 +328,14 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
     assert (memdir / "MEMORY.md").exists()
 
 
-def test_turn_gate_fires_at_review_turns_threshold(tmp_path: Path) -> None:
+def test_turn_gate_fires_at_consolidate_turns_threshold(tmp_path: Path) -> None:
     """The trigger fires once ENOUGH COMPLETE turns have accrued (turn gate).
 
     Regression for the DECIDED 2026-09-14 cadence change (see
     Designs/Turn-Based-Background-Cadence): consolidation should fire once at
     least ``consolidate_turns`` (default 5, spec-configurable) *settled* turns
-    have accrued since the last fold — NOT on a minute timer. The reviewer has
-    its own slower threshold (``review_turns``, default 10). This test pins the
-    turn-count boundary and the spec configurability.
+    have accrued since the last fold — NOT on a minute timer. This test pins
+    the turn-count boundary and the spec configurability.
     """
     from paf.background import SKIPPED, BackgroundCoordinator
 
@@ -375,10 +374,9 @@ def test_turn_gate_skips_below_threshold_and_defaults(tmp_path: Path) -> None:
     from paf.background import SKIPPED, BackgroundCoordinator
     from paf.specs import resolve_memory_config
 
-    # Turn-count gates come from code defaults (5/10), not a spec knob.
+    # The turn-count gate comes from the code default, not a spec knob.
     cfg = resolve_memory_config("demo_assistant")
     assert cfg["consolidate_turns"] == 5
-    assert cfg["review_turns"] == 10
 
     # 5 complete turns -> span is 4 (tip excluded) -> ONE short of 5 -> skip.
     msgs: list[ModelMessage] = []
@@ -643,29 +641,28 @@ def test_injected_marker_blocks_do_not_anchor_turns() -> None:
     assert distinct_user_turn_texts(msgs) == ["real question"]
 
 
-def test_spec_review_false_disables_the_review_process(tmp_path: Path) -> None:
-    """`memory.review: false` in a spec turns the background reviewer off; the
-    consolidation process is unaffected. Default (no key) keeps it on."""
+def test_pairwise_review_is_on_by_default_and_spec_can_turn_it_off(
+    tmp_path: Path,
+) -> None:
+    """The pairwise reviewer runs after each fold unless a spec sets
+    `memory.pairwise_review: false`; there is no separate review process."""
     from paf.specs import _spec_memory_config, resolve_memory_config
 
     spec = tmp_path / "agent.yaml"
-    spec.write_text("memory:\n  review: false\n", encoding="utf-8")
-    assert _spec_memory_config(spec) == {"review": False}
-    spec.write_text("memory:\n  consolidate_every: 10\n", encoding="utf-8")
-    assert "review" not in (_spec_memory_config(spec) or {})
+    spec.write_text("memory:\n  pairwise_review: false\n", encoding="utf-8")
+    assert _spec_memory_config(spec) == {"pairwise_review": False}
+    assert resolve_memory_config("demo_assistant")["pairwise_review"] is True
+    assert resolve_memory_config("spec-less-agent")["pairwise_review"] is True
 
-    # The shipped agents have it off; the coordinator honors the flag.
-    assert resolve_memory_config("demo_assistant")["review_enabled"] is False
     from paf.background import BackgroundCoordinator
     from paf.capabilities.profiles import AgentProfile
 
     bg = BackgroundCoordinator(
         store=_store(tmp_path, {}),
-        agent_name="demo_assistant",
+        agent_name="spec-less-agent",
         memory_directory=str(tmp_path / "mem"),
-        profile=AgentProfile(name="review-off", capability_names=("Memory",)),
+        profile=AgentProfile(name="memory", capability_names=("Memory",)),
         lane="agent",
     )
-    enabled = {p.id_namespace for p in bg._processes if p.enabled and p.enabled(bg)}
-    assert "consolidation" in enabled
-    assert "review" not in enabled
+    assert bg.pairwise_review is True
+    assert [p.id_namespace for p in bg._processes] == ["consolidation"]

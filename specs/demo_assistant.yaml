@@ -329,7 +329,6 @@ compact:
 #   Decoupled from context eviction (eviction is trim-only and never calls
 #   memory); the owner just folds durable turns at least this often when new
 #   material has accumulated. Absent -> default (30m in build.py).
-#   `review_every` (default 60m, not set here) is the rarer reviewer cadence.
 #   Background consolidation is LIVE — the runtime triggers it off the
 #   completed-turn path via `_maybe_trigger_consolidation`.
 # - tier_caps (default {t1: 75, t2: 25, t3: 15}): PER-TIER COUNT caps — the
@@ -344,15 +343,11 @@ compact:
 #   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
   consolidate_every: 10
-  # Old reviewer OFF (2026-10-01): it merges/over-archives and its memory_merge
-  # writes v1 rows that drop scope/project. Replaced by the pairwise reviewer —
-  # see vault Designs/Memory-Pipeline-v2-Plan.
-  review: false
-  # Pairwise reviewer ON: after each fold, each new fact vs its BM25 candidates
-  # (same project + global); DeepSeek labels same/update/different, code
-  # archives/supersedes via the overrides sidecar. Starts at the journal tail
-  # (no backfill). Dry run: scripts/memory_review.py --last 30
-  pairwise_review: true
+  # The pairwise reviewer runs after each fold by default: each new fact vs
+  # its BM25 candidates (same project + global); DeepSeek labels
+  # same/update/different, code archives/supersedes via the overrides sidecar.
+  # `pairwise_review: false` turns it off. Dry run:
+  # scripts/memory_review.py --last 30
   # Scoped render: per turn, inject About you (global) + this conversation's
   # project (BM25 vs the latest user turns) + a mentioned project + Recent
   # history (events and replaced values), each to a token budget. Every key

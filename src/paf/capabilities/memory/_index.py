@@ -27,8 +27,8 @@ not something the deterministic index should arbitrate.
 
 Dedup scoping: folds dedup on **exact** and **normalized-token-set** equality
 (catches verbatim + re-ordered repeats at O(1)). Paraphrase bloat is NOT
-auto-merged here — the reviewer merges duplicates deliberately (see
-``memory_merge``).
+auto-merged here — the pairwise reviewer archives duplicates deliberately
+(``_pairwise``).
 
 Layout: the index lives beside ``MEMORY.md`` and the journal::
 
@@ -269,7 +269,7 @@ def build_index(directory: str | os.PathLike) -> int:
     # 5K times (27:12 vs 25:50) were treated as one duplicate and the newer value
     # was dropped from the render, losing the gold answer from injected memory.
     # Only the exact/token dedup above (pass 1) is kept; paraphrase bloat is left
-    # to the reviewer to merge deliberately.
+    # to the pairwise reviewer to archive deliberately.
 
     idx.watermark = records[-1][0] if records else 0
     idx.save(directory)

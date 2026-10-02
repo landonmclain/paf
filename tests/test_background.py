@@ -227,10 +227,10 @@ class _NoRunsStore:
 
 
 def test_job_status_summary_returns_idle_rows_when_idle() -> None:
-    """The Processes-panel snapshot exposes all 3 jobs as idle with a reason.
+    """The Processes-panel snapshot exposes every job as idle with a reason.
 
     A coordinator over a fresh/conversationless store (no runs, no watermarks)
-    must still yield consolidation / review / thread summarizer idle rows with
+    must still yield consolidation / thread summarizer idle rows with
     the stable ids the frontend coalesces transitions against — never raise.
     """
     from tempfile import mkdtemp
@@ -242,7 +242,7 @@ def test_job_status_summary_returns_idle_rows_when_idle() -> None:
 
     bg = BackgroundCoordinator(
         FileStepStore(directory=mkdtemp()),  # real store, no runs yet
-        agent_name="spec-less-agent",  # code defaults: all 3 processes on
+        agent_name="spec-less-agent",  # code defaults: every process on
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",  # loads a fresh watermark
     )
@@ -252,7 +252,6 @@ def test_job_status_summary_returns_idle_rows_when_idle() -> None:
 
     assert set(by_id) == {
         "consolidation.cid123",
-        "review.cid123",
         "thread_summarize.cid123",
     }
     for r in rows:
@@ -332,13 +331,13 @@ def test_job_status_summary_degrades_when_store_fails() -> None:
 
     bg = BackgroundCoordinator(
         _BrokenStore(),
-        agent_name="spec-less-agent",  # code defaults: all 3 processes on
+        agent_name="spec-less-agent",  # code defaults: every process on
         profile=PROFILES.get("demo"),
         memory_directory="/nonexistent-memory-dir",
     )
 
     rows = asyncio.run(bg.job_status_summary("cid123"))  # must not raise
-    assert len(rows) == 3
+    assert len(rows) == 2  # consolidation + thread summarizer
     assert all(r.status == "idle" for r in rows)
     assert all("unavailable" in r.detail for r in rows)
 

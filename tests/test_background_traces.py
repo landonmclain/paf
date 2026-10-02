@@ -126,8 +126,6 @@ def test_memory_and_summarizer_queues_name_their_own_traces() -> None:
     from paf.capabilities.memory._background import (
         ConsolidationJob,
         MemoryConsolidationQueue,
-        MemoryReviewQueue,
-        ReviewJob,
     )
     from paf.capabilities.thread_summarizer._background import (
         ThreadSummarizeJob,
@@ -140,11 +138,6 @@ def test_memory_and_summarizer_queues_name_their_own_traces() -> None:
         "demo_assistant", ConsolidationJob(run_id="r1", turn_id=4)
     ) == (
         "paf.memory.consolidate.demo_assistant",
-        {"agent": "demo_assistant", "run_id": "r1", "turn_id": 4},
-    )
-    reviewer = MemoryReviewQueue.__new__(MemoryReviewQueue)
-    assert reviewer.job_trace("demo_assistant", ReviewJob(run_id="r1", turn_id=4)) == (
-        "paf.memory.review.demo_assistant",
         {"agent": "demo_assistant", "run_id": "r1", "turn_id": 4},
     )
     summarizer = ThreadSummarizerQueue.__new__(ThreadSummarizerQueue)

@@ -297,7 +297,7 @@ async def run_guarded(
 ):
     """Run a pydantic-ai agent under the degeneration guards, mirroring the main
     runtime's `Session.stream` wiring for background/direct `agent.run` call
-    sites (thread-summarizer, memory reviewer/owner, vision) that never stream.
+    sites (thread-summarizer, memory owner, vision) that never stream.
 
     Streams the agent via `agent.iter(prompt)` (the same graph execution
     `agent.run` uses internally, just exposed) so we can watch thinking deltas
@@ -309,10 +309,9 @@ async def run_guarded(
     - Thinking guard is ON by default — it only fires on a pure thinking
       narration loop and is safe on every background agent.
     - Tool-call guard is OFF by default — the tool-using background agents
-      (memory reviewer, owner) deliberately repeat their own tool calls as the
-      job (reviewer calls `memory_review`/`memory_merge` many times; the owner
-      reads `read_memory`/`search_memory` in a loop with its own `_guard_repeat`
-      guard). Apply it only where a stuck repeat-tool loop is the actual risk.
+      (the memory owner) deliberately repeat their own tool calls as the job
+      (the owner reads `read_memory`/`search_memory` in a loop with its own
+      `_guard_repeat` guard). Apply it only where a stuck repeat-tool loop is the actual risk.
 
     On detection raises :class:`DegenerationError`. Background callers already handle
     per-job exceptions (e.g. the thread summarizer's `on_complete(False, ...)` +
