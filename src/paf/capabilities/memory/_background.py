@@ -330,6 +330,10 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         # extractor still gets the conversation's project. Jobs are FIFO on
         # one worker, so this never mixes two jobs.
         self.current_project: str | None = None
+        # The step store's history source, so the extractor's source_refs are
+        # numbered in each turn's own run (read_turn's frame). Set by the
+        # coordinator; None falls back to slice ordinals (single-run paths).
+        self.history_source = None
 
     def job_trace(self, session_id: str, job: ConsolidationJob) -> tuple[str, dict]:
         """Each consolidation is its OWN trace: memory is per-agent, not part of
@@ -486,6 +490,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
             keep_tail=0,
             journal=journal,
             project=project,
+            history_source=self.history_source,
         )
         return journal.count() - before
 

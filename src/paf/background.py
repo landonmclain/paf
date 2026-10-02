@@ -1063,6 +1063,7 @@ class BackgroundCoordinator:
                 consolidate_span=publish_fold,
                 pairwise_review=self.pairwise_review,
             )
+            queue.history_source = source
             queue_ref = queue
             self._memory_queue = queue
         return self._memory_queue

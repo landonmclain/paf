@@ -257,3 +257,48 @@ def test_consolidate_conversation_chunked_runs_once_per_chunk(monkeypatch) -> No
     joined = "\n".join(fed)
     for i in range(12):
         assert f"turn number {i} and then some" in joined
+
+
+def test_turn_refs_are_numbered_in_each_turns_own_run() -> None:
+    """Regression: refs were the turn's ordinal in the consolidation SLICE, but
+    read_turn('R:k') takes the k-th turn of run R's own history. Each turn is a
+    run whose history resumes earlier turns, so a slice from the latest run
+    mixes runs and the slice ordinal points at the wrong turn."""
+    import asyncio
+
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    from paf.capabilities.memory._consolidate import _turn_refs
+
+    def turn(run, text):
+        u = ModelRequest(parts=[UserPromptPart(content=text)])
+        a = ModelResponse(parts=[TextPart(content="ok " + text)])
+        u.run_id = a.run_id = run
+        return [u, a]
+
+    t0, t1, t2 = turn("A", "first"), turn("B", "second"), turn("C", "third")
+    shot = ModelRequest(parts=[UserPromptPart(content="[screenshot captured: s1]")])
+    shot.run_id = "C"  # a pseudo-turn injected mid-turn by a tool
+    histories = {
+        "A": [*t0],
+        "B": [*t0, *t1],  # B resumes A's turn, then its own
+        "C": [*t1, *t2],  # C's window dropped A's turn
+    }
+
+    class Source:
+        async def run_history(self, *, run_id):
+            return histories[run_id]
+
+    slice_ = [*t1, *t2, shot]  # a tail of C's history
+    refs = asyncio.run(_turn_refs(slice_, Source()))
+    # "second" is turn 1 of B's history (slice ordinal would say B:0).
+    assert refs[0] == refs[1] == "B:1"
+    assert refs[2] == refs[3] == "C:1"
+    assert refs[4] == "C:1"  # the screenshot prompt belongs to C's turn
+    # Without a source (single-run benchmark path) the slice ordinal is kept.
+    assert asyncio.run(_turn_refs(slice_, None))[0] == "B:0"

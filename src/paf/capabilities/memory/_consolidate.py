@@ -200,6 +200,7 @@ async def resident_consolidate_text(messages: list[ModelMessage]) -> str | None:
 
 async def consolidation_view(
     messages: list[ModelMessage],
+    history_source=None,
 ) -> tuple[str | None, dict[str, str]]:
     """Render a message list for the owner prompt, plus each label's turn date.
 
@@ -241,7 +242,6 @@ async def consolidation_view(
     )
 
     from paf.capabilities._markers import injected_artifact_markers
-    from paf.capabilities._turns import user_anchor_indices
 
     markers = injected_artifact_markers()
 
@@ -268,22 +268,11 @@ async def consolidation_view(
         joined = " ".join(texts).strip()
         return joined or None
 
-    # Precompute each message's `{run_id}:{turn_id}` ref (same walk as the
-    # conversation-search toolset: turn_id = ordinal of the message's greatest
-    # user-prompt anchor <= its index). Messages before any anchor get None.
-    runs = [getattr(m, "run_id", None) for m in messages]
-    anchors = user_anchor_indices(messages)
-    turn_refs: list[str | None] = []
-    for idx, _m in enumerate(messages):
-        tid = None
-        for a in range(len(anchors) - 1, -1, -1):
-            if anchors[a] <= idx:
-                tid = a
-                break
-        run_id = runs[idx]
-        turn_refs.append(
-            f"{run_id}:{tid}" if run_id is not None and tid is not None else None
-        )
+    # Each message's `{run_id}:{turn_id}` ref, in the frame read_turn resolves:
+    # turn_id = the ordinal of the message's turn (its user-prompt anchor) within
+    # the history of the RUN THAT CREATED that turn. See _turn_refs for why the
+    # slice's own ordinal is not that number.
+    turn_refs = await _turn_refs(messages, history_source)
 
     # Pass 1: collect the durable lines, and each turn's date (metadata
     # ``source_date`` first, else the inline ``[date: ...]`` prefix the harness
@@ -340,6 +329,95 @@ async def consolidation_view(
     return "\n".join(lines), ref_dates
 
 
+def _anchor_key(message: ModelMessage) -> tuple[str, str] | None:
+    """Identify a user turn across run histories: its real (marker-stripped)
+    prompt text + the prompt part's timestamp. Injected blocks are excluded so
+    a stripped/re-injected ``<memory>`` block can't break the match."""
+    from pydantic_ai.messages import UserPromptPart
+
+    from paf.capabilities._turns import _real_user_prompt_text
+
+    text = _real_user_prompt_text(message)
+    if text is None:
+        return None
+    ts = next(
+        (
+            str(p.timestamp)
+            for p in getattr(message, "parts", None) or []
+            if isinstance(p, UserPromptPart) and getattr(p, "timestamp", None)
+        ),
+        "",
+    )
+    return text, ts
+
+
+async def _turn_refs(
+    messages: list[ModelMessage], history_source=None
+) -> list[str | None]:
+    """``run_id:turn_id`` per message, numbered the way ``read_turn`` reads it.
+
+    Why this isn't just the slice's own ordinal: every user turn is its own run,
+    and each run's history is the resumed window of earlier turns plus its own
+    new messages. A consolidation slice is a tail of the LATEST run's history,
+    so it mixes messages created by many runs. ``read_turn('R:k')`` opens run
+    R's history and takes its k-th user turn — so k must be counted in R's
+    history, not in the slice. (Counting in the slice was correct only for a
+    single run consolidated from its start — the benchmark path — and silently
+    wrong in production once ``resume_window`` made runs carry earlier turns.)
+
+    With a ``history_source``, each turn's anchor is found in its creating
+    run's history (by :func:`_anchor_key`) and numbered there. Without one, or
+    when the anchor can't be found, falls back to the slice ordinal.
+    Messages before the slice's first anchor get ``None``.
+    """
+    from paf.capabilities._turns import user_anchor_indices
+
+    anchors = user_anchor_indices(messages)
+    run_anchor_keys: dict[str, list[tuple[str, str] | None]] = {}
+
+    async def ordinal_in_run(run_id: str, key) -> int | None:
+        if history_source is None or key is None:
+            return None
+        if run_id not in run_anchor_keys:
+            try:
+                history = await history_source.run_history(run_id=run_id)
+            except Exception:  # noqa: BLE001 - unreadable run: fall back
+                history = []
+            run_anchor_keys[run_id] = [
+                _anchor_key(history[i]) for i in user_anchor_indices(history)
+            ]
+        keys = run_anchor_keys[run_id]
+        return keys.index(key) if key in keys else None
+
+    refs: list[str | None] = []
+    anchor_ref: dict[int, str | None] = {}
+    last_found: dict[str, str] = {}  # run_id -> last anchor ref matched in it
+    for idx, msg in enumerate(messages):
+        slot = next(
+            (n for n in range(len(anchors) - 1, -1, -1) if anchors[n] <= idx), None
+        )
+        if slot is None:
+            refs.append(None)
+            continue
+        if slot not in anchor_ref:
+            anchor = messages[anchors[slot]]
+            run_id = getattr(anchor, "run_id", None) or getattr(msg, "run_id", None)
+            if run_id is None:
+                anchor_ref[slot] = None
+            else:
+                k = await ordinal_in_run(run_id, _anchor_key(anchor))
+                if k is not None:
+                    anchor_ref[slot] = last_found[run_id] = f"{run_id}:{k}"
+                elif history_source is not None and run_id in last_found:
+                    # Not a real turn in its run (e.g. a "[screenshot captured …]"
+                    # prompt injected mid-turn): it belongs to the turn before.
+                    anchor_ref[slot] = last_found[run_id]
+                else:
+                    anchor_ref[slot] = f"{run_id}:{slot}"
+        refs.append(anchor_ref[slot])
+    return refs
+
+
 def _inline_date(text: str) -> str | None:
     """Extract the date from a leading ``[date: ...]`` prefix, else ``None``.
 
@@ -381,6 +459,7 @@ async def consolidate(
     keep_tail: int,
     journal=None,
     project: str | None = None,
+    history_source=None,
 ) -> None:
     """Fold the about-to-be-evicted slice into the store via the owner agent.
 
@@ -402,7 +481,7 @@ async def consolidate(
         return  # nothing about to be evicted
 
     evicted = messages[:cutoff]
-    evicted_text, ref_dates = await consolidation_view(evicted)
+    evicted_text, ref_dates = await consolidation_view(evicted, history_source)
     owner, _owner_memory = _build_owner(
         store,
         agent_name=agent_name,
