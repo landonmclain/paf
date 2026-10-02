@@ -27,7 +27,19 @@ DEFS_V2 = {
     "related": "same subject, but about a different attribute; both can be true at once",
 }
 
-DEFS = {"v1": DEFS_V1, "v2": DEFS_V2}
+# v3: v2 + the subject rule (nearly every fact is about "the user", so "same
+# subject" must mean the specific thing — this was tev1's remaining v2 miss).
+_SUBJECT = (
+    " The subject is the specific thing (a project, tool, machine, place, person, "
+    "or area of preference), never just 'the user'."
+)
+DEFS_V3 = {
+    **DEFS_V2,
+    "related": DEFS_V2["related"] + "." + _SUBJECT,
+    "unrelated": "different subject." + _SUBJECT,
+}
+
+DEFS = {"v1": DEFS_V1, "v2": DEFS_V2, "v3": DEFS_V3}
 
 # (fact A, fact B, gold label) — a hand-picked smoke set, NOT an evaluation.
 PAIRS = [

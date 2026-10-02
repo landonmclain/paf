@@ -13,7 +13,11 @@ Sources (pairs keyed by (min line, max line); A is always the older fact):
              or one or two swapped words (the rare `update` label).
   reviewer — reviewer archive reasons that cite another line ("Duplicate of
              kept #81") and merge(#a,#b) source lists.
+  snapshot — "currently / as of / now" facts paired with close neighbors whose
+             numbers differ: where real value changes (five notes -> six) live.
   random   — uniform random pairs (easy `unrelated`).
+
+Pairs where either fact has no ``born_on`` are dropped (no older/newer order).
 
 The corpus is every index winner, INCLUDING reviewer-archived ones (the
 archived duplicates are exactly the same/update cases we want), minus
@@ -95,6 +99,7 @@ def band(ratio: float) -> str:
 
 
 _NUM = re.compile(r"\d")
+_SNAPSHOT = re.compile(r"\b(currently|as of|right now|now has|so far)\b", re.IGNORECASE)
 
 
 def looks_like_update(a: list[str], b: list[str]) -> bool:
@@ -151,6 +156,7 @@ def main() -> int:
     ap.add_argument("--bm25-low", type=int, default=60)
     ap.add_argument("--update", type=int, default=50)
     ap.add_argument("--reviewer", type=int, default=120)
+    ap.add_argument("--snapshot", type=int, default=40)
     ap.add_argument("--random", type=int, default=30)
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
@@ -181,6 +187,8 @@ def main() -> int:
     def take(key, source, **extra) -> bool:
         if key in chosen or key[0] == key[1]:
             return False
+        if not (records[key[0]].born_on and records[key[1]].born_on):
+            return False  # undated: no reliable older -> newer order
         chosen[key] = {"source": source, **extra}
         return True
 
@@ -206,6 +214,24 @@ def main() -> int:
         if take(key, "bm25", ratio=round(p["ratio"], 3), band=b):
             got[b] += 1
             per_query[p["query"]] += 1
+
+    # Snapshot facts: state captured at a point in time. Two snapshots of the
+    # same thing with different numbers are the likeliest real `update`s.
+    snap = [
+        (key, p)
+        for key, p in pool.items()
+        if p["ratio"] > LOW
+        and any(_SNAPSHOT.search(records[n].fact) for n in key)
+        and {t for t in bm.docs[p["ti"]] if _NUM.search(t)}
+        != {t for t in bm.docs[p["tj"]] if _NUM.search(t)}
+    ]
+    rng.shuffle(snap)
+    n_snap = 0
+    for key, p in snap:
+        if n_snap >= args.snapshot:
+            break
+        if take(key, "snapshot", ratio=round(p["ratio"], 3)):
+            n_snap += 1
 
     rev = reviewer_pairs(directory, records, eligible)
     rng.shuffle(rev)
@@ -252,9 +278,9 @@ def main() -> int:
         dict(Counter(r.get("band") for r in rows if r["source"] == "bm25")),
     )
     print(
-        f"(pools: {len(upd)} update-shaped pairs, {len(rev)} reviewer pairs available)"
+        f"(pools: {len(upd)} update-shaped, {len(snap)} snapshot, {len(rev)} reviewer pairs)"
     )
-    for src in ("update", "bm25", "reviewer", "random"):
+    for src in ("update", "snapshot", "bm25", "reviewer", "random"):
         sample = [r for r in rows if r["source"] == src][:2]
         for r in sample:
             tag = r.get("band") or r.get("reviewer_reason", "")[:50]
