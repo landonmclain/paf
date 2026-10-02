@@ -310,12 +310,14 @@ async def render_scoped(
             out += ["", f"## {names.get(slug, slug)} (mentioned)", *m.lines]
 
     # Recent history — events + replaced values, dated, newest first.
+    # Undated rows (pre-born_on legacy) never count as recent: "undated" would
+    # otherwise sort above every ISO date in the window check.
     since = (now_local() - timedelta(days=budget.history_days)).date().isoformat()
     visible = {None, project, *mentioned}
     items: list[tuple[str, str, str]] = []  # (date, kind, line)
     for ln, r, proj in filed.events:
         d = _date(r.born_on)
-        if proj in visible and d >= since:
+        if proj in visible and d != "undated" and d >= since:
             items.append((d, "event", f"- {d}  {r.fact} — #{ln}"))
     for target, st in overrides.items():
         if not st.is_superseded or target not in records or st.superseded_by is None:
@@ -325,7 +327,7 @@ async def render_scoped(
             continue
         d = _date(new.born_on)
         proj = new.project or old.project
-        if proj in visible and d >= since:
+        if proj in visible and d != "undated" and d >= since:
             items.append(
                 (
                     d,

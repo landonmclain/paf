@@ -145,6 +145,22 @@ def test_sections_and_render_time_filing(world) -> None:
     assert "Old event" not in out
 
 
+def test_undated_events_are_not_recent(world) -> None:
+    mem, steps = world
+    j = JournalStore(mem)
+    j.append(
+        type="event",
+        fact="Legacy undated event.",
+        tier="t3",
+        born_on="",
+        source_ref="r-x:0",
+    )
+    _add(j, "The user ran a 5K race.", type="event", scope="global", tier="t3")
+    out = _render(mem, steps, "conv-paf")
+    assert "5K race" in out
+    assert "undated" not in out and "Legacy undated" not in out
+
+
 def test_mentioned_project_and_untagged_conversation(world) -> None:
     mem, steps = world
     j = JournalStore(mem)
