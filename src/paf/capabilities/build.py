@@ -644,7 +644,8 @@ def _build_planning(store) -> Planning:
 
     Gives the agent a structured, self-updating todo/plan it can create and edit
     (``write_plan`` / ``read_plan`` / ``add_task`` / ``update_task_status`` /
-    ``remove_task``), surfaced back to the model every request as a cache-safe
+    ``remove_task``), with subtasks and dependencies (``add_subtask`` /
+    ``set_dependency`` / ``get_available_tasks``), surfaced back to the model every request as a cache-safe
     tail reminder — so it never loses track of what it set out to do on a long
     run, and plan edits don't invalidate the prompt cache (the reminder rides
     behind a ``CachePoint`` breakpoint).
@@ -680,15 +681,23 @@ def _build_planning(store) -> Planning:
 
     # Thin guidance: point out that write_plan returns the ids the model must
     # pass to a follow-up update_task_status(_es) — no read_plan round-trip
-    # needed. The tool schemas document themselves beyond that.
+    # needed — and call out the one subtask behavior the model would not expect:
+    # a parent completes on its own. The tool schemas document the rest.
     return Planning(
         store_resolver=_resolve_plan_store,
+        enable_subtasks=True,
         guidance=(
             "For multi-step work, lay out the steps up front with `write_plan` and "
             "keep it current as you go. `write_plan` returns each step's [id] — "
             "use those ids directly in `update_task_status`/`update_task_statuses`; "
             "you do not need `read_plan` first. "
-            "To clear the plan, call `write_plan` with `items: []`."
+            "To clear the plan, call `write_plan` with `items: []`. "
+            "Break a large step into subtasks with `add_subtask`, and use "
+            "`set_dependency` when one step must wait for another (it stays `blocked` "
+            "until that step is completed or cancelled). Work the subtasks, not the "
+            "parent: a parent cannot be marked `completed` while any subtask is open, "
+            "and it is completed automatically once its last subtask is done — do not "
+            "complete it yourself. Reopening or adding a subtask reopens it."
         ),
     )
 

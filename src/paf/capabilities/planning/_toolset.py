@@ -2,7 +2,9 @@
 
 PlanningToolset: write_plan, read_plan, add_task, update_task_status,
 update_task_statuses, remove_task. Subtask tools (add_subtask, set_dependency,
-get_available_tasks) are gated behind enable_subtasks, left off per YAGNI.
+get_available_tasks) are gated behind enable_subtasks. A parent's status follows
+its subtasks: it cannot be completed while one is open, and it completes on its
+own once the last one is resolved.
 """
 
 from __future__ import annotations
@@ -63,8 +65,10 @@ or were created in error. To mark work done, use update_task_status instead.\
 
 ADD_SUBTASK_DESCRIPTION = """\
 Add a `pending` subtask under an existing step, creating a parent/child link. \
-Break a complex step into a handful of independently completable subtasks, and \
-complete them before completing the parent.\
+Break a complex step into a handful of independently completable subtasks and \
+work those, not the parent: the parent cannot be completed while a subtask is \
+open, and it is completed automatically once its last subtask is done. Adding a \
+subtask to a completed parent reopens it.\
 """
 
 SET_DEPENDENCY_DESCRIPTION = """\
@@ -75,8 +79,22 @@ or `cancelled`). Self-dependencies, cycles, and duplicates are rejected.\
 
 GET_AVAILABLE_TASKS_DESCRIPTION = """\
 List the steps that can be worked on now -- those that are not completed, not \
-blocked, and have no incomplete dependencies. Use it to choose the next step \
-when dependencies are involved.\
+blocked, and have no incomplete dependencies. A step with open subtasks is not \
+listed; its subtasks are. Use it to choose the next step when dependencies or \
+subtasks are involved.\
+"""
+
+WRITE_PLAN_SUBTASKS_NOTE = """\
+ To nest a step, set its `parent_id` to the parent's id. Within one call you may \
+give a new parent a short id of your own (e.g. "p1") for its subtasks to \
+reference. A completed step cannot have open subtasks, and a parent whose \
+subtasks are all done is completed for you. Rewriting the plan without a step's \
+`parent_id` or `depends_on` drops that link.\
+"""
+
+STATUS_SUBTASKS_NOTE = """\
+ A step with subtasks cannot be completed while any of them is open; it is \
+completed automatically when its last subtask is done.\
 """
 
 CORE_TOOL_NAMES = (
@@ -133,17 +151,68 @@ def status_icon(status: TaskStatus) -> str:
     return _ICONS[status]
 
 
-def render_plan(items: list[PlanItem]) -> str:
-    """Render the compact classic checklist with a one-line progress summary."""
+def render_plan(items: list[PlanItem], *, tree: bool = False) -> str:
+    """Render the compact checklist with a one-line progress summary.
+
+    The flat form is the classic checklist. `tree` (subtasks mode) nests each
+    subtask under its parent with outline numbers (1, 1.1, ...) and names the
+    unresolved steps a step is waiting on, so the per-turn reminder shows the
+    plan's structure rather than subtasks trailing at the end of the list.
+    """
     if not items:
         return "No plan yet."
-    lines = [
-        f"{index}. {status_icon(item.status)} {item.content}"
-        for index, item in enumerate(items, 1)
-    ]
+    if tree:
+        by_id = {item.id: item for item in items}
+        lines = []
+        for item, number, depth in walk_tree(items):
+            line = f"{'  ' * depth}{number}. {status_icon(item.status)} {item.content}"
+            waiting = [
+                by_id[dep_id].content
+                for dep_id in item.depends_on
+                if dep_id in by_id and not is_terminal(by_id[dep_id].status)
+            ]
+            if waiting:
+                line += f" (waits on: {', '.join(waiting)})"
+            lines.append(line)
+    else:
+        lines = [
+            f"{index}. {status_icon(item.status)} {item.content}"
+            for index, item in enumerate(items, 1)
+        ]
     completed = sum(1 for item in items if item.status is TaskStatus.completed)
     lines.append(f"({completed}/{len(items)} completed)")
     return "\n".join(lines)
+
+
+def walk_tree(items: list[PlanItem]) -> Iterator[tuple[PlanItem, str, int]]:
+    """Yield `(item, outline_number, depth)` depth-first, each subtask under its parent.
+
+    Siblings keep plan order, so a subtask appended to the end of the store still
+    renders under its parent. A step whose parent is not in the plan is shown at
+    the top level rather than dropped. Parent cycles are rejected on write
+    (`validate_hierarchy`), so every step is reachable from a top-level one.
+    """
+    known = {item.id for item in items}
+    children: dict[str | None, list[PlanItem]] = {}
+    for item in items:
+        parent_id = item.parent_id if item.parent_id in known else None
+        children.setdefault(parent_id, []).append(item)
+    seen: set[str] = set()
+
+    def walk(
+        nodes: list[PlanItem], prefix: str, depth: int
+    ) -> Iterator[tuple[PlanItem, str, int]]:
+        index = 0
+        for item in nodes:
+            if item.id in seen:
+                continue
+            seen.add(item.id)
+            index += 1
+            number = f"{prefix}{index}"
+            yield item, number, depth
+            yield from walk(children.get(item.id, []), f"{number}.", depth + 1)
+
+    yield from walk(children.get(None, []), "", 0)
 
 
 def find_item(items: list[PlanItem], item_id: str) -> PlanItem | None:
@@ -189,6 +258,31 @@ def is_blocked(items: list[PlanItem], item: PlanItem) -> bool:
     return False
 
 
+def subtasks_of(items: list[PlanItem], item: PlanItem) -> list[PlanItem]:
+    """Return the direct subtasks of `item`, in plan order."""
+    return [node for node in items if node.parent_id == item.id]
+
+
+def open_subtasks(items: list[PlanItem], item: PlanItem) -> list[PlanItem]:
+    """Return the direct subtasks of `item` that are not yet resolved."""
+    return [node for node in subtasks_of(items, item) if not is_terminal(node.status)]
+
+
+def subtasks_done(items: list[PlanItem], item: PlanItem) -> bool:
+    """Return whether `item` has subtasks, none still open, and at least one completed.
+
+    This is the state in which a parent is completed for the model. Subtasks that
+    were all cancelled do not finish a parent -- nothing was done -- so that case
+    is left to the model.
+    """
+    subtasks = subtasks_of(items, item)
+    return (
+        bool(subtasks)
+        and all(is_terminal(node.status) for node in subtasks)
+        and any(node.status is TaskStatus.completed for node in subtasks)
+    )
+
+
 def dependency_block_transitions(
     items: list[PlanItem],
 ) -> Iterator[tuple[PlanItem, TaskStatus]]:
@@ -208,6 +302,59 @@ def dependency_block_transitions(
             yield item, TaskStatus.blocked
         elif not blocked and item.status is TaskStatus.blocked:
             yield item, TaskStatus.pending
+
+
+def parent_status_transitions(
+    items: list[PlanItem],
+) -> Iterator[tuple[PlanItem, TaskStatus]]:
+    """Yield `(parent, new_status)` for each parent whose status its subtasks now decide.
+
+    A parent is completed once its last subtask is resolved (see `subtasks_done`),
+    and a completed parent goes back to `pending` when it has an open subtask again
+    (one was reopened or added). A parent still waiting on a dependency is left
+    until that resolves, and `blocked` is left to `dependency_block_transitions`,
+    so the two never move the same step in one snapshot.
+    """
+    for item in items:
+        if item.status is TaskStatus.completed:
+            if open_subtasks(items, item):
+                yield item, TaskStatus.pending
+        elif (
+            item.status in (TaskStatus.pending, TaskStatus.in_progress)
+            and not is_blocked(items, item)
+            and subtasks_done(items, item)
+        ):
+            yield item, TaskStatus.completed
+
+
+def reconcile_plan(items: list[PlanItem]) -> list[tuple[PlanItem, TaskStatus]]:
+    """Apply every structure-forced status change to `items` in place, until none remain.
+
+    Changes cascade -- a parent completing can complete its own parent, or free a
+    step that depends on it -- so this repeats to a fixed point. Returns the parent
+    changes, for the tool reply to report.
+    """
+    parent_changes: list[tuple[PlanItem, TaskStatus]] = []
+    for _ in range(2 * len(items) + 1):
+        dependency_changes = list(dependency_block_transitions(items))
+        parent_moves = list(parent_status_transitions(items))
+        if not dependency_changes and not parent_moves:
+            break
+        for item, status in [*dependency_changes, *parent_moves]:
+            item.status = status
+        parent_changes.extend(parent_moves)
+    return parent_changes
+
+
+def describe_parent_changes(changes: list[tuple[PlanItem, TaskStatus]]) -> str:
+    """Render the reply lines that tell the model which parents moved on their own."""
+    lines = [
+        f"\nParent '{item.content}' was completed automatically: all its subtasks are done."
+        if status is TaskStatus.completed
+        else f"\nParent '{item.content}' was reopened: it has an open subtask."
+        for item, status in changes
+    ]
+    return "".join(lines)
 
 
 def validate_hierarchy(items: list[PlanItem]) -> str | None:
@@ -253,41 +400,25 @@ def validate_hierarchy(items: list[PlanItem]) -> str | None:
 
 
 def render_flat(items: list[PlanItem], *, subtasks: bool) -> str:
-    """Render the detailed numbered list with ids, annotating parents/dependencies."""
+    """Render the detailed numbered list with ids.
+
+    With `subtasks`, each subtask is indented under its parent with an outline
+    number (1, 1.1, ...) and dependencies are listed by id.
+    """
     lines = ["Current plan:"]
-    for index, item in enumerate(items, 1):
-        lines.append(f"{index}. {status_icon(item.status)} [{item.id}] {item.content}")
-        if subtasks and item.parent_id:
-            lines.append(f"   (subtask of: {item.parent_id})")
-        if subtasks and item.depends_on:
-            lines.append(f"   (depends on: {', '.join(item.depends_on)})")
-    return "\n".join(lines)
-
-
-def render_tree(items: list[PlanItem]) -> str:
-    """Render the plan as an indented parent/child tree."""
-    children: dict[str | None, list[PlanItem]] = {}
-    for item in items:
-        children.setdefault(item.parent_id, []).append(item)
-    lines = ["Current plan (hierarchical view):"]
-    counter = [0]
-    seen: set[str] = set()
-
-    def walk(parent_id: str | None, depth: int) -> None:
-        for item in children.get(parent_id, []):
-            if item.id in seen:
-                continue
-            seen.add(item.id)
-            counter[0] += 1
-            indent = "  " * depth
+    if not subtasks:
+        for index, item in enumerate(items, 1):
             lines.append(
-                f"{indent}{counter[0]}. {status_icon(item.status)} [{item.id}] {item.content}"
+                f"{index}. {status_icon(item.status)} [{item.id}] {item.content}"
             )
-            if item.depends_on:
-                lines.append(f"{indent}   depends on: {', '.join(item.depends_on)}")
-            walk(item.id, depth + 1)
-
-    walk(None, 0)
+        return "\n".join(lines)
+    for item, number, depth in walk_tree(items):
+        indent = "  " * depth
+        lines.append(
+            f"{indent}{number}. {status_icon(item.status)} [{item.id}] {item.content}"
+        )
+        if item.depends_on:
+            lines.append(f"{indent}   (depends on: {', '.join(item.depends_on)})")
     return "\n".join(lines)
 
 
@@ -347,15 +478,22 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         def wanted(name: str) -> bool:
             return name in selected
 
+        # Subtasks change what writing a plan and moving a status mean, so those
+        # built-in descriptions say so; an override is used verbatim.
+        subtasks_note = STATUS_SUBTASKS_NOTE if self._subtasks else ""
         if wanted("write_plan"):
             self.add_function(
                 self.write_plan,
                 name="write_plan",
-                description=descriptions.get("write_plan", WRITE_PLAN_DESCRIPTION),
+                description=descriptions.get(
+                    "write_plan",
+                    WRITE_PLAN_DESCRIPTION
+                    + (WRITE_PLAN_SUBTASKS_NOTE if self._subtasks else ""),
+                ),
             )
         if wanted("read_plan"):
             self.add_function(
-                self.read_plan_tree if self._subtasks else self.read_plan,
+                self.read_plan,
                 name="read_plan",
                 description=descriptions.get("read_plan", READ_PLAN_DESCRIPTION),
             )
@@ -370,7 +508,7 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
                 self.update_task_status,
                 name="update_task_status",
                 description=descriptions.get(
-                    "update_task_status", UPDATE_TASK_STATUS_DESCRIPTION
+                    "update_task_status", UPDATE_TASK_STATUS_DESCRIPTION + subtasks_note
                 ),
             )
         if wanted("update_task_statuses"):
@@ -378,7 +516,8 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
                 self.update_task_statuses,
                 name="update_task_statuses",
                 description=descriptions.get(
-                    "update_task_statuses", UPDATE_TASK_STATUSES_DESCRIPTION
+                    "update_task_statuses",
+                    UPDATE_TASK_STATUSES_DESCRIPTION + subtasks_note,
                 ),
             )
         if wanted("remove_task"):
@@ -448,10 +587,18 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
             error = validate_hierarchy(new_items)
             if error is not None:
                 return f"Plan not updated: {error}"
-            # Reconcile dependency blocks in memory before storing, so `write_plan`
-            # commits one bulk `set_items` and stays event-silent (no per-step events).
-            for item, new_status in list(dependency_block_transitions(new_items)):
-                item.status = new_status
+            for item in new_items:
+                if item.status is TaskStatus.completed and open_subtasks(
+                    new_items, item
+                ):
+                    return (
+                        f"Plan not updated: step '{item.content}' is completed but has open "
+                        "subtasks. Leave the parent open -- it completes automatically when "
+                        "its last subtask is done."
+                    )
+        # Reconcile dependency blocks and parent rollups in memory before storing, so
+        # `write_plan` commits one bulk `set_items` instead of a write per step.
+        parent_changes = reconcile_plan(new_items) if self._subtasks else []
         await self._resolve(ctx).set_items(new_items)
         in_progress = sum(
             1 for item in new_items if item.status is TaskStatus.in_progress
@@ -464,9 +611,10 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         # guessing "1", "2", ... The bracketed ids ARE what the update tools take.
         return (
             f"Plan updated: {len(new_items)} step(s).\n\n"
-            f"{render_flat(new_items, subtasks=False)}"
+            f"{render_flat(new_items, subtasks=self._subtasks)}"
             f"\n\nUse the bracketed [id] values above with update_task_status or "
             f"update_task_statuses — do NOT guess ids.{note}"
+            f"{describe_parent_changes(parent_changes)}"
         )
 
     async def read_plan(self, ctx: RunContext[AgentDepsT]) -> str:
@@ -474,22 +622,9 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         items = await self._resolve(ctx).get_items()
         if not items:
             return "No plan yet. Use write_plan to create one."
-        return f"{render_flat(items, subtasks=False)}\n\n{render_summary(items)}"
-
-    async def read_plan_tree(
-        self, ctx: RunContext[AgentDepsT], hierarchical: bool = False
-    ) -> str:
-        """Read the current plan.
-
-        Args:
-            ctx: Framework-provided run context.
-            hierarchical: Render subtasks as an indented tree instead of a flat list.
-        """
-        items = await self._resolve(ctx).get_items()
-        if not items:
-            return "No plan yet. Use write_plan to create one."
-        body = render_tree(items) if hierarchical else render_flat(items, subtasks=True)
-        return f"{body}\n\n{render_summary(items)}"
+        return (
+            f"{render_flat(items, subtasks=self._subtasks)}\n\n{render_summary(items)}"
+        )
 
     async def add_task(
         self, ctx: RunContext[AgentDepsT], content: str, active_form: str = ""
@@ -506,17 +641,28 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         )
         return f"Added step '{content}' with id: {item.id}"
 
-    async def _sync_dependency_blocks(self, store: PlanStore) -> None:
-        """Keep dependency-driven `blocked` status in sync after a status change.
+    async def _reconcile(self, store: PlanStore) -> list[tuple[PlanItem, TaskStatus]]:
+        """Write every structure-forced status change through the store, until none remain.
 
         A step with dependencies is `blocked` while any prerequisite is incomplete
-        and returns to `pending` once they all complete. Steps without dependencies,
-        and completed/cancelled steps, are left untouched. Each transition is written
-        through the store, so the granular tools emit `status_changed` events for it.
+        and returns to `pending` once they all complete; a parent completes when its
+        last subtask is done and reopens when it has an open subtask again (see
+        `parent_status_transitions`). Each change is written through the store, so
+        the granular tools emit `status_changed` events for it. Returns the parent
+        changes for the reply.
         """
         items = await store.get_items()
-        for item, new_status in list(dependency_block_transitions(items)):
-            await store.update_item(item.id, status=new_status)
+        parent_changes: list[tuple[PlanItem, TaskStatus]] = []
+        for _ in range(2 * len(items) + 1):
+            dependency_changes = list(dependency_block_transitions(items))
+            parent_moves = list(parent_status_transitions(items))
+            if not dependency_changes and not parent_moves:
+                break
+            for item, new_status in [*dependency_changes, *parent_moves]:
+                await store.update_item(item.id, status=new_status)
+            parent_changes.extend(parent_moves)
+            items = await store.get_items()
+        return parent_changes
 
     @staticmethod
     def _refuse_inert_block(
@@ -537,6 +683,38 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         ):
             return None
         return f"Cannot block '{item.content}': every step it depends on is already resolved."
+
+    @staticmethod
+    def _refuse_parent_status(
+        items: list[PlanItem], item: PlanItem, status: TaskStatus
+    ) -> str | None:
+        """Refuse a parent status that its subtasks contradict.
+
+        A parent's completion follows its subtasks. Completing it while one is open
+        would claim work that is not done, and reopening one whose subtasks are all
+        done would be undone in the same call by the rollup -- so both are refused
+        with the move that does work instead.
+        """
+        if status is TaskStatus.completed:
+            remaining = open_subtasks(items, item)
+            if not remaining:
+                return None
+            names = ", ".join(f"'{node.content}'" for node in remaining)
+            return (
+                f"Cannot complete '{item.content}': {len(remaining)} subtask(s) still open "
+                f"({names}). Complete or cancel them -- the parent then completes automatically."
+            )
+        if (
+            not is_terminal(status)
+            and item.status is TaskStatus.completed
+            and subtasks_done(items, item)
+        ):
+            return (
+                f"Cannot reopen '{item.content}': all its subtasks are done, so it would be "
+                "completed again. Reopen one of its subtasks or add one with add_subtask -- "
+                "the parent reopens with it."
+            )
+        return None
 
     @staticmethod
     async def _stored_status(
@@ -570,7 +748,7 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         if item is None:
             raise ModelRetry(
                 f"Step with id '{task_id}' not found. Current plan:\n"
-                f"{render_flat(items, subtasks=False)}\n\n"
+                f"{render_flat(items, subtasks=self._subtasks)}\n\n"
                 f"Use the bracketed [id] values above with update_task_status — do NOT guess ids."
             )
         if (
@@ -581,9 +759,15 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
             return f"Cannot start '{item.content}': it has incomplete dependencies."
         if refusal := self._refuse_inert_block(items, item, status):
             return refusal
+        if refusal := self._refuse_parent_status(items, item, status):
+            return refusal
         await store.update_item(task_id, status=status)
-        await self._sync_dependency_blocks(store)
-        return f"Updated step '{item.content}' status to '{await self._stored_status(store, task_id, status)}'."
+        parent_changes = await self._reconcile(store)
+        return (
+            f"Updated step '{item.content}' status to "
+            f"'{await self._stored_status(store, task_id, status)}'."
+            f"{describe_parent_changes(parent_changes)}"
+        )
 
     async def update_task_statuses(
         self, ctx: RunContext[AgentDepsT], updates: list[PlanStatusUpdate]
@@ -628,6 +812,9 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
             if refusal := self._refuse_inert_block(projected, item, update.status):
                 errors.append(refusal)
                 continue
+            if refusal := self._refuse_parent_status(projected, item, update.status):
+                errors.append(refusal)
+                continue
             item.status = update.status
             resolved.append((item, update.status))
         if errors:
@@ -635,18 +822,22 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
                 "No changes applied. Errors:\n"
                 + "\n".join(f"- {error}" for error in errors)
                 + "\n\nCurrent plan:\n"
-                + f"{render_flat(projected, subtasks=False)}\n\n"
+                + f"{render_flat(projected, subtasks=self._subtasks)}\n\n"
                 + "Use the bracketed [id] values above with update_task_status or "
                 "update_task_statuses — do NOT guess ids."
             )
         for item, status in resolved:
             await store.update_item(item.id, status=status)
-        await self._sync_dependency_blocks(store)
+        parent_changes = await self._reconcile(store)
         lines = [
             f"- [{item.id}] {item.content} -> {await self._stored_status(store, item.id, status)}"
             for item, status in resolved
         ]
-        return f"Updated {len(resolved)} step(s):\n" + "\n".join(lines)
+        return (
+            f"Updated {len(resolved)} step(s):\n"
+            + "\n".join(lines)
+            + describe_parent_changes(parent_changes)
+        )
 
     async def remove_task(self, ctx: RunContext[AgentDepsT], task_id: str) -> str:
         """Remove a step by id.
@@ -660,11 +851,17 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         if item is None:
             return f"Step with id '{task_id}' not found."
         await store.remove_item(task_id)
-        subtasks_removed = (
-            await self._cleanup_after_removal(store, task_id) if self._subtasks else 0
-        )
+        subtasks_removed = 0
+        parent_changes: list[tuple[PlanItem, TaskStatus]] = []
+        if self._subtasks:
+            subtasks_removed = await self._cleanup_after_removal(store, task_id)
+            # Removing a parent's last open subtask leaves it finished.
+            parent_changes = await self._reconcile(store)
         extra = f" and {subtasks_removed} subtask(s)" if subtasks_removed else ""
-        return f"Removed step '{item.content}' (id: {task_id}){extra}."
+        return (
+            f"Removed step '{item.content}' (id: {task_id}){extra}."
+            f"{describe_parent_changes(parent_changes)}"
+        )
 
     async def _cleanup_after_removal(self, store: PlanStore, removed_id: str) -> int:
         """Cascade-remove the deleted step's descendants and drop dangling `depends_on` refs.
@@ -725,10 +922,17 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         parent = await store.get_item(parent_id)
         if parent is None:
             return f"Parent step with id '{parent_id}' not found."
+        if parent.status is TaskStatus.cancelled:
+            return f"Cannot add a subtask to '{parent.content}': it is cancelled."
         item = await store.add_item(
             PlanItem(content=content, active_form=active_form, parent_id=parent_id)
         )
-        return f"Added subtask '{content}' with id: {item.id} (parent: {parent_id})"
+        # A new open subtask reopens a completed parent.
+        parent_changes = await self._reconcile(store)
+        return (
+            f"Added subtask '{content}' with id: {item.id} (parent: {parent_id})"
+            f"{describe_parent_changes(parent_changes)}"
+        )
 
     async def set_dependency(
         self, ctx: RunContext[AgentDepsT], task_id: str, depends_on_id: str
@@ -768,9 +972,10 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
         # A step already `blocked` keeps its status above, which leaves it blocked on a
         # prerequisite that may be terminal -- and so excluded from `get_available_tasks`
         # with nothing left to free it. Every other write reconciles; so does this one.
-        await self._sync_dependency_blocks(store)
+        parent_changes = await self._reconcile(store)
         return (
             f"Added dependency: '{item.content}' now depends on '{dependency.content}'."
+            f"{describe_parent_changes(parent_changes)}"
         )
 
     async def get_available_tasks(self, ctx: RunContext[AgentDepsT]) -> str:
@@ -782,6 +987,7 @@ class PlanningToolset(FunctionToolset[AgentDepsT]):
             if item.status
             not in (TaskStatus.completed, TaskStatus.blocked, TaskStatus.cancelled)
             and not is_blocked(items, item)
+            and not open_subtasks(items, item)
         ]
         if not available:
             return "No available steps. All steps are either completed, cancelled, or blocked."

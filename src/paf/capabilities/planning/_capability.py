@@ -53,8 +53,11 @@ _GRANULAR_GUIDANCE = (
 _SUBTASK_GUIDANCE = (
     "Break a complex step into subtasks with `add_subtask`, and record ordering with "
     "`set_dependency`: a step stays `blocked` until every step it depends on is resolved "
-    "(`completed` or `cancelled`). Call `get_available_tasks` to pick the next step that has no "
-    "incomplete dependencies."
+    "(`completed` or `cancelled`). Work the subtasks, not the parent: a parent cannot be "
+    "marked `completed` while any subtask is open, and it is completed automatically once its "
+    "last subtask is done -- do not complete it yourself. Reopening or adding a subtask reopens "
+    "a completed parent. Call `get_available_tasks` to pick the next step that has no "
+    "incomplete dependencies or open subtasks."
 )
 
 
@@ -213,7 +216,7 @@ class Planning(AbstractCapability[AgentDepsT]):
         if isinstance(last, ModelRequest):
             marker = self._plan_marker_for(ctx)
             self._remove_previous_injection(messages, marker)
-            rendered = _reminder_text(render_plan(items))
+            rendered = _reminder_text(render_plan(items, tree=self.enable_subtasks))
             reminder = UserPromptPart(
                 content=[
                     "<plan-reminder>\n",

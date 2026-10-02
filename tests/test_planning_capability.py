@@ -48,8 +48,8 @@ def test_build_planning_returns_paf_owned_instance() -> None:
     """_build_planning must construct the paf-owned capability (not the harness)."""
     cap = _build_planning(store=None)
     assert type(cap).__module__ == "paf.capabilities.planning._capability"
-    # still a proper Planning capability (subtask tools off by default per YAGNI)
-    assert cap.enable_subtasks is False
+    # the live agent plans with subtasks + dependencies
+    assert cap.enable_subtasks is True
 
 
 def test_build_planning_uses_paf_store_symbol() -> None:
@@ -390,3 +390,281 @@ def test_remove_previous_injection_strips_plan_reminder() -> None:
     remaining = [i for i in messages[0].parts if isinstance(i, UserPromptPart)]
     texts = [i.content for i in remaining]
     assert "old plan" not in str(texts) and any(t == "real user prompt" for t in texts)
+
+
+# --- Subtasks: tree rendering + parent completion follows its subtasks -------
+
+
+def _subtask_toolset(
+    *, emitter: PlanEventEmitter | None = None
+) -> tuple[PlanningToolset, InMemoryPlanStore]:
+    store = InMemoryPlanStore(event_emitter=emitter)
+    return PlanningToolset(Planning(store=store, enable_subtasks=True)), store
+
+
+async def _statuses(store: InMemoryPlanStore) -> dict[str, TaskStatus]:
+    return {item.id: item.status for item in await store.get_items()}
+
+
+async def _add(store: InMemoryPlanStore, item_id: str, content: str, parent: str):
+    await store.add_item(PlanItem(id=item_id, content=content, parent_id=parent))
+
+
+def _scenario(body) -> None:
+    asyncio.run(body())
+
+
+def _seeded(fn):
+    """Run `fn(toolset, store)` against the design/build/ship plan with two subtasks."""
+
+    async def body():
+        toolset, store = _subtask_toolset()
+        await toolset.write_plan(
+            None,  # type: ignore[arg-type]
+            [
+                PlanItem(id="design", content="Design"),
+                PlanItem(id="build", content="Build"),
+                PlanItem(id="ship", content="Ship", depends_on=["design"]),
+            ],
+        )
+        await _add(store, "s1", "Sketch schema", "design")
+        await _add(store, "s2", "Review schema", "design")
+        await fn(toolset, store)
+
+    _scenario(body)
+
+
+def test_build_planning_registers_subtask_tools_and_guidance() -> None:
+    """The live agent gets the subtask tools and is told the parent auto-completes."""
+    cap = _build_planning(store=None)
+    names = set(PlanningToolset(cap).tools)
+    assert {"add_subtask", "set_dependency", "get_available_tasks"} <= names
+    guidance = cap.get_instructions()
+    assert isinstance(guidance, str)
+    assert "completed automatically" in guidance
+    assert "completed automatically" in (
+        Planning(enable_subtasks=True).get_instructions() or ""
+    )
+
+
+def test_tree_reminder_nests_subtasks_under_their_parent() -> None:
+    """A subtask appended to the store renders under its parent, not at the end."""
+
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        from paf.capabilities.planning import render_plan
+
+        text = render_plan(await store.get_items(), tree=True)
+        assert text.splitlines()[:5] == [
+            "1. [ ] Design",
+            "  1.1. [ ] Sketch schema",
+            "  1.2. [ ] Review schema",
+            "2. [ ] Build",
+            "3. [!] Ship (waits on: Design)",
+        ]
+        listing = await toolset.read_plan(None)  # type: ignore[arg-type]
+        assert "  1.1. [ ] [s1] Sketch schema" in listing
+        assert "(depends on: design)" in listing
+
+    _seeded(check)
+
+
+def test_completing_parent_with_open_subtasks_is_refused() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        reply = await toolset.update_task_status(None, "design", TaskStatus.completed)  # type: ignore[arg-type]
+        assert reply.startswith("Cannot complete 'Design'")
+        assert "'Sketch schema'" in reply and "'Review schema'" in reply
+        assert (await _statuses(store))["design"] is TaskStatus.pending
+
+    _seeded(check)
+
+
+def test_last_subtask_done_completes_parent_and_frees_dependents() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        first = await toolset.update_task_status(None, "s1", TaskStatus.completed)  # type: ignore[arg-type]
+        assert "automatically" not in first
+        assert (await _statuses(store))["design"] is TaskStatus.pending
+
+        reply = await toolset.update_task_status(None, "s2", TaskStatus.completed)  # type: ignore[arg-type]
+        assert "Parent 'Design' was completed automatically" in reply
+        statuses = await _statuses(store)
+        assert statuses["design"] is TaskStatus.completed
+        # Ship waited on Design; the rollup resolves that dependency too.
+        assert statuses["ship"] is TaskStatus.pending
+
+    _seeded(check)
+
+
+def test_rollup_cascades_through_nested_parents() -> None:
+    async def body():
+        toolset, store = _subtask_toolset()
+        await toolset.write_plan(None, [PlanItem(id="top", content="Top")])  # type: ignore[arg-type]
+        await _add(store, "mid", "Mid", "top")
+        await _add(store, "leaf", "Leaf", "mid")
+        reply = await toolset.update_task_status(None, "leaf", TaskStatus.completed)  # type: ignore[arg-type]
+        assert "Parent 'Mid' was completed automatically" in reply
+        assert "Parent 'Top' was completed automatically" in reply
+        assert set((await _statuses(store)).values()) == {TaskStatus.completed}
+
+    _scenario(body)
+
+
+def test_all_cancelled_subtasks_leave_parent_to_the_model() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        await toolset.update_task_statuses(
+            None,  # type: ignore[arg-type]
+            [
+                PlanStatusUpdate(task_id="s1", status=TaskStatus.cancelled),
+                PlanStatusUpdate(task_id="s2", status=TaskStatus.cancelled),
+            ],
+        )
+        assert (await _statuses(store))["design"] is TaskStatus.pending
+        # ...and with nothing open, the model may complete it itself.
+        reply = await toolset.update_task_status(None, "design", TaskStatus.completed)  # type: ignore[arg-type]
+        assert "to 'completed'" in reply
+
+    _seeded(check)
+
+
+def test_reopening_a_subtask_reopens_parent_but_parent_alone_is_refused() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        for sid in ("s1", "s2"):
+            await toolset.update_task_status(None, sid, TaskStatus.completed)  # type: ignore[arg-type]
+        refused = await toolset.update_task_status(
+            None, "design", TaskStatus.in_progress
+        )  # type: ignore[arg-type]
+        assert refused.startswith("Cannot reopen 'Design'")
+        assert (await _statuses(store))["design"] is TaskStatus.completed
+
+        reply = await toolset.update_task_status(None, "s2", TaskStatus.in_progress)  # type: ignore[arg-type]
+        assert "Parent 'Design' was reopened" in reply
+        statuses = await _statuses(store)
+        assert statuses["design"] is TaskStatus.pending
+        assert statuses["ship"] is TaskStatus.blocked  # its prerequisite is open again
+
+    _seeded(check)
+
+
+def test_add_subtask_reopens_completed_parent_and_refuses_cancelled() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        for sid in ("s1", "s2"):
+            await toolset.update_task_status(None, sid, TaskStatus.completed)  # type: ignore[arg-type]
+        reply = await toolset.add_subtask(None, "design", "Write migration")  # type: ignore[arg-type]
+        assert "Parent 'Design' was reopened" in reply
+        assert (await _statuses(store))["design"] is TaskStatus.pending
+
+        await toolset.update_task_status(None, "build", TaskStatus.cancelled)  # type: ignore[arg-type]
+        refused = await toolset.add_subtask(None, "build", "Compile")  # type: ignore[arg-type]
+        assert refused == "Cannot add a subtask to 'Build': it is cancelled."
+
+    _seeded(check)
+
+
+def test_batch_validates_parent_completion_against_earlier_entries() -> None:
+    import pydantic_ai.exceptions as _paie
+
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        with pytest.raises(_paie.ModelRetry) as exc:
+            await toolset.update_task_statuses(
+                None,  # type: ignore[arg-type]
+                [
+                    PlanStatusUpdate(task_id="s1", status=TaskStatus.completed),
+                    PlanStatusUpdate(task_id="design", status=TaskStatus.completed),
+                ],
+            )
+        assert "Cannot complete 'Design'" in str(exc.value)
+        assert (await _statuses(store))["s1"] is TaskStatus.pending  # nothing applied
+
+        reply = await toolset.update_task_statuses(
+            None,  # type: ignore[arg-type]
+            [
+                PlanStatusUpdate(task_id="s1", status=TaskStatus.completed),
+                PlanStatusUpdate(task_id="s2", status=TaskStatus.completed),
+            ],
+        )
+        assert "Parent 'Design' was completed automatically" in reply
+
+    _seeded(check)
+
+
+def test_write_plan_nests_by_model_ids_and_rolls_up() -> None:
+    async def body():
+        toolset, store = _subtask_toolset()
+        rejected = await toolset.write_plan(
+            None,  # type: ignore[arg-type]
+            [
+                PlanItem(id="p1", content="Parent", status=TaskStatus.completed),
+                PlanItem(content="Child", parent_id="p1"),
+            ],
+        )
+        assert rejected.startswith("Plan not updated: step 'Parent' is completed")
+        assert await store.get_items() == []
+
+        reply = await toolset.write_plan(
+            None,  # type: ignore[arg-type]
+            [
+                PlanItem(id="p1", content="Parent"),
+                PlanItem(content="Child", parent_id="p1", status=TaskStatus.completed),
+            ],
+        )
+        assert "  1.1. [x] [" in reply  # echo shows the nesting
+        assert "Parent 'Parent' was completed automatically" in reply
+        assert (await store.get_item("p1")).status is TaskStatus.completed  # type: ignore[union-attr]
+
+    _scenario(body)
+
+
+def test_removing_last_open_subtask_completes_parent() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        await toolset.update_task_status(None, "s1", TaskStatus.completed)  # type: ignore[arg-type]
+        reply = await toolset.remove_task(None, "s2")  # type: ignore[arg-type]
+        assert "Parent 'Design' was completed automatically" in reply
+        assert (await _statuses(store))["design"] is TaskStatus.completed
+
+    _seeded(check)
+
+
+def test_parent_blocked_on_dependency_completes_once_it_resolves() -> None:
+    async def body():
+        toolset, store = _subtask_toolset()
+        await toolset.write_plan(
+            None,  # type: ignore[arg-type]
+            [
+                PlanItem(id="pre", content="Prerequisite"),
+                PlanItem(id="par", content="Parent", depends_on=["pre"]),
+            ],
+        )
+        await _add(store, "kid", "Kid", "par")
+        await toolset.update_task_status(None, "kid", TaskStatus.completed)  # type: ignore[arg-type]
+        assert (await _statuses(store))["par"] is TaskStatus.blocked
+
+        reply = await toolset.update_task_status(None, "pre", TaskStatus.completed)  # type: ignore[arg-type]
+        assert "Parent 'Parent' was completed automatically" in reply
+        assert (await _statuses(store))["par"] is TaskStatus.completed
+
+    _scenario(body)
+
+
+def test_available_tasks_offer_subtasks_not_their_open_parent() -> None:
+    async def check(toolset: PlanningToolset, store: InMemoryPlanStore) -> None:
+        listing = await toolset.get_available_tasks(None)  # type: ignore[arg-type]
+        assert "[design]" not in listing
+        assert "[s1]" in listing and "[s2]" in listing and "[build]" in listing
+        assert "[ship]" not in listing
+
+    _seeded(check)
+
+
+def test_rollup_emits_completed_event_for_parent() -> None:
+    """The sidebar refreshes off plan events, so an auto-completion must emit one."""
+    completed: list[str] = []
+    emitter = PlanEventEmitter()
+    emitter.on_completed(lambda event: completed.append(event.item.id))
+
+    async def body():
+        toolset, store = _subtask_toolset(emitter=emitter)
+        await store.add_item(PlanItem(id="p", content="Parent"))
+        await _add(store, "c", "Child", "p")
+        await toolset.update_task_status(None, "c", TaskStatus.completed)  # type: ignore[arg-type]
+
+    _scenario(body)
+    assert completed == ["c", "p"]

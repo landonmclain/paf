@@ -14,7 +14,9 @@ in a ``PlanStore``, resolved per-run so the web sidebar can react to changes.
 
 paf owns the surface and wires it through the capability-toolset seam (registry
 + profile + builder) instead of using the harness directly. ``enable_subtasks``
-and the Postgres/Redis stores are deliberately NOT ported (YAGNI); a paf
+adds subtasks and dependencies (``add_subtask`` / ``set_dependency`` /
+``get_available_tasks``); a parent completes on its own once its last subtask is
+done. The Postgres/Redis stores are deliberately NOT ported (YAGNI); a paf
 flat-file ``FilePlanStore`` is provided separately.
 """
 
