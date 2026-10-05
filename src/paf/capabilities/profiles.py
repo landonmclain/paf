@@ -167,6 +167,22 @@ RESEARCHER_PROFILE = AgentProfile(
 )
 
 
+# Tool profile for the `coding` SUBAGENT leaf (specs/sub_agents/
+# coding_subagent.yaml): the read-only codebase map (get_overview / lookup_file /
+# read_block / search_codebase) plus the scoped filesystem for making edits.
+# Git is deliberately NOT included yet. Leaf builds always strip
+# persistence/recall/memory/summarizer/subagents regardless of the profile.
+CODING_PROFILE = AgentProfile(
+    name="coding",
+    capability_names=(
+        "CodebaseMap",
+        "FileSystem",
+        "Workspace",
+        "ToolOutputLimits",
+    ),
+)
+
+
 PROFILES: dict[str, AgentProfile] = {
     profile.name: profile
     for profile in (
@@ -181,5 +197,5 @@ PROFILES: dict[str, AgentProfile] = {
 # PROFILES — they are never selectable as a subject agent's profile. Leaf
 # profile lookup checks here first, then PROFILES.
 SUBAGENT_PROFILES: dict[str, AgentProfile] = {
-    profile.name: profile for profile in (RESEARCHER_PROFILE,)
+    profile.name: profile for profile in (RESEARCHER_PROFILE, CODING_PROFILE)
 }
