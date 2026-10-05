@@ -19,11 +19,14 @@ fail=0
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
+# Use the venv's ruff directly (AGENTS.md documents `.venv/bin/ruff`), not
+# `uv run ruff` — the hook runs in a non-interactive shell where uv may not be
+# on PATH. pyright is not in the venv, so it runs via npx.
 step "ruff check (lint)"
-uv run ruff check src tests --output-format=concise || fail=1
+.venv/bin/ruff check src tests --output-format=concise || fail=1
 
 step "ruff format --check (format)"
-uv run ruff format --check src tests || fail=1
+.venv/bin/ruff format --check src tests || fail=1
 
 step "pyright (typecheck)"
 npx --yes pyright || fail=1
