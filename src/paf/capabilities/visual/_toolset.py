@@ -22,13 +22,13 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Awaitable, Callable
-from typing import Concatenate, ParamSpec
+from typing import Any, Concatenate, ParamSpec
 
 from pydantic_ai.toolsets import FunctionToolset
 
-from paf.degeneration_guard import run_guarded
-
 from ._store import _store
+from ._uploads import UploadStore, is_upload_id
+from ._vision import _run_vision
 
 _P = ParamSpec("_P")
 
@@ -54,27 +54,6 @@ def _recoverable(  # noqa: UP047  # ParamSpec/Concatenate signature-preserving d
     return wrapper
 
 
-async def _run_vision(model: str, images: list[bytes], prompt: str) -> str:
-    """Send `images` + `prompt` to `model` and return its text.
-
-    The one vision side-call, kept here so the capability and toolset never
-    duplicate it. The `Agent` and message types are imported lazily so this
-    module imports without a live key.
-    """
-    from pydantic_ai import Agent
-    from pydantic_ai.messages import BinaryContent, TextContent
-
-    if not images:
-        return "Vision describe: no image bytes to describe."
-
-    content: list[TextContent | BinaryContent] = [TextContent(prompt)]
-    content.extend(BinaryContent(data=raw, media_type="image/png") for raw in images)
-
-    agent = Agent(model)
-    result = await run_guarded(agent, content)
-    return str(result.output)
-
-
 class VisualToolset(FunctionToolset):
     """Vision-description tools for an agent.
 
@@ -83,36 +62,54 @@ class VisualToolset(FunctionToolset):
     imported lazily inside the tool so this module imports without a live key.
     """
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        uploads: UploadStore | None = None,
+        model_settings: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
         self._model = model
+        self._model_settings = model_settings
+        self._uploads = uploads or UploadStore()
         self.add_function(self.describe_screenshot, name="describe_screenshot")
 
     @_recoverable
     async def describe_screenshot(self, ref: str, prompt: str) -> str:
-        """Describe a captured screenshot with a vision model.
+        """Ask a vision model a question about a screenshot or an uploaded image.
 
         Args:
-            ref: The `shot_<...>` reference for a screenshot captured earlier in
-                this run (see the stub text left in your context by the browser
-                `screenshot` route). Do not fabricate one.
+            ref: Either a `shot_<...>` reference for a browser screenshot
+                captured earlier in this run (from the stub text the browser
+                `screenshot` route left in your context), or an `img_<...>` id
+                of an image the user uploaded (from an `<image id="...">` block
+                in their message). Do not fabricate one.
             prompt: What you want to know about the image, e.g. "is the padding
-                OK?" or "does the hero image look centered?".
+                OK?" or "what is the exact error text in the dialog?".
 
         Returns:
-            The vision model's text answer to your prompt about that screenshot.
+            The vision model's text answer to your prompt about that image.
         """
-        images = _store.get(ref)
-        if images is None:
-            return (
-                "describe_screenshot: no screenshot found for ref "
-                f'"{ref}". Use the ref shown in the [screenshot captured] stub '
-                "text from an earlier browser capture. Do not fabricate a ref."
-            )
+        if is_upload_id(ref):
+            image = self._uploads.model_image(ref)
+            if image is None:
+                return f'describe_screenshot: no uploaded image found for id "{ref}".'
+            data, media_type = image
+        else:
+            data, media_type = _store.get(ref), "image/png"
+            if data is None:
+                return (
+                    "describe_screenshot: no screenshot found for ref "
+                    f'"{ref}". Use the ref shown in the [screenshot captured] stub '
+                    "text from an earlier browser capture, or an img_ id from an "
+                    "<image> block. Do not fabricate a ref."
+                )
         if not self._model:
             return (
                 "describe_screenshot: no vision model is configured for this "
                 "agent (the spec's `visual:` block has no model), so it cannot "
-                "inspect screenshots."
+                "inspect images."
             )
-        return await _run_vision(self._model, [images], prompt)
+        return await _run_vision(
+            self._model, [data], prompt, media_type, self._model_settings
+        )

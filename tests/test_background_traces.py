@@ -164,7 +164,9 @@ def test_notify_span_is_a_new_trace_in_the_conversation_session(
             seen["span"] = trace.get_current_span()
             return "enqueue-1"  # steered into a live run -> no turn_started emit
 
-    async def fake_get_session(conversation_id: str, agent: str) -> FakeSession:
+    async def fake_get_session(
+        conversation_id: str, agent: str, **_: object
+    ) -> FakeSession:
         return FakeSession()
 
     monkeypatch.setattr(sse, "_get_session", fake_get_session)

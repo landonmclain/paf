@@ -102,7 +102,7 @@ model_settings:
   # forever' loops on simple turns. OpenRouterModelSettings.openrouter_reasoning
   # forwards to the OpenRouter `reasoning` body.
   openrouter_reasoning:
-    effort: high
+    effort: none
 
 # ---------------------------------------------------------------------------
 # Web trust boundary (lives in the spec — the source of truth). Read by
@@ -177,11 +177,18 @@ browser:
 # `build_agent` -> `_spec_visual_config` -> the Visual capability's
 # `describe_screenshot` side-call + the before_model_request routing hook.
 #
-# `model` is the vision-capable model that inspects captured screenshots when
-# the main model is text-only. Absent block -> the Visual capability is inert
-# (images pass through to the main model untouched).
+# `model` is the vision-capable model that inspects captured screenshots and
+# describes images uploaded in paf-ui (ui/sse.py, saved under data/uploads) when
+# the main model is text-only. Any pydantic-ai model string works — a remote
+# `openrouter:...` model or a local `ollama:...` one (needs OLLAMA_BASE_URL).
+# `model_settings` is passed to every vision call. Absent block -> the Visual
+# capability is inert (images pass through to the main model untouched).
 visual:
-  model: openrouter:xiaomi/mimo-v2.5
+  model: ollama:qwen3.5:4b
+  model_settings:
+    # qwen3.5 thinks by default; a description doesn't need it, and turning it
+    # off halves the time (measured: 74s -> 37s on a 1920x1080 screenshot).
+    openai_reasoning_effort: none
 
 # ---------------------------------------------------------------------------
 # Per-assistant root scoping. Read
@@ -373,5 +380,5 @@ memory:
 # delegate to. Each name is a leaf spec under specs/sub_agents/. The
 # `code_reviewer` leaf is review-and-report only (filesystem tools, no writes).
 subagents:
-  agents: [writer_subagent, code_reviewer_subagent]
+  agents: [writer_subagent, code_reviewer_subagent, coding_subagent]
   max_concurrent: 5

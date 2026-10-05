@@ -162,10 +162,12 @@ class Visual(AbstractCapability):
     """
 
     model: str | None = None
+    # The spec's `visual.model_settings`, passed to every vision call.
+    model_settings: dict[str, Any] | None = None
 
     def get_toolset(self) -> VisualToolset:
         """Build and return the visual toolset."""
-        return VisualToolset(model=self.model)
+        return VisualToolset(model=self.model, model_settings=self.model_settings)
 
     async def before_model_request(
         self,

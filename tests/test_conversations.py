@@ -19,6 +19,7 @@ from ui import sse
 def _reset_registry() -> None:
     sse._sessions.clear()
     sse._sessions_last_used.clear()
+    sse._sessions_touched.clear()
 
 
 @contextmanager
@@ -88,6 +89,54 @@ def test_list_conversations_newest_first(tmp_path, monkeypatch) -> None:
             "mid",
             "old",
         ]
+
+
+def test_reads_do_not_reorder_conversations(tmp_path, monkeypatch) -> None:
+    """Reading a lane (history/plan/process feed/rejoin) must not make it newest.
+
+    Regression: a page load read the fallback lane before the list resolved,
+    bumping it to the top, so the UI auto-selected it over the real latest.
+    """
+    import asyncio
+
+    _reset_registry()
+    prefix = sse._session_key(sse.DEFAULT_AGENT, "")
+    for cid, t in (("old", 100.0), ("new", 300.0)):
+        sse._sessions[prefix + cid] = _FakeSession([])
+        sse._sessions_last_used[prefix + cid] = t
+
+    asyncio.run(sse._get_session("old", sse.DEFAULT_AGENT))  # a read
+    assert sse._sessions_touched[prefix + "old"] > 300.0  # keepalive still bumps
+
+    with _empty_store(tmp_path, monkeypatch):
+        client = TestClient(sse.app)
+        ids = [
+            c["conversation_id"]
+            for c in client.get("/api/conversations").json()["conversations"]
+        ]
+        assert ids == ["new", "old"]
+
+        asyncio.run(sse._get_session("old", sse.DEFAULT_AGENT, activity=True))
+        ids = [
+            c["conversation_id"]
+            for c in client.get("/api/conversations").json()["conversations"]
+        ]
+        assert ids == ["old", "new"]
+
+
+def test_read_only_lane_not_listed(tmp_path, monkeypatch) -> None:
+    """A lane that was only read (e.g. the agent-wide process feed's
+    conversation-less session) has no activity and no history: not listed."""
+    import asyncio
+
+    _reset_registry()
+    key = sse._session_key(sse.DEFAULT_AGENT, "None")
+    sse._sessions[key] = _FakeSession([])
+    asyncio.run(sse._get_session("None", sse.DEFAULT_AGENT))
+
+    with _empty_store(tmp_path, monkeypatch):
+        client = TestClient(sse.app)
+        assert client.get("/api/conversations").json()["conversations"] == []
 
 
 def test_create_conversation_mints_id_and_registers(tmp_path, monkeypatch) -> None:

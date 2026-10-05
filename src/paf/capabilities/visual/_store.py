@@ -23,7 +23,7 @@ dropped the bytes can be released by ``drop``.
 
 from __future__ import annotations
 
-import secrets
+import hashlib
 from threading import Lock
 from typing import Final
 
@@ -42,15 +42,19 @@ class ScreenshotStore:
         self._lock = Lock()
 
     def save(self, data: bytes) -> str:
-        """Persist `data` and return a fresh ref the model can reference.
+        """Persist `data` and return the ref the model can reference.
 
-        Evicts the oldest entry when at capacity so a long-running agent cannot
-        grow the store without bound.
+        The ref is content-derived, so re-stashing the same capture (the hook
+        runs on the whole history before every model request) yields the SAME
+        ref the model saw earlier instead of minting a new one each time.
+        Evicts the least recently stashed entry when at capacity so a
+        long-running agent cannot grow the store without bound.
         """
+        ref = f"{self._PREFIX}{hashlib.sha256(data).hexdigest()[:12]}"
         with self._lock:
+            self._images.pop(ref, None)  # re-insert as newest
             if len(self._images) >= self._max:
                 self._images.pop(next(iter(self._images)))
-            ref = f"{self._PREFIX}{secrets.token_hex(6)}"
             self._images[ref] = data
             return ref
 

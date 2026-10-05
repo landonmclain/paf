@@ -374,6 +374,18 @@ def _spec_search_only_no_readturn_instructions(spec_path: Path) -> str | None:
     return _spec_top_level_str(spec_path, "search_only_no_readturn_instructions")
 
 
+def _spec_thread_summary_instructions(spec_path: Path) -> str | None:
+    """Read the spec's top-level ``thread_summary_instructions:`` block.
+
+    The thread-summarizer arm's prompt section (describing the injected
+    ``<thread-summary>`` block + the ``list_turn_summaries`` navigation tool),
+    appended to the base instructions when ``THREAD_SUMMARY=1``. Returns ``None``
+    when absent so a ``THREAD_SUMMARY=1`` run can hard-error rather than run
+    without telling the subject the tool exists.
+    """
+    return _spec_top_level_str(spec_path, "thread_summary_instructions")
+
+
 def resolve_memory_config(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
@@ -747,8 +759,11 @@ def _spec_visual_config(spec_path: Path) -> dict | None:
 
         visual:
           model: openrouter:xiaomi/mimo-v2.5
+          model_settings:              # optional, passed to the vision calls
+            openai_reasoning_effort: none
 
-    Returns ``{"model": <str>}`` when the block names a model, ``{"model": None}``
+    Returns ``{"model": <str>}`` (plus ``"model_settings"`` when the block has
+    them) when the block names a model, ``{"model": None}``
     when a `visual:` block is present but omits `model` (a misconfiguration the
     builder hard-errors on), or ``None`` when the block is absent / unreadable.
     Absent -> the Visual capability is inert: no separate vision model, images
@@ -764,6 +779,9 @@ def _spec_visual_config(spec_path: Path) -> dict | None:
         return None
     model = block.get("model")
     if isinstance(model, str) and model.strip():
+        settings = block.get("model_settings")
+        if isinstance(settings, dict) and settings:
+            return {"model": model, "model_settings": settings}
         return {"model": model}
     return {"model": None}
 
@@ -846,6 +864,21 @@ def get_spec_path(
     raise AgentSpecNotFoundError(
         f"No agent specification found for {agent_name!r} in {spec_directory}"
     )
+
+
+def spec_visual_config(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> dict[str, Any]:
+    """The agent spec's vision config: ``{"model": str | None, "model_settings"?}``.
+
+    ``model`` is None when the spec is missing or has no ``visual:`` model.
+    """
+    try:
+        config = _spec_visual_config(get_spec_path(agent_name, spec_directory))
+    except AgentSpecNotFoundError:
+        return {"model": None}
+    return config or {"model": None}
 
 
 _SPEC_SUFFIXES = (".yaml", ".yml", ".json")

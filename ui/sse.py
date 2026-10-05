@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 # Message/part types for serializing restored conversation history
 # (session.history is a list of pydantic-ai ModelMessage).
@@ -59,6 +59,16 @@ from paf.capabilities import PROFILES
 from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
 from paf.capabilities.planning._store import FilePlanStore
+from paf.capabilities.visual import (
+    MAX_UPLOAD_BYTES,
+    Describer,
+    UploadError,
+    UploadMeta,
+    UploadStore,
+    is_upload_id,
+    split_image_blocks,
+    with_image_blocks,
+)
 from paf.config import PROJECT_ROOT
 from paf.conversations import (
     ConversationMetaStore,
@@ -71,6 +81,7 @@ from paf.conversations import (
 )
 from paf.observability.instrumentation import root_span
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
+from paf.specs import spec_visual_config
 
 if TYPE_CHECKING:
     from paf.capabilities._storage import FlatFileStorage
@@ -100,9 +111,15 @@ def _profile_for(agent_name: str) -> Any | None:
 # Session registry: "{agent}:{conversation_id}" -> Session. One Session per lane.
 # ---------------------------------------------------------------------------
 _sessions: dict[str, Session] = {}
+# Last ACTIVITY on a lane (create, chat turn, steer, notify): the lane's
+# `updated_at` in the sidebar list. Reads (history, plan, tasks, process feeds,
+# rejoin) must not bump it — a page load reading the default/active lane made
+# that lane "newest" and the UI auto-selected it instead of the real latest.
 _sessions_last_used: dict[str, float] = {}
+# Last ACCESS of any kind (activity or read): the idle sweeper's keepalive.
+_sessions_touched: dict[str, float] = {}
 
-# Idle TTL: a lane with no activity for IDLE_TTL_SECONDS is closed and evicted
+# Idle TTL: a lane untouched for IDLE_TTL_SECONDS is closed and evicted
 # (Session.close() flushes spans; a re-touch lazily recreates + resumes from the
 # store via the same {agent}:{conversation_id}, so an idle lane is cheap, not lost).
 IDLE_TTL_SECONDS = 30 * 60  # 30 min
@@ -113,13 +130,20 @@ def _session_key(agent: str, conversation_id: str) -> str:
 
 
 def _now() -> float:
-    # Wall clock, not monotonic: last-used doubles as the lane's `updated_at`,
+    # Wall clock, not monotonic: last-activity doubles as the lane's `updated_at`,
     # which is compared against persisted run start times (epoch) and shown in
     # the UI. The idle sweeper only needs differences, which this still gives.
     return time.time()
 
 
-async def _get_session(conversation_id: str, agent: str) -> Session:
+async def _get_session(
+    conversation_id: str, agent: str, *, activity: bool = False
+) -> Session:
+    """Look up (or lazily create) a lane's Session and mark it touched.
+
+    ``activity=True`` also bumps the lane's last-activity (its sidebar
+    ``updated_at``); pass it only for writes that move the conversation along.
+    """
     key = _session_key(agent, conversation_id)
     session = _sessions.get(key)
     if session is None:
@@ -132,7 +156,10 @@ async def _get_session(conversation_id: str, agent: str) -> Session:
         )
         session.attach_background()
         _sessions[key] = session
-    _sessions_last_used[key] = _now()
+    now = _now()
+    _sessions_touched[key] = now
+    if activity:
+        _sessions_last_used[key] = now
     return session
 
 
@@ -170,7 +197,7 @@ async def _notify_agent(
     raw_cid = (
         conversation_id.split(":", 1)[1] if ":" in conversation_id else conversation_id
     )
-    session = await _get_session(raw_cid, agent)
+    session = await _get_session(raw_cid, agent, activity=True)
     # A NEW trace, grouped with the conversation by session id. This runs in the
     # background worker, whose inherited current span is the turn that started
     # the job (often long finished) — nesting under it buried the notify turn
@@ -257,7 +284,7 @@ def _session_is_busy(session: Session) -> bool:
     """True if a session has a live turn with an attached subscriber.
 
     The idle sweeper must not reap a session that is actively streaming to a
-    connected client (a live stream can outlive the attach-time last_used
+    connected client (a live stream can outlive the attach-time touch
     timestamp). A running turn with NO subscriber is an orphan and stays
     reapable — that is the cost guard.
     """
@@ -273,6 +300,7 @@ def _close_session(key: str) -> None:
     """Close + evict one lane (flush spans, drop the worker). Tolerant of races."""
     session = _sessions.pop(key, None)
     _sessions_last_used.pop(key, None)
+    _sessions_touched.pop(key, None)
     if session is not None:
         try:
             session.close()
@@ -285,7 +313,7 @@ async def _close_idle_loop() -> None:
     """Periodically close lanes idle past ``IDLE_TTL_SECONDS`` (started on startup).
 
     A session mid-live-stream (a running turn with an attached subscriber) is
-    never reaped even if its attach-time last_used has gone stale; a running
+    never reaped even if its attach-time touch has gone stale; a running
     turn with no subscriber is an orphan and is reaped (the cost guard), which
     cancels it via ``Session.close()``.
     """
@@ -293,7 +321,7 @@ async def _close_idle_loop() -> None:
         await asyncio.sleep(60)  # sweep every minute
         cutoff = _now() - IDLE_TTL_SECONDS
         stale: list[str] = []
-        for key, t in list(_sessions_last_used.items()):
+        for key, t in list(_sessions_touched.items()):
             if t >= cutoff:
                 continue
             session = _sessions.get(key)
@@ -459,7 +487,11 @@ def _serialize_history(msgs: list[Any]) -> list[dict[str, Any]]:
                     and isinstance(part.content, str)
                     and part.content
                 ):
-                    out.append({"role": "user", "text": part.content})
+                    text, images = split_image_blocks(part.content)
+                    entry: dict[str, Any] = {"role": "user", "text": text}
+                    if images:
+                        entry["images"] = images
+                    out.append(entry)
         elif isinstance(msg, ModelResponse):
             log: list[dict[str, Any]] = []
             # Coalesce consecutive ThinkingParts into one block (they stream in
@@ -569,7 +601,11 @@ def _last_prompt(session: Session) -> str | None:
                     if isinstance(part, UserPromptPart) and isinstance(
                         part.content, str
                     ):
-                        return part.content[:120]
+                        # Title from the user's words, not an image description.
+                        text, images = split_image_blocks(part.content)
+                        if not text and images:
+                            text = "[image] " + images[0]["name"]
+                        return text[:120]
     except Exception:  # noqa: BLE001 - title is sugar; never fail a list
         return None
     return None
@@ -613,12 +649,15 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
             cur = by_lane.get(lane_id)
             if cur is not None and (cur.get("updated_at") or 0) >= started:
                 continue  # live registry already has this lane, at least as fresh
+            # A lane only read since boot has a live session (and so a last
+            # prompt) but no live activity; otherwise show the id so persisted
+            # lanes are identifiable, not a generic placeholder.
+            session = _sessions.get(agent_prefix + lane_id)
             by_lane[lane_id] = {
                 "conversation_id": lane_id,
                 "agent": agent,
-                # No live session to read a last prompt from — show the id so
-                # persisted lanes are identifiable, not a generic placeholder.
-                "title": lane_id,
+                "title": (_last_prompt(session) if session is not None else None)
+                or lane_id,
                 "updated_at": started,
             }
     except Exception:  # noqa: BLE001 - store scan must never break the endpoint
@@ -650,7 +689,8 @@ async def create_conversation(
     if project:
         _require_assignable_project(project)
     conversation_id = f"paf-{uuid.uuid4().hex[:12]}"
-    _sessions_last_used[_session_key(agent, conversation_id)] = _now()
+    key = _session_key(agent, conversation_id)
+    _sessions_last_used[key] = _sessions_touched[key] = _now()
     if project:
         _meta_store(agent).set_project(conversation_id, project)
     return {"conversation_id": conversation_id, "agent": agent, "project": project}
@@ -1173,11 +1213,111 @@ def _turn_frames(
     return _inner()
 
 
+# --- image uploads ---------------------------------------------------------
+# Images live on disk (data/uploads, content-addressed) and are described once
+# by the agent spec's vision model (`visual.model`), starting at upload time.
+# On send, each description is appended to the user's text as an <image> block,
+# so the text-only main model reads it and the history stays text.
+_uploads = UploadStore()
+_describer = Describer(_uploads)
+_DESCRIBE_TIMEOUT_SECONDS = 180.0
+
+
+def _upload_view(meta: UploadMeta, model: str | None) -> dict[str, Any]:
+    """An upload record for the UI, with its description status."""
+    if model and _describer.pending(meta.id, model):
+        state = "describing"
+    elif meta.description is not None and meta.description_model == model:
+        state = "ready"
+    elif meta.error is not None:
+        state = "error"
+    elif meta.description is not None:
+        state = "ready"  # described by an earlier visual model; still usable
+    else:
+        state = "none"  # not described (no vision model, or never started)
+    return {
+        **meta.to_dict(),
+        "status": state,
+        "url": f"/api/uploads/{meta.id}",
+    }
+
+
+@app.post("/api/uploads")
+async def upload_image(
+    request: Request, agent: str = DEFAULT_AGENT, name: str | None = None
+) -> dict[str, Any]:
+    """Store an image (raw bytes as the request body) and start describing it.
+
+    Returns the upload record (``id``, size, ``status``…). The description runs
+    in the background with the agent's vision model; ``/api/chat`` waits for it.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status.HTTP_413_CONTENT_TOO_LARGE,
+            f"image exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+        )
+    try:
+        meta = _uploads.save(await request.body(), name)
+    except UploadError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+    visual = spec_visual_config(agent)
+    if visual["model"]:
+        _describer.start(meta.id, visual["model"], visual.get("model_settings"))
+    return _upload_view(meta, visual["model"])
+
+
+@app.get("/api/uploads/{upload_id}")
+async def get_upload(upload_id: str) -> FileResponse:
+    """The stored original image (content-addressed, so cacheable forever)."""
+    meta = _uploads.meta(upload_id)
+    path = _uploads.path(upload_id)
+    if meta is None or path is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown image")
+    return FileResponse(
+        path,
+        media_type=meta.media_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/api/uploads/{upload_id}/meta")
+async def get_upload_meta(upload_id: str, agent: str = DEFAULT_AGENT) -> dict[str, Any]:
+    """The upload record, including its description and status."""
+    meta = _uploads.meta(upload_id)
+    if meta is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown image")
+    return _upload_view(meta, spec_visual_config(agent)["model"])
+
+
+async def _prompt_with_images(prompt: str, image_ids: list[str], agent: str) -> str:
+    """`prompt` plus one described <image> block per uploaded image."""
+    visual = spec_visual_config(agent)
+    model, settings = visual["model"], visual.get("model_settings")
+    metas: list[UploadMeta] = []
+    for upload_id in image_ids:
+        meta = (
+            await _describer.wait(
+                upload_id, model, settings, timeout=_DESCRIBE_TIMEOUT_SECONDS
+            )
+            if model
+            else _uploads.meta(upload_id)
+        )
+        if meta is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"unknown image {upload_id}"
+            )
+        metas.append(meta)
+    return with_image_blocks(prompt, metas)
+
+
 @app.post("/api/chat")
 async def chat(body: dict[str, Any], request: Request) -> StreamingResponse:
     """Open an SSE stream for one turn on a conversation.
 
-    Body: ``{conversation_id, prompt, agent?, rejoin?}``. Returns
+    Body: ``{conversation_id, prompt, images?, agent?, rejoin?}``. ``images`` are
+    upload ids (``POST /api/uploads``); their descriptions are appended to the
+    prompt before the turn starts (waiting for any still in progress). Returns
     ``text/event-stream`` of TurnStreamEvent frames; forwards ``task:`` frames
     for the background timeline while the stream is open.
 
@@ -1191,18 +1331,26 @@ async def chat(body: dict[str, Any], request: Request) -> StreamingResponse:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "conversation_id required"
         )
-    if not rejoin and not body.get("prompt"):
+    images = body.get("images") or []
+    if not isinstance(images, list) or not all(is_upload_id(i) for i in images):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "images must be upload ids"
+        )
+    if not rejoin and not body.get("prompt") and not images:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "conversation_id + prompt required (or rejoin: true)",
+            "conversation_id + prompt (or images) required (or rejoin: true)",
         )
-    session = await _get_session(
-        str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
-    )
+    agent = str(body.get("agent", DEFAULT_AGENT))
+    prompt = str(body.get("prompt") or "")
+    if images and not rejoin:
+        prompt = await _prompt_with_images(prompt, images, agent)
+    # A rejoin (refresh / visibility re-attach) is a read, not activity.
+    session = await _get_session(str(conversation_id), agent, activity=not rejoin)
 
     frames = _turn_frames(
         session,
-        str(body.get("prompt") or ""),
+        prompt,
         str(conversation_id),
         request,
         rejoin=rejoin,
@@ -1215,7 +1363,7 @@ async def steer(body: dict[str, Any]) -> dict[str, Any]:
     """Inject a message into a running conversation (``Session.enqueue``)."""
     conversation_id = body.get("conversation_id")
     session = await _get_session(
-        str(conversation_id), str(body.get("agent", DEFAULT_AGENT))
+        str(conversation_id), str(body.get("agent", DEFAULT_AGENT)), activity=True
     )
     enq_id = await session.enqueue(
         str(body.get("content", "")), priority=str(body.get("priority", "asap"))

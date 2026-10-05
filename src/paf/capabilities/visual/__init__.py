@@ -16,8 +16,26 @@ model).
 
 from ._capability import Visual
 from ._toolset import VisualToolset
+from ._uploads import (
+    MAX_UPLOAD_BYTES,
+    Describer,
+    UploadError,
+    UploadMeta,
+    UploadStore,
+    is_upload_id,
+    split_image_blocks,
+    with_image_blocks,
+)
 
 __all__ = [
+    "MAX_UPLOAD_BYTES",
+    "Describer",
+    "UploadError",
+    "UploadMeta",
+    "UploadStore",
     "Visual",
     "VisualToolset",
+    "is_upload_id",
+    "split_image_blocks",
+    "with_image_blocks",
 ]

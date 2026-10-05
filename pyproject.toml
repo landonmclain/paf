@@ -38,6 +38,9 @@ dependencies = [
     # degraded to "tavily-python is not installed". Same rule as gradio below:
     # no package the repo's own code imports may be ad-hoc only.
     "tavily-python",
+    # Image uploads (paf.capabilities.visual._uploads): validate, measure and
+    # shrink images for the vision model. Was transitive-only (via gradio).
+    "pillow",
 ]
 
 [build-system]

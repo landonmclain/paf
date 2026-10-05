@@ -152,7 +152,8 @@ def _build_memory(
     # `memory: render: {mode: scoped, ...}` injects the per-turn scoped render
     # (global / this project / mentioned / recent history) instead of the static
     # tier-capped MEMORY.md; the other `render` keys override RenderBudget.
-    render_cfg = cfg.get("render") if isinstance(cfg.get("render"), dict) else {}
+    render = cfg.get("render")
+    render_cfg = render if isinstance(render, dict) else {}
     render_budget = None
     if render_cfg.get("mode") == "scoped" and agent_name:
         from paf.capabilities.memory._scoped import RenderBudget
@@ -470,7 +471,7 @@ def _build_visual(store, visual_config: dict | None = None) -> _Visual:
             "Spec declares a `visual:` block but no `model` — the Visual "
             "capability needs a vision model to route screenshots to."
         )
-    return _Visual(model=model)
+    return _Visual(model=model, model_settings=visual_config.get("model_settings"))
 
 
 def _build_browser(store, browser_config: dict | None = None) -> _Browser:

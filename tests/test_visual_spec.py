@@ -59,3 +59,22 @@ def test_spec_visual_config_distinguishes_states(tmp_path) -> None:
     no_model = tmp_path / "no_model.yaml"
     no_model.write_text("visual:\n  color: red\n")
     assert _spec_visual_config(no_model) == {"model": None}
+
+    with_settings = tmp_path / "settings.yaml"
+    with_settings.write_text(
+        "visual:\n  model: ollama:qwen3.5:4b\n"
+        "  model_settings:\n    openai_reasoning_effort: none\n"
+    )
+    assert _spec_visual_config(with_settings) == {
+        "model": "ollama:qwen3.5:4b",
+        "model_settings": {"openai_reasoning_effort": "none"},
+    }
+
+
+def test_visual_model_settings_reach_the_toolset() -> None:
+    """`visual.model_settings` is carried by the capability into its tool."""
+    visual = _build_visual(
+        {"model": "ollama:x", "model_settings": {"openai_reasoning_effort": "none"}}
+    )
+    assert visual.model_settings == {"openai_reasoning_effort": "none"}
+    assert visual.get_toolset()._model_settings == {"openai_reasoning_effort": "none"}
