@@ -214,6 +214,23 @@ class ThreadSummarizer(AbstractCapability[AgentDepsT]):
     def capture_directory(self) -> Path:
         return self._capture_directory
 
+    def get_toolset(self) -> Any | None:
+        """Provide the `list_turn_summaries` chronological pager tool.
+
+        The tool reads this conversation's persisted thread-beat summaries
+        (``summaries.jsonl``) — the navigation-first rung of the recall ladder
+        for *what this conversation did across turns*, complementing
+        ``search_conversation_history`` / ``read_turn``. It is a pure read of
+        already-persisted data: no new storage, no model call.
+
+        Imported lazily to avoid a module-level cycle: ``_toolset`` imports
+        ``_header`` from this module, so this module must not import
+        ``_toolset`` at import time.
+        """
+        from paf.capabilities.thread_summarizer._toolset import ThreadSummaryToolset
+
+        return ThreadSummaryToolset(self._capture_directory)
+
     def _render(self, conversation_id: str) -> str:
         """Read + render this conversation's summaries ('' when none/absent)."""
         store = ThreadSummaryStore(self._capture_directory, conversation_id)
