@@ -39,3 +39,9 @@ def paf_src_scan() -> tuple[list[FileInfo], dict[str, str]] | None:
             infos.append(fi)
             sources[fi.path] = py.read_text()
     return infos, sources
+
+
+@pytest.fixture(autouse=True)
+def _no_jev_screen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the pairwise reviewer's Jev screen off so no test hits OpenRouter."""
+    monkeypatch.setenv("PAF_PAIR_SCREEN", "0")

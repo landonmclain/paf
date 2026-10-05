@@ -323,7 +323,11 @@ async def review_new_facts(
     journal tail: the reviewer starts with facts appended from now on (old
     facts are a separate, explicit backfill).
     """
-    judge = judge or deepseek_judge
+    if judge is None:
+        from ._cascade import default_judge
+
+        judge, default_name = default_judge()
+        judge_name = judge_name or default_name
     suggestion_judge = suggestion_judge or deepseek_suggestion_judge
     if not judge_name:
         judge_name = JUDGE_SPEC if judge is deepseek_judge else "custom"

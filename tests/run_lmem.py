@@ -950,6 +950,10 @@ def main(argv: list[str] | None = None) -> dict:
                         f"[lmem]   q{qi} pairwise reviewer: {_report.summary()}",
                         flush=True,
                     )
+                    from paf.capabilities.memory._cascade import STATS, screen_enabled
+
+                    if screen_enabled():
+                        print(f"[lmem]   q{qi} {STATS.summary()}", flush=True)
                 _persist_durable_memory(q["question_id"], mem_dir)
 
         # ---- Thread summarizer: fold the haystack into per-conversation beats --

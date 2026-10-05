@@ -32,6 +32,7 @@ from ._overrides import OverrideStore
 MAIN_FILENAME = "MEMORY.md"
 """The main notebook file injected as bounded user-role context."""
 
+
 class MemoryWriteResult(TypedDict):
     """Result from a memory append — echoes the recorded fact back so the model
     can confirm its append landed.

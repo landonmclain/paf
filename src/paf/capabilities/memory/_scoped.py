@@ -449,7 +449,9 @@ async def render_scoped(
     # Recent history — events + replaced values, dated, newest first.
     # Undated rows (pre-born_on legacy) never count as recent: "undated" would
     # otherwise sort above every ISO date in the window check.
-    since = ((now or now_local()) - timedelta(days=budget.history_days)).date().isoformat()
+    since = (
+        ((now or now_local()) - timedelta(days=budget.history_days)).date().isoformat()
+    )
     visible = {None, project, *mentioned}
     items: list[tuple[str, str, str]] = []  # (date, kind, line)
     for ln, r, proj in filed.events:

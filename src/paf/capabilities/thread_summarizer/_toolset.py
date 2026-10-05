@@ -125,5 +125,7 @@ class ThreadSummaryToolset(FunctionToolset[AgentDepsT]):
         total = len(records)
         shown = offset + len(page)
         if shown < total:
-            lines.append(f"(… {total - shown} more blocks; pass offset={shown} to continue)")
+            lines.append(
+                f"(… {total - shown} more blocks; pass offset={shown} to continue)"
+            )
         return "\n".join(lines)
