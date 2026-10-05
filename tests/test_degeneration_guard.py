@@ -413,6 +413,84 @@ def test_run_guarded_skips_non_streamable_nodes():
         pass
 
 
+def test_run_guarded_tool_loop_executes_tool_before_raise():
+    """Regression: the tool-loop guard must raise AFTER the triggering tool call
+    is executed (its stream runs), so the call has a response in history — not
+    before, which would leave an unprocessed tool call and break the next user
+    prompt with pydantic-ai's 'Cannot provide a new user prompt when the message
+    history contains unprocessed tool calls'."""
+
+    from pydantic_ai.agent import CallToolsNode
+    from pydantic_ai.messages import ModelRequest, ToolCallPart
+
+    executed = []
+
+    class _FakeToolNode(CallToolsNode):
+        def __init__(self, parts):
+            super().__init__(model_response=parts)
+
+        def stream(self, ctx):  # type: ignore[override]  # stubbed for tests
+            async def gen():
+                executed.append(1)  # the tool call is processed here
+                yield None
+
+            return _AsyncGen(gen())
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    # 5 identical tool calls in a row -> guard fires on the 5th.
+    parts = [
+        ModelRequest(
+            parts=[ToolCallPart(tool_name="search_files", args=SEARCH_ARGS)]
+        )
+        for _ in range(5)
+    ]
+
+    class _NodeIter:
+        def __init__(self, nodes):
+            self._nodes = iter(nodes)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._nodes)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    class _Run:
+        ctx = object()
+        result = "ok"
+        nodes = [_FakeToolNode(p) for p in parts]
+
+        def __aiter__(self):
+            return _NodeIter(self.nodes)
+
+    class _FakeAgent:
+        def iter(self, prompt):
+            class _CM:
+                async def __aenter__(self):
+                    return _Run()
+
+                async def __aexit__(self, *a):
+                    return False
+
+            return _CM()
+
+    try:
+        asyncio.run(run_guarded(_FakeAgent(), "go", tool_guard=ToolCallGuard()))
+        raise AssertionError("expected DegenerationError")
+    except DegenerationError as e:
+        assert e.result.reason == "repeated_tool_call"
+    # The 5th (triggering) tool call's stream ran before the guard raised.
+    assert len(executed) == 5
+
+
 def test_run_guarded_thinking_chunks_across_deltas():
     """Loops detected even when thinking arrives chunked (stream_thinking buffers
     across PartDeltaEvents)."""

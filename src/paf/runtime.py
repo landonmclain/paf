@@ -781,7 +781,16 @@ class Session:
                             if isinstance(node, (ModelRequestNode, CallToolsNode)):
                                 # Tool-call loop guard: feed each COMPLETED tool
                                 # call (full args from the node's model_response)
-                                # and abort if the same call recurs too many times.
+                                # and remember if the same call recurs too many
+                                # times. The raise is DEFERRED until after the
+                                # node's stream runs, so the triggering tool call
+                                # is executed and has a response in the message
+                                # history — otherwise the run aborts with an
+                                # unprocessed tool call in history and the next
+                                # user prompt fails with pydantic-ai's "Cannot
+                                # provide a new user prompt when the message
+                                # history contains unprocessed tool calls."
+                                pending_tool = None
                                 if isinstance(node, CallToolsNode):
                                     for part in node.model_response.parts:
                                         if isinstance(part, ToolCallPart):
@@ -789,7 +798,7 @@ class Session:
                                                 part.tool_name, part.args
                                             )
                                             if tg is not None:
-                                                raise DegenerationError(tg)
+                                                pending_tool = tg
                                 async with node.stream(run.ctx) as stream:
                                     async for event in stream:
                                         # Guard hook: feed THINKING-only stream to
@@ -807,6 +816,8 @@ class Session:
                                                 raise DegenerationError(guard_result)
                                         for ev in _dispatch_stream_event(event):
                                             yield ev
+                                if pending_tool is not None:
+                                    raise DegenerationError(pending_tool)
                             elif isinstance(node, End):
                                 break
                     finally:

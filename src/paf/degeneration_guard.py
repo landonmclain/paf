@@ -333,13 +333,17 @@ async def run_guarded(
             # (e.g. UserPromptNode) have no .stream() — mirror runtime.py.
             if not isinstance(node, (ModelRequestNode, CallToolsNode)):
                 continue
-            # Completed tool calls -> tool-loop guard (opt-in).
+            # Completed tool calls -> tool-loop guard (opt-in). The raise is
+            # DEFERRED until after the node's stream runs so the triggering tool
+            # call is executed and has a response in history (mirror runtime.py) —
+            # otherwise the run aborts with an unprocessed tool call in history.
+            pending_tool = None
             if isinstance(node, CallToolsNode):
                 for part in node.model_response.parts:
                     if isinstance(part, ToolCallPart):
                         tg = tool_g.add_tool_call(part.tool_name, part.args)
                         if tg is not None:
-                            raise DegenerationError(tg)
+                            pending_tool = tg
             # Streaming thinking deltas -> thinking-loop guard (default on).
             async with node.stream(run.ctx) as stream:
                 async for event in stream:
@@ -349,6 +353,8 @@ async def run_guarded(
                         rg = think.stream_thinking(event.delta.content_delta or "")
                         if rg is not None:
                             raise DegenerationError(rg)
+            if pending_tool is not None:
+                raise DegenerationError(pending_tool)
     return run.result
 
 
