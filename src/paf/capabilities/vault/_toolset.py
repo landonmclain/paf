@@ -449,16 +449,16 @@ class VaultToolset(FunctionToolset):
         ``ScanScope`` would not include (allow/deny). Returns the confined
         absolute path (the note need not exist yet for create).
         """
-        rel = self._from_absolute(rel.strip())
-        if rel is None or rel.startswith("/") or "\\" in rel:
+        resolved = self._from_absolute(rel.strip())
+        if resolved is None or resolved.startswith("/") or "\\" in resolved:
             return None
-        parts = Path(rel).parts
+        parts = Path(resolved).parts
         if not parts or ".." in parts or parts[0].endswith(":"):
             return None
-        full = self._abs(rel)
+        full = self._abs(resolved)
         if full is None:
             return None
-        if not self._scope._allowed_rel(rel):
+        if not self._scope._allowed_rel(resolved):
             return None
         return full
 

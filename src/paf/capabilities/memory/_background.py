@@ -363,7 +363,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         # The step store's history source, so the extractor's source_refs are
         # numbered in each turn's own run (read_turn's frame). Set by the
         # coordinator; None falls back to slice ordinals (single-run paths).
-        self.history_source = None
+        self.history_source: HistorySource | None = None
 
     def job_trace(self, session_id: str, job: ConsolidationJob) -> tuple[str, dict]:
         """Each consolidation is its OWN trace: memory is per-agent, not part of
