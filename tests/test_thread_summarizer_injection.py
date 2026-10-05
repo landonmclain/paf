@@ -75,7 +75,7 @@ def test_render_oldest_to_newest_most_recent_tag() -> None:
     assert "(most recent)" in out
     assert "→" in out  # absolute range
     # Footer depth reminder lands once.
-    assert out.count("search_conversation()") == 1
+    assert out.count("list_turn_summaries()") == 1
     assert "read_turn()" in out
 
 

@@ -139,9 +139,10 @@ def render_thread_summary(
     the arc reads forward and the last line is "where we left off" (which also
     carries the ``(most recent)`` tag). No ``(run, turn)`` refs and no per-beat
     noise — pure awareness; depth is one footer reminder pointing at the
-    existing ``search_conversation`` / ``read_turn`` tools. Oldest blocks are
-    trimmed first if the render exceeds ``max_chars`` (a hard token-ish cap so
-    ``<thread-summary>`` folds inside the turn budget).
+    navigation-first ladder: ``list_turn_summaries`` to locate a block, then
+    ``read_turn`` for lossless content. Oldest blocks are trimmed first if the
+    render exceeds ``max_chars`` (a hard token-ish cap so ``<thread-summary>``
+    folds inside the turn budget).
     """
     if not records:
         return ""
@@ -159,7 +160,7 @@ def render_thread_summary(
     while len(lines) > 1 and sum(len(line) for line in lines) > max_chars:
         lines.pop(0)
     body = "\n".join(lines)
-    footer = "− detail: search_conversation() → read_turn() −"
+    footer = "− detail: list_turn_summaries() to locate a block, then read_turn() for content −"
     if len(body) + len(footer) > max_chars:
         footer = ""
         while len(lines) > 1 and len(body) > max_chars:
