@@ -9,7 +9,7 @@ pydantic-ai model string -- ``openrouter:openai/gpt-6-luna`` today, a local
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from paf.degeneration_guard import run_guarded
 
@@ -28,7 +28,7 @@ async def _run_vision(
     ``visual.model_settings`` (e.g. ``openai_reasoning_effort: none`` to stop a
     local thinking model reasoning before every description).
     """
-    from pydantic_ai import Agent
+    from pydantic_ai import Agent, ModelSettings
     from pydantic_ai.messages import BinaryContent, TextContent
 
     if not images:
@@ -37,6 +37,6 @@ async def _run_vision(
     content: list[TextContent | BinaryContent] = [TextContent(prompt)]
     content.extend(BinaryContent(data=raw, media_type=media_type) for raw in images)
 
-    agent = Agent(model, model_settings=model_settings)
+    agent = Agent(model, model_settings=cast(ModelSettings, model_settings))
     result = await run_guarded(agent, content)
     return str(result.output)
