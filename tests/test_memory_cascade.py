@@ -85,3 +85,32 @@ def test_screen_env_override(monkeypatch):
     assert not _cascade.screen_enabled()
     monkeypatch.setenv("PAF_PAIR_SCREEN", "1")
     assert _cascade.screen_enabled()
+
+
+def test_screen_emits_span_with_decision_attributes(patched):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    _seen, mp = patched
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    mp.setattr(_cascade, "_TRACER", provider.get_tracer("test"))
+
+    async def post(body):
+        return {
+            "answers": {"relation_1": _rel("different"), "relation_2": _rel("same")},
+            "usage": {"cost": 0.002},
+        }
+
+    mp.setattr(_cascade, "_post_screen", post)
+    asyncio.run(_cascade.cascade_judge(_fact(9, "n"), [_fact(1, "a"), _fact(2, "b")]))
+    (span,) = exporter.get_finished_spans()
+    attrs = span.attributes
+    assert span.name == "pairwise.screen"
+    assert attrs["screen.candidates"] == 2 and attrs["screen.escalated"] == 1
+    assert attrs["screen.cost_usd"] == 0.002
+    assert attrs["screen.min_passed_confidence"] == 0.99

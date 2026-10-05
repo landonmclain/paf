@@ -112,12 +112,11 @@ from tests.lme_scoring import (
 # The subject model comes from the spec (specs/longmemeval.yaml), not here.
 JUDGE_MODEL = "openrouter:openai/gpt-4o-mini"
 
-# Benchmark data file — v2 memory-system variant copy of the oracle split
+# Benchmark data file — v3 memory-system variant copy of the oracle split
 # (evidence-only sessions, ~1.9 sessions / ~22 turns per question). Hardcoded
 # (not env/spec): the renamed copy also forces a fresh durable-memory dir below,
-# so the new (v2) memory system's runs never clobber the v1 snapshots that the
-# 0.9468/0.934 baselines came from.
-LME_DATA_FILE = "memory-v2-lme_oracle.json"
+# so the new (v3) memory system's runs never clobber the v2 snapshots.
+LME_DATA_FILE = "memory-v3-lme_oracle.json"
 DATA = Path(__file__).parent.parent / "data" / "benchmarks" / LME_DATA_FILE
 RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -1006,9 +1005,7 @@ def main(argv: list[str] | None = None) -> dict:
         if THREAD_SUMMARY:
             import tests.framework as _rl
 
-            _rl._CURRENT_SUMMARIES_DIR = (
-                artifact_dir / "summaries" / q["question_id"]
-            )
+            _rl._CURRENT_SUMMARIES_DIR = artifact_dir / "summaries" / q["question_id"]
         agent = _build_agent(
             store,
             memory_dir=artifact_dir / "memory",

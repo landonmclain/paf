@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import itertools
 import json
 import shutil
 import sys
@@ -24,9 +25,11 @@ from paf.capabilities.memory import _cascade
 from paf.capabilities.memory._pairwise import deepseek_judge, review_new_facts
 
 ROWS: list[dict] = []
+_CALLS = itertools.count()
 
 
 async def recording_judge(new, older):
+    call = next(_CALLS)
     model, _ = _cascade._screen_config()
     ds_task = asyncio.create_task(deepseek_judge(new, older))
     try:
@@ -41,6 +44,7 @@ async def recording_judge(new, older):
         rel = ans[f"relation_{i}"] if ans else None
         ROWS.append(
             {
+                "call": call,
                 "ds": labels.get(i, "different"),
                 "jev": rel["choice"] if rel else None,
                 "p": rel["probabilities"] if rel else None,
@@ -83,10 +87,22 @@ def report() -> None:
         rules[f"+ conf < {t}"] = lambda r, t=t: (
             r["jev"] != "different" or float(r["conf"] or 0) < t
         )
+    calls: dict[int, list[dict]] = {}
+    for r in ROWS:
+        calls.setdefault(r["call"], []).append(r)
+    print(
+        f"\n{len(calls)} reviewer calls; a call goes to DeepSeek if ANY candidate escalates"
+    )
+    print(
+        "rule                         pairs esc.  calls to DeepSeek  hidden DS-positives"
+    )
     for name, esc in rules.items():
         e = sum(esc(r) for r in ROWS)
         hidden = sum(not esc(r) for r in pos)
-        print(f"{name:28} {e:5} ({e / n:4.0%})   {hidden}/{len(pos)}")
+        c = sum(any(esc(r) for r in rs) for rs in calls.values())
+        print(
+            f"{name:28} {e / n:6.0%}   {c:5} ({c / len(calls):4.0%})   {hidden}/{len(pos)}"
+        )
     print("\nJev P(different) on the DeepSeek positives it called different:")
     for r in pos:
         if r["jev"] == "different":

@@ -14,16 +14,20 @@ Models and the confidence floor come from the ``memory_pair_reviewer`` spec
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
 
 import httpx
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 from . import _pairwise
 from ._pairwise import JUDGE_SPEC, Fact, PairJudgement
 
 logger = logging.getLogger(__name__)
+_TRACER = trace.get_tracer("paf")
 
 SYSTEMONE_URL = "https://openrouter.ai/api/v1/systemone"
 SCREEN_TIMEOUT_SECONDS = 60.0
@@ -135,19 +139,41 @@ async def cascade_judge(new: Fact, older: list[Fact]) -> list[PairJudgement]:
     model, min_conf = _screen_config()
     STATS.candidates += len(older)
     STATS.calls += 1
-    try:
-        resp = await _post_screen(screen_request(model, new, older))
-        answers = resp["answers"]
-        STATS.cost += float((resp.get("usage") or {}).get("cost") or 0.0)
-        flagged = [
-            i
-            for i in range(1, len(older) + 1)
-            if needs_judge(answers[f"relation_{i}"], min_conf)
-        ]
-    except Exception:  # noqa: BLE001 - a screen outage must not skip facts
-        logger.exception("jev screen failed on #%s; escalating all", new.line)
-        STATS.failed_calls += 1
-        flagged = list(range(1, len(older) + 1))
+    everyone = list(range(1, len(older) + 1))
+    with _TRACER.start_as_current_span("pairwise.screen") as span:
+        span.set_attribute("screen.model", model)
+        span.set_attribute("screen.new_line", new.line)
+        span.set_attribute("screen.candidates", len(older))
+        span.set_attribute("screen.min_confidence", min_conf)
+        try:
+            resp = await _post_screen(screen_request(model, new, older))
+            answers = resp["answers"]
+            cost = float((resp.get("usage") or {}).get("cost") or 0.0)
+            STATS.cost += cost
+            flagged = [
+                i for i in everyone if needs_judge(answers[f"relation_{i}"], min_conf)
+            ]
+            passed = [
+                float(answers[f"relation_{i}"].get("confidence") or 0.0)
+                for i in everyone
+                if i not in flagged
+            ]
+            span.set_attribute("screen.cost_usd", cost)
+            span.set_attribute(
+                "screen.labels",
+                json.dumps(
+                    {str(i): answers[f"relation_{i}"]["choice"] for i in everyone}
+                ),
+            )
+            if passed:
+                span.set_attribute("screen.min_passed_confidence", min(passed))
+        except Exception as exc:  # noqa: BLE001 - a screen outage must not skip facts
+            logger.exception("jev screen failed on #%s; escalating all", new.line)
+            STATS.failed_calls += 1
+            flagged = everyone
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, "screen failed; escalating all"))
+        span.set_attribute("screen.escalated", len(flagged))
     STATS.escalated += len(flagged)
     if not flagged:
         return []
