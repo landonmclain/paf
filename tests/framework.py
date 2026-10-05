@@ -286,7 +286,9 @@ def _build_agent(
     # `read_turn("#N")` resolves memory ids when the agent has Memory: point
     # ConversationSearch at this agent's memory dir (mirrors build.py).
     if MEMORY:
-        search_cap.memory_directory = str(_CURRENT_MEMORY_DIR or memory_dir or Path("memory"))
+        search_cap.memory_directory = str(
+            _CURRENT_MEMORY_DIR or memory_dir or Path("memory")
+        )
     if MEMORY:
         # Memory arm: durable notebook injected every request. Per the M2 owner
         # model (_consolidate.py, design note §2c), the subject is READ-ONLY

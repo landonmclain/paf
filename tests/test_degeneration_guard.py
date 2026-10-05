@@ -444,9 +444,7 @@ def test_run_guarded_tool_loop_executes_tool_before_raise():
 
     # 5 identical tool calls in a row -> guard fires on the 5th.
     parts = [
-        ModelRequest(
-            parts=[ToolCallPart(tool_name="search_files", args=SEARCH_ARGS)]
-        )
+        ModelRequest(parts=[ToolCallPart(tool_name="search_files", args=SEARCH_ARGS)])
         for _ in range(5)
     ]
 
