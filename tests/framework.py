@@ -33,6 +33,7 @@ from paf.specs import (
     _spec_search_config,
     _spec_search_only_instructions,
     _spec_search_only_no_readturn_instructions,
+    _spec_thread_summary_instructions,
     get_spec_path,
     load_agent_spec,
 )
@@ -169,6 +170,13 @@ MEMORY = os.environ.get("MEMORY", "1") == "1"
 # with MEMORY=0 (search-only); selects the search_only_no_readturn prompt.
 NO_READ_TURN = os.environ.get("NO_READ_TURN", "0") == "1"
 
+# Thread-summarizer presence knob: THREAD_SUMMARY=1 wires the ThreadSummarizer
+# capability into the harness (inject_thread_summary=True + the
+# `list_turn_summaries` navigation tool) and runs the seed-time summarizer over
+# the haystack (via run_lmem). Default OFF — an added navigation layer, not part
+# of the standard memory/search arms.
+THREAD_SUMMARY = os.environ.get("THREAD_SUMMARY", "0") == "1"
+
 # Per-question memory store for the running question (run_lmem only). The
 # subject agent is built once but must read the SAME per-question notebook the
 # consolidation owner writes. run_lmem sets this to `<memory_dir> /
@@ -176,11 +184,18 @@ NO_READ_TURN = os.environ.get("NO_READ_TURN", "0") == "1"
 # None so the subject defaults to `mem_dir`.
 _CURRENT_MEMORY_DIR: Path | None = None
 
+# Per-question summaries store for the running question (run_lmem only). The
+# subject's ThreadSummarizer capability must read the SAME per-question
+# summaries the seed-time summarizer wrote. run_lmem sets this to
+# `<summaries_dir>/<question_id>` before each recall.
+_CURRENT_SUMMARIES_DIR: Path | None = None
+
 
 def _build_agent(
     store: FileStepStore,
     *,
     memory_dir: Path | None = None,
+    summaries_dir: Path | None = None,
     render_project: str | None = None,
     render_now: datetime | None = None,
 ) -> Agent:
@@ -239,6 +254,19 @@ def _build_agent(
                     "MEMORY=0 search-only run requires a `search_only_instructions:` "
                     "block in specs/longmemeval.yaml; refusing to reuse the memory prompt."
                 )
+    # Thread-summarizer arm: `thread_summary_instructions:` is a FULL standalone
+    # prompt (memory arm + navigation-first ladder), so it REPLACES the base
+    # instructions rather than appending to them. Hard-errors if the block is
+    # missing so a THREAD_SUMMARY=1 run can never silently run without telling
+    # the subject the tool exists.
+    if THREAD_SUMMARY:
+        system_prompt = _spec_thread_summary_instructions(get_spec_path("longmemeval"))
+        if system_prompt is None:
+            raise RuntimeError(
+                "THREAD_SUMMARY=1 run requires a `thread_summary_instructions:` "
+                "block in specs/longmemeval.yaml; refusing to run without telling "
+                "the subject the tool exists."
+            )
     source = SnapshotHistorySource(store)
     # ConversationSearch: BM25 wide fallback (add_instructions=False — the
     # single system prompt owns the retrieval ladder; this tool is just
@@ -345,6 +373,23 @@ def _build_agent(
                 # the single system prompt owns all static guidance. Only the
                 # dynamic MEMORY.md body still injects (before_model_request).
                 guidance="",
+            )
+        )
+    if THREAD_SUMMARY:
+        # Thread-summarizer arm: the capability injects the `<thread-summary>`
+        # block (before_model_request) and exposes the `list_turn_summaries`
+        # navigation tool (get_toolset). It reads the SAME per-question summaries
+        # the seed-time summarizer wrote, resolved per-run via
+        # `_CURRENT_SUMMARIES_DIR` (mirrors `_CURRENT_MEMORY_DIR`).
+        from paf.capabilities.thread_summarizer import ThreadSummarizer
+
+        caps.append(
+            ThreadSummarizer(
+                agent_name="assistant",
+                capture_directory=str(
+                    _CURRENT_SUMMARIES_DIR or summaries_dir or Path("summaries")
+                ),
+                inject_thread_summary=True,
             )
         )
     return Agent(

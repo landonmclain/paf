@@ -45,7 +45,6 @@ import os
 import re
 import resource
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -91,6 +90,7 @@ from tests.framework import (
     JUDGE_PROVIDER_QUANTIZATIONS,
     LME_SAMPLER_SEED,
     MEMORY,
+    THREAD_SUMMARY,
     _build_agent,
     _openrouter_model_settings,
     _run_turn,
@@ -130,7 +130,14 @@ RESULTS_DIR = Path(__file__).parent / "results"
 # never clobber each other's durable memory. PAF_FRESH_MEMORY=1 forces
 # re-consolidation (and re-persists); combining with LME_QIDS narrows the
 # refresh to specific questions.
+# Durable memory dir is namespaced by dataset filename stem (see the skill):
+# copying/renaming the dataset forces a fresh memory dir. The thread-summarizer
+# durable dir is namespaced separately (`-summaries`) so summary snapshots never
+# collide with memory snapshots.
 MEMORY_DURABLE_DIR = Path(__file__).parent.parent / "data" / "benchmarks" / DATA.stem
+SUMMARIES_DURABLE_DIR = (
+    Path(__file__).parent.parent / "data" / "benchmarks" / f"{DATA.stem}-summaries"
+)
 
 # Multi-question run bounds (small by default). A stratified ~15-Q sample
 # across all 6 types + some abstention is a good first validation.
@@ -547,6 +554,50 @@ def _restore_durable_memory(qid: str, live_dir: Path) -> int:
     return n
 
 
+def _persist_durable_summaries(qid: str, live_dir: Path) -> int:
+    """Snapshot a question's freshly-summarized thread store to the durable dir.
+
+    Copies every file under ``live_dir`` (the ``summaries/<qid>/`` the seed-time
+    summarizer wrote — ``conversations/<hash(cid)>/summaries.jsonl`` + the
+    thread watermark) into ``data/benchmarks/<stem>-summaries/<qid>/``.
+    Idempotent overwrite, so re-running on unchanged input just re-stamps the
+    same bytes. Call it only after a REAL summarizer pass (never after a
+    restore-skip). Returns files copied.
+    """
+    snap = SUMMARIES_DURABLE_DIR / qid
+    if not live_dir.is_dir():
+        return 0
+    n = _copy_tree(live_dir, snap)
+    if n:
+        print(
+            f"[lmem]     persisted {n} durable summary files -> {snap}",
+            flush=True,
+        )
+    return n
+
+
+def _restore_durable_summaries(qid: str, live_dir: Path) -> int:
+    """Copy a durable thread-summary snapshot back into the live store; 0 if none.
+
+    With no snapshot (fresh question, or a forced refresh) returns 0 so the
+    caller falls through to a real summarizer pass. Otherwise the durable
+    snapshot IS the source of truth for a reproducible run: copy all files back
+    into ``summaries/<qid>/`` so the subject's ThreadSummarizer capability reads
+    the exact summaries — ZERO summarizer tokens for the question.
+    """
+    snap = SUMMARIES_DURABLE_DIR / qid
+    if not snap.is_dir():
+        return 0
+    n = _copy_tree(snap, live_dir)
+    if n:
+        print(
+            f"[lmem]     REUSED {n} durable summary files -> {live_dir} "
+            "(0 summarizer tokens)",
+            flush=True,
+        )
+    return n
+
+
 def _extract_surfaced_session_ids(recall: dict) -> list[str]:
     """Pull the source-session ids the search tools surfaced this turn.
 
@@ -725,7 +776,7 @@ def main(argv: list[str] | None = None) -> dict:
     # snapshot -- never call a model when the durable store already has the
     # answer.
     for qi, q in enumerate(questions, start=1):
-        cid = f"lmem-{uuid.uuid4().hex[:8]}"
+        cid = f"lmem-{q['question_id']}"
         # Resume: skip any question whose row was already replayed from the
         # partial file (LME_RESUME_PARTIAL=1), so an interrupted run picks up
         # exactly where it left off instead of re-answering completed QIDs.
@@ -901,6 +952,40 @@ def main(argv: list[str] | None = None) -> dict:
                     )
                 _persist_durable_memory(q["question_id"], mem_dir)
 
+        # ---- Thread summarizer: fold the haystack into per-conversation beats --
+        # Mirrors the memory owner: run the seed-time summarizer over the SAME
+        # seeded haystack (seed_msgs) so the recall turn's `<thread-summary>`
+        # injection + `list_turn_summaries` tool read a POPULATED store. Durable
+        # snapshot reuse (0 summarizer tokens) mirrors the memory path. The cid
+        # is stable per question (see above), so the per-conversation summary
+        # store keyed by it is reproducible across runs.
+        if THREAD_SUMMARY:
+            from tests._lmem_summarize import summarize_conversation
+
+            summaries_dir = artifact_dir / "summaries" / q["question_id"]
+            restored_s = _restore_durable_summaries(q["question_id"], summaries_dir)
+            if restored_s:
+                print(
+                    f"[lmem]   q{qi} thread summaries REUSED from durable snapshot "
+                    "(skipped summarizer)",
+                    flush=True,
+                )
+            else:
+                n_blocks = asyncio.run(
+                    summarize_conversation(
+                        seed_msgs,
+                        capture_root=summaries_dir,
+                        conversation_id=cid,
+                        agent_name="assistant",
+                    )
+                )
+                print(
+                    f"[lmem]   q{qi} summarized {n_blocks} thread block(s) "
+                    f"-> {summaries_dir}",
+                    flush=True,
+                )
+                _persist_durable_summaries(q["question_id"], summaries_dir)
+
         # ---- Recall: cold-start the question -------------------------
         # Point the subject's Memory store at THIS question's notebook so
         # search_memory/read_memory/inject read exactly what the owner just
@@ -914,9 +999,16 @@ def main(argv: list[str] | None = None) -> dict:
             import tests.framework as _rl
 
             _rl._CURRENT_MEMORY_DIR = artifact_dir / "memory" / q["question_id"]
+        if THREAD_SUMMARY:
+            import tests.framework as _rl
+
+            _rl._CURRENT_SUMMARIES_DIR = (
+                artifact_dir / "summaries" / q["question_id"]
+            )
         agent = _build_agent(
             store,
             memory_dir=artifact_dir / "memory",
+            summaries_dir=artifact_dir / "summaries",
             # v2 scoped-recall arm: force the lmem project section and anchor
             # the recent-history window to the question date (the 2023 seeds
             # would otherwise all fall outside now_local()'s 30-day window).
