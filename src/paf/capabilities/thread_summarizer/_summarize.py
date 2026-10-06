@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, model_validator
 
-from paf.capabilities._turns import user_anchor_indices
+from paf.capabilities._turns import nearest_run_id, user_anchor_indices
 
 if TYPE_CHECKING:
     from pydantic_ai import ModelSettings
@@ -62,6 +62,11 @@ def _ref_for(messages: list, idx: int) -> str | None:
     """``{run_id}:{turn_id}`` ref for ``messages[idx]`` (greatest user anchor <= idx)."""
     msg = messages[idx]
     run_id = getattr(msg, "run_id", None)
+    if run_id is None:
+        # A message with no run_id (e.g. a tool-return + user-prompt combined
+        # request from a steered/stopped turn) belongs to the run that made the
+        # preceding tool call — fall back so the turn stays addressable.
+        run_id = nearest_run_id(messages, idx)
     if run_id is None:
         return None
     anchors = user_anchor_indices(messages)

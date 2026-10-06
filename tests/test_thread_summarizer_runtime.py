@@ -386,3 +386,34 @@ def test_task_history_scopes_and_retains_error_rows(tmp_path: Path) -> None:
 
         # Conversation isolation: cB (different cid) sees nothing.
         assert session.background.task_history("profile:cB") == []
+
+
+def test_ref_for_falls_back_to_preceding_run_id() -> None:
+    """A run_id-less combined request (tool-return + user-prompt) stays anchored.
+
+    A steered/stopped turn delivers the pending tool result and the next user
+    prompt in one ModelRequest with run_id=None. `_ref_for` must fall back to
+    the nearest preceding run_id so the turn renders a real ref instead of
+    ``[unanchored]``.
+    """
+    from pydantic_ai.messages import ToolReturnPart
+
+    from paf.capabilities.thread_summarizer._summarize import _ref_for
+
+    msgs: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="first")], run_id="run-a"),
+        ModelResponse(parts=[TextPart("reply")], run_id="run-a"),
+        # Combined request: pending tool result + steered user prompt, no run_id.
+        ModelRequest(
+            parts=[
+                ToolReturnPart(tool_name="t", content="ok", tool_call_id="c1"),
+                UserPromptPart(content="steered"),
+            ],
+            run_id=None,
+        ),
+        ModelResponse(parts=[TextPart("done")], run_id="run-a"),
+    ]
+    # The combined request is the 2nd user anchor; fall back to run-a.
+    assert _ref_for(msgs, 2) == "run-a:1"
+    # A message with no preceding run_id still returns None.
+    assert _ref_for([ModelRequest(parts=[UserPromptPart(content="x")])], 0) is None

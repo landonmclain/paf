@@ -370,7 +370,7 @@ async def _turn_refs(
     when the anchor can't be found, falls back to the slice ordinal.
     Messages before the slice's first anchor get ``None``.
     """
-    from paf.capabilities._turns import user_anchor_indices
+    from paf.capabilities._turns import nearest_run_id, user_anchor_indices
 
     anchors = user_anchor_indices(messages)
     run_anchor_keys: dict[str, list[tuple[str, str] | None]] = {}
@@ -402,6 +402,12 @@ async def _turn_refs(
         if slot not in anchor_ref:
             anchor = messages[anchors[slot]]
             run_id = getattr(anchor, "run_id", None) or getattr(msg, "run_id", None)
+            if run_id is None:
+                # A message with no run_id (e.g. a tool-return + user-prompt
+                # combined request from a steered/stopped turn) belongs to the
+                # run that made the preceding tool call — fall back so the turn
+                # stays addressable instead of being dropped.
+                run_id = nearest_run_id(messages, anchors[slot])
             if run_id is None:
                 anchor_ref[slot] = None
             else:

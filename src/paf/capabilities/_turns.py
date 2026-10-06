@@ -64,6 +64,21 @@ def user_anchor_indices(messages: list[ModelMessage]) -> list[int]:
     return [i for i, m in enumerate(messages) if _is_user_turn(m)]
 
 
+def nearest_run_id(messages: list[ModelMessage], idx: int) -> str | None:
+    """The nearest preceding message's run_id, or None if none exists.
+
+    A message with no run_id (e.g. a tool-return + user-prompt combined request
+    from a steered or stopped turn) belongs to the run that made the preceding
+    tool call — fall back to that run so the turn stays addressable instead of
+    rendering as ``[unanchored]``.
+    """
+    for j in range(idx - 1, -1, -1):
+        rid = getattr(messages[j], "run_id", None)
+        if rid is not None:
+            return rid
+    return None
+
+
 def _real_user_prompt_text(message: ModelMessage) -> str | None:
     """The real (non-injected) user-prompt text of `message`, if any.
 
