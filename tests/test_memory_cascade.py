@@ -114,3 +114,9 @@ def test_screen_emits_span_with_decision_attributes(patched):
     assert attrs["screen.candidates"] == 2 and attrs["screen.escalated"] == 1
     assert attrs["screen.cost_usd"] == 0.002
     assert attrs["screen.min_passed_confidence"] == 0.99
+    import json
+
+    out = json.loads(attrs["langfuse.observation.output"])
+    assert out["escalated"] == [2] and out["candidates"]["1"]["escalated"] is False
+    inp = json.loads(attrs["langfuse.observation.input"])
+    assert "n" in inp["new"] and set(inp["older"]) == {"1", "2"}

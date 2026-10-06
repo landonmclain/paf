@@ -145,6 +145,15 @@ async def cascade_judge(new: Fact, older: list[Fact]) -> list[PairJudgement]:
         span.set_attribute("screen.new_line", new.line)
         span.set_attribute("screen.candidates", len(older))
         span.set_attribute("screen.min_confidence", min_conf)
+        span.set_attribute(
+            "langfuse.observation.input",
+            json.dumps(
+                {
+                    "new": new.render(),
+                    "older": {str(i): f.render() for i, f in enumerate(older, 1)},
+                }
+            ),
+        )
         try:
             resp = await _post_screen(screen_request(model, new, older))
             answers = resp["answers"]
@@ -160,6 +169,28 @@ async def cascade_judge(new: Fact, older: list[Fact]) -> list[PairJudgement]:
             ]
             span.set_attribute("screen.cost_usd", cost)
             span.set_attribute(
+                "langfuse.observation.output",
+                json.dumps(
+                    {
+                        "candidates": {
+                            str(i): {
+                                "label": answers[f"relation_{i}"]["choice"],
+                                "confidence": answers[f"relation_{i}"].get(
+                                    "confidence"
+                                ),
+                                "probabilities": answers[f"relation_{i}"].get(
+                                    "probabilities"
+                                ),
+                                "escalated": i in flagged,
+                            }
+                            for i in everyone
+                        },
+                        "escalated": flagged,
+                        "cost_usd": cost,
+                    }
+                ),
+            )
+            span.set_attribute(
                 "screen.labels",
                 json.dumps(
                     {str(i): answers[f"relation_{i}"]["choice"] for i in everyone}
@@ -173,6 +204,10 @@ async def cascade_judge(new: Fact, older: list[Fact]) -> list[PairJudgement]:
             flagged = everyone
             span.record_exception(exc)
             span.set_status(Status(StatusCode.ERROR, "screen failed; escalating all"))
+            span.set_attribute(
+                "langfuse.observation.output",
+                json.dumps({"error": str(exc)[:300], "escalated": everyone}),
+            )
         span.set_attribute("screen.escalated", len(flagged))
     STATS.escalated += len(flagged)
     if not flagged:

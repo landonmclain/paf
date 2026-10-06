@@ -173,9 +173,9 @@ NO_READ_TURN = os.environ.get("NO_READ_TURN", "0") == "1"
 # Thread-summarizer presence knob: THREAD_SUMMARY=1 wires the ThreadSummarizer
 # capability into the harness (inject_thread_summary=True + the
 # `list_turn_summaries` navigation tool) and runs the seed-time summarizer over
-# the haystack (via run_lmem). Default OFF — an added navigation layer, not part
-# of the standard memory/search arms.
-THREAD_SUMMARY = os.environ.get("THREAD_SUMMARY", "0") == "1"
+# the haystack (via run_lmem). Default ON — the navigation layer is the standard
+# recall arm; set THREAD_SUMMARY=0 to disable it.
+THREAD_SUMMARY = os.environ.get("THREAD_SUMMARY", "1") == "1"
 
 # Per-question memory store for the running question (run_lmem only). The
 # subject agent is built once but must read the SAME per-question notebook the
