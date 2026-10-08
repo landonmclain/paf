@@ -109,7 +109,7 @@ import socket
 import sys
 import warnings
 from collections import deque
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass, replace
 from time import monotonic
 from typing import TYPE_CHECKING, Literal, Protocol, Self, TypeVar, get_args
@@ -1365,7 +1365,16 @@ class BrowserSession:
         """
         assert self._driver_cm is not None
         if self._driver is None:
-            self._driver = await self._driver_cm.__aenter__()
+            try:
+                self._driver = await self._driver_cm.__aenter__()
+            except BaseException:
+                # Interrupted (e.g. the run was cancelled) or failed mid-start:
+                # the driver connection already exists, so stop it here. Left
+                # running, it outlives the session and blocks event-loop shutdown.
+                with suppress(Exception):
+                    await asyncio.shield(self._driver_cm.__aexit__(None, None, None))
+                self._driver_cm = async_playwright()
+                raise
             self._driver_entered = True
         # An attempt that connected and then failed to build its context left a browser
         # behind. It is closed before another is started, since teardown holds only the
