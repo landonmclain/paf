@@ -57,6 +57,7 @@ ASSISTANT_PROFILE = AgentProfile(
         "Compaction",
         "FileSystem",
         "Shell",
+        # "Python",  # sandboxed run_python (Docker); opt in once Docker is available
         "Git",
         "CodebaseMap",
         "Vault",
@@ -88,6 +89,7 @@ DEMO_PROFILE = AgentProfile(
         "Compaction",
         "FileSystem",
         "Shell",
+        # "Python",  # sandboxed run_python (Docker); opt in once Docker is available
         "Git",
         "CodebaseMap",
         "Vault",

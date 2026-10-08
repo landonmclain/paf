@@ -35,6 +35,13 @@ _ROOTED: tuple[tuple[str, str, str, str, str], ...] = (
         "paths relative to {root}",
     ),
     ("Shell", "cwd", "Shell", "run_command, start_command", "commands start in {root}"),
+    (
+        "Python",
+        "cwd",
+        "Python",
+        "run_python",
+        "programs run in {root}; fresh interpreter per call",
+    ),
     ("Git", "root", "Git", "git_*", "repo {root}; paths relative to it"),
     (
         "CodebaseMap",

@@ -642,6 +642,22 @@ def _spec_executor_block(executor: dict) -> dict:
         cleaned = [e for e in exclude if isinstance(e, str) and e.strip()]
         if cleaned:
             resolved["exclude"] = cleaned
+    for key in ("network", "user", "memory", "cpus", "workspace"):
+        value = executor.get(key)
+        if isinstance(value, str) and value.strip():
+            resolved[key] = value
+    pids_limit = executor.get("pids_limit")
+    if isinstance(pids_limit, int) and not isinstance(pids_limit, bool):
+        resolved["pids_limit"] = pids_limit
+    for key in ("read_only", "workspace_readonly"):
+        if isinstance(executor.get(key), bool):
+            resolved[key] = executor[key]
+    for key in ("writable", "tmpfs"):
+        values = executor.get(key)
+        if isinstance(values, list):
+            cleaned = [v for v in values if isinstance(v, str) and v.strip()]
+            if cleaned:
+                resolved[key] = cleaned
     return resolved
 
 
@@ -682,6 +698,48 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
     cwd = block.get("cwd")
     if isinstance(cwd, str) and cwd.strip():
         config["cwd"] = cwd
+    executor = block.get("executor")
+    if isinstance(executor, dict):
+        resolved = _spec_executor_block(executor)
+        if resolved:
+            config["executor"] = resolved
+    return config or None
+
+
+def _spec_python_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``python:`` block (the ``run_python`` tool).
+
+        python:
+          cwd: ~/workspace
+          allow_unsandboxed: false     # default; true permits the host backend
+          default_timeout: 30
+          max_timeout: 120
+          executor:                    # overrides the strict Docker defaults
+            writable: [out]            # workspace subpaths writable by programs
+            memory: 512m
+
+    Returns only well-typed keys, or ``None`` when the block is absent.
+    """
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("python")
+    if not isinstance(block, dict):
+        return None
+    config: dict = {}
+    cwd = block.get("cwd")
+    if isinstance(cwd, str) and cwd.strip():
+        config["cwd"] = cwd
+    if isinstance(block.get("allow_unsandboxed"), bool):
+        config["allow_unsandboxed"] = block["allow_unsandboxed"]
+    for key in ("default_timeout", "max_timeout"):
+        value = block.get(key)
+        if isinstance(value, int | float) and not isinstance(value, bool):
+            config[key] = value
     executor = block.get("executor")
     if isinstance(executor, dict):
         resolved = _spec_executor_block(executor)
@@ -810,6 +868,7 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         # Root scoping for the root-bearing capabilities from their spec blocks.
         "filesystem_config": _spec_filesystem_config(spec_path),
         "shell_config": _spec_shell_config(spec_path),
+        "python_config": _spec_python_config(spec_path),
         "git_config": _spec_git_config(spec_path),
         "codebase_map_config": _spec_codebase_map_config(spec_path),
         # Skill library dirs + top_k from the spec's `skills:` block.

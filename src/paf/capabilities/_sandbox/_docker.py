@@ -95,6 +95,9 @@ class DockerExecutor:
         workspace: str = "/workspace",
         container_name: str | None = None,
         exclude: Sequence[str] = (),
+        workspace_readonly: bool = False,
+        writable: Sequence[str] = (),
+        tmpfs: Sequence[str] = (),
     ) -> None:
         if mode not in ("exec", "run"):
             raise ValueError("mode must be 'exec' or 'run'")
@@ -109,7 +112,37 @@ class DockerExecutor:
         self._workspace = workspace
         self._container_name = container_name
         self._exclude = list(exclude)
+        self._workspace_readonly = workspace_readonly
+        self._writable = [self._clean_relative(w) for w in writable]
+        self._tmpfs = list(tmpfs)
         self._container_id: str | None = None
+
+    @staticmethod
+    def _clean_relative(path: str) -> str:
+        """Validate a workspace-relative path (no absolute, no ``..``)."""
+        p = Path(path)
+        if p.is_absolute() or ".." in p.parts or not p.parts:
+            raise ValueError(
+                f"writable path must be workspace-relative without '..', got {path!r}"
+            )
+        return str(p)
+
+    def _workspace_args(self, cwd: Path) -> list[str]:
+        """``-v``/``-w`` args for the workspace mount plus its overlays.
+
+        With ``workspace_readonly`` the whole workspace is mounted ``:ro`` and
+        only the ``writable`` subpaths are re-mounted read-write on top, so the
+        container can write exactly where the spec allows and nowhere else.
+        Secret-file overlays are mounted last so they shadow either mode.
+        """
+        mode = ":ro" if self._workspace_readonly else ""
+        args = ["-v", f"{cwd}:{self._workspace}{mode}", "-w", self._workspace]
+        for rel in self._writable:
+            host = cwd / rel
+            host.mkdir(parents=True, exist_ok=True)
+            args.extend(["-v", f"{host}:{self._workspace}/{rel}"])
+        args.extend(self._overlay_mounts(cwd))
+        return args
 
     def _overlay_mounts(self, cwd: Path) -> list[str]:
         """Build ``-v`` args that shadow each excluded path with an empty file/dir.
@@ -164,6 +197,8 @@ class DockerExecutor:
         ]
         if self._read_only:
             args.append("--read-only")
+        for mount in self._tmpfs:
+            args.extend(["--tmpfs", mount])
         return args
 
     async def _docker(
@@ -216,11 +251,7 @@ class DockerExecutor:
             "--name",
             name,
             *self._base_run_args(),
-            "-v",
-            f"{cwd}:{self._workspace}",
-            "-w",
-            self._workspace,
-            *self._overlay_mounts(cwd),
+            *self._workspace_args(cwd),
             self._image,
             "sleep",
             "infinity",
@@ -241,26 +272,35 @@ class DockerExecutor:
         env: dict[str, str] | None,
         timeout: float,
     ) -> ExecResult:
+        run_name: str | None = None
         if self._mode == "exec":
             await self._ensure_container(cwd)
             args = ["docker", "exec", self._container_id, "sh", "-c", command]
         else:
+            run_name = f"paf-run-{uuid.uuid4().hex[:12]}"
             args = [
                 "docker",
                 "run",
                 "--rm",
+                "--name",
+                run_name,
                 *self._base_run_args(),
-                "-v",
-                f"{cwd}:{self._workspace}",
-                "-w",
-                self._workspace,
-                *self._overlay_mounts(cwd),
+                *self._workspace_args(cwd),
                 self._image,
                 "sh",
                 "-c",
                 command,
             ]
-        code, out, err = await self._docker(args, timeout=timeout)
+        try:
+            code, out, err = await self._docker(args, timeout=timeout)
+        except TimeoutError:
+            # Killing the docker CLI client does not stop the container, so a
+            # per-command container is removed explicitly. (exec mode shares one
+            # long-lived container; callers that need a hard in-container kill
+            # wrap the command in ``timeout``.)
+            if run_name is not None:
+                await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
+            return ExecResult(stdout="", stderr="", exit_code=124, timed_out=True)
         return ExecResult(stdout=out, stderr=err, exit_code=code)
 
     async def start(
@@ -280,11 +320,7 @@ class DockerExecutor:
             "--name",
             name,
             *self._base_run_args(),
-            "-v",
-            f"{cwd}:{self._workspace}",
-            "-w",
-            self._workspace,
-            *self._overlay_mounts(cwd),
+            *self._workspace_args(cwd),
             self._image,
             "sh",
             "-c",

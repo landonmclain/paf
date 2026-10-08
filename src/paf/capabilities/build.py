@@ -60,6 +60,7 @@ from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.planning import Planning
 from paf.capabilities.profiles import AgentProfile
+from paf.capabilities.python import Python as _Python
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.subagents import Subagents
@@ -242,7 +243,8 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
     :class:`LocalProcessExecutor` (host, no sandbox). ``backend: docker`` ->
     :class:`DockerExecutor` with the block's options (``mode`` / ``image`` /
     ``network`` / ``user`` / ``read_only`` / ``memory`` / ``cpus`` /
-    ``pids_limit`` / ``workspace`` / ``container_name`` / ``exclude``), each
+    ``pids_limit`` / ``workspace`` / ``container_name`` / ``exclude`` /
+    ``workspace_readonly`` / ``writable`` / ``tmpfs``), each
     defaulting to the executor's secure default when omitted. ``exclude`` names
     workspace-relative paths (globs allowed) that the Docker backend overlays
     with empty files; it defaults to :data:`DEFAULT_EXCLUDE`.
@@ -276,6 +278,9 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
             workspace=executor_config.get("workspace", "/workspace"),
             container_name=executor_config.get("container_name"),
             exclude=executor_config.get("exclude", DEFAULT_EXCLUDE),
+            workspace_readonly=executor_config.get("workspace_readonly", False),
+            writable=executor_config.get("writable", ()),
+            tmpfs=executor_config.get("tmpfs", ()),
         )
     raise ValueError(f"executor.backend must be 'local' or 'docker', got {backend!r}")
 
@@ -283,6 +288,48 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
 def _resolve_shell_executor(executor_config: dict | None) -> SandboxedExecutor:
     """Resolve the spec's ``shell.executor`` block (see ``_resolve_executor``)."""
     return _resolve_executor(executor_config)
+
+
+# Executor defaults for ``run_python``: the strictest the Docker backend offers.
+# A fresh container per call (no state leaks between runs), a read-only workspace
+# with only a size-capped, non-executable scratch tmpfs writable. The spec's
+# ``python.executor`` block overrides key by key.
+_PYTHON_EXECUTOR_DEFAULTS: dict = {
+    "backend": "docker",
+    "mode": "run",
+    "workspace_readonly": True,
+    "tmpfs": ["/tmp:rw,size=64m,noexec,nosuid"],
+}
+
+
+def _build_python(store, python_config: dict | None = None) -> _Python:
+    """Sandboxed ``run_python`` rooted at the project root (paf-owned).
+
+    Secure by default and stricter than ``Shell``: the executor defaults to
+    Docker in per-call ``run`` mode with a read-only workspace
+    (:data:`_PYTHON_EXECUTOR_DEFAULTS`), and the capability refuses the local
+    backend unless the spec sets ``allow_unsandboxed: true``.
+
+    `python_config` is the spec's top-level ``python:`` block (see
+    ``specs._spec_python_config``): ``cwd`` moves the workspace, ``executor``
+    overrides the defaults above, and ``allow_unsandboxed`` /
+    ``default_timeout`` / ``max_timeout`` tune the tool. `store` is unused.
+    """
+    config = python_config if isinstance(python_config, dict) else {}
+    cwd = PROJECT_ROOT
+    if isinstance(config.get("cwd"), str) and config["cwd"]:
+        cwd = Path(os.path.expanduser(config["cwd"]))
+    executor_config = {**_PYTHON_EXECUTOR_DEFAULTS, **(config.get("executor") or {})}
+    kwargs: dict = {}
+    for key in ("default_timeout", "max_timeout"):
+        if isinstance(config.get(key), int | float):
+            kwargs[key] = float(config[key])
+    return _Python(
+        cwd=cwd,
+        executor=_resolve_executor(executor_config),
+        allow_unsandboxed=config.get("allow_unsandboxed") is True,
+        **kwargs,
+    )
 
 
 def _build_shell(
@@ -870,6 +917,7 @@ def build_runtime_capabilities(
     memory_config: dict | None = None,
     filesystem_config: dict | None = None,
     shell_config: dict | None = None,
+    python_config: dict | None = None,
     git_config: dict | None = None,
     codebase_map_config: dict | None = None,
     skills_config: dict | None = None,
@@ -905,6 +953,9 @@ def build_runtime_capabilities(
         "FileSystem": _build_filesystem,
         # Shell command execution (paf-owned harness copy) rooted at the project root.
         "Shell": _build_shell,
+        # Sandboxed Python execution (paf-owned): Docker-by-default, refuses the
+        # unsandboxed local backend unless the spec opts in.
+        "Python": _build_python,
         # Safe git inspection + checkpoint tools rooted at the repo root.
         "Git": _build_git,
         # Codebase-map: navigation-first codebase browser rooted at the repo root
@@ -961,6 +1012,8 @@ def build_runtime_capabilities(
             capabilities.append(
                 _build_shell(store, shell_config, agent_name, on_complete)
             )
+        elif name == "Python":
+            capabilities.append(_build_python(store, python_config))
         elif name == "Git":
             capabilities.append(_build_git(store, git_config))
         elif name == "CodebaseMap":

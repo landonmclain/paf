@@ -35,6 +35,7 @@ from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
 from paf.capabilities.memory import Memory
 from paf.capabilities.planning import Planning
+from paf.capabilities.python import Python
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
@@ -71,6 +72,9 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     "FileSystem": FileSystem,
     # Shell command execution rooted at a cwd. `from_spec` + `get_toolset`.
     "Shell": Shell,
+    # Sandboxed `run_python` over the executor seam. Refuses the local backend
+    # unless the spec opts in. Built in Python so the profile gate controls it.
+    "Python": Python,
     # Safe git inspection + checkpoint tools rooted at a workspace dir.
     "Git": Git,
     # Navigation-first codebase browser. Built in Python (needs a real scan_root
