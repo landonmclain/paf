@@ -1,9 +1,8 @@
-"""Tests for the paf Skills capability — list/load + deterministic pointer trigger.
+"""Tests for the paf Skills capability — list/load on demand.
 
 Covers the unified capability (Landon 2026-08-19): the load mechanism
-(list_skills / load_skill / list_skill_files / read_skill_file) paired with the
-skill-hint pointer engine (point_skills — internal primitive, zero-LLM BM25 over
-frontmatter vocab, for the auto per-turn hint layer). Uses the checked-in
+(list_skills / load_skill / list_skill_files / read_skill_file) plus the corpus's
+zero-LLM BM25 ranking over frontmatter vocab. Uses the checked-in
 `tests/fixtures/skills/` corpus as the deterministic test library.
 """
 
@@ -42,8 +41,8 @@ def _skills_index_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _toolset(top_k: int = 3) -> SkillToolset:
-    return Skills(libraries=(FIXTURE_SKILLS,), top_k=top_k).get_toolset()
+def _toolset() -> SkillToolset:
+    return Skills(libraries=(FIXTURE_SKILLS,)).get_toolset()
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +51,7 @@ def _toolset(top_k: int = 3) -> SkillToolset:
 
 
 def test_skill_toolset_registers_six_tools() -> None:
-    """The skill toolset exposes list/load/resource/create/edit tools (pointer is internal)."""
+    """The skill toolset exposes list/load/resource/create/edit tools."""
     ts = _toolset()
     assert set(ts.tools) == {
         "list_skills",
@@ -62,23 +61,6 @@ def test_skill_toolset_registers_six_tools() -> None:
         "create_skill",
         "edit_skill",
     }
-
-
-def test_point_skills_is_internal_not_a_tool() -> None:
-    """The BM25 pointer is a capability primitive, NOT an agent-facing tool."""
-    ts = _toolset()
-    assert "point_skills" not in ts.tools
-    # But the engine is still callable directly (for the hint layer).
-    out = ts.point_skills("can you review this pull request")
-    assert "consider: code-review" in out
-
-
-def test_capability_validates_top_k() -> None:
-    """top_k must be a positive integer (config-driven validation)."""
-    with pytest.raises(ValueError):
-        Skills(libraries=(FIXTURE_SKILLS,), top_k=0)
-    with pytest.raises(ValueError):
-        Skills(libraries=(FIXTURE_SKILLS,), top_k=-1)
 
 
 @pytest.mark.live
@@ -239,7 +221,7 @@ def test_read_skill_file_rejects_traversal_and_non_resources() -> None:
 
 
 def _toolset_at(root: str) -> SkillToolset:
-    return Skills(libraries=(root,), top_k=3).get_toolset()
+    return Skills(libraries=(root,)).get_toolset()
 
 
 def test_create_skill_writes_valid_skill_and_indexes(tmp_path: Path) -> None:
@@ -359,34 +341,15 @@ def test_edit_skill_refuses_ambiguous_and_unknown(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# point_skills (the internal hint-pointer trigger)
+# Corpus ranking (BM25 over declared skill vocab)
 # ---------------------------------------------------------------------------
 
 
-def test_point_skills_returns_pointer_hints() -> None:
-    out = _toolset().point_skills("can you review this pull request")
-    assert "consider: code-review" in out
-    # a pointer, never content
-    assert "# Skill" not in out
-
-
-def test_point_to_skill_ranks_matching_skill() -> None:
+def test_corpus_ranks_matching_skill() -> None:
     hits = HintCorpus(roots=FIXTURE_SKILLS).rank("backtest my trading strategy", k=3)
     assert hits
     top_name = hits[0][0].name
     assert top_name == "vectorized-backtest"
-
-
-def test_point_skills_respects_top_k() -> None:
-    out = _toolset(top_k=1).point_skills("code review pull request")
-    lines = [ln for ln in out.splitlines() if ln.strip()]
-    assert len(lines) == 1
-
-
-def test_point_skills_no_match_reports_cleanly() -> None:
-    # terms absent from every indexed doc's vocab -> zero BM25 overlap
-    out = _toolset().point_skills("elephant astronomy")
-    assert "No skills" in out
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +358,7 @@ def test_point_skills_no_match_reports_cleanly() -> None:
 
 
 def test_build_skills_defaults_to_data_skills() -> None:
-    """No config -> the paf-owned data/skills/ default with top_k=3.
+    """No config -> the paf-owned data/skills/ default.
 
     Checks the resolved *default path*, not the mutable on-disk library — the
     spec'd path is PROJECT_ROOT/data/skills (gitignored, free to grow/shrink).
@@ -410,21 +373,18 @@ def test_build_skills_defaults_to_data_skills() -> None:
         "edit_skill",
     }
     assert sk.libraries == (PROJECT_ROOT / "data" / "skills",)
-    assert sk.top_k == 3
 
 
-def test_build_skills_respects_config_libraries_and_top_k() -> None:
-    """A config dict drives the custom skill-library directories + top_k."""
+def test_build_skills_respects_config_libraries() -> None:
+    """A config dict drives the custom skill-library directories."""
     # Point at the deterministic fixture so the indexed set is stable.
     sk = _build_skills(
         store=None,
         skills_config={
             "libraries": [FIXTURE_SKILLS],
-            "top_k": 5,
         },
     )
     ts = sk.get_toolset()
-    assert ts.top_k == 5
     shown = ts.list_skills()
     assert "code-review" in shown and "vectorized-backtest" in shown
 
@@ -439,14 +399,12 @@ def test_spec_skills_config_parses_block(tmp_path: Path) -> None:
         "  libraries:\n"
         "    - ~/.hermes/skills\n"
         "    - data/skills\n"
-        "  top_k: 5\n"
     )
     cfg = _spec_skills_config(spec)
     assert cfg is not None
     # `~` expands to an absolute path; plain paths pass through.
     assert cfg["libraries"][0] == str(Path.home() / ".hermes" / "skills")
     assert cfg["libraries"][1] == "data/skills"
-    assert cfg["top_k"] == 5
 
 
 def test_spec_skills_config_absent_returns_none(tmp_path: Path) -> None:
@@ -461,4 +419,3 @@ def test_demo_spec_resolves_skills_block() -> None:
     cfg = _spec_skills_config(get_spec_path("demo_assistant"))
     assert cfg is not None
     assert "libraries" in cfg and cfg["libraries"]
-    assert cfg["top_k"] == 3

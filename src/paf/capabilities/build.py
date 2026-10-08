@@ -604,34 +604,28 @@ def _build_browser(store, browser_config: dict | None = None) -> _Browser:
 
 
 def _build_skills(store, skills_config: dict | None = None) -> _Skills:
-    """Skill library — list/load on demand + deterministic pointer trigger.
+    """Skill library — list/load on demand.
 
     `store` is accepted for a uniform builder signature but unused — the skill
     library is self-contained over its configured library directories, not the
     persistence store. Indexes the configured SKILL.md skills + .md notes at
     construction; `list_skills`/`load_skill` expose the load mechanism (prompt
-    stays thin, bodies pulled on demand) and `point_skills` pre-arms which
-    skill a message needs via zero-LLM BM25 over the declared frontmatter vocab
-    (the skill-note-hint pointer engine). One paf-native capability for all skill
+    stays thin, bodies pulled on demand). One paf-native capability for all skill
     functionality.
 
     `skills_config` is the spec's top-level ``skills:`` block (see
     ``specs._spec_skills_config``): ``libraries`` (one or more FULL absolute
-    paths, `~`-expanded) and optional ``top_k``. Absent/``None`` -> the paf-owned
-    ``data/skills/`` default with ``top_k=3`` — no implicit disk scanning beyond
+    paths, `~`-expanded). Absent/``None`` -> the paf-owned
+    ``data/skills/`` default — no implicit disk scanning beyond
     what a spec names explicitly (mirrors the vault capability's
     never-reach-the-real-thing-without-an-explicit-spec default).
     """
     libraries: tuple[str | Path, ...] = (DATA_DIR / "skills",)
-    top_k: int = 3
     if isinstance(skills_config, dict):
         libs = skills_config.get("libraries")
         if isinstance(libs, (list, tuple)) and libs:
             libraries = tuple(Path(os.path.expanduser(str(v))) for v in libs if str(v))
-        k = skills_config.get("top_k")
-        if isinstance(k, int) and not isinstance(k, bool) and k > 0:
-            top_k = k
-    return _Skills(libraries=libraries, top_k=top_k)
+    return _Skills(libraries=libraries)
 
 
 def _build_tool_output_limits(store) -> ToolOutputLimits:

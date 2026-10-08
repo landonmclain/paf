@@ -9,7 +9,7 @@ tree** (the Hermes/Claude shape) rather than a flat skill/note dump:
 - A skill's **resources** — files under `references/`, `scripts/`, `templates/`,
   `assets/` — are attached to that skill, NOT indexed as standalone notes.
 - The corpus indexes **skills only**. ``rank()`` BM25s over skill vocabulary
-  (name + description + tags), so the pointer engine (`point_skills`) never
+  (name + description + tags), so ranking never
   scores against a polluted note dump (a flat dump over a real tree indexed 480
   docs — 130 skills + 350 junk notes).
 
@@ -60,7 +60,7 @@ class SkillDoc:
     """One indexable skill in the tree.
 
     ``text`` is what BM25 scores (name + description + tags, lowercased);
-    ``hint`` is the one-line pointer injected (``consider: <skill_id>``);
+    ``hint`` is the one-line pointer form (``consider: <skill_id>``);
     ``skill_file`` is the on-disk SKILL.md so `load_skill` can read the body;
     ``skill_root`` is the skill's directory; ``resources`` are its support files.
     """
@@ -284,7 +284,7 @@ class HintCorpus:
         """Re-scan library roots from disk, rebuilding the in-memory indexes.
 
         Called after `create_skill` so a newly written skill is immediately
-        indexable (list/load/point) without reconstructing the toolset.
+        indexable (list/load) without reconstructing the toolset.
         """
         self._load()
 

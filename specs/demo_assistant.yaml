@@ -243,19 +243,15 @@ vault:
 # ---------------------------------------------------------------------------
 # Skill library. Read by
 # `build_agent` -> `_spec_skills_config` -> `_build_skills` -> the Skills
-# capability's `libraries` / `top_k`.
+# capability's `libraries`.
 #
 # `libraries` are FULL absolute paths (`~` expands). Each is scanned for
 # SKILL.md skills and plain .md notes. Multiple directories are supported
 # (merged into one hint corpus). Absent block -> the paf-owned `data/skills/`
 # default, so a spec block is purely additive and never weakens the default.
-#
-# `top_k` (optional) is the default number of `point_to_skill` pointer hints
-# returned per call.
 skills:
   libraries:
     - ~/projects/Personal/pydantic-agent-framework/data/skills
-  top_k: 3
 
 # ---------------------------------------------------------------------------
 # Per-assistant context-compaction tuning. Read by `build_agent` ->

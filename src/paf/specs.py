@@ -204,12 +204,10 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
           libraries:        # one or more full paths (~ expands); absent -> the
             - ~/.hermes/skills          # paf-owned data/skills/ default
             - ~/projects/Personal/skill-library
-          top_k: 3           # optional; default number of point_skills hints
 
     ``libraries`` are **full absolute paths** (``~`` expanded via
     ``os.path.expanduser``); each is a directory scanned for ``SKILL.md`` skills
-    (a skill tree: ``<root>/<category>/<skill>/SKILL.md`` or flat). ``top_k`` is
-    the default number of ``point_skills`` hint pointers returned per call.
+    (a skill tree: ``<root>/<category>/<skill>/SKILL.md`` or flat).
     Returns a dict (or ``None`` when the block is absent/unreadable); absent
     members fall back to ``_build_skills`` defaults (whose default library is
     the paf-owned ``data/skills/``).
@@ -228,9 +226,6 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
     libraries = block.get("libraries")
     if isinstance(libraries, list) and libraries:
         cfg["libraries"] = [os.path.expanduser(str(v)) for v in libraries if str(v)]
-    top_k = block.get("top_k")
-    if isinstance(top_k, int) and not isinstance(top_k, bool) and top_k > 0:
-        cfg["top_k"] = top_k
     if not cfg:
         return None
     return cfg
@@ -871,7 +866,7 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "python_config": _spec_python_config(spec_path),
         "git_config": _spec_git_config(spec_path),
         "codebase_map_config": _spec_codebase_map_config(spec_path),
-        # Skill library dirs + top_k from the spec's `skills:` block.
+        # Skill library dirs from the spec's `skills:` block.
         "skills_config": _spec_skills_config(spec_path),
         # mcpServers JSON path from the spec's `mcp:` block (builtin env expansion).
         "mcp_config": _spec_mcp_config(spec_path),

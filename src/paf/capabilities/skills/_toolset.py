@@ -14,10 +14,6 @@ Tools (agent-facing):
     in the configured library (mirrors vault ``note_create``).
   - ``edit_skill``     — CAS conflict-safe edit of a skill's SKILL.md (mirrors
     vault ``note_edit``; paired with ``create_skill``).
-
-Internal (NOT agent tools):
-  - ``point_skills``   — BM25 pointer engine (`consider: <skill_id>`), called by
-    the auto per-turn hint layer, not offered to the model.
 """
 
 from __future__ import annotations
@@ -68,14 +64,12 @@ class SkillToolset(FunctionToolset[object]):
         self,
         libraries: list[str] | str,
         *,
-        top_k: int = 3,
         storage: FlatFileSkillsStorage | None = None,
     ) -> None:
         if isinstance(libraries, str):
             libraries = [libraries]
         super().__init__()
         self.libraries = list(libraries)
-        self.top_k = top_k
         self._storage = storage if storage is not None else FlatFileSkillsStorage()
         self._corpus = HintCorpus(roots=self.libraries, storage=self._storage)
         self._by_id: dict[str, SkillDoc] = self._corpus.by_id
@@ -83,9 +77,7 @@ class SkillToolset(FunctionToolset[object]):
 
         # Register the method-tools explicitly (FunctionToolset pops `.tools`
         # from `add_function`, not from plain subclass methods — same pattern as
-        # the FileSystem toolset). Note: `point_skills` (the BM25 pointer engine)
-        # is deliberately NOT registered — it is an internal capability
-        # primitive for the auto per-turn hint layer, not an agent-facing tool.
+        # the FileSystem toolset).
         self.add_function(self.list_skills, name="list_skills")
         self.add_function(self.load_skill, name="load_skill")
         self.add_function(self.list_skill_files, name="list_skill_files")
@@ -362,7 +354,7 @@ class SkillToolset(FunctionToolset[object]):
         human) edited it since you read it. Re-load the skill and retry with the
         fresh version. Returns a confirmation with the new version and a per-pair
         diff. Writes atomically and refreshes the corpus so the change is
-        immediately reflected in list/load/point.
+        immediately reflected in list/load.
 
         Args:
             skill_id: Canonical skill id (`category/name`) or unique short name.
@@ -393,24 +385,3 @@ class SkillToolset(FunctionToolset[object]):
         )
         self._corpus.refresh()
         return result.summary(doc.skill_id)
-
-    def point_skills(self, query: str, top_k: int | None = None) -> str:
-        """INTERNAL primitive (NOT an agent tool): BM25 pointer hints for the hint layer.
-
-        Deterministic BM25 over the skill library's declared vocabulary
-        (name/description/tags) — zero LLM cost. Returns one line per hit like
-        `consider: <skill_id>` (canonical, category-qualified), most relevant
-        first. A pointer names *where to look*, not the answer; the auto per-turn
-        hint layer calls this and injects `consider:` lines into turn context; the
-        agent then follows up with load_skill / read_skill_file. Deliberately NOT
-        in `.tools` — it is not a tool the model should call on its own volition.
-        """
-        k = top_k if top_k is not None else self.top_k
-        hits = self._corpus.rank(query, k=k)
-        if not hits:
-            return (
-                f"No skills in the library overlap {query!r}. "
-                "Consider adding a SKILL.md with matching tags/description."
-            )
-        lines = [f"{doc.hint}  # {score:.2f}" for doc, score in hits]
-        return "\n".join(lines)
