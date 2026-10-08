@@ -161,3 +161,12 @@ def test_search_files_byte_cap(tmp_path: Path) -> None:
     # 8,000 matching lines were all returned. The truncation marker must fire.
     assert "bytes]" in out
     assert len(out.encode("utf-8")) < 300 * 1024  # far under the uncapped result
+
+
+def test_create_directory_over_a_file_is_model_correctable(tmp_path: Path) -> None:
+    """A path that is already a file is a retry for the model, not a crashed turn."""
+    from pydantic_ai import ModelRetry
+
+    (tmp_path / "a").write_text("x", encoding="utf-8")
+    with pytest.raises(ModelRetry, match="File exists"):
+        _run(_fs(tmp_path).create_directory("a"))

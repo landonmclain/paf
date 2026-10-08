@@ -34,6 +34,7 @@ _P = ParamSpec("_P")
 _RECOVERABLE_ERRORS = (
     PermissionError,
     FileNotFoundError,
+    FileExistsError,
     NotADirectoryError,
     IsADirectoryError,
     ValueError,
