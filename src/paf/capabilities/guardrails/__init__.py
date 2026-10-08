@@ -6,6 +6,12 @@ module in this package is one guard policy, wired into a capability by the
 builders in ``build.py``.
 """
 
+from paf.capabilities.guardrails.gating_policy import (
+    GatingPolicy,
+    GatingRule,
+    make_gating_guard,
+    parse_policy,
+)
 from paf.capabilities.guardrails.prompt_injection import (
     prompt_injection_on_detection,
 )
@@ -16,6 +22,10 @@ from paf.capabilities.guardrails.tool_gating import (
 
 __all__ = [
     "DEFAULT_GATED_TOOLS",
+    "GatingPolicy",
+    "GatingRule",
+    "make_gating_guard",
+    "parse_policy",
     "prompt_injection_on_detection",
     "tool_gating_guard",
 ]

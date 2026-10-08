@@ -25,6 +25,7 @@ Two guards ride the same ``ToolGuardrail``:
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Collection
 
 from pydantic_ai_harness.guardrails import GuardrailResult, ToolCallInfo, ToolResultInfo
 
@@ -41,27 +42,44 @@ def _resolve(name: str) -> str:
     return os.environ[name]
 
 
-def secret_handle_guard(info: ToolCallInfo) -> GuardrailResult:
-    """Resolve ``$SECRET:key`` handles in tool args at execution time.
+def make_secret_handle_guard(
+    allowed: Collection[str] | None = None,
+) -> Callable[[ToolCallInfo], GuardrailResult]:
+    """Build the handle-resolving guard, optionally restricted to ``allowed`` names.
 
-    ``replace`` hands the tool the full resolved argument mapping, so the real
-    value is what executes while the window only ever saw the handle. A handle
-    naming an unavailable secret is a ``retry``: the model learns the secret is
-    not available and can ask the user or choose another path.
+    ``allowed=None`` keeps the original behavior (any environment variable can be
+    named by a handle). A collection - including an empty one - restricts the
+    guard to those names, so a handle naming anything else is refused as if the
+    secret did not exist, without confirming whether the variable is set. That is
+    the setting for agents where the model must not be able to ask for
+    ``OPENROUTER_API_KEY`` and have it forwarded into a tool argument.
     """
-    replacement = dict(info.args)
-    for key, value in info.args.items():
-        if isinstance(value, str) and value.startswith(_HANDLE_PREFIX):
-            name = value[len(_HANDLE_PREFIX) :]
-            try:
-                replacement[key] = _resolve(name)
-            except KeyError:
-                return GuardrailResult.retry(
-                    f"Secret '{name}' is not available. Ask the user for it or choose another path."
-                )
-    if replacement != dict(info.args):
-        return GuardrailResult.replace(replacement)
-    return GuardrailResult.allow()
+    permitted = None if allowed is None else frozenset(allowed)
+
+    def guard(info: ToolCallInfo) -> GuardrailResult:
+        replacement = dict(info.args)
+        for key, value in info.args.items():
+            if isinstance(value, str) and value.startswith(_HANDLE_PREFIX):
+                name = value[len(_HANDLE_PREFIX) :]
+                if permitted is not None and name not in permitted:
+                    return GuardrailResult.retry(_UNAVAILABLE.format(name=name))
+                try:
+                    replacement[key] = _resolve(name)
+                except KeyError:
+                    return GuardrailResult.retry(_UNAVAILABLE.format(name=name))
+        if replacement != dict(info.args):
+            return GuardrailResult.replace(replacement)
+        return GuardrailResult.allow()
+
+    return guard
+
+
+_UNAVAILABLE = (
+    "Secret '{name}' is not available. Ask the user for it or choose another path."
+)
+
+# Unrestricted guard: any environment variable may be named by a handle.
+secret_handle_guard = make_secret_handle_guard()
 
 
 def secret_result_guard(info: ToolResultInfo) -> GuardrailResult:

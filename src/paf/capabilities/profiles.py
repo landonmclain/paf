@@ -152,6 +152,31 @@ LONGMEMEVAL_PROFILE = AgentProfile(
 )
 
 
+# The locked-down profile for high-stakes deployments (specs/secure_assistant.yaml).
+# Deliberately the OPPOSITE of the everything-sandbox: no way off the machine
+# (Web, Browser, MCP), no arbitrary command execution (Shell, Git), no durable
+# cross-session state (Memory, Vault, ThreadSummarizer), no delegation
+# (Subagents) and no other skill/knowledge surfaces. What it keeps: scoped
+# file tools, the sandboxed run_python, persistence/recall for the audit trail,
+# and ALL THREE guardrails — prompt-injection screening of tool results, the
+# declarative per-call tool gate, and the allowlisted secret handles.
+SECURE_PROFILE = AgentProfile(
+    name="secure",
+    capability_names=(
+        "StepPersistence",
+        "ConversationSearch",
+        "Compaction",
+        "FileSystem",
+        "Python",
+        "Workspace",
+        "ToolOutputLimits",
+        "Guardrails",
+        "ToolGating",
+        "Secrets",
+    ),
+)
+
+
 # Name lookup so a spec/CLI can reference a profile by a string that resolves
 # to the allowlist. Only used by spec-driven loaders; keep small.
 # Tool profile for the `researcher` SUBAGENT leaf (specs/sub_agents/
@@ -192,6 +217,7 @@ PROFILES: dict[str, AgentProfile] = {
         DEMO_PROFILE,
         CONTEXTBENCH_PROFILE,
         LONGMEMEVAL_PROFILE,
+        SECURE_PROFILE,
     )
 }
 

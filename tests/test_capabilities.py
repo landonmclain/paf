@@ -412,7 +412,7 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
 def test_profiles_are_the_complete_intentional_set() -> None:
     """Known profiles: assistant (clean prod), demo (the everything sandbox),
     contextbench (the codebase-map benchmark arm), and longmemeval (the memory
-    benchmark arm).
+    benchmark arm), and secure (the locked-down high-stakes agent).
 
     ``demo`` is the surface where new/experimental capabilities are tried before
     being promoted to the production ``assistant`` spec. ``contextbench`` is the
@@ -426,6 +426,7 @@ def test_profiles_are_the_complete_intentional_set() -> None:
         "demo",
         "contextbench",
         "longmemeval",
+        "secure",
     }
     assert PROFILES["assistant"] is ASSISTANT_PROFILE
     assert PROFILES["contextbench"] is CONTEXTBENCH_PROFILE

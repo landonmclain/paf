@@ -48,10 +48,12 @@ from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
+from paf.capabilities.guardrails.gating_policy import make_gating_guard, parse_policy
 from paf.capabilities.guardrails.prompt_injection import (
     prompt_injection_on_detection,
 )
 from paf.capabilities.guardrails.secret_handles import (
+    make_secret_handle_guard,
     secret_handle_guard,
     secret_result_guard,
 )
@@ -773,7 +775,7 @@ def _build_guardrails(store) -> PromptInjectionDefender:
     )
 
 
-def _build_tool_gating(store) -> ToolGuardrail:
+def _build_tool_gating(store, gating_config: dict | None = None) -> ToolGuardrail:
     """Per-call execution-time tool gate (BUILTIN shell, paf-owned policy).
 
     The harness ``ToolGuardrail`` is the shell; the policy is paf's own
@@ -782,9 +784,28 @@ def _build_tool_gating(store) -> ToolGuardrail:
     gatekeeper: this builder only runs when the profile allowlists
     ``ToolGating``.
 
+    `gating_config` is the spec's top-level ``gating:`` block (see
+    ``specs._spec_gating_config``): an ordered rule list compiled by
+    ``guardrails.gating_policy`` into ``allow`` / ``block`` / ``approve``
+    outcomes, optionally conditioned on a path argument. ``approve`` is enforced
+    as ``block`` here (``approval_available=False``) until a transport can show
+    the request to a person and resume the run. Absent block -> the legacy
+    ``tool_gating_guard`` (``DEFAULT_GATED_TOOLS``). A malformed block raises at
+    build time rather than loading half a policy.
+
     `store` is accepted for a uniform builder signature but unused — the
     policy is stateless per call.
     """
+    policy = parse_policy(gating_config)
+    if policy is not None:
+        return ToolGuardrail(
+            guard=make_gating_guard(policy, approval_available=False),
+            id="tool_gating",
+            description=(
+                "Applies this agent's declarative gating policy to every tool "
+                "call before it executes."
+            ),
+        )
     return ToolGuardrail(
         guard=tool_gating_guard,
         id="tool_gating",
@@ -795,7 +816,7 @@ def _build_tool_gating(store) -> ToolGuardrail:
     )
 
 
-def _build_secrets(store) -> ToolGuardrail:
+def _build_secrets(store, secrets_config: dict | None = None) -> ToolGuardrail:
     """Secret-handle resolution + result redaction (BUILTIN shell, paf-owned policy).
 
     The harness ``ToolGuardrail`` is the shell; the policy is paf's own
@@ -806,11 +827,23 @@ def _build_secrets(store) -> ToolGuardrail:
     result. The profile is the gatekeeper: this builder only runs when the
     profile allowlists ``Secrets``.
 
+    `secrets_config` is the spec's top-level ``secrets:`` block (see
+    ``specs._spec_secrets_config``). Its ``allowed`` list names the only
+    environment variables a handle may resolve; an empty list resolves nothing.
+    Absent block (or no ``allowed`` key) keeps the original unrestricted
+    behavior. The result-side redaction backstop is unaffected: it still scrubs
+    every secret-looking environment value from tool output.
+
     `store` is accepted for a uniform builder signature but unused — the
     policy is stateless per call.
     """
+    allowed = (secrets_config or {}).get("allowed")
     return ToolGuardrail(
-        guard=secret_handle_guard,
+        guard=(
+            make_secret_handle_guard(allowed)
+            if allowed is not None
+            else secret_handle_guard
+        ),
         result_guard=secret_result_guard,
         id="secrets",
         description=(
@@ -912,6 +945,8 @@ def build_runtime_capabilities(
     filesystem_config: dict | None = None,
     shell_config: dict | None = None,
     python_config: dict | None = None,
+    gating_config: dict | None = None,
+    secrets_config: dict | None = None,
     git_config: dict | None = None,
     codebase_map_config: dict | None = None,
     skills_config: dict | None = None,
@@ -1006,6 +1041,10 @@ def build_runtime_capabilities(
             capabilities.append(
                 _build_shell(store, shell_config, agent_name, on_complete)
             )
+        elif name == "ToolGating":
+            capabilities.append(_build_tool_gating(store, gating_config))
+        elif name == "Secrets":
+            capabilities.append(_build_secrets(store, secrets_config))
         elif name == "Python":
             capabilities.append(_build_python(store, python_config))
         elif name == "Git":

@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from pydantic_ai import Agent, AgentSpec, UsageLimits
 
-from paf.capabilities import ASSISTANT_PROFILE, AgentProfile
+from paf.capabilities import ASSISTANT_PROFILE, PROFILES, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
 from paf.config import SPECS_DIR
@@ -743,6 +743,60 @@ def _spec_python_config(spec_path: Path) -> dict | None:
     return config or None
 
 
+def _spec_gating_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``gating:`` block (declarative tool policy).
+
+        gating:
+          default: block          # allow (default) | block | approve
+          rules:                  # first match wins
+            - tools: [read_file, list_directory]
+              action: allow
+            - tools: [write_file, edit_file]
+              action: allow
+              inside: [out]       # only when the path is under out/
+            - tools: [write_file, edit_file]
+              action: approve     # everything else; enforced as block until
+                                  # an approval transport exists
+
+    Returned as written (a raw mapping); ``guardrails.gating_policy.parse_policy``
+    validates it and raises on a malformed block, so a half-applied security
+    policy cannot load. ``None`` when the block is absent or unreadable.
+    """
+    return _spec_mapping_block(spec_path, "gating")
+
+
+def _spec_secrets_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``secrets:`` block.
+
+        secrets:
+          allowed: []             # env var names a $SECRET:name handle may resolve
+
+    ``allowed`` is kept only when it is a list of strings; absent -> the guard
+    stays unrestricted (legacy), so an explicit ``[]`` (resolve nothing) and a
+    missing key are different on purpose.
+    """
+    block = _spec_mapping_block(spec_path, "secrets")
+    if not block:
+        return None
+    allowed = block.get("allowed")
+    if isinstance(allowed, list) and all(isinstance(n, str) for n in allowed):
+        return {"allowed": allowed}
+    return None
+
+
+def _spec_mapping_block(spec_path: Path, key: str) -> dict | None:
+    """The spec's top-level ``key:`` mapping, or ``None`` (absent/unreadable)."""
+    try:
+        with spec_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get(key)
+    return block if isinstance(block, dict) else None
+
+
 def _spec_git_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``git:`` block (root)."""
     return _spec_rooted_config(spec_path, "git", "root")
@@ -864,6 +918,8 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "filesystem_config": _spec_filesystem_config(spec_path),
         "shell_config": _spec_shell_config(spec_path),
         "python_config": _spec_python_config(spec_path),
+        "gating_config": _spec_gating_config(spec_path),
+        "secrets_config": _spec_secrets_config(spec_path),
         "git_config": _spec_git_config(spec_path),
         "codebase_map_config": _spec_codebase_map_config(spec_path),
         # Skill library dirs from the spec's `skills:` block.
@@ -959,6 +1015,26 @@ def spec_usage_limits(
     return _spec_usage_limits(get_spec_path(agent_name, spec_directory))
 
 
+def _declared_profile(agent_name: str, spec_directory: Path) -> AgentProfile:
+    """The profile the spec declares via ``profile:`` (default: the assistant's).
+
+    A spec's profile is its capability allowlist, so ``build_agent`` must honor
+    it even when the caller does not pass one: otherwise a locked-down spec
+    built by a caller that forgot ``profile=`` silently gets the assistant's
+    full tool set. A declared name that is not a registered profile raises
+    rather than falling back, so a typo can never widen an agent's capabilities.
+    """
+    declared = resolve_profile_name(agent_name, spec_directory)
+    if declared is None:
+        return ASSISTANT_PROFILE
+    if declared not in PROFILES:
+        raise ValueError(
+            f"Spec {agent_name!r} declares profile {declared!r}, which is not "
+            f"registered. Known: {sorted(PROFILES)}"
+        )
+    return PROFILES[declared]
+
+
 def build_agent(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
@@ -985,7 +1061,7 @@ def build_agent(
     ``model_settings`` is the spec's to declare; when a spec omits it, the
     model runs on pydantic-ai's plain defaults.
     """
-    profile = profile or ASSISTANT_PROFILE
+    profile = profile or _declared_profile(agent_name, spec_directory)
     spec = load_agent_spec(agent_name, spec_directory)
     spec_path = get_spec_path(agent_name, spec_directory)
     # Every per-capability config block (compact/web/browser/vault/skills/
