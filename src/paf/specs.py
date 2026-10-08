@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from pydantic_ai import Agent, AgentSpec, UsageLimits
 
-from paf.capabilities import ASSISTANT_PROFILE, PROFILES, AgentProfile
+from paf.capabilities import PROFILES, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
 from paf.config import SPECS_DIR
@@ -1016,17 +1016,21 @@ def spec_usage_limits(
 
 
 def _declared_profile(agent_name: str, spec_directory: Path) -> AgentProfile:
-    """The profile the spec declares via ``profile:`` (default: the assistant's).
+    """The profile the spec declares via ``profile:``; raises if it declares none.
 
-    A spec's profile is its capability allowlist, so ``build_agent`` must honor
-    it even when the caller does not pass one: otherwise a locked-down spec
-    built by a caller that forgot ``profile=`` silently gets the assistant's
-    full tool set. A declared name that is not a registered profile raises
-    rather than falling back, so a typo can never widen an agent's capabilities.
+    A profile is an agent's capability allowlist, so there is no safe default to
+    fall back to: guessing one (the assistant's, say) hands a locked-down spec
+    the full tool set, or a minimal one capabilities it never asked for. The
+    caller must pass ``profile=`` or the spec must declare ``profile:``. A
+    declared name that is not a registered profile also raises, so a typo can
+    never widen an agent's capabilities.
     """
     declared = resolve_profile_name(agent_name, spec_directory)
     if declared is None:
-        return ASSISTANT_PROFILE
+        raise ValueError(
+            f"No profile for agent {agent_name!r}: pass `profile=` to build_agent "
+            f"or declare `profile:` in the spec. Known: {sorted(PROFILES)}"
+        )
     if declared not in PROFILES:
         raise ValueError(
             f"Spec {agent_name!r} declares profile {declared!r}, which is not "
@@ -1048,7 +1052,7 @@ def build_agent(
 
     ``profile`` is the capability allowlist for this agent kind — resolved to
     ``custom_capability_types`` so the spec's ``capabilities:`` entries can only
-    come from the allowlisted catalog. Defaults to ``ASSISTANT_PROFILE``.
+    come from the allowlisted catalog. When omitted it is the profile the spec declares (``profile:``); with neither, ``build_agent`` raises.
 
     ``build_runtime_capabilities()`` assembles capabilities that cannot resolve
     from YAML (the tiered ``TieredCompaction``, whose nested strategy objects have

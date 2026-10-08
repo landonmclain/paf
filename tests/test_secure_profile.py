@@ -453,6 +453,7 @@ def test_build_agent_honors_the_specs_declared_profile(tmp_path):
     (spec_dir / "b.yaml").write_text("name: b\nmodel: test\n")
     (spec_dir / "c.yaml").write_text("name: c\nprofile: secur\nmodel: test\n")
     assert _declared_profile("a", spec_dir) is SECURE_PROFILE
-    assert _declared_profile("b", spec_dir).name == "assistant"  # no declaration
+    with pytest.raises(ValueError, match="No profile"):
+        _declared_profile("b", spec_dir)  # no default: caller or spec must say
     with pytest.raises(ValueError, match="not registered"):
         _declared_profile("c", spec_dir)  # a typo must not widen the agent
