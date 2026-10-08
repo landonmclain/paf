@@ -1,197 +1,309 @@
-# pydantic-agent-framework
+# paf
 
-A **thin, opinionated agent framework on pydantic-ai V2**. Import name: **`paf`**.
+**paf** is a small, opinionated agent framework built on
+[pydantic-ai](https://ai.pydantic.dev) V2. You describe an agent in a YAML spec,
+choose which capabilities it may use, and paf assembles the agent and runs it
+with durable conversations, long-term memory, and context management.
 
-The primary agent is `demo_assistant` — an "everything sandbox" that exercises
-the full stack (persistence, recall, durable memory, compaction) plus the demo
-capabilities live. A leaner `assistant` profile ships the production core
-without the demo surface.
+It ships with a terminal chat (`paf chat`), an SSE server for web front ends,
+and a Python API (`Session`) that both are built on.
 
-## Principles
+## Why it exists
 
-- **Extensibility is essential, not optional** — capabilities are the extension
-  seam: an allowlisted catalog (`capabilities/registry.py`) + named profiles
-  (`capabilities/profiles.py`) resolve to the `custom_capability_types` a spec
-  loader registers.
-- **Single-agent default** — `Agent` is the composable unit; multi-agent comes
-  later via a thin `Runner`, never a rewrite.
-- **Hybrid config** — the spec (`specs/*.yaml`) declares what pydantic-ai
-  resolves natively (model, instructions, settings); capabilities that need real
-  Python objects (persistence, durable memory + recall, compaction) are
-  assembled in `capabilities/build.py` and merged via `Agent.from_spec`.
-- **Durable, lossless recall** — `StepPersistence` writes every run to a
-  flat-file store (`data/`, JSON/JSONL — greppable, no DB to administer);
-  recall tools give the model access to past turns over the *same* store.
-- **Structured traces, not bloated logs** — telemetry to self-hosted Langfuse via
-  OTLP (no Logfire).
+paf started from a handful of design principles drawn from earlier agent
+projects, not from a library. When pydantic-ai V2 turned out to provide much of
+what those principles called for (capabilities as the extension point, typed
+tools, agent specs, per-step persistence), building thin on top of it made more
+sense than writing a new foundation.
+
+So paf adds only what pydantic-ai deliberately leaves open:
+
+- **A capability catalog and profiles.** One registry of everything an agent
+  could use, plus named allowlists that decide what a given agent does use.
+- **Spec loading that handles real objects.** YAML declares what YAML can
+  describe; capabilities that need live Python objects (stores, search indexes,
+  compaction strategies) are built in code and merged in.
+- **Storage, recall, and memory.** Every conversation is persisted to plain
+  files and stays searchable, and a background process distills durable facts
+  into a memory the agent reads on every request.
+
+The principles behind it:
+
+- **Extensible by construction.** New behavior arrives as a capability, not a
+  fork of the runtime.
+- **Single agent first.** An `Agent` is the unit; delegation and background
+  agents are built from the same pieces.
+- **Lossless, inspectable state.** JSON and JSONL on disk, no database to run.
+  You can read, grep, and diff everything the agent remembers.
+- **Structured traces over logs.** Telemetry goes to Langfuse over
+  OpenTelemetry.
+
+## Quickstart
+
+Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/landonmclain/paf.git
+cd paf
+uv sync
+cp .env.example .env   # then set OPENROUTER_API_KEY
+```
+
+Start a conversation:
+
+```bash
+uv run paf chat                    # the default agent, demo_assistant
+uv run paf chat assistant --new    # another agent, in a fresh conversation
+```
+
+The default model is DeepSeek V4 Flash via [OpenRouter](https://openrouter.ai),
+so an `OPENROUTER_API_KEY` is the only required setting. To use the browser
+capability, install Chromium once with `uv run playwright install chromium`.
+
+## How it fits together
+
+```
+specs/assistant.yaml ──► build_agent ──► Agent ──► Session ──► paf chat
+  model, instructions,       │                       │          ui/sse.py
+  profile, per-capability    │                       │          your code
+  settings                   ▼                       ▼
+                    profile (allowlist)        data/  (runs, memory,
+                    + capability catalog              conversations, plans)
+```
+
+- A **spec** (`specs/<name>.yaml`) names the model, the instructions, the
+  profile, and settings for each capability (file-tool roots, shell backend,
+  web domains, memory options, and so on).
+- A **profile** (`src/paf/capabilities/profiles.py`) is the allowlist of
+  capabilities that agent gets, drawn from the catalog in
+  `src/paf/capabilities/registry.py`.
+- `build_agent` (`src/paf/specs.py`) loads the spec with pydantic-ai's
+  `Agent.from_spec` and merges in the capabilities built in Python
+  (`src/paf/capabilities/build.py`).
+- A **`Session`** (`src/paf/runtime.py`) owns a conversation: it restores prior
+  history, stamps the date on each message, compacts context between turns,
+  streams events, and schedules background work after each turn. Turns run as
+  tasks the session owns, so a client can disconnect and reattach to a running
+  turn.
 
 ## Agents
 
-Agents resolve from declarative YAML specs (`specs/*.yaml`) via `Agent.from_spec`.
-The primary agent is `demo_assistant` — the "everything sandbox" that exercises
-the full stack (persistence, recall, durable memory, compaction) plus the demo
-capabilities live. A leaner `assistant` profile ships the production core
-(durability + recall + compaction) without the demo surface.
+| Agent | Spec | Purpose |
+| --- | --- | --- |
+| `demo_assistant` | `specs/demo_assistant.yaml` | Default for `paf chat`. Everything enabled, including experimental pieces. |
+| `assistant` | `specs/assistant.yaml` | General assistant with the same capabilities, configured for everyday use. |
 
-Both default to **DeepSeek V4 Flash via OpenRouter** (requires
-`OPENROUTER_API_KEY` in `.env`; bare slug, no `:nitro` suffix).
+Other specs in `specs/` serve benchmarks and tests. Subagents that agents can
+delegate to (coding, code review, research, writing) live in
+`specs/sub_agents/`, and the background agents that maintain memory and
+summaries live in `specs/background_agents/`.
+
+A spec is plain YAML. Abridged:
+
+```yaml
+name: assistant
+profile: assistant
+model: openrouter:deepseek/deepseek-v4-flash-0731
+instructions: |
+  You are a capable general-purpose assistant and technical collaborator...
+
+filesystem:
+  root_dir: ~/
+shell:
+  cwd: ~/
+  executor:
+    backend: local   # or docker, for a locked-down container
+```
+
+To add an agent, copy a spec, give it a new `name`, and point `profile` at the
+capability set it should have.
 
 ## Capabilities
 
-Capabilities are the extension seam — an allowlisted catalog (`registry.py`)
-that a named profile (`profiles.py`) resolves to concrete capability types,
-assembled in `build.py` and merged into the agent by `build_agent`
-(`specs.py`).
+Each capability bundles tools, instructions, and hooks. A profile picks from
+these.
 
-### Core (both agents)
+**Conversation and memory**
 
-- **StepPersistence** — every run to a flat-file store (`data/`, JSON/JSONL).
-- **ConversationSearch** — paf-owned BM25 retrieval: a wide
-  `search_conversation_history` over the raw transcript, plus the shared
-  full-content read (`read_turn`) that expands a `run_id:turn_id` ref into the
-  complete original turn.
-- **Memory** — a durable, inspectable fact notebook (see below).
-- **Compaction** — context management: sliding-window eviction and
-  clear-tool-results scavenging to keep long conversations in bounds.
+- **StepPersistence** saves every run, step by step, to a flat-file store.
+- **ConversationSearch** gives the model `search_conversation_history` (BM25
+  over the full transcript) and `read_turn` (the complete original turn behind
+  a search hit).
+- **Memory** keeps a durable notebook of facts, injected into every request
+  (see [Memory](#memory)).
+- **ThreadSummarizer** summarizes each conversation in the background.
+- **Compaction** keeps long conversations within budget: it trims the window at
+  turn boundaries and clears stale tool results, never cutting into the turn in
+  progress.
 
-### Demo (`demo_assistant` — "everything sandbox")
+**Working with files and code**
 
-The demo additionally allowlists the harness-style capabilities:
+- **FileSystem** reads, writes, edits, and searches files under a configured
+  root.
+- **Shell** runs commands in the foreground or background, locally or in a
+  Docker container.
+- **Git** gives status, diffs, checkpoints, and restores of explicit paths.
+- **CodebaseMap** is a navigation-first code browser: orient with
+  `get_overview`, then `lookup_file`, then read a tight range with
+  `read_block`; `search_codebase` is there when navigation isn't enough.
+- **Vault** navigates and edits a folder of Markdown notes, with links and
+  backlinks.
+- **Workspace** tells the model where each tool family's relative paths start,
+  and the user's time zone.
 
-- **FileSystem** — scoped read/write/edit/search under a root.
-- **Shell** — run/start/check/stop, rooted at a cwd, with allow/deny lists and
-  env-masking.
-- **Git** — safe inspection + checkpoint tools (explicit paths only).
-- **CodebaseMap** — navigation-first codebase browser (overview/lookup_file/
-  read_block/search_codebase + re-index).
-- **Vault** — navigation-first note ladder over an Obsidian-style markdown vault.
-- **Web** — Tavily-backed search + page extraction (`search_web_docs`,
-  `search_official_docs`, `fetch_web_page`).
-- **Browser** — mobile-first headless Chromium automation (navigate/snapshot/
-  click/type/screenshot + set_viewport), with SSRF defense.
-- **Visual** — vision-model description of captured screenshots.
-- **Skills** — LIST / LOAD on demand plus a deterministic POINTER trigger.
-- **ToolOutputLimits** — framework-level tool-return reduction (spill/summarize/
-  truncate oversized results).
-- **WarnOnCacheBusts** — observer that warns when the prompt-cacheable prefix
-  collapses mid-run.
-- **Subagents** — `delegate_task` to named child agents in isolated runs.
-- **Planning** — model-owned task plan (write_plan/read_plan/add_task/...).
-- **ThreadSummarizer** — per-conversation episodic background summarizer.
-  Phase 1: records each eviction block (per-message `{run_id}:{turn_id}` refs) to
-  `data/summaries/demo_assistant/evictions.jsonl`. OFF for the production agent.
-- **Guardrails** — structural prompt-injection defense.
-- **ToolGating** — per-call execution-time tool gate for the highest-risk tools.
-- **Secrets** — secret-handle resolution + result redaction (real values never
-  enter the window).
+**Web and vision**
 
-Native pydantic-ai capabilities (WebSearch, WebFetch, XSearch, Thinking, MCP,
-ToolSearch, ImageGeneration) resolve directly from the `demo_assistant` spec's
-YAML `capabilities:` list — no Python build step needed.
+- **Web** searches the web and extracts pages (`search_web`, `fetch_web_page`,
+  backed by Tavily).
+- **Browser** drives headless Chromium with a mobile-first viewport, limited to
+  allowed domains.
+- **Visual** describes screenshots and images with a vision model.
+
+**Orchestration**
+
+- **Subagents** delegates tasks to named child agents in isolated runs, in the
+  foreground or background (`delegate_task`, `check_task`, `cancel_task`).
+- **Planning** gives the model a task plan it maintains as it works
+  (`write_plan`, `add_task`, `update_task_status`, and so on), shown live in the
+  CLI toolbar.
+- **Skills** lists and loads skill documents on demand, and points the model at
+  a relevant one when a message matches it.
+- **ToolOutputLimits** shrinks oversized tool results before they reach the
+  model.
+- **WarnOnCacheBusts** warns when the cacheable prompt prefix changes mid-run.
+
+Native pydantic-ai capabilities (web search, thinking, MCP, and others) can be
+listed directly in a spec's `capabilities:` block, with no Python needed.
 
 ## Memory
 
-Memory is **paf-owned and flat-file-first** — an *append-only JSONL journal is
-the source of truth*, and `MEMORY.md` is a pure presentation view rendered from
-it (no opaque DB; inspectable, editable, diffable).
+Memory is owned by paf and stored as plain files under `data/memory/<agent>/`:
 
-```
-data/memory/
-  memory-journal.jsonl   # source of truth — append-only, one JSON record per durable fact
-  MEMORY.md              # rendered view — what gets injected as <memory>
-```
+- `memory-journal.jsonl` is the **source of truth**: an append-only log, one
+  record per fact, each with the date it became true and a reference back to
+  the turn it came from.
+- `MEMORY.md` is a **rendered view** of the journal. It is what the agent sees,
+  and you can read it with `/memory` in the CLI.
 
-**Write side — the consolidation owner.** A dedicated owner sub-agent extracts
-durable facts from the conversation and appends them to the journal
-(`append_memory(type, fact, born_on, source_ref)`) — one fact per call, six
-semantic types (`identity` / `preference` / `fact` / `event` / `task` /
-`current`). It never edits, moves, deletes, or dedupes; newest-wins and dedup
-are resolved by the render pass.
+The roles are split. A background **owner agent** reads new conversation turns
+and appends facts to the journal; it never edits or deletes. Duplicates and
+outdated facts are resolved when the view is rendered, so the journal itself is
+never rewritten. The assistant only reads memory, and when it needs more than
+memory holds, it recalls in order: what's in context, then
+`search_conversation_history`, then `read_turn`.
 
-**Read side — the assistant (read-only).** The answerer reads the rendered
-`MEMORY.md`, injected into `<memory>` on every request, and recalls by the
-ladder *in-context → `search_conversation_history` → `read_turn`* — it has no
-memory-write tool (recording is the owner's job).
+Because each fact carries its source reference, anything in memory can be
+traced back to the exact turn that produced it.
 
-**As-of date / traceability.** Each record carries `born_on` (ISO date) and
-`source_ref` (`run_id:turn_id`), so every fact is date-grounded and
-`read_turn`-resolvable back to the turn it came from.
+## Using paf
 
-## UIs
+### Terminal: `paf chat`
 
-All UIs drive the same `Session` underneath.
+The answer streams into normal scrollback, so the terminal's own scrolling,
+search, and copy work. Thinking shows dimmed, each tool call gets one line, and
+Markdown renders as each block completes. A toolbar at the bottom shows
+background jobs and plan progress.
 
-- `paf chat` (`src/paf/cli/`) — inline terminal chat: streams thinking, tool
-  calls, and a markdown-rendered answer into normal scrollback, with a bottom
-  toolbar for background processes and plan progress. Type while a turn runs to
-  steer it; `/image <path>` sends an image; `/help` lists the rest. Runs
-  in-process (no server needed). From a source checkout, `python ui/chat.py` is
-  the same command.
-- `ui/sse.py` — FastAPI SSE server for a web frontend: turn streams, the
-  background-process feed, steer/cancel, conversations, projects, and uploads.
+- **Type while a turn is running to steer it.** Output pauses, and what you send
+  is delivered into the running turn.
+- **Background work reports back.** When a background shell command or subagent
+  finishes, its follow-up turn streams in, even while you're at the prompt.
+- **Conversations persist.** `paf chat` reopens your last conversation; `/list`
+  and `/resume` switch between them, and `/name` and `/project` organize them.
+- **Piped input is one turn.** `cat task.md | paf chat --new` sends the whole
+  input as one message, then exits.
 
-## Benchmarking: LongMemEval
+`/help` lists every command, including `/image <path>` to send an image and
+`/plan`, `/tasks`, and `/memory` to inspect state. From a source checkout,
+`python ui/chat.py` is the same command.
 
-The graded proof gate is **LongMemEval** (`tests/run_lmem.py`) — the official
-binary judge for answer correctness plus **ID-membership recall@k** over
-surfaced `session=` tags (no token-overlap F1) for retrieval. Oracle split lives
-in `data/benchmarks/lme_oracle.json`; graded records in `tests/results/`.
+### Web front ends: `ui/sse.py`
+
+A FastAPI server exposing the same sessions over Server-Sent Events: a stream
+per turn, a separate feed for background processes, steer and cancel, and
+endpoints for conversations, projects, plans, and image uploads. Turns run on
+the server, so a page refresh reattaches to a turn in progress.
 
 ```bash
-set -a && . ./.env && set +a && \
-  LME_MAX_QUESTIONS=4 PYTHONPATH= python -u -m tests.run_lmem
+uv run python ui/sse.py   # serves on port 8090
 ```
 
-Benchmark data, seeding, and knobs are documented in
-[`tests/AGENTS.md`](tests/AGENTS.md).
+### Python
 
-## Layout
+```python
+from paf.runtime import Session, StreamEvent
+
+session = Session("assistant", conversation_id="notes-1")
+
+# One turn, final text only.
+print(session.run_sync("What did we decide about the release date?"))
+
+# Or stream events: text, thinking, tool_call, tool_result.
+async def ask(prompt: str) -> None:
+    async for event in session.stream(prompt):
+        if isinstance(event, StreamEvent) and event.kind == "text":
+            print(event.text, end="", flush=True)
+
+session.close()
+```
+
+The same `conversation_id` resumes the same conversation in a later process.
+For long-running clients, `start_turn` returns a handle you can subscribe to,
+cancel, or reattach to, and `enqueue` steers a turn that's in progress.
+
+## Configuration
+
+Settings come from the environment or a `.env` file (see `.env.example`):
+
+| Setting | Purpose |
+| --- | --- |
+| `OPENROUTER_API_KEY` | Required for the default model. |
+| `OTLP_ENDPOINT`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Send traces to Langfuse. Leave blank to turn tracing off. |
+| `PAF_HOME` | Where `specs/` and `data/` live. Defaults to the repository root in a source checkout, otherwise the current directory. |
+| `TIMEZONE` | The user's IANA time zone, for the date stamped on messages. Defaults to the machine's. |
+
+Everything paf writes goes under `data/`, as plain files:
+
+```
+data/
+  paf/            persisted runs (one directory per run)
+  memory/<agent>/ memory journal, rendered MEMORY.md, review state
+  conversations/  conversation titles, projects, hidden flags
+  plans/          the model's task plans, per conversation
+  processes/      background shell and subagent records
+  uploads/        images sent to the agent
+```
+
+## Development
+
+```bash
+uv run pytest                      # offline suite; live tests are opt-in
+uv run pytest -m live              # real model calls (needs .env)
+uv run ruff check src tests ui
+uv run ruff format --check src tests ui
+npx pyright
+```
+
+The offline suite uses pydantic-ai's `TestModel`, so it needs no API key. CI
+runs the same checks on every push.
+
+## Project layout
 
 ```
 src/paf/
-  capabilities/   extension seam — registry, profiles, builders
-    search/       paf-owned BM25 ConversationSearch (search_conversation_history)
-                  + shared full-content read (read_turn)
-    memory/       paf-owned Memory — journal + render + consolidation owner
-    fs/ shell/ git/ web/ skills/   demo-profile capabilities ("everything sandbox")
-  observability/  Langfuse OTLP instrumentation (setup/shutdown)
-  runtime.py      Session — UI-agnostic run lifecycle (build + trace + stream +
-                  history + flush)
-  specs.py        spec loader (agent name → YAML → Agent)
-  config.py       pydantic-settings config + spec/root anchoring
-specs/            declarative agent specs (*.yaml)
-ui/               chat.py (inline terminal chat), sse.py (background-process feed),
-                  web.py (Gradio)
-tests/            unit tests + benchmark harness (run_lmem, ...)
+  runtime.py        Session: the turn runtime every client uses
+  specs.py          spec loading (agent name → YAML → Agent)
+  background.py     post-turn background work (memory, summaries)
+  clients.py        helpers shared by the CLI and the SSE server
+  config.py         settings and paths
+  capabilities/     the catalog, profiles, builders, and each capability
+  cli/              paf chat
+  observability/    Langfuse / OpenTelemetry setup
+specs/              agent specs, plus sub_agents/ and background_agents/
+ui/                 sse.py (web server), chat.py (CLI shim)
+tests/              unit tests and the benchmark harness
 ```
 
-## Run it
+## License
 
-The real workflow uses the local venv + env:
-
-```bash
-# one-time
-cp .env.example .env        # OPENROUTER_API_KEY + optional Langfuse keys
-PYTHONPATH= .venv/bin/pip install -e .   # or: uv sync
-
-# interactive CLI — defaults to the demo_assistant "everything sandbox"
-paf chat
-# or the leaner production assistant, on a fresh conversation
-paf chat assistant --new
-```
-
-Prepend `set -a && . ./.env && set +a;` to export secrets for the runner. The
-REPL keeps a durable conversation; run it twice with the same conversation id
-to see persistence + recall — start, quit, restart, then ask for something
-reachable only via `search_conversation_history`.
-
-## Verify
-
-```bash
-.venv/bin/ruff check . --fix --output-format=concise
-python -m pytest -q          # offline unit + integration
-python -m pytest -m live     # opt-in: real model + Langfuse (needs .env)
-```
-
-A root `conftest.py` wires `.env` into `os.environ` at import time so bare
-`pytest` and `pytest -m live` both run green.
+[MIT](LICENSE)
