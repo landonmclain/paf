@@ -17,6 +17,7 @@ from paf.capabilities.keyword_curator import (
     KeywordJournalStore,
     KeywordWatermark,
     derive_entity_map,
+    looks_like_identifier,
     make_record,
     normalize_term,
     read_entity_map,
@@ -288,3 +289,58 @@ def test_failed_pass_does_not_advance(tmp_path) -> None:
     assert wm.changed(current) == ["skill:a"]
     # (pass fails here: no advance, no save)
     assert KeywordWatermark.load(tmp_path).changed(current) == ["skill:a"]
+
+
+# --- alias hygiene -----------------------------------------------------------
+
+
+def test_looks_like_identifier() -> None:
+    for ident in [
+        "backtests/read",
+        "pull_objectstore.py",
+        "gws 0.22.5",
+        "HMAC-SHA256",
+        "ib.example.com",
+        "LME_QIDS",
+        "qc-deploy.sh",
+    ]:
+        assert looks_like_identifier(ident), ident
+    for phrase in ["QC", "lean CLI", "the extractor", "Langfuse v4", "quick add"]:
+        assert not looks_like_identifier(phrase), phrase
+
+
+def test_make_record_moves_identifier_aliases_to_keywords() -> None:
+    rec = make_record(
+        "skill:qc",
+        "skill",
+        ["lean-cli"],
+        [
+            {
+                "canonical": "quantconnect",
+                "aliases": ["qc", "live/logs/read", "run_lmem.py"],
+            }
+        ],
+    )
+    assert rec["entities"] == [{"canonical": "quantconnect", "aliases": ["qc"]}]
+    assert rec["keywords"] == ["lean-cli", "live/logs/read", "run_lmem.py"]
+
+
+def test_make_record_drops_generic_aliases_and_caps() -> None:
+    aliases = ["Docs", "Calendar", "workflow"] + [f"name {i}" for i in range(20)]
+    rec = make_record(
+        "skill:g", "skill", [], [{"canonical": "gws", "aliases": aliases}]
+    )
+    kept = rec["entities"][0]["aliases"]
+    assert len(kept) == 8 and kept[0] == "name 0"
+    assert not {"docs", "calendar", "workflow"} & {a.lower() for a in kept}
+    assert rec["keywords"] == []  # generic words are dropped, not kept as keywords
+
+
+def test_derive_applies_the_same_hygiene_to_old_journal_lines() -> None:
+    legacy = {
+        "source_ref": "skill:a",
+        "source_type": "skill",
+        "keywords": [],
+        "entities": [{"canonical": "foo", "aliases": ["f", "foo/bar", "Docs"]}],
+    }
+    assert derive_entity_map([legacy])["foo"]["aliases"] == ["f"]

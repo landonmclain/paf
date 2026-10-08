@@ -38,17 +38,31 @@ instructions: |
   below, name the entities it is mainly about, the ways a person would refer to
   each in conversation, and a few searchable keywords.
 
-  Entities: the project, tool, system or topic a source is about — usually one to
+  Entities: the project, tool, product or topic a source is about — usually one to
   three, never a list of everything it mentions. The canonical name is short,
   lowercase and hyphenated. If a source is about an entity already in the
   known-entity list, use that exact canonical name; do NOT invent a second name
   for it. Prefer adding aliases to an existing entity over creating a new one.
+  One entity per product: a product's CLI, API, SDK or sub-features are aliases
+  or keywords of that product, not separate entities (a "Foo CLI" and "Foo" are
+  one entity "foo"). Only split when they are genuinely different things with
+  different uses.
 
-  Aliases: the phrases someone would actually type — abbreviations, informal
-  names, how they would say it out loud ("the extractor", "qc", "that gmail
-  thing"). Each alias must be specific: seeing it in a message should strongly
-  imply this entity. Never use generic words ("code", "file", "setup", "notes",
-  "workflow") as an alias. Three to eight aliases is typical; fewer is fine.
+  Aliases are the phrases someone would actually SAY or type when referring to
+  the entity in conversation: the product's common names, abbreviations,
+  informal names ("the extractor", "qc", "that gmail thing"). At most eight, and
+  fewer is better. An alias must be specific: seeing it in a message should
+  strongly imply this entity. NEVER use as an alias:
+    - identifiers: endpoints, URLs, file names, script names, env vars, function
+      or field names, version numbers, hashes (`backtests/read`, `qc-deploy.sh`,
+      `runtimeStatistics`, `HMAC-SHA256`). Those are keywords.
+    - generic words that appear in ordinary talk ("docs", "calendar", "drive",
+      "code", "setup", "notes", "workflow", "api", "cli").
+    - the name of a different product (a skill that USES Postgres is not about
+      Postgres unless it is mainly about it).
+
+  Keywords are where the specific terms go: concrete names, identifiers and
+  vocabulary from the source that a search would use (up to six).
 
   Answer every source exactly once and cite its exact [ref]. Do not infer
   anything the source does not say.

@@ -138,12 +138,12 @@ def check_batch(batch: CurateBatch, refs: Sequence[str]) -> list[str]:
 DEFAULT_CURATOR_INSTRUCTIONS = (
     "You maintain a shared vocabulary that lets an assistant recognise when a "
     "conversation is about something it has skills or notes for. For each source "
-    "below, name the entities it is mainly about and the ways a person would "
-    "refer to them in conversation, plus a few searchable keywords. Reuse an "
-    "existing canonical name from the known-entity list whenever a source is "
-    "about that entity — do not invent a second name for it. Answer every source "
-    "exactly once, citing its exact [ref]. Do not infer anything the source does "
-    "not say."
+    "below, name the entities it is mainly about (one entity per product; reuse an "
+    "existing canonical name from the known-entity list), the phrases a person "
+    "would actually say to refer to each (at most eight; never identifiers, file "
+    "names, endpoints, versions, or generic words — those are keywords), and a few "
+    "searchable keywords. Answer every source exactly once, citing its exact "
+    "[ref]. Do not infer anything the source does not say."
 )
 
 

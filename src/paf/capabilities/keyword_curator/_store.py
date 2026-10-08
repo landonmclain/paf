@@ -32,6 +32,43 @@ ENTITY_MAP_FILENAME = "entity-map.json"
 
 _SEPARATORS = re.compile(r"[\s_\-]+")
 
+MAX_ALIASES = 8
+"""Per-entity alias cap. The hot path detects entities by alias, so a long alias
+list is a long list of ways to fire a wrong hint."""
+
+GENERIC_ALIASES = frozenset(
+    {
+        "api", "cli", "code", "config", "data", "docs", "doc", "drive", "file",
+        "files", "framework", "notes", "note", "project", "script", "server",
+        "setup", "sheet", "sheets", "calendar", "test", "tests", "tool", "tools",
+        "workflow", "workflows", "agent", "agents",
+    }
+)  # fmt: skip
+"""Single common words that appear in ordinary conversation. As an alias they
+would fire on anything, so they are dropped (not even kept as keywords)."""
+
+_IDENTIFIER = re.compile(
+    r"""
+    [/\\_:=$()]                      # path / snake_case / call / env-var syntax
+    | \.(py|sh|md|json|ya?ml|toml|txt|csv|sql|js|ts)\b   # file name
+    | \d+\.\d+                        # version number
+    | ^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$   # ALL-CAPS-TOKEN (HMAC-SHA256)
+    | ^\S+\.[A-Za-z]{2,}$             # dotted name (host.tld, module.attr)
+    """,
+    re.VERBOSE,
+)
+
+
+def looks_like_identifier(text: str) -> bool:
+    """True for strings that name a code/file/endpoint/env thing, not a phrase.
+
+    ``backtests/read``, ``pull_objectstore.py``, ``gws 0.22.5``, ``HMAC-SHA256``,
+    ``ib.example.com``. Such terms are good *keywords* (searchable) but bad
+    *aliases* (nobody says them to refer to an entity), so :func:`make_record`
+    moves them to the record's keywords.
+    """
+    return bool(_IDENTIFIER.search(str(text).strip()))
+
 
 def normalize_term(text: str) -> str:
     """The comparison form of an entity name or alias.
@@ -57,8 +94,14 @@ def _clean_terms(values: Iterable[Any]) -> list[str]:
     return out
 
 
-def _clean_entities(entities: Iterable[Any]) -> list[dict[str, Any]]:
-    """Normalize raw entities to ``{"canonical": str, "aliases": [str]}``."""
+def _clean_entities(
+    entities: Iterable[Any], *, moved: list[str] | None = None
+) -> list[dict[str, Any]]:
+    """Normalize raw entities to ``{"canonical": str, "aliases": [str]}``.
+
+    Aliases that are identifiers are appended to ``moved`` (if given) instead of
+    kept; generic words are dropped; at most :data:`MAX_ALIASES` remain.
+    """
     out: list[dict[str, Any]] = []
     for ent in entities:
         if not isinstance(ent, dict):
@@ -66,12 +109,17 @@ def _clean_entities(entities: Iterable[Any]) -> list[dict[str, Any]]:
         canonical = str(ent.get("canonical") or "").strip()
         if not normalize_term(canonical):
             continue
-        aliases = [
-            a
-            for a in _clean_terms(ent.get("aliases") or [])
-            if normalize_term(a) != normalize_term(canonical)
-        ]
-        out.append({"canonical": canonical, "aliases": aliases})
+        aliases: list[str] = []
+        for a in _clean_terms(ent.get("aliases") or []):
+            key = normalize_term(a)
+            if key == normalize_term(canonical) or key in GENERIC_ALIASES:
+                continue
+            if looks_like_identifier(a):
+                if moved is not None:
+                    moved.append(a)
+                continue
+            aliases.append(a)
+        out.append({"canonical": canonical, "aliases": aliases[:MAX_ALIASES]})
     return out
 
 
@@ -87,16 +135,21 @@ def make_record(
 
     ``source_ref`` ties the record to its source (``skill:<id>``,
     ``note:<vault-path>``, ``memory:<line>``, ...). ``at`` defaults to now (UTC).
+
+    Alias hygiene is enforced here, not left to the prompt: identifier-like
+    aliases move to ``keywords``, generic words are dropped, aliases are capped.
     """
     ref = str(source_ref).strip()
     if not ref:
         raise ValueError("source_ref must be non-empty")
+    moved: list[str] = []
+    cleaned = _clean_entities(entities, moved=moved)
     return {
         "source_ref": ref,
         "source_type": str(source_type).strip(),
         "at": at or datetime.now(UTC).isoformat(timespec="seconds"),
-        "keywords": _clean_terms(keywords),
-        "entities": _clean_entities(entities),
+        "keywords": _clean_terms([*keywords, *moved]),
+        "entities": cleaned,
     }
 
 

@@ -520,3 +520,16 @@ def test_report_counts_singletons_and_alias_free() -> None:
     out = find_issues(m)
     assert out["single_source"] == ["b"] and out["no_aliases"] == ["b"]
     assert out["entities"] == 2
+
+
+def test_report_flags_split_entities_that_share_sources() -> None:
+    m = _emap(
+        gws={"sources": ["skill:gmail", "skill:google-workspace"]},
+        **{"google-workspace": {"sources": ["skill:google-workspace"]}},
+        quantconnect={"sources": [f"skill:q{i}" for i in range(8)]},
+        composer={"sources": ["skill:q0"]},
+    )
+    pairs = {frozenset((a, b)) for a, b, _ in find_issues(m)["overlapping_sources"]}
+    assert frozenset(("gws", "google-workspace")) in pairs
+    # a small entity inside a big one is normal, not a duplicate
+    assert frozenset(("composer", "quantconnect")) not in pairs

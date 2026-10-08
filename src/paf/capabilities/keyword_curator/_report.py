@@ -15,6 +15,7 @@ from typing import Any
 from ._store import normalize_term
 
 SIMILAR_RATIO = 0.82
+OVERLAP_JACCARD = 0.5
 
 
 def find_issues(entity_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -24,6 +25,9 @@ def find_issues(entity_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
       entity (the hot path could not tell which was meant).
     - ``similar_names`` — pairs of canonical names that are near-spellings or one
       contains the other's words (possible duplicates or a missing alias).
+    - ``overlapping_sources`` — entity pairs that share most of their sources
+      (Jaccard >= 0.5): often one thing split in two, which name similarity
+      misses (``gws`` vs ``google-workspace``).
     - ``single_source`` / ``no_aliases`` — entities that connect only one source
       or can only be detected by their canonical name.
     """
@@ -50,8 +54,22 @@ def find_issues(entity_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
             if ta and tb and (ta < tb or tb < ta) and len(ta | tb) > 1:
                 similar.append((a, b, "one name contains the other's words"))
 
+    overlapping: list[tuple[str, str, str]] = []
+    srcs = {n: set(entity_map[n].get("sources", [])) for n in names}
+    for i, a in enumerate(names):
+        for b in names[i + 1 :]:
+            sa, sb = srcs[a], srcs[b]
+            if not sa or not sb:
+                continue
+            jac = len(sa & sb) / len(sa | sb)
+            if jac >= OVERLAP_JACCARD:
+                overlapping.append(
+                    (a, b, f"{len(sa & sb)} shared of {len(sa | sb)} sources")
+                )
+
     return {
         "entities": len(entity_map),
+        "overlapping_sources": overlapping,
         "ambiguous_terms": ambiguous,
         "similar_names": similar,
         "single_source": sorted(
@@ -71,6 +89,10 @@ def format_issues(issues: dict[str, Any]) -> str:
     if issues["similar_names"]:
         lines.append("\nPossible duplicates:")
         for a, b, why in issues["similar_names"]:
+            lines.append(f"  {a}  ~  {b}   ({why})")
+    if issues["overlapping_sources"]:
+        lines.append("\nEntities sharing most of their sources (split duplicates?):")
+        for a, b, why in issues["overlapping_sources"]:
             lines.append(f"  {a}  ~  {b}   ({why})")
     lines.append(
         f"\nSingle-source entities: {len(issues['single_source'])}"
