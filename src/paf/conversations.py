@@ -192,7 +192,7 @@ class ConversationMetaStore:
 def lane_id(conversation_id: str, profile: str | None) -> str:
     """Strip a ``{profile}:`` scope prefix back to the bare lane id.
 
-    ``Session._scoped_cid`` stores conversations as ``{profile}:{cid}``
+    ``Session.scoped_id`` stores conversations as ``{profile}:{cid}``
     (``demo:paf-e4b3ff13d560``), while conversation meta is keyed by the bare
     lane id. Only the known profile prefix is stripped — lane ids are arbitrary
     (``chat.py --id``) and may themselves contain a colon. An id without that
@@ -298,15 +298,13 @@ async def list_conversations(
 
 def default_project_store() -> ProjectStore:
     """The registry at ``<project_root>/data/projects/projects.json``."""
-    from paf.config import PROJECT_ROOT
+    from paf.config import DATA_DIR
 
-    return ProjectStore(FlatFileStorage(PROJECT_ROOT / "data"))
+    return ProjectStore(FlatFileStorage(DATA_DIR))
 
 
 def default_conversation_meta_store(agent: str) -> ConversationMetaStore:
     """``<project_root>/data/conversations/<agent>/conversation-titles.json``."""
-    from paf.config import PROJECT_ROOT
+    from paf.config import DATA_DIR
 
-    return ConversationMetaStore(
-        FlatFileStorage(PROJECT_ROOT / "data" / "conversations"), agent
-    )
+    return ConversationMetaStore(FlatFileStorage(DATA_DIR / "conversations"), agent)

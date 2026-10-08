@@ -115,6 +115,10 @@ class StreamEvent:
     - ``"tool_call"`` the model invoked a tool (``tool_name``, ``args``)
     - ``"tool_result"`` a tool returned (``tool_name``, ``text``)
 
+    Tool events carry ``step_id`` (the tool call id), shared with the
+    ``ToolRunning``/``ToolError`` events of the same call, so parallel calls
+    to one tool stay distinguishable.
+
     The settled ``AgentRunResult`` lands on ``self.last_result`` when the run
     completes and ``self.history`` accumulates the turn's messages — callers
     never need to reconstruct the transcript from these events.
@@ -124,6 +128,7 @@ class StreamEvent:
     text: str = ""
     tool_name: str = ""
     args: str = ""
+    step_id: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +270,7 @@ def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
                     if isinstance(event.part.args, str)
                     else str(event.part.args)
                 ),
+                step_id=step_id,
             )
         )
         # Tool-call START. step_id = the stable tool_call_id, so the UI flips
@@ -280,6 +286,7 @@ def _dispatch_stream_event(event: Any) -> list[TurnStreamEvent]:
                 kind="tool_result",
                 tool_name=tool_name,
                 text=(content if isinstance(content, str) else str(content or "")),
+                step_id=step_id,
             )
         )
         # Tool ERROR. A real tool failure comes back as a ToolReturnPart with
@@ -506,9 +513,15 @@ class Session:
         """Number of prior messages loaded by ``continue_run`` resume (0 if none)."""
         return len(self.history) if self._restored else 0
 
+    @property
+    def current_turn(self) -> TurnHandle | None:
+        """The Session-owned turn still running, or None when idle."""
+        turn = self._turn
+        return turn if turn is not None and not turn.done else None
+
     # -- profile namespace (conversation identity scoping) --------------------
 
-    def _scoped_cid(self, cid: str | None) -> str | None:
+    def scoped_id(self, cid: str | None) -> str | None:
         """Scope a conversation id by the session's profile: ``{profile}:{cid}``.
 
         The store/resume/agent-run access run under the profile-scoped id, so
@@ -546,7 +559,7 @@ class Session:
         included), idempotent, safe to call early or never.
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
-        await self._ensure_resumed(self._scoped_cid(cid))
+        await self._ensure_resumed(self.scoped_id(cid))
         return self.restored_count
 
     async def refresh(self, *, conversation_id: str | None = None) -> int:
@@ -561,7 +574,7 @@ class Session:
         self._resumed = False
         self._restored = False
         self.history = []
-        await self._ensure_resumed(self._scoped_cid(cid))
+        await self._ensure_resumed(self.scoped_id(cid))
         return self.restored_count
 
     async def _recover_interrupted(self, run_id: str, history: list[Any]) -> list[Any]:
@@ -618,7 +631,7 @@ class Session:
         run. A conversation with no prior runs stays empty (``restored_count == 0``).
 
         ``conversation_id`` here is ALREADY profile-scoped by the caller
-        (``_scoped_cid``).
+        (``scoped_id``).
         """
         if self._resumed or not self.resume or conversation_id is None:
             self._resumed = True
@@ -693,12 +706,12 @@ class Session:
         - Background memory-consolidation trigger fired post-turn.
 
         The chosen ``conversation_id`` (explicit > session default) is threaded
-        through (profile-scoped via ``_scoped_cid``) so persistent storage
+        through (profile-scoped via ``scoped_id``) so persistent storage
         restores prior history and the whole turn lives under one namespace
         identity.
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
-        scoped = self._scoped_cid(cid)
+        scoped = self.scoped_id(cid)
         # A fresh turn must NOT inherit a previously-cancelled token: cancel()
         # is one-way on CancellationToken, so a token cancelled by an earlier
         # stop would instantly cancel every later run ("The agent run was

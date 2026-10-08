@@ -10,23 +10,18 @@ dependencies = [
     # doesn't vanish from the venv if pydantic-ai stops pulling it transitively.
     "pydantic-graph",
     "pydantic-settings",
-    "textual>=8.2.8",
     "tree-sitter>=0.26.0",
     "tree-sitter-language-pack>=1.15.7",
-    # The systemd-run web UI (ui/web.py → Gradio ChatInterface on :8080). Gradio
-    # pulls fastapi/starlette/uvicorn/jinja2/anyio as transitive deps. Declared
-    # here (not ad-hoc) so `uv sync` stops silently dropping it from the venv —
-    # which broke the running paf-web.service the moment a bare sync ran. Pinned
-    # to Gradio 6 (the UI's CSS targets 6.x); floor 6,<7 to avoid a surprise
-    # major bump.
-    "gradio>=6,<7",
+    # The SSE transport for the web frontend (ui/sse.py).
+    "fastapi",
+    "uvicorn",
     # Direct imports in repo code (specs.py → yaml, CLIs → rich, smoke script →
     # dotenv, memory toolset → typing_extensions). Declared so none vanish from
-    # the venv if their transitive provider (gradio/textual/pydantic-settings)
+    # the venv if their transitive provider (e.g. pydantic-settings)
     # changes — i.e. no package the repo's own code imports may be ad-hoc only.
     "pyyaml",
     "rich",
-    # ui/chat.py's line editor + bottom toolbar (was transitive-only).
+    # The chat CLI's line editor + bottom toolbar (paf.cli.chat).
     "prompt-toolkit>=3.0",
     "python-dotenv",
     "typing-extensions",
@@ -35,13 +30,16 @@ dependencies = [
     # time. Declared here (not ad-hoc) so `uv sync` stops silently dropping it
     # from the venv; it was ad-hoc-only since the capability landed (2705c42),
     # so the first `uv sync` after the 22bd6f4 upgrade purged it and the tools
-    # degraded to "tavily-python is not installed". Same rule as gradio below:
+    # degraded to "tavily-python is not installed". Same rule as above:
     # no package the repo's own code imports may be ad-hoc only.
     "tavily-python",
     # Image uploads (paf.capabilities.visual._uploads): validate, measure and
-    # shrink images for the vision model. Was transitive-only (via gradio).
+    # shrink images for the vision model.
     "pillow",
 ]
+
+[project.scripts]
+paf = "paf.cli:main"
 
 [build-system]
 requires = ["hatchling"]

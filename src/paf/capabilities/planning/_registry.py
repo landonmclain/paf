@@ -8,7 +8,7 @@ Keying is by **scoped conversation id** (``{profile}:{cid}``, e.g.
 ``demo:paf-ui-e1``), which is already unambiguous: the profile prefix means two
 different agents/profiles can never share a scoped id, so a module-global dict
 is safe. Both sides derive the same scoped id from the same session/context
-(``session._scoped_cid`` / ``ctx.conversation_id``), so they always hit the same
+(``session.scoped_id`` / ``ctx.conversation_id``), so they always hit the same
 emitter.
 
 Emitters are created lazily and kept for the process lifetime; the SSE layer

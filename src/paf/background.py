@@ -461,9 +461,9 @@ class BackgroundCoordinator:
         from paf.background_processes._store import RunEventStore
 
         if processes_root is None:
-            from paf.config import PROJECT_ROOT
+            from paf.config import PROCESSES_DIR
 
-            processes_root = str(PROJECT_ROOT / "data" / "processes")
+            processes_root = str(PROCESSES_DIR)
         self._run_events = RunEventStore.open(
             processes_root, agent_name, conversation_id=conversation_id
         )
@@ -1257,7 +1257,7 @@ class BackgroundCoordinator:
         no job is due this turn -- mark skipped, don't leave a phantom "running"
         row.
 
-        ``cid`` here is ALREADY profile-scoped by the caller (``_scoped_cid``).
+        ``cid`` here is ALREADY profile-scoped by the caller (``scoped_id``).
         """
         if cid is None:
             return

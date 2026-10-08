@@ -1,8 +1,8 @@
-"""`/resume` argument matching in ui/chat.py."""
+"""Tests for the paf chat CLI (paf.cli.chat)."""
 
 from __future__ import annotations
 
-from ui.chat import match_conversation
+from paf.cli.chat import match_conversation
 
 ROWS = [
     {"conversation_id": "paf-1", "title": "quantconnect"},
@@ -43,3 +43,33 @@ def test_exact_name_breaks_a_tie() -> None:
 
 def test_no_match() -> None:
     assert match_conversation(ROWS, "staging") == (None, [])
+
+
+def test_status_refreshes_coalesce_during_a_burst() -> None:
+    """Many refresh requests while a read runs cost one follow-up read, not one each."""
+    import asyncio
+
+    from paf.cli.chat import ChatApp
+
+    app = object.__new__(ChatApp)
+    app._refresh_task = None
+    app._refresh_dirty = False
+    reads = 0
+
+    async def slow_read() -> None:
+        nonlocal reads
+        reads += 1
+        await asyncio.sleep(0.05)
+
+    app._read_status = slow_read  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        first = asyncio.create_task(app.refresh_status())
+        await asyncio.sleep(0.01)  # first read is running
+        for _ in range(10):  # a burst of background events
+            app._request_refresh()
+        await app.refresh_status()  # an awaiting caller sees the follow-up read
+        await first
+
+    asyncio.run(scenario())
+    assert reads == 2

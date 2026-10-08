@@ -69,7 +69,8 @@ Gradio gotchas, the fold model, and browser-DOM verification selectors.
 
 ## Other entry points
 
-- **CLI:** `ui/chat.py [agent] [--new | --id CID | --resume N|NAME] [--profile P]`
+- **CLI:** `paf chat [agent] [--new | --id CID | --resume N|NAME] [--profile P]`
+  (code in `src/paf/cli/`; `ui/chat.py` is the same command from a checkout)
   — inline chat that streams into normal scrollback (default agent
   `demo_assistant`). With no conversation flag an interactive run reopens the
   conversation last open in the CLI (piped runs use lane `chat-<agent>`);

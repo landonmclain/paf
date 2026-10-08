@@ -71,8 +71,8 @@ class _FakeRequest:
 
 def _fake_session(block_on: asyncio.Event) -> object:
     class _Session:
-        def _scoped_cid(self, cid):
-            return cid  # bare session -> identity (mirrors Session._scoped_cid)
+        def scoped_id(self, cid):
+            return cid  # bare session -> identity (mirrors Session.scoped_id)
 
         def start_turn(self, prompt, *, conversation_id=None):
             del prompt, conversation_id
@@ -188,7 +188,7 @@ def test_rest_endpoint_returns_authoritative_snapshot() -> None:
     }
 
     class _Sess:
-        def _scoped_cid(self, cid):
+        def scoped_id(self, cid):
             return f"demo:{cid}"
 
     async def _drive():

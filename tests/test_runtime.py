@@ -211,20 +211,20 @@ def test_done_task_not_replayed() -> None:
 def test_scoped_cid_prefixes_with_profile_name() -> None:
     s = object.__new__(runtime.Session)
     s.profile = _FakeProfile(name="assistant")
-    assert s._scoped_cid("cli-1") == "assistant:cli-1"
+    assert s.scoped_id("cli-1") == "assistant:cli-1"
 
 
 def test_scoped_cid_returns_cid_when_no_profile() -> None:
     s = object.__new__(runtime.Session)
     s.profile = None
-    assert s._scoped_cid("cli-1") == "cli-1"
-    assert s._scoped_cid(None) is None
+    assert s.scoped_id("cli-1") == "cli-1"
+    assert s.scoped_id(None) is None
 
 
 def test_scoped_cid_handles_bare_name_profile() -> None:
     s = object.__new__(runtime.Session)
     s.profile = "test"  # raw string profile fallback
-    assert s._scoped_cid("web-1") == "test:web-1"
+    assert s.scoped_id("web-1") == "test:web-1"
 
 
 def test_two_profiles_same_cid_do_not_collide() -> None:
@@ -233,7 +233,7 @@ def test_two_profiles_same_cid_do_not_collide() -> None:
     b = _FakeProfile("demo")
     sa, sb = object.__new__(runtime.Session), object.__new__(runtime.Session)
     sa.profile, sb.profile = a, b
-    assert sa._scoped_cid("conv-9") != sb._scoped_cid("conv-9")
+    assert sa.scoped_id("conv-9") != sb.scoped_id("conv-9")
 
 
 # --- profile wiring --------------------------------------------------------

@@ -58,7 +58,6 @@ from paf.background_processes._events import (
 from paf.capabilities import PROFILES
 from paf.capabilities.planning._events import PlanEventType
 from paf.capabilities.planning._registry import get_plan_emitter
-from paf.capabilities.planning._store import FilePlanStore
 from paf.capabilities.visual import (
     MAX_UPLOAD_BYTES,
     Describer,
@@ -67,9 +66,15 @@ from paf.capabilities.visual import (
     UploadStore,
     is_upload_id,
     split_image_blocks,
-    with_image_blocks,
 )
-from paf.config import PROJECT_ROOT
+from paf.clients import (
+    UnknownImageError,
+    notify_message,
+    plan_items,
+    prompt_with_images,
+    task_frames,
+)
+from paf.config import DATA_DIR
 from paf.conversations import (
     ConversationMetaStore,
     ProjectExistsError,
@@ -163,19 +168,6 @@ async def _get_session(
     return session
 
 
-def _notify_message(run_id: str, detail: str) -> str:
-    """The ``[system]`` text a completion notify delivers to the parent.
-
-    Subagent tasks (``subagent.<cid>.<n>``) and shell commands (``shell.<cid>.<n>``)
-    hand over a ready-made message — the output whole, or an excerpt plus a
-    ``check_task`` / ``check_command`` pointer (``subagents._notify``,
-    ``shell._output``) — delivered verbatim. Anything else is wrapped here.
-    """
-    if run_id.startswith(("subagent.", "shell.")):
-        return detail
-    return f"[system] Background process {run_id} finished: {detail}"
-
-
 async def _notify_agent(
     agent: str, run_id: str, conversation_id: str | None, ok: bool, detail: str
 ) -> None:
@@ -213,7 +205,7 @@ async def _notify_agent(
         ok=ok,
         detail=detail,
     ):
-        started = session.notify(_notify_message(run_id, detail))
+        started = session.notify(notify_message(run_id, detail))
     # Only when the notify actually STARTED a new turn (idle lane) do we signal
     # the conversation-lane process feed so the UI re-attaches and streams the
     # model response. When it was steered into a live turn, that turn is already
@@ -267,7 +259,7 @@ def _title_store(agent: str) -> FlatFileStorage:
     """
     from paf.capabilities._storage import FlatFileStorage
 
-    return FlatFileStorage(PROJECT_ROOT / "data" / "conversations")
+    return FlatFileStorage(DATA_DIR / "conversations")
 
 
 def _meta_store(agent: str) -> ConversationMetaStore:
@@ -288,12 +280,8 @@ def _session_is_busy(session: Session) -> bool:
     timestamp). A running turn with NO subscriber is an orphan and stays
     reapable — that is the cost guard.
     """
-    turn = getattr(session, "_turn", None)
-    return (
-        turn is not None
-        and not getattr(turn, "done", True)
-        and bool(getattr(turn, "has_subscribers", False))
-    )
+    turn = session.current_turn
+    return turn is not None and turn.has_subscribers
 
 
 def _close_session(key: str) -> None:
@@ -404,6 +392,7 @@ def _serialize_turn(ev: TurnStreamEvent) -> tuple[str, dict[str, Any]]:
             "text": ev.text,
             "tool_name": ev.tool_name or None,
             "args": ev.args or None,
+            "step_id": ev.step_id or None,
         }
     if isinstance(ev, ToolRunning):
         return "tool_running", {"tool_name": ev.tool_name, "step_id": ev.step_id}
@@ -462,11 +451,7 @@ async def _plan_snapshot(scoped_cid: str) -> list[dict[str, Any]]:
     scoped cid + shared emitter key), so this endpoint and the agent's writes
     can never point at different files. Returns empty list when no plan exists.
     """
-    store = FilePlanStore(
-        root=PROJECT_ROOT / "data" / "plans", conversation_id=scoped_cid
-    )
-    items = await store.get_items()
-    return _serialize_plan_items(items)
+    return _serialize_plan_items(await plan_items(scoped_cid))
 
 
 def _serialize_history(msgs: list[Any]) -> list[dict[str, Any]]:
@@ -562,7 +547,7 @@ async def conversation_plan(
     Returns real ids/statuses; ``items: []`` when the conversation has no plan.
     """
     session = await _get_session(conversation_id, agent)
-    scoped = session._scoped_cid(conversation_id) or conversation_id
+    scoped = session.scoped_id(conversation_id) or conversation_id
     items = await _plan_snapshot(scoped)
     return {
         "conversation_id": conversation_id,
@@ -839,7 +824,7 @@ async def conversation_tasks(
     """
     session = await _get_session(conversation_id, agent)
     bg = session.background
-    scoped_cid = session._scoped_cid(conversation_id) or conversation_id
+    scoped_cid = session.scoped_id(conversation_id) or conversation_id
     tasks = bg.task_history(scoped_cid) if bg is not None else []
     return {
         "conversation_id": conversation_id,
@@ -906,7 +891,7 @@ def _process_response(
             scope: str | None = None
         else:
             lane_bg = bg.conversation
-            scope = session._scoped_cid(conversation_id) or conversation_id
+            scope = session.scoped_id(conversation_id) or conversation_id
         if lane_bg is None:
             return
         async for frame in feed(lane_bg, scope, request):
@@ -989,29 +974,9 @@ def _process_feed(bg: Any, scope: str | None, request: Request) -> AsyncIterator
         #     task_history restored above), so a reconnect must read them here
         #     or a running / recently-finished shell process would vanish after
         #     a refresh or conversation switch. Agent lane has no scope -> skip.
-        if scope is not None:
-            try:
-                from paf.capabilities.shell._background import conversation_shell_frames
-
-                for frame in conversation_shell_frames(
-                    PROJECT_ROOT / "data" / "processes", bg.agent_name, scope
-                ):
-                    _publish(("task", frame))
-            except Exception:
-                log.warning("shell process restore failed", exc_info=True)
-            # Subagent tasks live in their own store too; restore them the same
-            # way so running / recently finished rows survive a refresh.
-            try:
-                from paf.capabilities.subagents._store import (
-                    conversation_subagent_frames,
-                )
-
-                for frame in conversation_subagent_frames(
-                    PROJECT_ROOT / "data" / "processes", bg.agent_name, scope
-                ):
-                    _publish(("task", frame))
-            except Exception:
-                log.warning("subagent task restore failed", exc_info=True)
+        if scope is not None and bg is not None:
+            for frame in task_frames(bg.agent_name, scope):
+                _publish(("task", frame))
 
         # No wall-clock heartbeat: every background job is TURN-gated, so task
         # events (SKIPPED/PROCESSING) already fire on every ``after_turn`` and
@@ -1132,7 +1097,7 @@ def _turn_frames(
 
     async def _inner() -> AsyncIterator[str]:
         out_q: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
-        _scoped = getattr(session, "_scoped_cid", None)
+        _scoped = getattr(session, "scoped_id", None)
         scoped_cid = (
             _scoped(conversation_id) if _scoped is not None else None
         ) or conversation_id
@@ -1141,8 +1106,8 @@ def _turn_frames(
             # Refresh/visibility re-attach: subscribe to the in-flight turn if
             # one is running; otherwise yield an empty stream (the client
             # renders history) WITHOUT starting a new turn.
-            handle = getattr(session, "_turn", None)
-            if handle is None or handle.done:
+            handle = session.current_turn
+            if handle is None:
                 return
         else:
             # Start (or re-attach to) the Session-owned turn. If a turn is
@@ -1220,7 +1185,6 @@ def _turn_frames(
 # so the text-only main model reads it and the history stays text.
 _uploads = UploadStore()
 _describer = Describer(_uploads)
-_DESCRIBE_TIMEOUT_SECONDS = 180.0
 
 
 def _upload_view(meta: UploadMeta, model: str | None) -> dict[str, Any]:
@@ -1293,22 +1257,19 @@ async def get_upload_meta(upload_id: str, agent: str = DEFAULT_AGENT) -> dict[st
 async def _prompt_with_images(prompt: str, image_ids: list[str], agent: str) -> str:
     """`prompt` plus one described <image> block per uploaded image."""
     visual = spec_visual_config(agent)
-    model, settings = visual["model"], visual.get("model_settings")
-    metas: list[UploadMeta] = []
-    for upload_id in image_ids:
-        meta = (
-            await _describer.wait(
-                upload_id, model, settings, timeout=_DESCRIBE_TIMEOUT_SECONDS
-            )
-            if model
-            else _uploads.meta(upload_id)
+    try:
+        return await prompt_with_images(
+            prompt,
+            image_ids,
+            model=visual["model"],
+            model_settings=visual.get("model_settings"),
+            uploads=_uploads,
+            describer=_describer,
         )
-        if meta is None:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT, f"unknown image {upload_id}"
-            )
-        metas.append(meta)
-    return with_image_blocks(prompt, metas)
+    except UnknownImageError as e:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, f"unknown image {e.args[0]}"
+        ) from e
 
 
 @app.post("/api/chat")

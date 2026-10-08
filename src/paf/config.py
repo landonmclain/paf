@@ -2,15 +2,35 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Anchored to the repo root (…/src/paf/config.py → …/), not the process CWD.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+def _project_root() -> Path:
+    """Where ``specs/`` and ``data/`` live.
+
+    ``PAF_HOME`` wins. Otherwise a source checkout (…/src/paf/config.py) uses
+    its repo root, and an installed package uses the current directory.
+    """
+    if home := os.environ.get("PAF_HOME"):
+        return Path(home).expanduser().resolve()
+    repo = Path(__file__).resolve().parents[2]
+    if (repo / "pyproject.toml").is_file() and (repo / "src" / "paf").is_dir():
+        return repo
+    return Path.cwd()
+
+
+PROJECT_ROOT = _project_root()
 
 # Declarative agent config (model, instructions, capabilities).
 SPECS_DIR = PROJECT_ROOT / "specs"
+
+# Runtime state: conversations, plans, background-process records, uploads.
+DATA_DIR = PROJECT_ROOT / "data"
+PLANS_DIR = DATA_DIR / "plans"
+PROCESSES_DIR = DATA_DIR / "processes"
 
 
 class Settings(BaseSettings):

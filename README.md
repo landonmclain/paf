@@ -119,23 +119,16 @@ memory-write tool (recording is the owner's job).
 
 ## UIs
 
-All UIs drive the same `Session`/`Runtime` underneath.
+All UIs drive the same `Session` underneath.
 
-- `ui/chat.py` — inline terminal chat: streams thinking, tool calls, and a
-  markdown-rendered answer into normal scrollback, with a bottom toolbar for
-  background processes and plan progress. Runs in-process (no server needed).
-- `ui/sse.py` — SSE server exposing the background-process feed.
-- `ui/web.py` — **Gradio web UI.** Serves a single-lane conversation for the
-  chosen agent; defaults to `demo_assistant`.
-
-```bash
-# Gradio web UI (default agent demo_assistant on 0.0.0.0:8080)
-set -a && . ./.env && set +a && python ui/web.py
-# or via uv
-set -a && . ./.env && set +a && uv run --env-file .env python ui/web.py
-# pass an agent name / port explicitly
-python ui/web.py demo_assistant 8080
-```
+- `paf chat` (`src/paf/cli/`) — inline terminal chat: streams thinking, tool
+  calls, and a markdown-rendered answer into normal scrollback, with a bottom
+  toolbar for background processes and plan progress. Type while a turn runs to
+  steer it; `/image <path>` sends an image; `/help` lists the rest. Runs
+  in-process (no server needed). From a source checkout, `python ui/chat.py` is
+  the same command.
+- `ui/sse.py` — FastAPI SSE server for a web frontend: turn streams, the
+  background-process feed, steer/cancel, conversations, projects, and uploads.
 
 ## Benchmarking: LongMemEval
 
@@ -182,9 +175,9 @@ cp .env.example .env        # OPENROUTER_API_KEY + optional Langfuse keys
 PYTHONPATH= .venv/bin/pip install -e .   # or: uv sync
 
 # interactive CLI — defaults to the demo_assistant "everything sandbox"
-python ui/chat.py
+paf chat
 # or the leaner production assistant, on a fresh conversation
-python ui/chat.py assistant --new
+paf chat assistant --new
 ```
 
 Prepend `set -a && . ./.env && set +a;` to export secrets for the runner. The

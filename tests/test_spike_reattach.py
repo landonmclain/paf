@@ -62,7 +62,7 @@ def _bare_session() -> Session:
     sess._token = CancellationToken()
     sess.conversation_id = "conv-1"
     sess.profile = None
-    sess._scoped_cid = None  # type: ignore[method-assign]  # fall back to plain cid
+    sess.scoped_id = None  # type: ignore[method-assign]  # fall back to plain cid
     sess.stream = _slow_turn_stream()  # type: ignore[method-assign]
     return sess
 

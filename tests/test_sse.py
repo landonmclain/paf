@@ -259,8 +259,8 @@ def test_process_feed_restores_history_then_streams_live_and_unsubscribes() -> N
         def __init__(self, coord) -> None:
             self.background = coord
 
-        def _scoped_cid(self, cid):
-            # bare session (no profile) => identity; mirrors Session._scoped_cid
+        def scoped_id(self, cid):
+            # bare session (no profile) => identity; mirrors Session.scoped_id
             return cid
 
     class _Hist:
@@ -361,7 +361,7 @@ def test_process_feed_terminates_on_client_disconnect() -> None:
     class _Session:
         background = None
 
-        def _scoped_cid(self, conversation_id: str) -> str:
+        def scoped_id(self, conversation_id: str) -> str:
             return conversation_id
 
     class _Req:
@@ -406,7 +406,7 @@ def test_session_is_busy_guards_idle_reap() -> None:
 
     class _S:
         def __init__(self, turn) -> None:
-            self._turn = turn
+            self.current_turn = None if turn is None or turn.done else turn
 
     assert sse._session_is_busy(_S(_BusyTurn())) is True, "live stream: not reapable"
     assert sse._session_is_busy(_S(_DetachedTurn())) is False, "orphan: reapable"

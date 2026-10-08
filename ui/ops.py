@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import hmac
 import os
-import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -137,7 +136,7 @@ async def restart(authorization: str | None = Header(default=None)) -> dict[str,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(502, detail="systemctl timed out") from None
     except FileNotFoundError:
         raise HTTPException(500, detail="systemctl not found on host") from None

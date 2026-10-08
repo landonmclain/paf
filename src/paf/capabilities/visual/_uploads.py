@@ -33,11 +33,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from paf.config import PROJECT_ROOT
+from paf.config import DATA_DIR
 
 log = logging.getLogger(__name__)
 
-UPLOAD_ROOT = PROJECT_ROOT / "data" / "uploads"
+UPLOAD_ROOT = DATA_DIR / "uploads"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 # Long side of the copy sent to the vision model: enough for dense screenshots,
 # small enough to keep image tokens (and local-model VRAM) in check.

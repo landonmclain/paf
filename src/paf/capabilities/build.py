@@ -67,7 +67,7 @@ from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault as _Vault
 from paf.capabilities.visual import Visual as _Visual
 from paf.capabilities.web import Web as _Web
-from paf.config import PROJECT_ROOT, settings
+from paf.config import DATA_DIR, PLANS_DIR, PROCESSES_DIR, PROJECT_ROOT, settings
 
 # The profile name that gates context compaction in build_runtime_capabilities.
 _COMPACTION_CAPABILITY = "Compaction"
@@ -107,7 +107,7 @@ DEFAULT_CONSOLIDATE_TURNS = 5
 DEFAULT_MEMORY_MAX_SIZE = 65_536
 
 # Where the Planning capability writes its per-conversation plan files.
-_PLAN_ROOT = PROJECT_ROOT / "data" / "plans"
+_PLAN_ROOT = PLANS_DIR
 
 
 def _read_positive_int(memory_config: dict, key: str, default: int) -> int:
@@ -328,7 +328,7 @@ def _build_shell(
     return _Shell(
         cwd=cwd,
         executor=executor,
-        processes_root=str(PROJECT_ROOT / "data" / "processes"),
+        processes_root=str(PROCESSES_DIR),
         agent=agent_name or "assistant",
         on_complete=on_complete,
     )
@@ -404,7 +404,7 @@ def _build_web(store, search_domains: list[str] | None = None) -> _Web:
 # under the repo's data/ tree — clean, deterministic, safe for tests. The real
 # vault is ONLY reachable via an explicit `vault: root:` in an agent spec, never a
 # hardcoded test/tool target.
-_DEFAULT_VAULT_ROOT = PROJECT_ROOT / "data" / "vault"
+_DEFAULT_VAULT_ROOT = DATA_DIR / "vault"
 
 
 def _build_vault(store, vault_config: dict | None = None) -> _Vault:
@@ -575,7 +575,7 @@ def _build_skills(store, skills_config: dict | None = None) -> _Skills:
     what a spec names explicitly (mirrors the vault capability's
     never-reach-the-real-thing-without-an-explicit-spec default).
     """
-    libraries: tuple[str | Path, ...] = (PROJECT_ROOT / "data" / "skills",)
+    libraries: tuple[str | Path, ...] = (DATA_DIR / "skills",)
     top_k: int = 3
     if isinstance(skills_config, dict):
         libs = skills_config.get("libraries")
@@ -828,7 +828,7 @@ def _build_subagents(
     ]
     return Subagents(
         leaves=leaves,
-        processes_root=str(PROJECT_ROOT / "data" / "processes"),
+        processes_root=str(PROCESSES_DIR),
         agent=agent_name or "assistant",
         on_complete=on_complete,
         max_concurrent=config.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
