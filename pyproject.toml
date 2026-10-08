@@ -6,6 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic-ai",
+    # Builtin capabilities paf imports at load time (StepPersistence, compaction,
+    # ToolOutputLimits, guardrails, ...). Both extras are required: the catalog
+    # imports PromptInjectionDefender (stackone-defender) and the Browser
+    # capability (playwright) when it loads. Chromium itself is a separate
+    # `playwright install chromium` download.
+    # Pre-1.0 and fast-moving: capped at the minor version paf is tested on.
+    "pydantic-ai-harness[playwright, prompt-injection-defender]>=0.36,<0.37",
     # Direct import in runtime.py (End from pydantic_graph). Declared so it
     # doesn't vanish from the venv if pydantic-ai stops pulling it transitively.
     "pydantic-graph",
