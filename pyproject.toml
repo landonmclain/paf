@@ -1,5 +1,5 @@
 [project]
-name = "pydantic-agent-framework"
+name = "paf-agent-framework"
 version = "0.1.0"
 description = "A thin, opinionated agent framework on pydantic-ai V2."
 readme = "README.md"

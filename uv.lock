@@ -1718,6 +1718,61 @@ wheels = [
 ]
 
 [[package]]
+name = "paf-agent-framework"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "gradio" },
+    { name = "pillow" },
+    { name = "prompt-toolkit" },
+    { name = "pydantic-ai" },
+    { name = "pydantic-graph" },
+    { name = "pydantic-settings" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "tavily-python" },
+    { name = "textual" },
+    { name = "tree-sitter" },
+    { name = "tree-sitter-language-pack" },
+    { name = "typing-extensions" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pydantic-ai-harness", extra = ["playwright", "prompt-injection-defender", "prompt-injection-defender-ml"] },
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gradio", specifier = ">=6,<7" },
+    { name = "pillow" },
+    { name = "prompt-toolkit", specifier = ">=3.0" },
+    { name = "pydantic-ai" },
+    { name = "pydantic-graph" },
+    { name = "pydantic-settings" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "tavily-python" },
+    { name = "textual", specifier = ">=8.2.8" },
+    { name = "tree-sitter", specifier = ">=0.26.0" },
+    { name = "tree-sitter-language-pack", specifier = ">=1.15.7" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pydantic-ai-harness", extras = ["playwright", "prompt-injection-defender", "prompt-injection-defender-ml"] },
+    { name = "pytest" },
+    { name = "pytest-xdist" },
+    { name = "ruff", specifier = ">=0.16.1" },
+]
+
+[[package]]
 name = "pandas"
 version = "3.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1971,61 +2026,6 @@ wheels = [
 [package.optional-dependencies]
 email = [
     { name = "email-validator" },
-]
-
-[[package]]
-name = "pydantic-agent-framework"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "gradio" },
-    { name = "pillow" },
-    { name = "prompt-toolkit" },
-    { name = "pydantic-ai" },
-    { name = "pydantic-graph" },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "tavily-python" },
-    { name = "textual" },
-    { name = "tree-sitter" },
-    { name = "tree-sitter-language-pack" },
-    { name = "typing-extensions" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pydantic-ai-harness", extra = ["playwright", "prompt-injection-defender", "prompt-injection-defender-ml"] },
-    { name = "pytest" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "gradio", specifier = ">=6,<7" },
-    { name = "pillow" },
-    { name = "prompt-toolkit", specifier = ">=3.0" },
-    { name = "pydantic-ai" },
-    { name = "pydantic-graph" },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
-    { name = "rich" },
-    { name = "tavily-python" },
-    { name = "textual", specifier = ">=8.2.8" },
-    { name = "tree-sitter", specifier = ">=0.26.0" },
-    { name = "tree-sitter-language-pack", specifier = ">=1.15.7" },
-    { name = "typing-extensions" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pydantic-ai-harness", extras = ["playwright", "prompt-injection-defender", "prompt-injection-defender-ml"] },
-    { name = "pytest" },
-    { name = "pytest-xdist" },
-    { name = "ruff", specifier = ">=0.16.1" },
 ]
 
 [[package]]
