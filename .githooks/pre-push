@@ -23,10 +23,10 @@ step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 # `uv run ruff` — the hook runs in a non-interactive shell where uv may not be
 # on PATH. pyright is not in the venv, so it runs via npx.
 step "ruff check (lint)"
-.venv/bin/ruff check src tests --output-format=concise || fail=1
+.venv/bin/ruff check src tests ui --output-format=concise || fail=1
 
 step "ruff format --check (format)"
-.venv/bin/ruff format --check src tests || fail=1
+.venv/bin/ruff format --check src tests ui || fail=1
 
 step "pyright (typecheck)"
 npx --yes pyright || fail=1
