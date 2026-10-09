@@ -55,6 +55,12 @@ class ScheduledJob(BaseModel):
         default="global",
         description="The origin conversation the job runs in (routing column).",
     )
+    name: str = Field(
+        description="Human-readable name for the task (shown in the UI).",
+    )
+    description: str = Field(
+        description="What the task does / when it runs (shown in the UI).",
+    )
     schedule: str = Field(
         description="Cron expression. Parsed by the scheduler (Phase 2) via croniter."
     )

@@ -105,7 +105,11 @@ def test_fires_due_job_and_stamps_last_run() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = ScheduledTaskStore(tmp, agent="a")
         job = ScheduledJob(
-            schedule="0 9 * * *", instructions="post", conversation_id="c1"
+            schedule="0 9 * * *",
+            name="post",
+            description="posts at 9am",
+            instructions="post",
+            conversation_id="c1",
         )
         store.create_job(job)
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
@@ -124,7 +128,11 @@ def test_sleeps_until_next_due_not_fixed_interval() -> None:
         store = ScheduledTaskStore(tmp, agent="a")
         store.create_job(
             ScheduledJob(
-                schedule="0 9 * * *", instructions="post", conversation_id="c1"
+                schedule="0 9 * * *",
+                name="post",
+                description="posts at 9am",
+                instructions="post",
+                conversation_id="c1",
             )
         )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
@@ -141,6 +149,8 @@ def test_skips_disabled_and_archived_jobs() -> None:
         store.create_job(
             ScheduledJob(
                 schedule="0 9 * * *",
+                name="post",
+                description="posts at 9am",
                 instructions="post",
                 enabled=False,
                 conversation_id="c1",
@@ -149,6 +159,8 @@ def test_skips_disabled_and_archived_jobs() -> None:
         store.create_job(
             ScheduledJob(
                 schedule="0 9 * * *",
+                name="archived",
+                description="archived job",
                 instructions="archived",
                 archived=True,
                 conversation_id="c1",
@@ -200,6 +212,8 @@ def test_loop_wakes_on_new_job() -> None:
             store.create_job(
                 ScheduledJob(
                     schedule="* * * * * *",
+                    name="post",
+                    description="posts every second",
                     instructions="post",
                     conversation_id="c1",
                 )
@@ -223,7 +237,11 @@ def test_single_flight_fires_once() -> None:
         store = ScheduledTaskStore(tmp, agent="a")
         store.create_job(
             ScheduledJob(
-                schedule="0 9 * * *", instructions="post", conversation_id="c1"
+                schedule="0 9 * * *",
+                name="post",
+                description="posts at 9am",
+                instructions="post",
+                conversation_id="c1",
             )
         )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
@@ -241,7 +259,11 @@ def test_restart_skips_missed_fire() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = ScheduledTaskStore(tmp, agent="a")
         job = ScheduledJob(
-            schedule="0 9 * * *", instructions="post", conversation_id="c1"
+            schedule="0 9 * * *",
+            name="post",
+            description="posts at 9am",
+            instructions="post",
+            conversation_id="c1",
         )
         store.create_job(job)
         store.update_job(job.id, last_run=datetime(2026, 10, 7, 9, 0, tzinfo=UTC))
@@ -260,10 +282,18 @@ def test_single_loop_scans_all_agents() -> None:
         store_a = ScheduledTaskStore(tmp, agent="a")
         store_b = ScheduledTaskStore(tmp, agent="b")
         job_a = ScheduledJob(
-            schedule="0 9 * * *", instructions="a", conversation_id="c1"
+            schedule="0 9 * * *",
+            name="a",
+            description="job a",
+            instructions="a",
+            conversation_id="c1",
         )
         job_b = ScheduledJob(
-            schedule="0 9 * * *", instructions="b", conversation_id="c2"
+            schedule="0 9 * * *",
+            name="b",
+            description="job b",
+            instructions="b",
+            conversation_id="c2",
         )
         store_a.create_job(job_a)
         store_b.create_job(job_b)
@@ -281,10 +311,22 @@ def test_agent_scoped_loop_ignores_other_agents() -> None:
         store_a = ScheduledTaskStore(tmp, agent="a")
         store_b = ScheduledTaskStore(tmp, agent="b")
         store_a.create_job(
-            ScheduledJob(schedule="0 9 * * *", instructions="a", conversation_id="c1")
+            ScheduledJob(
+                schedule="0 9 * * *",
+                name="a",
+                description="job a",
+                instructions="a",
+                conversation_id="c1",
+            )
         )
         store_b.create_job(
-            ScheduledJob(schedule="0 9 * * *", instructions="b", conversation_id="c2")
+            ScheduledJob(
+                schedule="0 9 * * *",
+                name="b",
+                description="job b",
+                instructions="b",
+                conversation_id="c2",
+            )
         )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched)

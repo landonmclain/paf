@@ -49,6 +49,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
     async def schedule_task(
         self,
         schedule: str,
+        name: str,
+        description: str,
         instructions: str | None = None,
         script: str | None = None,
         notify: str = "always",
@@ -63,6 +65,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
 
         Args:
             schedule: Cron expression for when the task fires.
+            name: Human-readable name for the task (shown in the UI).
+            description: What the task does / when it runs (shown in the UI).
             instructions: The instruction block (agent-executed task).
             script: A script to run code-only (script-executed task).
             notify: For script tasks, "always" (agent reviews every run) or
@@ -84,6 +88,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
             ) from None
         job = ScheduledJob(
             schedule=schedule,
+            name=name,
+            description=description,
             instructions=instructions,
             script=script,
             notify=mode,
@@ -93,7 +99,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
         )
         created = self._store().create_job(job)
         return (
-            f"Scheduled task {created.id} created: schedule={created.schedule!r}, "
+            f"Scheduled task {created.id} created: {created.name!r} — "
+            f"schedule={created.schedule!r}, "
             f"mode={'agent' if created.instructions else 'script'}, "
             f"notify={created.notify.value}"
         )
@@ -108,7 +115,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
             mode = "agent" if j.instructions else "script"
             state = "enabled" if j.enabled else "paused"
             lines.append(
-                f"- {j.id}: {j.schedule!r} ({mode}, {state}, notify={j.notify.value})"
+                f"- {j.id}: {j.name!r} — {j.description!r} "
+                f"({j.schedule!r}, {mode}, {state}, notify={j.notify.value})"
             )
         return "\n".join(lines)
 
@@ -116,6 +124,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
         self,
         job_id: str,
         schedule: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
         instructions: str | None = None,
         script: str | None = None,
         notify: str | None = None,
@@ -131,6 +141,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
         Args:
             job_id: The task's id.
             schedule: New cron expression.
+            name: New human-readable name.
+            description: New description of what the task does / when it runs.
             instructions: New instruction block (agent-executed).
             script: New script (script-executed).
             notify: "always" or "on_trigger".
@@ -158,6 +170,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
         updated = store.update_job(
             job_id,
             schedule=schedule,
+            name=name,
+            description=description,
             notify=mode,
             delivery=delivery,
             enabled=enabled,
@@ -165,7 +179,8 @@ class ScheduledTasksToolset(FunctionToolset[AgentDepsT]):
         if updated is None:
             raise ModelRetry(f"No scheduled task with id {job_id!r}.")
         return (
-            f"Updated scheduled task {job_id}: schedule={updated.schedule!r}, "
+            f"Updated scheduled task {job_id}: {updated.name!r} — "
+            f"schedule={updated.schedule!r}, "
             f"mode={'agent' if updated.instructions else 'script'}, "
             f"enabled={updated.enabled}"
         )

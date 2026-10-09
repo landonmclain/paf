@@ -116,6 +116,8 @@ class ScheduledTaskStore:
         job_id: str,
         *,
         schedule: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
         instructions: str | None = None,
         script: str | None = None,
         notify: NotifyMode | None = None,
@@ -137,6 +139,10 @@ class ScheduledTaskStore:
             data = existing.model_dump()
             if schedule is not None:
                 data["schedule"] = schedule
+            if name is not None:
+                data["name"] = name
+            if description is not None:
+                data["description"] = description
             if instructions is not None:
                 data["instructions"] = instructions
             if script is not None:
