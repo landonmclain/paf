@@ -146,8 +146,12 @@ class ScheduledTaskScheduler:
         current = store.get_job(job.id)
         if current is None or not current.enabled or current.archived:
             return
-        self._queue.enqueue(current.conversation_id, current)
-        store.update_job(job.id, last_run=self._clock())
+        # Stamp last_run BEFORE enqueueing so the job the queue runs carries the
+        # CURRENT fire time (the run's own "last ran"), not the previous fire's.
+        updated = store.update_job(job.id, last_run=self._clock())
+        if updated is None:
+            return
+        self._queue.enqueue(updated.conversation_id, updated)
 
     # --- the loop ----------------------------------------------------------
 

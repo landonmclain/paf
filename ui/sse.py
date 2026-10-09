@@ -221,7 +221,9 @@ async def _notify_agent(
         await _emit_turn_started(agent, conversation_id, run_id)
 
 
-async def _scheduled_run_turn(agent: str, cid: str, content: str) -> None:
+async def _scheduled_run_turn(
+    agent: str, cid: str, content: str, run_id: str
+) -> None:
     """Run a scheduled job's agent turn in its origin conversation.
 
     The scheduled-tasks queue's ``run_turn`` seam: get (or create) the lane's
@@ -230,10 +232,17 @@ async def _scheduled_run_turn(agent: str, cid: str, content: str) -> None:
     ``conversation_id`` carries the ``{agent}:`` profile prefix (like the shell
     queue's cid), so strip it before the registry lookup — otherwise we build a
     new session keyed on the prefixed id instead of the real lane.
+
+    When the notify actually STARTED a new turn (idle lane), signal the
+    conversation-lane process feed so the UI re-attaches and streams the model
+    response live (mirrors ``_notify_agent``); a steered notify is already part
+    of a streaming turn, so no signal is needed.
     """
     raw_cid = cid.split(":", 1)[1] if ":" in cid else cid
     session = await _get_session(raw_cid, agent, activity=True)
-    session.notify(content)
+    started = session.notify(content)
+    if started is None:
+        await _emit_turn_started(agent, cid, run_id)
 
 
 async def _emit_turn_started(agent: str, conversation_id: str, run_id: str) -> None:

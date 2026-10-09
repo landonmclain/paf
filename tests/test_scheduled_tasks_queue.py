@@ -38,13 +38,15 @@ class FakeExecutor:
 
 
 class FakeRunTurn:
-    """Records ``(agent, cid, content)`` turn requests instead of running them."""
+    """Records ``(agent, cid, content, run_id)`` turn requests instead of running them."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str, str, str]] = []
 
-    async def __call__(self, agent: str, cid: str, content: str) -> None:
-        self.calls.append((agent, cid, content))
+    async def __call__(
+        self, agent: str, cid: str, content: str, run_id: str
+    ) -> None:
+        self.calls.append((agent, cid, content, run_id))
 
 
 def _store_factory(tmp: str):
@@ -60,12 +62,24 @@ def _store_factory(tmp: str):
 
 def _agent_job(**kw) -> ScheduledJob:
     return ScheduledJob(
-        schedule="0 9 * * *", instructions="post the article", agent="a", **kw
+        schedule="0 9 * * *",
+        name="post article",
+        description="posts the article at 9am",
+        instructions="post the article",
+        agent="a",
+        **kw,
     )
 
 
 def _script_job(**kw) -> ScheduledJob:
-    return ScheduledJob(schedule="0 9 * * *", script="echo hi", agent="a", **kw)
+    return ScheduledJob(
+        schedule="0 9 * * *",
+        name="check",
+        description="runs check.py",
+        script="echo hi",
+        agent="a",
+        **kw,
+    )
 
 
 # --- agent-executed path (q3a) ----------------------------------------------
@@ -81,7 +95,9 @@ def test_agent_executed_runs_turn_and_appends_run() -> None:
         job = _agent_job()
         asyncio.run(queue.process_job("c1", job, None))
 
-        assert run_turn.calls == [("a", "c1", "post the article")]
+        assert len(run_turn.calls) == 1
+        assert run_turn.calls[0][:3] == ("a", "c1", "post the article")
+        assert isinstance(run_turn.calls[0][3], str) and run_turn.calls[0][3]
         runs = factory("a").read_runs()
         assert len(runs) == 2  # running + done
         rec = runs[-1]
@@ -187,10 +203,16 @@ def test_queue_routes_by_job_agent() -> None:
             executor=FakeExecutor(ExecResult("", "", 0)),
         )
         job = ScheduledJob(
-            schedule="0 9 * * *", instructions="hi", agent="b", conversation_id="c9"
+            schedule="0 9 * * *",
+            name="hi",
+            description="says hi",
+            instructions="hi",
+            agent="b",
+            conversation_id="c9",
         )
         asyncio.run(queue.process_job("c9", job, None))
 
         assert len(factory("b").read_runs()) == 2  # running + done in b's store
         assert factory("a").read_runs() == []  # nothing leaked into a's store
-        assert run_turn.calls == [("b", "c9", "hi")]
+        assert len(run_turn.calls) == 1
+        assert run_turn.calls[0][:3] == ("b", "c9", "hi")
