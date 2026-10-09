@@ -11,6 +11,7 @@ phase plan. Run by hand with ``python -m paf.capabilities.keyword_curator``.
 - `_curate`     — the structured-output curator agent (no tools).
 - `_background` — the worker pass: discover → curate → append → rebuild → advance.
 - `_match`      — the hot path: per-source term index → ranked hints.
+- `_lock`       — cross-process flock around a pass (the store is multi-process).
 - `_queue`      — the single-flight worker that runs a pass off the turn path.
 - `_config`     — store location, spec-derived sources, background-curation opt-in.
 - `_report`     — review aid: likely duplicate / ambiguous entities.
@@ -22,12 +23,14 @@ from ._background import (
     PassResult,
     make_batches,
     pending_changes,
+    prioritize,
     project_seeds,
     run_keyword_pass,
 )
 from ._capability import KeywordCurator
 from ._config import curate_settings, keyword_dir_for, sources_config_for
 from ._curate import CurateBatch, CurateResult, Entity, curate_batch
+from ._lock import LOCK_FILENAME, pass_lock
 from ._match import Hint, IndexCache, KeywordIndex
 from ._queue import KeywordCuratorQueue, KeywordJob
 from ._render import render_hints
@@ -52,6 +55,7 @@ __all__ = [
     "Entity",
     "Hint",
     "KeywordCuratorQueue",
+    "LOCK_FILENAME",
     "KeywordJob",
     "IndexCache",
     "KeywordCurator",
@@ -64,7 +68,9 @@ __all__ = [
     "curate_settings",
     "keyword_dir_for",
     "make_batches",
+    "pass_lock",
     "pending_changes",
+    "prioritize",
     "project_seeds",
     "run_keyword_pass",
     "scan_notes",

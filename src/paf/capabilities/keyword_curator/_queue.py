@@ -43,6 +43,8 @@ class KeywordJob:
 
 def summarize_pass(result: PassResult) -> str:
     """One human line for the Processes row."""
+    if result.skipped:
+        return f"skipped — {result.skipped}"
     parts = [f"{len(result.keyed)} curated"]
     if result.failed:
         parts.append(f"{len(result.failed)} failed")

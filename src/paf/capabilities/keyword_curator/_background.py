@@ -20,12 +20,13 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ._curate import CurateFn, CurateResult, curate_batch
+from ._lock import pass_lock
 from ._sources import SourceItem, snapshots
 from ._store import (
     ENTITY_MAP_FILENAME,
@@ -59,10 +60,30 @@ class PassResult:
     batches: int = 0
     entities: int = 0
     """Entities in the rebuilt map."""
+    skipped: str = ""
+    """Why nothing ran (another process holds the store's pass lock)."""
 
     @property
     def ok(self) -> bool:
         return not self.failed
+
+
+def prioritize(refs: Iterable[str], sources: Mapping[str, SourceItem]) -> list[str]:
+    """The order a backlog is worked off: skills first, then notes newest-first.
+
+    Skills are few, small, and the most useful hint targets; curating them first
+    also seeds the canonical entity names the notes then reuse. Notes follow by
+    most-recently-modified, since what you touched lately is what you are likely
+    to ask about. Ties fall back to the ref so the order is deterministic.
+    """
+
+    def key(ref: str) -> tuple[int, float, str]:
+        item = sources[ref]
+        if item.source_type == "skill":
+            return (0, 0.0, ref)
+        return (1, -item.snapshot[0], ref)
+
+    return sorted(refs, key=key)
 
 
 def make_batches(
@@ -166,7 +187,7 @@ def _record_for(item: SourceItem, res: CurateResult) -> dict[str, Any]:
     )
 
 
-async def run_keyword_pass(
+async def _run_pass(
     directory: str | os.PathLike,
     sources: Mapping[str, SourceItem],
     *,
@@ -179,6 +200,9 @@ async def run_keyword_pass(
 ) -> PassResult:
     """Run one curation pass over ``sources`` into the keyword store at ``directory``.
 
+    Holds a cross-process lock for the whole pass; if another process already has
+    it, returns immediately with ``skipped`` set (it is doing the same work).
+
     ``limit`` caps how many changed sources are curated this pass (a trial run);
     the rest stay changed and are picked up next time. ``seeds`` are extra known
     entities (see :func:`project_seeds`) offered to the curator as names to reuse.
@@ -187,7 +211,7 @@ async def run_keyword_pass(
     wm = KeywordWatermark.load(directory)
     current = snapshots(sources)
 
-    changed = wm.changed(current)
+    changed = prioritize(wm.changed(current), sources)
     vanished = wm.vanished(current)
     if limit is not None:
         changed = changed[: max(0, limit)]
@@ -247,3 +271,36 @@ def pending_changes(
     wm = KeywordWatermark.load(directory)
     current = snapshots(sources)
     return wm.changed(current), wm.vanished(current)
+
+
+async def run_keyword_pass(
+    directory: str | os.PathLike,
+    sources: Mapping[str, SourceItem],
+    *,
+    curate: CurateFn = curate_batch,
+    batch_chars: int = DEFAULT_BATCH_CHARS,
+    max_batch_items: int = DEFAULT_MAX_BATCH_ITEMS,
+    max_known: int = DEFAULT_MAX_KNOWN,
+    limit: int | None = None,
+    seeds: Sequence[dict[str, Any]] = (),
+) -> PassResult:
+    """Run one curation pass under the store's cross-process lock.
+
+    The backlog is worked off in :func:`prioritize` order (skills first, then
+    notes newest-first); ``limit`` caps how many changed sources this pass takes
+    from the front of that order. If another process holds the lock, nothing is
+    read or written and the result's ``skipped`` says so.
+    """
+    with pass_lock(directory) as acquired:
+        if not acquired:
+            return PassResult(skipped="another process is curating this store")
+        return await _run_pass(
+            directory,
+            sources,
+            curate=curate,
+            batch_chars=batch_chars,
+            max_batch_items=max_batch_items,
+            max_known=max_known,
+            limit=limit,
+            seeds=seeds,
+        )

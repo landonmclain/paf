@@ -12,7 +12,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from ._background import make_batches, project_seeds, run_keyword_pass
+from ._background import make_batches, prioritize, project_seeds, run_keyword_pass
 from ._config import keyword_dir_for, sources_config_for
 from ._report import find_issues, format_issues
 from ._sources import scan_sources, snapshots
@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg["skill_libraries"] = []
     sources = scan_sources(**cfg)
     wm = KeywordWatermark.load(directory)
-    changed = wm.changed(snapshots(sources))
+    changed = prioritize(wm.changed(snapshots(sources)), sources)
     if args.limit is not None:
         changed = changed[: args.limit]
     n_skill = sum(1 for r in sources if r.startswith("skill:"))
@@ -74,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     result = asyncio.run(
         run_keyword_pass(directory, sources, limit=args.limit, seeds=seeds)
     )
+    if result.skipped:
+        print(f"skipped: {result.skipped}", file=sys.stderr)
+        return 2
     print(
         f"keyed {len(result.keyed)}, failed {len(result.failed)}, "
         f"removed {len(result.removed)}; {result.entities} entities"

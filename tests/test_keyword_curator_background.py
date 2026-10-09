@@ -458,3 +458,139 @@ def test_registered_without_an_idle_row_so_the_panel_stays_clean(
     # and the degraded status summary does not invent a row for it either
     rows = asyncio.run(env.bg.job_status_summary("cid"))
     assert not [r for r in rows if r.id.startswith("keyword_curate")]
+
+
+# --- ordering and the cross-process lock -------------------------------------
+
+
+def _item(ref: str, mtime: float = 1.0):
+    from paf.capabilities.keyword_curator import SourceItem
+
+    kind = ref.split(":", 1)[0]
+    return SourceItem(ref, kind, ref.split(":", 1)[1], "text", (mtime, 10))
+
+
+def test_prioritize_puts_skills_first_then_notes_newest_first() -> None:
+    from paf.capabilities.keyword_curator import prioritize
+
+    sources = {
+        "note:Govt/old.md": _item("note:Govt/old.md", mtime=100.0),
+        "note:Zed/newest.md": _item("note:Zed/newest.md", mtime=900.0),
+        "skill:b-skill": _item("skill:b-skill"),
+        "note:Mid/mid.md": _item("note:Mid/mid.md", mtime=500.0),
+        "skill:a-skill": _item("skill:a-skill"),
+    }
+    assert prioritize(list(sources), sources) == [
+        "skill:a-skill",
+        "skill:b-skill",
+        "note:Zed/newest.md",
+        "note:Mid/mid.md",
+        "note:Govt/old.md",
+    ]
+    # ties on mtime fall back to the ref, so the order is deterministic
+    tie = {f"note:{n}.md": _item(f"note:{n}.md", mtime=5.0) for n in "cab"}
+    assert prioritize(tie, tie) == ["note:a.md", "note:b.md", "note:c.md"]
+
+
+def test_a_pass_works_the_backlog_in_priority_order_and_limit_takes_the_front(
+    tmp_path: Path,
+) -> None:
+    seen: list[str] = []
+
+    async def curate(batch, known):
+        seen.extend(it.ref for it in batch)
+        return await _fake_curate(batch, known)
+
+    sources = {
+        "note:A/old.md": _item("note:A/old.md", mtime=1.0),
+        "note:B/new.md": _item("note:B/new.md", mtime=9.0),
+        "skill:s": _item("skill:s"),
+    }
+    res = asyncio.run(
+        run_keyword_pass(tmp_path / "kw", sources, curate=curate, limit=2)
+    )
+    assert seen == ["skill:s", "note:B/new.md"]  # skill, then the newest note
+    assert res.keyed == ["skill:s", "note:B/new.md"]
+    # the next pass picks up what is left
+    res2 = asyncio.run(run_keyword_pass(tmp_path / "kw", sources, curate=curate))
+    assert res2.keyed == ["note:A/old.md"]
+
+
+def test_pass_lock_is_exclusive_and_released(tmp_path: Path) -> None:
+    from paf.capabilities.keyword_curator import pass_lock
+
+    with pass_lock(tmp_path) as first:
+        assert first is True
+        with pass_lock(tmp_path) as second:  # a second holder (even in-process)
+            assert second is False
+    with pass_lock(tmp_path) as again:  # released on exit
+        assert again is True
+
+
+def test_pass_lock_is_released_when_the_holder_raises(tmp_path: Path) -> None:
+    from paf.capabilities.keyword_curator import pass_lock
+
+    with pytest.raises(RuntimeError), pass_lock(tmp_path):
+        raise RuntimeError("pass blew up")
+    with pass_lock(tmp_path) as ok:
+        assert ok is True
+
+
+def test_a_pass_is_skipped_untouched_while_another_process_holds_the_lock(
+    tmp_path: Path,
+) -> None:
+    from paf.capabilities.keyword_curator import pass_lock
+
+    store = tmp_path / "kw"
+    calls: list = []
+
+    async def curate(batch, known):
+        calls.append(batch)
+        return await _fake_curate(batch, known)
+
+    sources = {"skill:s": _item("skill:s")}
+    with pass_lock(store) as held:
+        assert held
+        res = asyncio.run(run_keyword_pass(store, sources, curate=curate))
+    assert res.skipped and res.keyed == [] and res.ok
+    assert calls == []  # nothing was curated ...
+    assert not (store / "keyword-journal.jsonl").exists()  # ... or written
+    assert not (store / "keyword-watermark.json").exists()
+    # once the lock is free the same pass runs normally
+    res2 = asyncio.run(run_keyword_pass(store, sources, curate=curate))
+    assert res2.keyed == ["skill:s"] and not res2.skipped
+
+
+def test_two_real_processes_cannot_both_hold_the_pass_lock(tmp_path: Path) -> None:
+    """flock across a genuine process boundary, not just two fds in one process."""
+    import subprocess
+    import sys
+    import textwrap
+
+    from paf.capabilities.keyword_curator import pass_lock
+
+    code = textwrap.dedent(
+        f"""
+        from paf.capabilities.keyword_curator import pass_lock
+        with pass_lock({str(tmp_path)!r}) as got:
+            print("GOT" if got else "BLOCKED")
+        """
+    )
+    with pass_lock(tmp_path) as held:
+        assert held
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        assert out == "BLOCKED"
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert out == "GOT"
+
+
+def test_queue_reports_a_skipped_pass_as_a_clean_completion(tmp_path: Path) -> None:
+    from paf.capabilities.keyword_curator._queue import summarize_pass
+
+    assert summarize_pass(
+        PassResult(skipped="another process is curating this store")
+    ) == ("skipped — another process is curating this store")
