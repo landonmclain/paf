@@ -221,9 +221,7 @@ async def _notify_agent(
         await _emit_turn_started(agent, conversation_id, run_id)
 
 
-async def _scheduled_run_turn(
-    agent: str, cid: str, content: str, run_id: str
-) -> None:
+async def _scheduled_run_turn(agent: str, cid: str, content: str, run_id: str) -> None:
     """Run a scheduled job's agent turn in its origin conversation.
 
     The scheduled-tasks queue's ``run_turn`` seam: get (or create) the lane's

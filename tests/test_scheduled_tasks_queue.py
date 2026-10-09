@@ -43,9 +43,7 @@ class FakeRunTurn:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str, str]] = []
 
-    async def __call__(
-        self, agent: str, cid: str, content: str, run_id: str
-    ) -> None:
+    async def __call__(self, agent: str, cid: str, content: str, run_id: str) -> None:
         self.calls.append((agent, cid, content, run_id))
 
 

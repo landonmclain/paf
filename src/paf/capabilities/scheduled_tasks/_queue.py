@@ -130,9 +130,7 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
                     detail=str(exc),
                 )
             )
-            await self._emit(
-                job.agent, job.id, "error", job.name, str(exc)
-            )
+            await self._emit(job.agent, job.id, "error", job.name, str(exc))
             raise
 
     def _done_detail(self, job: ScheduledJob) -> str:
@@ -152,13 +150,9 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
 
     async def _run_agent(self, session_id: str, job: ScheduledJob, run_id: str) -> None:
         """Run an agent-executed job: a full turn via the ``run_turn`` seam."""
-        await self._emit(
-            job.agent, job.id, "running", job.name, "agent turn"
-        )
+        await self._emit(job.agent, job.id, "running", job.name, "agent turn")
         await self.run_turn(job.agent, session_id, job.instructions or "", run_id)
-        await self._emit(
-            job.agent, job.id, "done", job.name, self._done_detail(job)
-        )
+        await self._emit(job.agent, job.id, "done", job.name, self._done_detail(job))
 
     async def _run_script(
         self, session_id: str, job: ScheduledJob, script: str, run_id: str

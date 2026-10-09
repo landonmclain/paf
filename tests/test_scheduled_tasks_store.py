@@ -44,9 +44,7 @@ def test_job_requires_name_and_description() -> None:
     with pytest.raises(ValueError):
         ScheduledJob(schedule="0 9 * * *", name="n", instructions="x")  # no description
     with pytest.raises(ValueError):
-        ScheduledJob(
-            schedule="0 9 * * *", description="d", instructions="x"
-        )  # no name
+        ScheduledJob(schedule="0 9 * * *", description="d", instructions="x")  # no name
 
 
 def test_job_defaults() -> None:

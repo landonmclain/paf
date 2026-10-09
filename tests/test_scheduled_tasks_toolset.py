@@ -55,7 +55,10 @@ def test_schedule_task_creates_agent_job() -> None:
         ts = _toolset(tmp)
         out = asyncio.run(
             ts.schedule_task(
-                "0 9 * * *", "Post article", "posts the article at 9am", instructions="post the article"
+                "0 9 * * *",
+                "Post article",
+                "posts the article at 9am",
+                instructions="post the article",
             )
         )
         assert "created" in out
@@ -78,7 +81,11 @@ def test_schedule_task_creates_script_job() -> None:
         ts = _toolset(tmp)
         out = asyncio.run(
             ts.schedule_task(
-                "0 9 * * *", "Check", "runs check.py", script="echo hi", notify="on_trigger"
+                "0 9 * * *",
+                "Check",
+                "runs check.py",
+                script="echo hi",
+                notify="on_trigger",
             )
         )
         job_id = out.split()[2]
@@ -122,8 +129,12 @@ def test_list_scheduled_tasks() -> None:
         assert asyncio.run(ts.list_scheduled_tasks()) == (
             "No scheduled tasks in this conversation."
         )
-        asyncio.run(ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a"))
-        asyncio.run(ts.schedule_task("0 10 * * *", "Check", "runs at 10am", script="echo hi"))
+        asyncio.run(
+            ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a")
+        )
+        asyncio.run(
+            ts.schedule_task("0 10 * * *", "Check", "runs at 10am", script="echo hi")
+        )
         out = asyncio.run(ts.list_scheduled_tasks())
         assert "Morning" in out
         assert "runs at 9am" in out
@@ -136,7 +147,9 @@ def test_list_scheduled_tasks() -> None:
 def test_update_scheduled_task_fields() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         ts = _toolset(tmp)
-        out = asyncio.run(ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a"))
+        out = asyncio.run(
+            ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a")
+        )
         job_id = out.split()[2]
         asyncio.run(ts.update_scheduled_task(job_id, schedule="0 11 * * *"))
         job = ts._store().get_job(job_id)
@@ -148,7 +161,9 @@ def test_update_scheduled_task_fields() -> None:
 def test_update_scheduled_task_name_description() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         ts = _toolset(tmp)
-        out = asyncio.run(ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a"))
+        out = asyncio.run(
+            ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a")
+        )
         job_id = out.split()[2]
         asyncio.run(
             ts.update_scheduled_task(
@@ -165,7 +180,9 @@ def test_update_scheduled_task_name_description() -> None:
 def test_update_scheduled_task_switches_mode() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         ts = _toolset(tmp)
-        out = asyncio.run(ts.schedule_task("0 9 * * *", "Check", "runs check.py", script="echo hi"))
+        out = asyncio.run(
+            ts.schedule_task("0 9 * * *", "Check", "runs check.py", script="echo hi")
+        )
         job_id = out.split()[2]
         asyncio.run(ts.update_scheduled_task(job_id, instructions="now do this"))
         job = ts._store().get_job(job_id)
@@ -185,7 +202,9 @@ def test_update_scheduled_task_missing_job_raises() -> None:
 def test_remove_scheduled_task_archives() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         ts = _toolset(tmp)
-        out = asyncio.run(ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a"))
+        out = asyncio.run(
+            ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a")
+        )
         job_id = out.split()[2]
         assert asyncio.run(ts.remove_scheduled_task(job_id)) == (
             f"Removed scheduled task {job_id}."
@@ -201,7 +220,9 @@ def test_run_scheduled_task_enqueues() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         queue = FakeQueue()
         ts = _toolset(tmp, queue=queue)
-        out = asyncio.run(ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a"))
+        out = asyncio.run(
+            ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a")
+        )
         job_id = out.split()[2]
         assert asyncio.run(ts.run_scheduled_task(job_id)) == (
             f"Queued scheduled task {job_id} to run now."
@@ -215,7 +236,9 @@ def test_run_scheduled_task_enqueues() -> None:
 def test_run_scheduled_task_unwired_queue_raises() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         ts = _toolset(tmp, queue=None)
-        out = asyncio.run(ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a"))
+        out = asyncio.run(
+            ts.schedule_task("0 9 * * *", "Morning", "runs at 9am", instructions="a")
+        )
         job_id = out.split()[2]
         with pytest.raises(ModelRetry):
             asyncio.run(ts.run_scheduled_task(job_id))
