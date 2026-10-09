@@ -45,6 +45,10 @@ SUBPHRASE_FACTOR = 0.5
 TOKEN_WEIGHT = 0.5
 MIN_TOKEN_HITS = 2
 MAX_PHRASE_TOKENS = 6
+SKILL_BOOST = 1.2
+"""Near-ties go to the skill: it is the actionable procedure (``load_skill``), while a
+note that shares the same terms is a reference. Modest on purpose — a clearly
+stronger note still wins."""
 
 DEFAULT_TOP_K = 3
 DEFAULT_MIN_SCORE = 2.5
@@ -275,6 +279,9 @@ class KeywordIndex:
                         self._idf(self._tok_df[t]) for t in extra
                     )
 
+        for ref in scores:
+            if self._sources[ref].kind == "skill":
+                scores[ref] *= SKILL_BOOST
         ranked = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
         if not ranked or ranked[0][1] < min_score:
             return []

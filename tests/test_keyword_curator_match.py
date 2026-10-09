@@ -16,7 +16,7 @@ from paf.capabilities.keyword_curator import (
     make_record,
     write_entity_map,
 )
-from paf.capabilities.keyword_curator._match import name_term, tokens
+from paf.capabilities.keyword_curator._match import SKILL_BOOST, name_term, tokens
 
 
 def _rec(ref, entities, keywords=()):
@@ -92,7 +92,9 @@ def test_bare_alias_is_discounted_by_the_size_of_its_entity() -> None:
     bg = idx.match("bg", min_score=0.0)[0].score
     sm = idx.match("sm", min_score=0.0)[0].score
     assert sm > bg
-    assert bg == round(3.0 * math.log(1 + 10 / 6), 2)  # df = entity size, not 2
+    # df = the entity's size (6), not the 2 sources that spell the alias; these are
+    # skills, so the modest skill preference applies on top
+    assert bg == round(3.0 * math.log(1 + 10 / 6) * SKILL_BOOST, 2)
 
 
 def test_subphrase_of_a_longer_term_matches_at_reduced_weight() -> None:
@@ -172,3 +174,27 @@ def test_from_store_without_a_map_keeps_every_journaled_source(tmp_path) -> None
 
 def test_empty_index_matches_nothing() -> None:
     assert KeywordIndex().match("anything at all") == []
+
+
+def test_a_skill_wins_a_tie_against_notes_with_the_same_terms() -> None:
+    same = [{"canonical": "longmem", "aliases": ["longmem benchmark"]}]
+    idx = _idx(
+        _rec("note:A-first.md", same),
+        _rec("note:B-second.md", same),
+        _rec("skill:run-longmem", same),
+    )
+    hits = idx.match("run the longmem benchmark", min_score=0.1)
+    assert hits[0].ref == "skill:run-longmem"  # not 'note:' just for sorting first
+
+
+def test_the_skill_preference_does_not_override_a_much_stronger_note() -> None:
+    idx = _idx(
+        _rec("skill:weak", [{"canonical": "thing", "aliases": []}]),
+        _rec(
+            "note:strong.md",
+            [{"canonical": "thing", "aliases": ["thing deep dive notes"]}],
+            ["thing deep dive notes"],
+        ),
+    )
+    hits = idx.match("thing deep dive notes", min_score=0.1)
+    assert hits[0].ref == "note:strong.md"
