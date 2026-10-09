@@ -30,6 +30,10 @@ MEMORY_MARKER_BASE = "pydantic-ai-harness.memory.v1"
 THREAD_SUMMARY_MARKER_BASE = "paf.thread-summary.v1"
 PLAN_MARKER_BASE = "paf.plan.v1"
 
+# The keyword curator's injected `<relevance-hints>` block (scope-qualified on
+# injection: `paf.keyword-hints.v1:<hash>`; stripping the base covers every scope).
+KEYWORD_HINTS_MARKER_BASE = "paf.keyword-hints.v1"
+
 
 def injected_artifact_markers() -> tuple[str, ...]:
     """Return the set of markers we strip from rendered User messages.
@@ -45,4 +49,5 @@ def injected_artifact_markers() -> tuple[str, ...]:
         MEMORY_MARKER_BASE,
         THREAD_SUMMARY_MARKER_BASE,
         PLAN_MARKER_BASE,
+        KEYWORD_HINTS_MARKER_BASE,
     )

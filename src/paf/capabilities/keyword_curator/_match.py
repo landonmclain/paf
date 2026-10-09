@@ -298,3 +298,45 @@ class KeywordIndex:
                 )
             )
         return out
+
+
+class IndexCache:
+    """Keeps a :class:`KeywordIndex` for one store directory, rebuilt on change.
+
+    The hot path calls :meth:`get` every real user turn; the cost when nothing
+    changed is two ``stat`` calls. The index is rebuilt when the journal or the
+    entity map changes on disk (the curator rewrites both atomically), and is empty
+    when the store does not exist yet.
+    """
+
+    def __init__(self, directory: str | Path) -> None:
+        self._directory = Path(directory)
+        self._stamp: tuple[Any, ...] | None = None
+        self._index = KeywordIndex()
+
+    @property
+    def size(self) -> int:
+        return self._index.size
+
+    def _signature(self) -> tuple[Any, ...]:
+        from ._store import JOURNAL_FILENAME
+
+        sig: list[Any] = []
+        for name in (JOURNAL_FILENAME, ENTITY_MAP_FILENAME):
+            try:
+                st = (self._directory / name).stat()
+                sig.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                sig.append(None)
+        return tuple(sig)
+
+    def get(self) -> KeywordIndex:
+        stamp = self._signature()
+        if stamp != self._stamp:
+            self._index = (
+                KeywordIndex()
+                if stamp == (None, None)
+                else KeywordIndex.from_store(self._directory)
+            )
+            self._stamp = stamp
+        return self._index

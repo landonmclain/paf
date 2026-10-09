@@ -33,6 +33,7 @@ from paf.capabilities.browser import Browser
 from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
+from paf.capabilities.keyword_curator import KeywordCurator
 from paf.capabilities.memory import Memory
 from paf.capabilities.planning import Planning
 from paf.capabilities.python import Python
@@ -68,6 +69,10 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Per-conversation background thread summarizer. OFF by default — the profile
     # allowlist is the ON/OFF switch.
     "ThreadSummarizer": ThreadSummarizer,
+    # Per-turn relevance hints (skills + notes) from the curated keyword store.
+    # Zero-LLM on the turn; the curator that builds the store runs in the
+    # background. OFF by default — the profile allowlist is the ON/OFF switch.
+    "KeywordCurator": KeywordCurator,
     # Scoped filesystem access rooted at a directory. `from_spec` + `get_toolset`.
     "FileSystem": FileSystem,
     # Shell command execution rooted at a cwd. `from_spec` + `get_toolset`.

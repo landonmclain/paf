@@ -17,8 +17,11 @@ phase plan. Run by hand with ``python -m paf.capabilities.keyword_curator``.
 from __future__ import annotations
 
 from ._background import PassResult, make_batches, project_seeds, run_keyword_pass
+from ._capability import KeywordCurator
+from ._config import keyword_dir_for, sources_config_for
 from ._curate import CurateBatch, CurateResult, Entity, curate_batch
-from ._match import Hint, KeywordIndex
+from ._match import Hint, IndexCache, KeywordIndex
+from ._render import render_hints
 from ._report import find_issues, format_issues
 from ._sources import SourceItem, scan_notes, scan_skills, scan_sources
 from ._store import (
@@ -39,18 +42,22 @@ __all__ = [
     "CurateResult",
     "Entity",
     "Hint",
+    "IndexCache",
+    "KeywordCurator",
     "KeywordIndex",
     "PassResult",
     "SourceItem",
     "curate_batch",
     "find_issues",
     "format_issues",
+    "keyword_dir_for",
     "make_batches",
     "project_seeds",
     "run_keyword_pass",
     "scan_notes",
     "scan_skills",
     "scan_sources",
+    "sources_config_for",
     "ENTITY_MAP_FILENAME",
     "JOURNAL_FILENAME",
     "WATERMARK_FILENAME",
@@ -61,5 +68,6 @@ __all__ = [
     "make_record",
     "normalize_term",
     "read_entity_map",
+    "render_hints",
     "write_entity_map",
 ]

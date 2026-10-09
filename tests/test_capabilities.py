@@ -409,6 +409,16 @@ def test_visual_hook_swaps_capture_pixels_for_stub() -> None:
     asyncio.run(_run())
 
 
+def test_keyword_curator_is_cataloged_and_only_in_the_demo_profile() -> None:
+    """Per-turn relevance hints are tried in the demo sandbox before promotion."""
+    from paf.capabilities.keyword_curator import KeywordCurator
+    from paf.capabilities.profiles import DEMO_PROFILE
+
+    assert CAPABILITY_TYPES["KeywordCurator"] is KeywordCurator
+    assert "KeywordCurator" in DEMO_PROFILE.capability_names
+    assert "KeywordCurator" not in ASSISTANT_PROFILE.capability_names
+
+
 def test_profiles_are_the_complete_intentional_set() -> None:
     """Known profiles: assistant (clean prod), demo (the everything sandbox),
     contextbench (the codebase-map benchmark arm), and longmemeval (the memory

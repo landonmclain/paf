@@ -103,6 +103,7 @@ DEMO_PROFILE = AgentProfile(
         "Subagents",
         "Planning",
         "ThreadSummarizer",
+        "KeywordCurator",  # per-turn relevance hints; injects nothing until a store exists
         # "Secrets",
         # "Guardrails",
         # "ToolGating",

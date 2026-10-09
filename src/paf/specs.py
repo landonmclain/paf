@@ -290,6 +290,34 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     return cfg
 
 
+def _spec_keywords_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``keywords:`` block (relevance-hint knobs).
+
+        keywords:
+          inject: true       # false = build the capability but inject nothing
+          top_k: 5           # at most this many hints per turn
+          min_score: 2.5     # absolute floor on a hint's score
+          query_turns: 2     # how many recent user prompts the match reads
+
+    Absent members fall back to the capability's defaults; unknown keys are
+    ignored so the schema can grow. Returns ``None`` when the block is absent.
+    """
+    block = _spec_mapping_block(spec_path, "keywords")
+    if not block:
+        return None
+    cfg: dict[str, object] = {}
+    if isinstance(block.get("inject"), bool):
+        cfg["inject"] = block["inject"]
+    for key in ("top_k", "query_turns"):
+        value = block.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            cfg[key] = value
+    score = block.get("min_score")
+    if isinstance(score, int | float) and not isinstance(score, bool) and score >= 0:
+        cfg["min_score"] = float(score)
+    return cfg or None
+
+
 def _spec_search_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``search:`` block into a config dict.
 
@@ -924,6 +952,8 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "codebase_map_config": _spec_codebase_map_config(spec_path),
         # Skill library dirs from the spec's `skills:` block.
         "skills_config": _spec_skills_config(spec_path),
+        # Relevance-hint knobs from the spec's `keywords:` block.
+        "keywords_config": _spec_keywords_config(spec_path),
         # mcpServers JSON path from the spec's `mcp:` block (builtin env expansion).
         "mcp_config": _spec_mcp_config(spec_path),
         # Subagent roster + background cap from the spec's `subagents:` block.

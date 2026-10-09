@@ -12,27 +12,12 @@ import asyncio
 import sys
 from pathlib import Path
 
-from paf.config import DATA_DIR
-
 from ._background import make_batches, project_seeds, run_keyword_pass
+from ._config import keyword_dir_for, sources_config_for
 from ._report import find_issues, format_issues
 from ._sources import scan_sources, snapshots
 from ._store import read_entity_map
 from ._watermark import KeywordWatermark
-
-
-def _spec_sources(agent: str) -> dict:
-    from paf.specs import _spec_skills_config, _spec_vault_config, get_spec_path
-
-    spec_path = get_spec_path(agent)
-    skills = _spec_skills_config(spec_path) or {}
-    vault = _spec_vault_config(spec_path) or {}
-    return {
-        "skill_libraries": skills.get("libraries") or [DATA_DIR / "skills"],
-        "vault_root": vault.get("root"),
-        "vault_allow": vault.get("allow") or [],
-        "vault_deny": vault.get("deny") or [],
-    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -53,13 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--report", action="store_true", help="print the review report")
     args = ap.parse_args(argv)
 
-    directory = Path(args.dir) if args.dir else DATA_DIR / "keywords" / args.agent
+    directory = Path(args.dir) if args.dir else keyword_dir_for(args.agent)
 
     if args.report and not args.dry_run:
         print(format_issues(find_issues(read_entity_map(directory))))
         return 0
 
-    cfg = _spec_sources(args.agent)
+    cfg = sources_config_for(args.agent)
     if args.skills:
         cfg["skill_libraries"] = args.skills
     if args.vault:

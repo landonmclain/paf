@@ -58,6 +58,7 @@ from paf.capabilities.guardrails.secret_handles import (
     secret_result_guard,
 )
 from paf.capabilities.guardrails.tool_gating import tool_gating_guard
+from paf.capabilities.keyword_curator import KeywordCurator
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.planning import Planning
@@ -178,6 +179,25 @@ def _build_memory(
         render_budget=render_budget,
         memory_directory=str(memory_dir),
         render_agent=agent_name,
+    )
+
+
+def _build_keyword_curator(
+    store, keywords_config: dict | None = None, agent_name: str | None = None
+) -> KeywordCurator:
+    """Build the KeywordCurator capability (the per-turn hints reader).
+
+    ``store`` is accepted for a uniform builder signature but unused — the keyword
+    store is its own flat-file directory (``data/keywords/<agent>/``), populated by
+    the background curator. ``keywords_config`` is the spec's top-level
+    ``keywords:`` block (``specs._spec_keywords_config``): ``top_k``, ``min_score``,
+    ``inject``. With no store yet it injects nothing.
+    """
+    cfg = keywords_config or {}
+    return KeywordCurator.from_spec(
+        agent_name=agent_name,
+        inject_hints=cfg.get("inject", True),
+        **{k: cfg[k] for k in ("top_k", "min_score", "query_turns") if k in cfg},
     )
 
 
@@ -950,6 +970,7 @@ def build_runtime_capabilities(
     git_config: dict | None = None,
     codebase_map_config: dict | None = None,
     skills_config: dict | None = None,
+    keywords_config: dict | None = None,
     mcp_config: str | None = None,
     agent_name: str | None = None,
     on_complete=None,
@@ -978,6 +999,9 @@ def build_runtime_capabilities(
         # Per-conversation background thread summarizer. OFF by default — only
         # built when the profile allowlists it.
         "ThreadSummarizer": _build_thread_summarizer,
+        # Per-turn relevance hints from the curated keyword store. OFF unless the
+        # profile allowlists it; injects nothing until a store exists.
+        "KeywordCurator": _build_keyword_curator,
         # Scoped filesystem (paf-owned harness copy) rooted at the project root.
         "FileSystem": _build_filesystem,
         # Shell command execution (paf-owned harness copy) rooted at the project root.
@@ -1068,6 +1092,10 @@ def build_runtime_capabilities(
             # a capture hook. Gated by the allowlist via the loop's `name not in
             # capability_names` continue above.
             capabilities.append(_build_thread_summarizer(store, None, agent_name))
+        elif name == "KeywordCurator":
+            capabilities.append(
+                _build_keyword_curator(store, keywords_config, agent_name)
+            )
         elif name == "Subagents":
             # Each leaf gets the SAME scoped FileSystem as the main model (root
             # from `filesystem_config` / default PROJECT_ROOT), so the parent
