@@ -18,10 +18,10 @@ batch small. Nothing here writes to a source or calls a model.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from ._watermark import Snapshot
 
