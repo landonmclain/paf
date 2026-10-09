@@ -362,7 +362,7 @@ class ShellToolset(FunctionToolset[AgentDepsT]):
 
     @_recoverable
     async def start_command(
-        self, command: str, notify_on_completion: bool = False
+        self, command: str, notify_on_completion: bool = True
     ) -> str:
         """Start a long-running command in the background (e.g. a server or watcher).
 
