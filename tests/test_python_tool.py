@@ -208,6 +208,7 @@ def _docker_python(tmp_path, **executor_kwargs):
     return PythonToolset(cwd=tmp_path, executor=DockerExecutor(**kwargs))
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_runs_a_program_and_reads_the_workspace(tmp_path):
     (tmp_path / "data.txt").write_text("hello")
@@ -249,6 +250,7 @@ def test_docker_workspace_is_read_only_but_tmp_is_scratch(tmp_path):
     assert not (tmp_path / "probe.txt").exists()
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_writable_subpath_is_the_only_writable_workspace_path(tmp_path):
     code = (
@@ -261,6 +263,7 @@ def test_docker_writable_subpath_is_the_only_writable_workspace_path(tmp_path):
     assert (tmp_path / "out" / "result.txt").read_text() == "done"
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_env_files_are_shadowed(tmp_path):
     (tmp_path / ".env").write_text("SECRET=hunter2")
