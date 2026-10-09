@@ -10,6 +10,7 @@ phase plan. Run by hand with ``python -m paf.capabilities.keyword_curator``.
 - `_sources`    — skill and note readers → bounded digests.
 - `_curate`     — the structured-output curator agent (no tools).
 - `_background` — the worker pass: discover → curate → append → rebuild → advance.
+- `_match`      — the hot path: per-source term index → ranked hints.
 - `_report`     — review aid: likely duplicate / ambiguous entities.
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 from ._background import PassResult, make_batches, project_seeds, run_keyword_pass
 from ._curate import CurateBatch, CurateResult, Entity, curate_batch
+from ._match import Hint, KeywordIndex
 from ._report import find_issues, format_issues
 from ._sources import SourceItem, scan_notes, scan_skills, scan_sources
 from ._store import (
@@ -36,6 +38,8 @@ __all__ = [
     "CurateBatch",
     "CurateResult",
     "Entity",
+    "Hint",
+    "KeywordIndex",
     "PassResult",
     "SourceItem",
     "curate_batch",
