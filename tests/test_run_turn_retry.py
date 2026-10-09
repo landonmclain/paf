@@ -112,6 +112,7 @@ class _AsyncNoop:
         return None
 
 
+@pytest.mark.live
 def test_retryable_502_recovers(monkeypatch, capsys) -> None:
     """A 502 'Network connection lost' on attempt 1 is retried and succeeds."""
     monkeypatch.setattr("tests.framework.asyncio.sleep", _fake_sleep)
@@ -126,6 +127,7 @@ def test_retryable_502_recovers(monkeypatch, capsys) -> None:
     assert "retryable ModelHTTPError 502" in capsys.readouterr().out
 
 
+@pytest.mark.live
 def test_fatal_401_not_retried(monkeypatch) -> None:
     """A 401 never gets retried — it propagates immediately (fatal status)."""
     slept = {"n": 0}
@@ -141,6 +143,7 @@ def test_fatal_401_not_retried(monkeypatch) -> None:
     assert slept["n"] == 0  # never slept => never retried a fatal status
 
 
+@pytest.mark.live
 def test_retry_exhausted_still_raises(monkeypatch) -> None:
     """Retryable but never-resolving -> raises after max attempts, constant backoff."""
     slept: list[float] = []
@@ -168,6 +171,7 @@ def test_retry_exhausted_still_raises(monkeypatch) -> None:
 # retries with the same backoff and recovers.
 
 
+@pytest.mark.live
 def test_transport_error_recovers(monkeypatch, capsys) -> None:
     """A raw httpx.ReadError on attempt 1 is retried and succeeds."""
     monkeypatch.setattr("tests.framework.asyncio.sleep", _fake_sleep)
@@ -180,6 +184,7 @@ def test_transport_error_recovers(monkeypatch, capsys) -> None:
     assert "ReadError" in out
 
 
+@pytest.mark.live
 def test_transport_error_exhausted_still_raises(monkeypatch) -> None:
     """A transport error that never resolves -> raises after max attempts."""
     slept: list[float] = []

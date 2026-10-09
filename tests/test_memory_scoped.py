@@ -97,6 +97,7 @@ def _render(mem: Path, steps, cid: str | None, query: str = "", **budget) -> str
     )
 
 
+@pytest.mark.live
 def test_sections_and_render_time_filing(world) -> None:
     mem, steps = world
     j = JournalStore(mem)
@@ -396,6 +397,7 @@ def test_browse_tools_only_with_browse_agent(tmp_path: Path) -> None:
     assert {"list_memory", "search_memory"} <= set(ts.tools)
 
 
+@pytest.mark.live
 def test_history_shows_only_global_and_this_project(world) -> None:
     mem, steps = world
     j = JournalStore(mem)

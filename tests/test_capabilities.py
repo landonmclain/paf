@@ -153,6 +153,7 @@ def test_cache_bust_warning_flips_active_span_to_error() -> None:
     # The turn continues: the `with` block above completed without raising.
 
 
+@pytest.mark.live
 def test_subagents_cataloged_and_wired() -> None:
     """Subagents is the paf-owned capability and resolves on a profile with its roster.
 
