@@ -99,7 +99,7 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         )
         try:
             if job.script is not None:
-                await self._run_script(session_id, job)
+                await self._run_script(session_id, job, job.script)
             else:
                 await self._run_agent(session_id, job)
         except Exception as exc:
@@ -112,11 +112,11 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         await self.run_turn(session_id, job.instructions or "")
         await self._emit(job.id, "done", f"scheduled: {job.id}", "agent turn started")
 
-    async def _run_script(self, session_id: str, job: ScheduledJob) -> None:
+    async def _run_script(self, session_id: str, job: ScheduledJob, script: str) -> None:
         """Run a script-executed job; notify per ``notify`` mode."""
         await self._emit(job.id, "running", f"scheduled: {job.id}", "script")
         result = await self.executor.run(
-            job.script,
+            script,
             cwd=self.cwd or Path("."),
             env=None,
             timeout=_SCRIPT_TIMEOUT_S,
