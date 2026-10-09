@@ -1,8 +1,10 @@
-# AGENTS.md — paf web UI operating guide
+# AGENTS.md — paf operating guide
 
 Concise operating guide for any agent (Claude Code, Codex, Cursor, Hermes, ...)
-working on the **web chat UI (`ui/web.py`)** in this repo. This file is
-web-UI-centric; the graded benchmark harness has its own guide — **see
+working in this repo. The web front end is the **SSE server (`ui/sse.py`)** plus
+the separate paf-ui Next.js app; the old Gradio web UI (`ui/web.py`,
+`paf-web.service`) is **retired and archived — do not use or restart it**. The
+graded benchmark harness has its own guide — **see
 [`tests/AGENTS.md`](tests/AGENTS.md)** before running or editing anything under
 `tests/`. The repo README (`README.md`) is the broader orientation.
 
@@ -14,58 +16,36 @@ web-UI-centric; the graded benchmark harness has its own guide — **see
 > (plain `source` does not export `OPENROUTER_API_KEY`).
 
 > **Full unit test suite:** from the repo root, `PYTHONPATH= .venv/bin/python -m pytest`
-> takes ~50s (~769 tests).
+> takes ~50s.
 
-## The web server is a systemd user service — do not run it ad hoc
+## Servers are systemd user services — do not run them ad hoc
 
-`ui/web.py` serves the paf Gradio chat on `0.0.0.0:8080` (Tailscale
-`http://100.107.176.116:8080`), default agent `demo_assistant`. It is owned by a
-**systemd user service**, not a chat background process — a chat-spawned server
-collides on the port and leaves orphans.
+| Service | What | Port |
+|---|---|---|
+| `paf-sse` | `ui/sse.py` FastAPI SSE + REST transport over `Session` | 8090 |
+| `paf-ops` | `ui/ops.py` ops transport (systemd control for paf-sse) | 8091 |
+| `paf-ui` | paf-ui Next.js dev server | 3001 |
 
-```bash
-systemctl --user daemon-reload                                   # after editing the unit
-systemctl --user enable --now paf-web.service                    # start + enable at login
-systemctl --user start|stop|restart|status paf-web               # daily driver
-journalctl --user -u paf-web -f                                  # live logs
-```
-
-- Unit: `~/.config/systemd/user/paf-web.service` — `Restart=on-failure`,
-  `RestartSec=2` (crash auto-restart verified), `WantedBy=default.target`.
-- Wrapper: `scripts/paf-web-start.sh` — `cd`s to root, sources `.env` (exports
-  keys), `exec`s `.venv/bin/python ui/web.py`. Doubles as the manual run path.
-
-## Run / debug manually (one-off)
+A chat-spawned server collides on the port and leaves orphans. **After changing
+Python code under `src/` or `ui/`, restart `paf-sse`** to pick it up:
 
 ```bash
-cd /home/alice/projects/Personal/pydantic-agent-framework
-PYTHONPATH= .venv/bin/python -m py_compile ui/web.py && \
-PYTHONPATH= .venv/bin/ruff check ui/web.py --output-format=concise   # CLEAN before/after edits
-# server (ONE-OFF; normally systemd runs it):
-set -a && . ./.env && set +a && .venv/bin/python ui/web.py
-sleep 6 && curl -s -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:8080/   # → 200
+systemctl --user restart paf-sse && sleep 4 && systemctl --user is-active paf-sse
+journalctl --user -u paf-sse -f                                  # live logs
+systemctl --user daemon-reload                                   # after editing a unit
 ```
 
-**Gotchas:**
-- `python ui/web.py 8080` makes `8080` the **agent name** →
-  `AgentSpecNotFoundError for '8080'`. Use no args, or `demo_assistant 8080`.
-- Gradio 6.25: no `type="messages"`; bot fn must be `functools.partial(...)` of
-  an async generator (a lambda breaks streaming); `.load()` needs a
-  `with gr.Blocks()` context; `css`/`fill_width` go to `launch()`.
-- `Session.close()` is SYNC (returns None) — do not `asyncio.run` it.
+- Units: `~/.config/systemd/user/paf-{sse,ops,ui}.service` (`Restart=on-failure`).
+- Wrapper: `scripts/paf-sse-start.sh [port]` — sources `.env`, `exec`s uvicorn
+  `ui.sse:app` with a bounded graceful shutdown. Doubles as the manual run path.
+- Errors on a chat turn (e.g. a capability failing at run time) surface from
+  paf-sse — check its journal first.
 
-## History rendering model (ui/web.py)
+## Lint / compile
 
-- **Live** (`event_messages`): rebuild the full transcript every frame from a
-  fixed base + `_assistant_messages(out)` — never accumulate via slice.
-- **Restore** (`_render_session_history`): folds flat pydantic-ai messages into
-  `(user, TurnStream)` turns; consecutive `UserPromptPart`s collapse to one
-  user bubble; empty/interrupted turns are skipped.
-- Restored history loads on **page refresh** via `demo.load` → `_load_history`
-  → `session.refresh()` (re-reads the store past the one-shot `_resumed` guard).
-
-A Hermes skill (`paf-web-ui`, category `autonomous-ai-agents`) has the full
-Gradio gotchas, the fold model, and browser-DOM verification selectors.
+```bash
+PYTHONPATH= .venv/bin/ruff check <path> --output-format=concise   # CLEAN before/after edits
+```
 
 ## Other entry points
 
