@@ -234,3 +234,16 @@ async def run_keyword_pass(
         write_entity_map(directory, entity_map)
     result.entities = len(entity_map)
     return result
+
+
+def pending_changes(
+    directory: str | os.PathLike, sources: Mapping[str, SourceItem]
+) -> tuple[list[str], list[str]]:
+    """``(changed, vanished)`` refs a pass over ``sources`` would act on.
+
+    The cheap question the post-turn trigger asks: is a pass worth enqueuing? It
+    only reads the watermark and compares snapshots — no model, no writes.
+    """
+    wm = KeywordWatermark.load(directory)
+    current = snapshots(sources)
+    return wm.changed(current), wm.vanished(current)

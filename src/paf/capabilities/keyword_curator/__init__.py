@@ -11,16 +11,25 @@ phase plan. Run by hand with ``python -m paf.capabilities.keyword_curator``.
 - `_curate`     — the structured-output curator agent (no tools).
 - `_background` — the worker pass: discover → curate → append → rebuild → advance.
 - `_match`      — the hot path: per-source term index → ranked hints.
+- `_queue`      — the single-flight worker that runs a pass off the turn path.
+- `_config`     — store location, spec-derived sources, background-curation opt-in.
 - `_report`     — review aid: likely duplicate / ambiguous entities.
 """
 
 from __future__ import annotations
 
-from ._background import PassResult, make_batches, project_seeds, run_keyword_pass
+from ._background import (
+    PassResult,
+    make_batches,
+    pending_changes,
+    project_seeds,
+    run_keyword_pass,
+)
 from ._capability import KeywordCurator
-from ._config import keyword_dir_for, sources_config_for
+from ._config import curate_settings, keyword_dir_for, sources_config_for
 from ._curate import CurateBatch, CurateResult, Entity, curate_batch
 from ._match import Hint, IndexCache, KeywordIndex
+from ._queue import KeywordCuratorQueue, KeywordJob
 from ._render import render_hints
 from ._report import find_issues, format_issues
 from ._sources import SourceItem, scan_notes, scan_skills, scan_sources
@@ -42,6 +51,8 @@ __all__ = [
     "CurateResult",
     "Entity",
     "Hint",
+    "KeywordCuratorQueue",
+    "KeywordJob",
     "IndexCache",
     "KeywordCurator",
     "KeywordIndex",
@@ -50,8 +61,10 @@ __all__ = [
     "curate_batch",
     "find_issues",
     "format_issues",
+    "curate_settings",
     "keyword_dir_for",
     "make_batches",
+    "pending_changes",
     "project_seeds",
     "run_keyword_pass",
     "scan_notes",

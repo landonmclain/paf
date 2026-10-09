@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import Context, ContextVar, copy_context
@@ -50,6 +51,9 @@ from paf.background_processes._events import (
 from paf.observability.instrumentation import root_span
 
 log = logging.getLogger(__name__)
+
+#: Minimum seconds between keyword-source scans (the trigger fires every turn).
+_KEYWORD_CHECK_INTERVAL_S = 60.0
 
 
 def _log_subscriber_failure(task: asyncio.Task) -> None:
@@ -438,6 +442,7 @@ class BackgroundCoordinator:
         consolidate_turns: int | None = None,
         thread_summarize_block=None,
         thread_summarize_span=None,
+        keyword_pass=None,
     ) -> None:
         from paf.capabilities.memory._window import memory_dir_for
 
@@ -498,6 +503,17 @@ class BackgroundCoordinator:
             if thread_summarize_span is not None
             else thread_summarize_block
         )
+        # Keyword curator: the profile allowlist makes the process available, but
+        # it only RUNS when the spec opts in (`keywords: {curate: true}`) — a pass
+        # sends skill/note digests to the model provider.
+        self._keyword_curator_enabled = bool(
+            profile is not None
+            and "KeywordCurator" in getattr(profile, "capability_names", ())
+        )
+        self._keyword_pass = keyword_pass  # test seam; None = the real curator pass
+        self._keyword_settings_cache: dict[str, Any] | None = None
+        self._keyword_last_check = float("-inf")
+        self._keyword_last_enqueue = float("-inf")
 
         # Consolidation seams (injected only by tests; production defaults the
         # queue's real fold).
@@ -506,11 +522,13 @@ class BackgroundCoordinator:
         # Lazily-built queues (one per type) + their rows.
         self._memory_queue: Any | None = None
         self._thread_queue: Any | None = None
+        self._keyword_queue: Any | None = None
 
         # Task registry + subscriber list (+ seq counters for stable ids).
         self._background_tasks: dict[str, BackgroundTask] = {}
         self._consolidation_seq = 0
         self._thread_summarizer_seq = 0
+        self._keyword_seq = 0
 
         # Capability names (profile gating for process registration).
         self._capability_names = tuple(
@@ -541,6 +559,18 @@ class BackgroundCoordinator:
                     idle_row=self._consolidation_idle_row,
                 ),
             ]
+            # Keyword curator: registered only when the profile allowlists it. No
+            # idle row — it is quiet unless something changed, and a permanent
+            # "idle" row would be noise in the Processes panel.
+            if self._keyword_curator_enabled:
+                processes.append(
+                    ProcessDefinition(
+                        id_namespace="keyword_curate",
+                        label="Curating keywords",
+                        enabled=lambda c: c._keyword_curator_enabled,
+                        trigger=self._maybe_trigger_keyword_curate,
+                    )
+                )
         # Conversation lane: thread summarizer (per-conversation).
         if self.lane != "agent":
             processes.append(
@@ -816,7 +846,8 @@ class BackgroundCoordinator:
             # rather than raising — the feed must never tear the SSE socket on a
             # status read.
             for p in self._processes:
-                if p.enabled is not None and p.enabled(self):
+                # Only processes that have an idle row are shown in the panel.
+                if p.enabled is not None and p.enabled(self) and p.idle_row is not None:
                     rows.append(
                         JobIdleStatus(
                             id=f"{p.id_namespace}.{scope}",
@@ -1109,6 +1140,111 @@ class BackgroundCoordinator:
                 on_complete=self._complete_thread_summarize,
             )
         return self._thread_queue
+
+    def _ensure_keyword_queue(self):
+        """Build the per-agent keyword-curation worker lazily."""
+        if self._keyword_queue is None:
+            from paf.capabilities.keyword_curator import KeywordCuratorQueue
+
+            self._keyword_queue = KeywordCuratorQueue(
+                pass_fn=self._keyword_pass,
+                on_complete=self._complete_keyword_curate,
+            )
+        return self._keyword_queue
+
+    async def _complete_keyword_curate(
+        self, agent_name: str, success: bool, detail: str
+    ) -> None:
+        """Publish completion for active keyword-curation task rows."""
+        for task in self._background_tasks.values():
+            if task.id.startswith(f"keyword_curate.{agent_name}.") and task.status in (
+                QUEUED,
+                PROCESSING,
+            ):
+                task.status = DONE if success else ERROR
+                task.detail = detail
+                task.progress = 1.0 if success else None
+                await self._publish_task(task)
+
+    def _keyword_settings(self) -> dict[str, Any]:
+        if self._keyword_settings_cache is None:
+            from paf.capabilities.keyword_curator import curate_settings
+
+            self._keyword_settings_cache = curate_settings(self.agent_name)
+        return self._keyword_settings_cache
+
+    async def _maybe_trigger_keyword_curate(self, cid: str | None) -> None:
+        """Enqueue a keyword-curation pass when sources changed (opt-in, throttled).
+
+        Runs after every turn, so it is built to be silent and cheap in the common
+        case: off unless the spec sets ``keywords.curate``; the source scan is
+        throttled; a pass already in flight or inside the cooldown is skipped with
+        no task row. A row is published only when a pass is actually enqueued. The
+        worker is the sole writer of the keyword store, and a bounded
+        ``curate_limit`` per pass means a large backlog is worked off over several
+        passes rather than one expensive one.
+        """
+        del cid  # the curator is per-agent, not per-conversation
+        if not self._keyword_curator_enabled:
+            return
+        settings = self._keyword_settings()
+        if not settings["curate"]:
+            return
+        now = time.monotonic()
+        if now - self._keyword_last_check < _KEYWORD_CHECK_INTERVAL_S:
+            return
+        self._keyword_last_check = now
+        if now - self._keyword_last_enqueue < settings["curate_cooldown_s"]:
+            return
+        queue = self._ensure_keyword_queue()
+        # Single-flight on actual work. `status().running` only says the worker
+        # task is alive, and a worker idles for seconds after a job finishes —
+        # that must not block the next pass.
+        state = queue.get_state(self.agent_name)
+        if state.active_jobs > 0 or not state.queue.empty():
+            return
+        from paf.capabilities.keyword_curator import (
+            KeywordJob,
+            keyword_dir_for,
+            pending_changes,
+            scan_sources,
+            sources_config_for,
+        )
+
+        try:
+            cfg = sources_config_for(self.agent_name)
+            directory = keyword_dir_for(self.agent_name)
+            sources = await asyncio.to_thread(scan_sources, **cfg)
+            changed, vanished = pending_changes(directory, sources)
+        except Exception:  # noqa: BLE001 - a scan failure must never break the turn
+            log.exception("keyword curator scan failed agent=%s", self.agent_name)
+            return
+        if not changed and not vanished:
+            return
+        self._keyword_seq += 1
+        task = BackgroundTask(
+            id=f"keyword_curate.{self.agent_name}.{self._keyword_seq}",
+            label="Curating keywords",
+        )
+        await self._publish_task(task)  # queued
+        try:
+            queue.enqueue(
+                self.agent_name,
+                KeywordJob(
+                    agent_name=self.agent_name,
+                    directory=str(directory),
+                    sources_config=cfg,
+                    limit=int(settings["curate_limit"]),
+                ),
+            )
+            self._keyword_last_enqueue = now
+            task.status = PROCESSING
+            task.detail = f"{len(changed)} changed, {len(vanished)} gone"
+            await self._publish_task(task)
+        except Exception as exc:  # noqa: BLE001 - never break the turn
+            task.status = ERROR
+            task.detail = str(exc)
+            await self._publish_task(task)
 
     async def _complete_thread_summarize(
         self, conversation_id: str, success: bool, detail: str

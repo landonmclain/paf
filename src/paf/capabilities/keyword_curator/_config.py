@@ -36,3 +36,32 @@ def sources_config_for(agent_name: str) -> dict[str, Any]:
         "vault_allow": vault.get("allow") or [],
         "vault_deny": vault.get("deny") or [],
     }
+
+
+CURATE_DEFAULTS: dict[str, Any] = {
+    "curate": False,
+    "curate_limit": 25,
+    "curate_cooldown_s": 300.0,
+}
+"""Background curation is OFF unless the spec says ``keywords: {curate: true}``.
+
+A pass sends skill/note digests to the model provider, so it is never started by
+merely allowlisting the capability. ``curate_limit`` caps sources per pass (a
+backlog is worked off over several passes); ``curate_cooldown_s`` is the minimum
+gap between passes so editing notes in a session cannot trigger a burst of calls.
+"""
+
+
+def curate_settings(agent_name: str) -> dict[str, Any]:
+    """The agent's background-curation knobs: spec ``keywords:`` over the defaults."""
+    settings = dict(CURATE_DEFAULTS)
+    try:
+        from paf.specs import _spec_keywords_config, get_spec_path
+
+        cfg = _spec_keywords_config(get_spec_path(agent_name)) or {}
+    except Exception:  # noqa: BLE001 - no spec for this agent name -> defaults (off)
+        return settings
+    for key in CURATE_DEFAULTS:
+        if key in cfg:
+            settings[key] = cfg[key]
+    return settings

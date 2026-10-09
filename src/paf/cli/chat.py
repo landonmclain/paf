@@ -84,7 +84,7 @@ from paf.specs import spec_visual_config
 
 DEFAULT_AGENT = "demo_assistant"
 _ACTIVE = {"queued", "running", "processing"}
-_COORDINATOR_JOBS = {"consolidation", "review", "thread_summarize"}
+_COORDINATOR_JOBS = {"consolidation", "review", "thread_summarize", "keyword_curate"}
 _NOTIFY = object()  # prompt result: a background notify started a turn
 
 # Prompt-toolkit styling. The default bottom toolbar is reverse video (a solid

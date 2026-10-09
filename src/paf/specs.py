@@ -298,6 +298,10 @@ def _spec_keywords_config(spec_path: Path) -> dict | None:
           top_k: 5           # at most this many hints per turn
           min_score: 2.5     # absolute floor on a hint's score
           query_turns: 2     # how many recent user prompts the match reads
+          curate: false      # true = curate in the background (sends digests to the
+                             # model provider; OFF unless you opt in)
+          curate_limit: 25   # sources curated per pass (a backlog takes several)
+          curate_cooldown_s: 300   # minimum seconds between passes
 
     Absent members fall back to the capability's defaults; unknown keys are
     ignored so the schema can grow. Returns ``None`` when the block is absent.
@@ -312,6 +316,18 @@ def _spec_keywords_config(spec_path: Path) -> dict | None:
         value = block.get(key)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             cfg[key] = value
+    if isinstance(block.get("curate"), bool):
+        cfg["curate"] = block["curate"]
+    limit = block.get("curate_limit")
+    if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0:
+        cfg["curate_limit"] = limit
+    cooldown = block.get("curate_cooldown_s")
+    if (
+        isinstance(cooldown, int | float)
+        and not isinstance(cooldown, bool)
+        and cooldown >= 0
+    ):
+        cfg["curate_cooldown_s"] = float(cooldown)
     score = block.get("min_score")
     if isinstance(score, int | float) and not isinstance(score, bool) and score >= 0:
         cfg["min_score"] = float(score)

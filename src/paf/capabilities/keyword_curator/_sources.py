@@ -37,6 +37,57 @@ _MAX_HEADINGS = 14
 _HAS_TITLE = re.compile(r"^(title|name): ", re.MULTILINE)
 
 
+# --- secret redaction ------------------------------------------------------------
+#
+# The digest is what leaves the machine for the model provider, and notes are free
+# text: a credential pasted into one must not travel. Redaction is deterministic
+# and applies only to the digest (never to the source file). It errs toward
+# redacting — a mangled digest costs a slightly worse keyword, a leaked secret
+# costs a rotation.
+
+REDACTED = "[REDACTED]"
+
+_KEY_NAMES = (
+    r"pass(?:word|wd|phrase)?|secret|token|api[_-]?key|apikey|auth(?:orization)?"
+    r"|bearer|credential|private[_-]?key|access[_-]?key|client[_-]?secret"
+)
+# `password: hunter2`, `wp_password = "abc def"`, `Authorization: Bearer xyz`
+_KEYED = re.compile(
+    rf"(?i)(\b[\w.-]*(?:{_KEY_NAMES})[\w.-]*\b\s*[:=]\s*)"
+    r"(?:bearer\s+)?(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s,;]+(?:[ \t][A-Za-z0-9]{3,6}){0,5})"
+)
+_TOKEN_SHAPES = re.compile(
+    r"\bsk-[A-Za-z0-9_-]{16,}"  # OpenAI / OpenRouter style
+    r"|\bgh[pousr]_[A-Za-z0-9]{20,}"  # GitHub
+    r"|\bAKIA[0-9A-Z]{16}\b"  # AWS access key id
+    r"|\bxox[abprs]-[A-Za-z0-9-]{10,}"  # Slack
+    r"|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"  # JWT
+)
+_PEM = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
+# WordPress-style application password: six space-separated groups of four.
+_GROUPED = re.compile(r"\b(?:[A-Za-z0-9]{4} ){5}[A-Za-z0-9]{4}\b")
+
+
+def _looks_random(group: re.Match[str]) -> bool:
+    """Six 4-char groups are only a password if they look random, not prose."""
+    s = group.group(0)
+    return (
+        sum(c.isupper() for c in s) >= 2
+        and sum(c.isdigit() or c.isupper() for c in s) >= 4
+    )
+
+
+def redact_secrets(text: str) -> str:
+    """``text`` with credentials replaced by ``[REDACTED]`` (digest-only)."""
+    text = _PEM.sub(REDACTED, text)
+    text = _KEYED.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
+    text = _TOKEN_SHAPES.sub(REDACTED, text)
+    return _GROUPED.sub(lambda m: REDACTED if _looks_random(m) else m.group(0), text)
+
+
 @dataclass(frozen=True)
 class SourceItem:
     """One source the curator can read."""
@@ -95,7 +146,7 @@ def digest(raw: str, *, max_chars: int = DEFAULT_DIGEST_CHARS) -> str:
         flat = re.sub(r"\n{3,}", "\n\n", body).strip()
         excerpt = flat[:budget].rstrip()
     out = head + (f"\nexcerpt:\n{excerpt}" if excerpt else "")
-    return out[:max_chars].strip()
+    return redact_secrets(out[:max_chars]).strip()
 
 
 def _snapshot(path: Path) -> Snapshot | None:
