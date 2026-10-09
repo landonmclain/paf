@@ -84,7 +84,9 @@ def main() -> int:
 
     # Live path — real model from the repo .env.
     if not os.environ.get("OPENROUTER_API_KEY"):
-        print("OPENROUTER_API_KEY not set; run with `--env-file .env` or pass --testmodel.")
+        print(
+            "OPENROUTER_API_KEY not set; run with `--env-file .env` or pass --testmodel."
+        )
         return 2
 
     from pydantic_ai import Agent

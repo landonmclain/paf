@@ -256,7 +256,9 @@ def test_session_init_injects_spec_profile_for_keyword_agent_name(
     monkeypatch.setattr(
         runtime,
         "build_agent",
-        lambda name, profile=None, on_complete=None, scheduled_tasks_queue=None: object(),
+        lambda name, profile=None, on_complete=None, scheduled_tasks_queue=None: (
+            object()
+        ),
     )
     monkeypatch.setattr(runtime, "_build_store", lambda: object())
     monkeypatch.setattr(runtime, "setup_observability", lambda: None)

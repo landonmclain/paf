@@ -158,9 +158,7 @@ def test_store_run_history_persists_across_instances() -> None:
 def test_store_on_change_fires_on_mutation() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         calls: list[str] = []
-        store = ScheduledTaskStore(
-            tmp, agent="a", on_change=lambda: calls.append("x")
-        )
+        store = ScheduledTaskStore(tmp, agent="a", on_change=lambda: calls.append("x"))
         job = ScheduledJob(schedule="0 9 * * *", instructions="post")
         store.create_job(job)
         assert calls == ["x"]

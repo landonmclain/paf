@@ -238,11 +238,13 @@ session = Session("assistant", conversation_id="notes-1")
 # One turn, final text only.
 print(session.run_sync("What did we decide about the release date?"))
 
+
 # Or stream events: text, thinking, tool_call, tool_result.
 async def ask(prompt: str) -> None:
     async for event in session.stream(prompt):
         if isinstance(event, StreamEvent) and event.kind == "text":
             print(event.text, end="", flush=True)
+
 
 session.close()
 ```

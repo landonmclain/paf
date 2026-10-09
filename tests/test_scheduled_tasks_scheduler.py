@@ -162,7 +162,11 @@ def test_skips_disabled_and_archived_jobs() -> None:
 # --- loop: wake on change + cap backstop (p4b) -------------------------------
 def test_sleep_wakes_on_change() -> None:
     sched = AdvancingScheduler(
-        "data/scheduled_tasks", agent="a", queue=FakeQueue(), clock=FakeClock(T0), cap=3600
+        "data/scheduled_tasks",
+        agent="a",
+        queue=FakeQueue(),
+        clock=FakeClock(T0),
+        cap=3600,
     )
     sched._change.set()
     start = time.monotonic()
@@ -172,7 +176,11 @@ def test_sleep_wakes_on_change() -> None:
 
 def test_sleep_times_out_after_cap() -> None:
     sched = ScheduledTaskScheduler(
-        "data/scheduled_tasks", agent="a", queue=FakeQueue(), clock=FakeClock(T0), cap=3600
+        "data/scheduled_tasks",
+        agent="a",
+        queue=FakeQueue(),
+        clock=FakeClock(T0),
+        cap=3600,
     )
     start = time.monotonic()
     asyncio.run(sched._sleep(0.05))
@@ -273,14 +281,10 @@ def test_agent_scoped_loop_ignores_other_agents() -> None:
         store_a = ScheduledTaskStore(tmp, agent="a")
         store_b = ScheduledTaskStore(tmp, agent="b")
         store_a.create_job(
-            ScheduledJob(
-                schedule="0 9 * * *", instructions="a", conversation_id="c1"
-            )
+            ScheduledJob(schedule="0 9 * * *", instructions="a", conversation_id="c1")
         )
         store_b.create_job(
-            ScheduledJob(
-                schedule="0 9 * * *", instructions="b", conversation_id="c2"
-            )
+            ScheduledJob(schedule="0 9 * * *", instructions="b", conversation_id="c2")
         )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched)

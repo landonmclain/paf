@@ -956,7 +956,9 @@ def _build_mcp(store, mcp_config: str | None = None) -> list:
     return [MCP(local=cast(Any, toolset)) for toolset in load_mcp_toolsets(path)]
 
 
-def _build_scheduled_tasks(store, scheduled_tasks_config=None, agent_name=None, queue=None):
+def _build_scheduled_tasks(
+    store, scheduled_tasks_config=None, agent_name=None, queue=None
+):
     """Scheduled-tasks capability: per-conversation CRUD + manual run.
 
     ``queue`` is the run-layer ``ScheduledTaskQueue`` (wired in paf-sse); when
