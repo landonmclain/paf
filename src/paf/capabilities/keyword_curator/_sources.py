@@ -21,7 +21,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from ._watermark import Snapshot
 
@@ -254,6 +254,6 @@ def scan_sources(
     return dict(sorted(items.items()))
 
 
-def snapshots(items: dict[str, SourceItem]) -> dict[str, Snapshot]:
+def snapshots(items: Mapping[str, SourceItem]) -> dict[str, Snapshot]:
     """``{ref: (mtime, size)}`` for the watermark's ``changed``/``vanished``."""
     return {ref: item.snapshot for ref, item in items.items()}
