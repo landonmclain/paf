@@ -112,7 +112,9 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         await self.run_turn(session_id, job.instructions or "")
         await self._emit(job.id, "done", f"scheduled: {job.id}", "agent turn started")
 
-    async def _run_script(self, session_id: str, job: ScheduledJob, script: str) -> None:
+    async def _run_script(
+        self, session_id: str, job: ScheduledJob, script: str
+    ) -> None:
         """Run a script-executed job; notify per ``notify`` mode."""
         await self._emit(job.id, "running", f"scheduled: {job.id}", "script")
         result = await self.executor.run(
