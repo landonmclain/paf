@@ -46,7 +46,7 @@ TOKEN_WEIGHT = 0.5
 MIN_TOKEN_HITS = 2
 MAX_PHRASE_TOKENS = 6
 
-DEFAULT_TOP_K = 5
+DEFAULT_TOP_K = 3
 DEFAULT_MIN_SCORE = 2.5
 """Absolute floor on a hint's score (a lone shared term can't clear it)."""
 DEFAULT_RELATIVE = 0.35

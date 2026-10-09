@@ -295,7 +295,7 @@ def _spec_keywords_config(spec_path: Path) -> dict | None:
 
         keywords:
           inject: true       # false = build the capability but inject nothing
-          top_k: 5           # at most this many hints per turn
+          top_k: 3           # at most this many hints per turn
           min_score: 2.5     # absolute floor on a hint's score
           query_turns: 2     # how many recent user prompts the match reads
           curate: false      # true = curate in the background (sends digests to the
