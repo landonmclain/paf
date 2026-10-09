@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from uuid import uuid4
 
 from paf.background import BackgroundQueueService, QueueState
 from paf.background_processes._events import (
@@ -38,10 +39,11 @@ _SCRIPT_TIMEOUT_S = 60.0
 class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
     """Runs scheduled jobs: agent turn (``instructions``) or script (``script``).
 
-    ``store_factory(cid)`` returns the conversation's ``ScheduledTaskStore``
-    (to append run records); ``run_turn(cid, content)`` runs an agent turn in
-    that conversation (wired to ``Session.notify`` in paf-sse); ``executor``
-    runs script-executed jobs. ``agent`` scopes the per-agent process emitter.
+    A single queue shared across agents. ``store_factory(agent)`` returns the
+    agent's ``ScheduledTaskStore`` (to append run records); ``run_turn(agent,
+    cid, content)`` runs an agent turn in that conversation (wired to
+    ``Session.notify`` in paf-sse); ``executor`` runs script-executed jobs. The
+    job carries its ``agent`` + ``conversation_id``, so the queue routes by them.
     """
 
     name = "scheduled-tasks"
@@ -50,9 +52,8 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         self,
         *,
         store_factory: Callable[[str], ScheduledTaskStore],
-        run_turn: Callable[[str, str], Awaitable[None]],
+        run_turn: Callable[[str, str, str], Awaitable[None]],
         executor: SandboxedExecutor,
-        agent: str,
         cwd: str | Path | None = None,
         on_complete=None,
     ) -> None:
@@ -60,21 +61,19 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         self.store_factory = store_factory
         self.run_turn = run_turn
         self.executor = executor
-        self.agent = agent
         self.cwd = Path(cwd).resolve() if cwd else None
         self.on_complete = on_complete
-        self._emitter = get_agent_emitter(agent)
         self._job_cid: dict[str, str | None] = {}
 
     async def _emit(
-        self, job_id: str, status: str, label: str, detail: str = ""
+        self, agent: str, job_id: str, status: str, label: str, detail: str = ""
     ) -> None:
-        """Push one live process event to the per-agent emitter.
+        """Push one live process event to the job's agent emitter.
 
         Scheduled tasks are conversation-scoped by origin, so the event carries
         ``lane="conversation"`` and the job's conversation id as ``scope``.
         """
-        await self._emitter.emit_process(
+        await get_agent_emitter(agent).emit_process(
             ProcessEvent(
                 id=job_id,
                 label=label,
@@ -93,30 +92,56 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
     ) -> None:
         del state
         self._job_cid[job.id] = session_id
-        store = self.store_factory(session_id)
+        store = self.store_factory(job.agent)
+        run_id = uuid4().hex[:8]
         store.append_run(
-            RunRecord(job_id=job.id, schedule=job.schedule, delivery=job.delivery)
+            RunRecord(
+                run_id=run_id,
+                job_id=job.id,
+                agent=job.agent,
+                conversation_id=session_id,
+                status="running",
+            )
         )
         try:
             if job.script is not None:
                 await self._run_script(session_id, job, job.script)
             else:
                 await self._run_agent(session_id, job)
+            store.append_run(
+                RunRecord(
+                    run_id=run_id,
+                    job_id=job.id,
+                    agent=job.agent,
+                    conversation_id=session_id,
+                    status="done",
+                )
+            )
         except Exception as exc:
-            await self._emit(job.id, "error", f"scheduled: {job.id}", str(exc))
+            store.append_run(
+                RunRecord(
+                    run_id=run_id,
+                    job_id=job.id,
+                    agent=job.agent,
+                    conversation_id=session_id,
+                    status="error",
+                    detail=str(exc),
+                )
+            )
+            await self._emit(job.agent, job.id, "error", f"scheduled: {job.id}", str(exc))
             raise
 
     async def _run_agent(self, session_id: str, job: ScheduledJob) -> None:
         """Run an agent-executed job: a full turn via the ``run_turn`` seam."""
-        await self._emit(job.id, "running", f"scheduled: {job.id}", "agent turn")
-        await self.run_turn(session_id, job.instructions or "")
-        await self._emit(job.id, "done", f"scheduled: {job.id}", "agent turn started")
+        await self._emit(job.agent, job.id, "running", f"scheduled: {job.id}", "agent turn")
+        await self.run_turn(job.agent, session_id, job.instructions or "")
+        await self._emit(job.agent, job.id, "done", f"scheduled: {job.id}", "agent turn started")
 
     async def _run_script(
         self, session_id: str, job: ScheduledJob, script: str
     ) -> None:
         """Run a script-executed job; notify per ``notify`` mode."""
-        await self._emit(job.id, "running", f"scheduled: {job.id}", "script")
+        await self._emit(job.agent, job.id, "running", f"scheduled: {job.id}", "script")
         result = await self.executor.run(
             script,
             cwd=self.cwd or Path("."),
@@ -129,6 +154,7 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         ):
             await self._notify(session_id, job, result)
         await self._emit(
+            job.agent,
             job.id,
             "done" if ok else "error",
             f"scheduled: {job.id}",
@@ -140,6 +166,7 @@ class ScheduledTaskQueue(BackgroundQueueService[ScheduledJob]):
         try:
             detail = (result.stdout or "").strip() or (result.stderr or "").strip()
             await self.run_turn(
+                job.agent,
                 session_id,
                 f"[system] Scheduled task {job.id} finished with exit code "
                 f"{result.exit_code}.\n\n{detail}",

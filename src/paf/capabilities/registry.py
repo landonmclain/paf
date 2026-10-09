@@ -37,6 +37,7 @@ from paf.capabilities.keyword_curator import KeywordCurator
 from paf.capabilities.memory import Memory
 from paf.capabilities.planning import Planning
 from paf.capabilities.python import Python
+from paf.capabilities.scheduled_tasks import ScheduledTasks
 from paf.capabilities.search import ConversationSearch
 from paf.capabilities.shell import Shell
 from paf.capabilities.skills import Skills
@@ -80,6 +81,10 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Sandboxed `run_python` over the executor seam. Refuses the local backend
     # unless the spec opts in. Built in Python so the profile gate controls it.
     "Python": Python,
+    # Per-conversation scheduled tasks (CRUD + manual run). Built in Python
+    # (needs the run-layer queue wired in paf-sse); cataloged so the allowlist
+    # + schema stay complete.
+    "ScheduledTasks": ScheduledTasks,
     # Safe git inspection + checkpoint tools rooted at a workspace dir.
     "Git": Git,
     # Navigation-first codebase browser. Built in Python (needs a real scan_root

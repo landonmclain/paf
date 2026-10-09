@@ -75,6 +75,7 @@ ASSISTANT_PROFILE = AgentProfile(
         # "Guardrails",
         # "ToolGating",
         "KeywordCurator",  # per-turn relevance hints; injects nothing until a store exists
+        "ScheduledTasks",  # per-conversation scheduled tasks (CRUD + manual run)
     ),
 )
 
@@ -105,6 +106,7 @@ DEMO_PROFILE = AgentProfile(
         "Planning",
         "ThreadSummarizer",
         "KeywordCurator",  # per-turn relevance hints; injects nothing until a store exists
+        "ScheduledTasks",  # per-conversation scheduled tasks (CRUD + manual run)
         # "Secrets",
         # "Guardrails",
         # "ToolGating",

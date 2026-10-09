@@ -47,6 +47,14 @@ class ScheduledJob(BaseModel):
         default_factory=lambda: uuid4().hex[:8],
         description="Stable id, stamped in code at creation.",
     )
+    agent: str = Field(
+        default="",
+        description="Which agent owns the job (scoping column; redundant with the folder but explicit).",
+    )
+    conversation_id: str = Field(
+        default="global",
+        description="The origin conversation the job runs in (routing column).",
+    )
     schedule: str = Field(
         description="Cron expression. Parsed by the scheduler (Phase 2) via croniter."
     )
@@ -94,34 +102,35 @@ class ScheduledJob(BaseModel):
 class RunRecord(BaseModel):
     """One scheduled run, appended to the run history (``scheduled_runs.jsonl``).
 
-    References the job by ``job_id`` rather than duplicating its task definition.
-    The run-time fields (``verdict``, ``skip_reason``, ``cost``, ``finished_at``)
-    are populated by the run (Phase 3); the store only appends and reads them.
+    Mirrors the background-process RunJournal shape (run_id, job_id, agent,
+    conversation_id, status, detail, timestamp) so it slots into the existing
+    Processes feed without a new schema. The run-time fields (``verdict``,
+    ``skip_reason``, ``cost``, ``finished_at``) are deferred to Phase 5
+    (delivery); the store only appends and reads these records.
     """
 
+    run_id: str = Field(
+        default_factory=lambda: uuid4().hex[:8],
+        description="Unique id for this run (one per fire).",
+    )
     job_id: str = Field(description="The job that ran.")
-    schedule: str = Field(description="The job's schedule at run time.")
-    verdict: str | None = Field(
-        default=None,
-        description="act / skip; populated by the run (Phase 3).",
+    agent: str = Field(
+        default="",
+        description="Which agent owns the job (routing column).",
     )
-    skip_reason: str | None = Field(
-        default=None,
-        description="Why the agent skipped; populated by the run (Phase 3).",
+    conversation_id: str = Field(
+        default="global",
+        description="The origin conversation the run belongs to (routing column).",
     )
-    delivery: str = Field(
-        default="file",
-        description="Delivery target.",
+    status: str = Field(
+        default="running",
+        description="running / done / error / skipped.",
     )
-    cost: float | None = Field(
-        default=None,
-        description="Cost/tokens of the run; populated by the run (Phase 3).",
+    detail: str = Field(
+        default="",
+        description="Free-form detail (what it did / why it errored / exit code).",
     )
-    started_at: datetime = Field(
+    timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
-        description="When the run started.",
-    )
-    finished_at: datetime | None = Field(
-        default=None,
-        description="When the run finished; populated by the run (Phase 3).",
+        description="When the run was recorded.",
     )

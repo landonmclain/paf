@@ -334,9 +334,10 @@ async def run_guarded(
             if not isinstance(node, (ModelRequestNode, CallToolsNode)):
                 continue
             # Completed tool calls -> tool-loop guard (opt-in). The raise is
-            # DEFERRED until after the node's stream runs so the triggering tool
-            # call is executed and has a response in history (mirror runtime.py) —
-            # otherwise the run aborts with an unprocessed tool call in history.
+            # raised DURING the node's stream (at the first event) so pydantic-ai's
+            # CallToolsNode commits the partial tool returns as 'interrupted' —
+            # making the history consistent instead of leaving an unprocessed tool
+            # call in history (mirror runtime.py).
             pending_tool = None
             if isinstance(node, CallToolsNode):
                 for part in node.model_response.parts:
@@ -347,14 +348,14 @@ async def run_guarded(
             # Streaming thinking deltas -> thinking-loop guard (default on).
             async with node.stream(run.ctx) as stream:
                 async for event in stream:
+                    if pending_tool is not None:
+                        raise DegenerationError(pending_tool)
                     if isinstance(event, PartDeltaEvent) and isinstance(
                         event.delta, ThinkingPartDelta
                     ):
                         rg = think.stream_thinking(event.delta.content_delta or "")
                         if rg is not None:
                             raise DegenerationError(rg)
-            if pending_tool is not None:
-                raise DegenerationError(pending_tool)
     return run.result
 
 

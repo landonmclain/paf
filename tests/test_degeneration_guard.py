@@ -355,6 +355,12 @@ class _AsyncGen:
         except StopAsyncIteration:
             raise
 
+    async def aclose(self):
+        # Closing the stream mid-iteration (the tool-loop guard raises during the
+        # stream) must close the underlying generator, mirroring an async gen's
+        # aclose().
+        self._gen.close()
+
     async def __aenter__(self):
         return self
 
@@ -413,17 +419,19 @@ def test_run_guarded_skips_non_streamable_nodes():
         pass
 
 
-def test_run_guarded_tool_loop_executes_tool_before_raise():
-    """Regression: the tool-loop guard must raise AFTER the triggering tool call
-    is executed (its stream runs), so the call has a response in history — not
-    before, which would leave an unprocessed tool call and break the next user
-    prompt with pydantic-ai's 'Cannot provide a new user prompt when the message
-    history contains unprocessed tool calls'."""
+def test_run_guarded_tool_loop_raises_during_stream():
+    """Regression: the tool-loop guard must raise DURING the tool node's stream
+    (at the first event), not after it — so pydantic-ai's CallToolsNode commits
+    the partial tool returns as 'interrupted', making the history consistent
+    instead of leaving an unprocessed tool call that breaks the next user prompt
+    with 'Cannot provide a new user prompt when the message history contains
+    unprocessed tool calls'."""
 
     from pydantic_ai.agent import CallToolsNode
     from pydantic_ai.messages import ModelRequest, ToolCallPart
 
-    executed = []
+    started = []
+    completed = []
 
     class _FakeToolNode(CallToolsNode):
         def __init__(self, parts):
@@ -431,8 +439,9 @@ def test_run_guarded_tool_loop_executes_tool_before_raise():
 
         def stream(self, ctx):  # type: ignore[override]  # stubbed for tests
             async def gen():
-                executed.append(1)  # the tool call is processed here
+                started.append(1)  # the tool node's stream starts
                 yield None
+                completed.append(1)  # only reached if the stream runs to completion
 
             return _AsyncGen(gen())
 
@@ -485,8 +494,11 @@ def test_run_guarded_tool_loop_executes_tool_before_raise():
         raise AssertionError("expected DegenerationError")
     except DegenerationError as e:
         assert e.result.reason == "repeated_tool_call"
-    # The 5th (triggering) tool call's stream ran before the guard raised.
-    assert len(executed) == 5
+    # The 5th (triggering) tool node's stream STARTED (the raise is during the
+    # stream) but did NOT complete — pydantic-ai commits the partial returns as
+    # 'interrupted' so the history stays consistent.
+    assert len(started) == 5
+    assert len(completed) == 4
 
 
 def test_run_guarded_thinking_chunks_across_deltas():

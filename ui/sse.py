@@ -124,6 +124,12 @@ _sessions_last_used: dict[str, float] = {}
 # Last ACCESS of any kind (activity or read): the idle sweeper's keepalive.
 _sessions_touched: dict[str, float] = {}
 
+# The single scheduled-tasks run queue + scheduler, constructed in ``_lifespan``
+# (started on boot, stopped on shutdown). Shared by every agent's capability so
+# ``run_scheduled_task`` enqueues into the same queue the scheduler fires into.
+_scheduled_tasks_queue: Any = None
+_scheduled_tasks_scheduler: Any = None
+
 # Idle TTL: a lane untouched for IDLE_TTL_SECONDS is closed and evicted
 # (Session.close() flushes spans; a re-touch lazily recreates + resumes from the
 # store via the same {agent}:{conversation_id}, so an idle lane is cheap, not lost).
@@ -158,6 +164,7 @@ async def _get_session(
             conversation_id=conversation_id,
             resume_window=300,
             on_complete=functools.partial(_notify_agent, agent),
+            scheduled_tasks_queue=_scheduled_tasks_queue,
         )
         session.attach_background()
         _sessions[key] = session
@@ -212,6 +219,17 @@ async def _notify_agent(
     # streaming to the UI, so no signal is needed.
     if started is None:
         await _emit_turn_started(agent, conversation_id, run_id)
+
+
+async def _scheduled_run_turn(agent: str, cid: str, content: str) -> None:
+    """Run a scheduled job's agent turn in its origin conversation.
+
+    The scheduled-tasks queue's ``run_turn`` seam: get (or create) the lane's
+    Session and deliver the content through ``Session.notify`` (the steer gate),
+    exactly like a background-process completion notification.
+    """
+    session = await _get_session(cid, agent, activity=True)
+    session.notify(content)
 
 
 async def _emit_turn_started(agent: str, conversation_id: str, run_id: str) -> None:
@@ -336,6 +354,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     a clean shutdown so a genuine process exit still flushes + shuts down.
     """
     from paf.background import _background_runner
+    from paf.capabilities._sandbox import LocalProcessExecutor
+    from paf.capabilities.scheduled_tasks._queue import ScheduledTaskQueue
+    from paf.capabilities.scheduled_tasks._scheduler import ScheduledTaskScheduler
+    from paf.capabilities.scheduled_tasks._store import ScheduledTaskStore
     from paf.observability.instrumentation import (
         setup_observability,
         shutdown_observability,
@@ -343,10 +365,26 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     setup_observability()  # process anchor: refs never hit 0 during idle eviction
     sweeper = asyncio.create_task(_close_idle_loop())
+
+    def _scheduled_store_factory(agent: str) -> ScheduledTaskStore:
+        return ScheduledTaskStore(DATA_DIR / "scheduled_tasks", agent=agent)
+
+    global _scheduled_tasks_queue, _scheduled_tasks_scheduler
+    _scheduled_tasks_queue = ScheduledTaskQueue(
+        store_factory=_scheduled_store_factory,
+        run_turn=_scheduled_run_turn,
+        executor=LocalProcessExecutor(),
+    )
+    _scheduled_tasks_scheduler = ScheduledTaskScheduler(
+        DATA_DIR / "scheduled_tasks",
+        queue=_scheduled_tasks_queue,
+    )
+    _scheduled_tasks_scheduler.start()
     try:
         yield
     finally:
         sweeper.cancel()
+        await _scheduled_tasks_scheduler.stop()
         for key in list(_sessions.keys()):
             _close_session(key)
         await _background_runner.shutdown()

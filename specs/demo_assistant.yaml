@@ -378,3 +378,7 @@ memory:
 subagents:
   agents: [writer_subagent, code_reviewer_subagent, coding_subagent]
   max_concurrent: 5
+
+
+keywords:
+  curate: true

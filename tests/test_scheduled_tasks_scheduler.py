@@ -103,8 +103,10 @@ def test_fires_due_job_and_stamps_last_run() -> None:
     clock = FakeClock(T0)
     queue = FakeQueue()
     with tempfile.TemporaryDirectory() as tmp:
-        store = ScheduledTaskStore(tmp, agent="a", conversation_id="c1")
-        job = ScheduledJob(schedule="0 9 * * *", instructions="post")
+        store = ScheduledTaskStore(tmp, agent="a")
+        job = ScheduledJob(
+            schedule="0 9 * * *", instructions="post", conversation_id="c1"
+        )
         store.create_job(job)
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched)
@@ -119,8 +121,12 @@ def test_sleeps_until_next_due_not_fixed_interval() -> None:
     clock = FakeClock(T0)
     queue = FakeQueue()
     with tempfile.TemporaryDirectory() as tmp:
-        store = ScheduledTaskStore(tmp, agent="a", conversation_id="c1")
-        store.create_job(ScheduledJob(schedule="0 9 * * *", instructions="post"))
+        store = ScheduledTaskStore(tmp, agent="a")
+        store.create_job(
+            ScheduledJob(
+                schedule="0 9 * * *", instructions="post", conversation_id="c1"
+            )
+        )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched)
         # next due is 60s away (8:59 -> 9:00); the first sleep is 60, not the cap
@@ -131,12 +137,22 @@ def test_skips_disabled_and_archived_jobs() -> None:
     clock = FakeClock(T0)
     queue = FakeQueue()
     with tempfile.TemporaryDirectory() as tmp:
-        store = ScheduledTaskStore(tmp, agent="a", conversation_id="c1")
+        store = ScheduledTaskStore(tmp, agent="a")
         store.create_job(
-            ScheduledJob(schedule="0 9 * * *", instructions="post", enabled=False)
+            ScheduledJob(
+                schedule="0 9 * * *",
+                instructions="post",
+                enabled=False,
+                conversation_id="c1",
+            )
         )
         store.create_job(
-            ScheduledJob(schedule="0 9 * * *", instructions="archived", archived=True)
+            ScheduledJob(
+                schedule="0 9 * * *",
+                instructions="archived",
+                archived=True,
+                conversation_id="c1",
+            )
         )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched)
@@ -146,7 +162,7 @@ def test_skips_disabled_and_archived_jobs() -> None:
 # --- loop: wake on change + cap backstop (p4b) -------------------------------
 def test_sleep_wakes_on_change() -> None:
     sched = AdvancingScheduler(
-        "data/cron", agent="a", queue=FakeQueue(), clock=FakeClock(T0), cap=3600
+        "data/scheduled_tasks", agent="a", queue=FakeQueue(), clock=FakeClock(T0), cap=3600
     )
     sched._change.set()
     start = time.monotonic()
@@ -156,7 +172,7 @@ def test_sleep_wakes_on_change() -> None:
 
 def test_sleep_times_out_after_cap() -> None:
     sched = ScheduledTaskScheduler(
-        "data/cron", agent="a", queue=FakeQueue(), clock=FakeClock(T0), cap=3600
+        "data/scheduled_tasks", agent="a", queue=FakeQueue(), clock=FakeClock(T0), cap=3600
     )
     start = time.monotonic()
     asyncio.run(sched._sleep(0.05))
@@ -172,8 +188,14 @@ def test_loop_wakes_on_new_job() -> None:
             task = asyncio.create_task(sched.run())
             await asyncio.sleep(0.01)
             # loop is sleeping (no jobs, cap=3600); create a job -> change wakes it
-            store = sched._store_for("c1")
-            store.create_job(ScheduledJob(schedule="* * * * * *", instructions="post"))
+            store = sched._store_for("a")
+            store.create_job(
+                ScheduledJob(
+                    schedule="* * * * * *",
+                    instructions="post",
+                    conversation_id="c1",
+                )
+            )
             for _ in range(200):
                 if queue.enqueued:
                     break
@@ -190,8 +212,12 @@ def test_single_flight_fires_once() -> None:
     clock = FakeClock(T0)
     queue = FakeQueue()
     with tempfile.TemporaryDirectory() as tmp:
-        store = ScheduledTaskStore(tmp, agent="a", conversation_id="c1")
-        store.create_job(ScheduledJob(schedule="0 9 * * *", instructions="post"))
+        store = ScheduledTaskStore(tmp, agent="a")
+        store.create_job(
+            ScheduledJob(
+                schedule="0 9 * * *", instructions="post", conversation_id="c1"
+            )
+        )
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched, yields=10)
         # daily job fires exactly once across many loop iterations
@@ -205,10 +231,57 @@ def test_restart_skips_missed_fire() -> None:
     clock = FakeClock(datetime(2026, 10, 8, 10, 0, tzinfo=UTC))
     queue = FakeQueue()
     with tempfile.TemporaryDirectory() as tmp:
-        store = ScheduledTaskStore(tmp, agent="a", conversation_id="c1")
-        job = ScheduledJob(schedule="0 9 * * *", instructions="post")
+        store = ScheduledTaskStore(tmp, agent="a")
+        job = ScheduledJob(
+            schedule="0 9 * * *", instructions="post", conversation_id="c1"
+        )
         store.create_job(job)
         store.update_job(job.id, last_run=datetime(2026, 10, 7, 9, 0, tzinfo=UTC))
         sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
         _run_loop(sched, yields=5)  # advances to 15:00, still before tomorrow 9:00
         assert queue.enqueued == []
+
+
+# --- single loop scans all agents (per-agent master lists) -------------------
+def test_single_loop_scans_all_agents() -> None:
+    # The scheduler is ONE loop, not per-agent: with agent=None it scans every
+    # agent's master list and fires each due job into its own conversation.
+    clock = FakeClock(T0)
+    queue = FakeQueue()
+    with tempfile.TemporaryDirectory() as tmp:
+        store_a = ScheduledTaskStore(tmp, agent="a")
+        store_b = ScheduledTaskStore(tmp, agent="b")
+        job_a = ScheduledJob(
+            schedule="0 9 * * *", instructions="a", conversation_id="c1"
+        )
+        job_b = ScheduledJob(
+            schedule="0 9 * * *", instructions="b", conversation_id="c2"
+        )
+        store_a.create_job(job_a)
+        store_b.create_job(job_b)
+        sched = AdvancingScheduler(tmp, agent=None, queue=queue, clock=clock, cap=3600)
+        _run_loop(sched)
+        fired = {cid: j.id for cid, j in queue.enqueued}
+        assert fired == {"c1": job_a.id, "c2": job_b.id}
+
+
+def test_agent_scoped_loop_ignores_other_agents() -> None:
+    # agent="a" scopes the loop to just that agent's master list.
+    clock = FakeClock(T0)
+    queue = FakeQueue()
+    with tempfile.TemporaryDirectory() as tmp:
+        store_a = ScheduledTaskStore(tmp, agent="a")
+        store_b = ScheduledTaskStore(tmp, agent="b")
+        store_a.create_job(
+            ScheduledJob(
+                schedule="0 9 * * *", instructions="a", conversation_id="c1"
+            )
+        )
+        store_b.create_job(
+            ScheduledJob(
+                schedule="0 9 * * *", instructions="b", conversation_id="c2"
+            )
+        )
+        sched = AdvancingScheduler(tmp, agent="a", queue=queue, clock=clock, cap=3600)
+        _run_loop(sched)
+        assert [cid for cid, _ in queue.enqueued] == ["c1"]

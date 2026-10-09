@@ -4,7 +4,9 @@
 A thin typed wrapper over the shared storage seams. The master list rides
 :class:`StorageService` (whole-artifact JSON, atomic writes) and the run history
 rides :class:`AppendOnlyStore` (append-only JSONL) — the two opposite persistence
-shapes the spec calls for (§4.8). Both are scoped per-conversation by ``key``.
+shapes the spec calls for (§4.8). Both are scoped per-agent by ``key`` (one flat
+table per agent, like a database); the job/run records carry ``agent`` +
+``conversation_id`` as columns.
 
 The store is **synchronous**, like the other paf stores (``ShellCommandStore``,
 the memory journal, the background-process store): it is a thin wrapper over the
@@ -13,8 +15,8 @@ toolset), not here.
 
 Layout::
 
-    <root>/<agent>/conversations/<cid>/scheduled_jobs.json     # master list — CRUD, soft-delete
-    <root>/<agent>/conversations/<cid>/scheduled_runs.jsonl    # run history — append-only
+    <root>/<agent>/scheduled_jobs.json     # master list — CRUD, soft-delete
+    <root>/<agent>/scheduled_runs.jsonl    # run history — append-only
 
 An optional ``on_change`` callback is invoked after every mutation, so the
 scheduler (Phase 2) can wake on a store change instead of polling.
@@ -38,30 +40,27 @@ _RUNS_KIND = "scheduled_runs"
 
 
 class ScheduledTaskStore:
-    """Master list + run history for one conversation's scheduled tasks.
+    """Master list + run history for one agent's scheduled tasks.
 
     Composes a :class:`StorageService` (master list) and an
-    :class:`AppendOnlyStore` (run history) under the same ``key``
-    (``conversations/<cid>``). Synchronous, like the other paf stores.
+    :class:`AppendOnlyStore` (run history) under the same ``key`` (the agent
+    name). Synchronous, like the other paf stores.
     """
 
     def __init__(
         self,
-        root: str | Path = "data/cron",
+        root: str | Path = "data/scheduled_tasks",
         *,
         agent: str = "default",
-        conversation_id: str = "default",
         storage: StorageService | None = None,
         runs: AppendOnlyStore | None = None,
         on_change: Callable[[], None] | None = None,
     ) -> None:
-        self._key = f"conversations/{conversation_id}"
+        self._key = agent
         # Default backends are the flat-file seams; alternates can be dropped in
         # (tests / future SQLite) via `storage` / `runs`.
-        self._storage = (
-            storage if storage is not None else FlatFileStorage(Path(root) / agent)
-        )
-        self._runs = runs if runs is not None else FlatJsonlStore(Path(root) / agent)
+        self._storage = storage if storage is not None else FlatFileStorage(Path(root))
+        self._runs = runs if runs is not None else FlatJsonlStore(Path(root))
         self._on_change = on_change
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -150,6 +149,35 @@ class ScheduledTaskStore:
                 data["enabled"] = enabled
             if last_run is not None:
                 data["last_run"] = last_run
+            updated = ScheduledJob.model_validate(data)
+            jobs[index] = updated
+            self._save_jobs(jobs)
+            self._notify_change()
+            return updated
+        return None
+
+    def set_definition(
+        self,
+        job_id: str,
+        *,
+        instructions: str | None = None,
+        script: str | None = None,
+    ) -> ScheduledJob | None:
+        """Set the task definition, clearing the other mode; return the job or None.
+
+        ``update_job`` treats ``None`` as "leave unchanged", so it cannot switch a
+        job between ``instructions``/``script`` modes (setting one would leave the
+        other set and fail the exactly-one-of validation). This method sets exactly
+        the given definition, clearing the other field — the toolset (Phase 4) uses
+        it for mode switches.
+        """
+        jobs = self._load_jobs()
+        for index, existing in enumerate(jobs):
+            if existing.id != job_id:
+                continue
+            data = existing.model_dump()
+            data["instructions"] = instructions
+            data["script"] = script
             updated = ScheduledJob.model_validate(data)
             jobs[index] = updated
             self._save_jobs(jobs)

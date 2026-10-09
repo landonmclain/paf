@@ -64,6 +64,7 @@ from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.planning import Planning
 from paf.capabilities.profiles import AgentProfile
 from paf.capabilities.python import Python as _Python
+from paf.capabilities.scheduled_tasks import ScheduledTasks
 from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.subagents import Subagents
@@ -955,6 +956,20 @@ def _build_mcp(store, mcp_config: str | None = None) -> list:
     return [MCP(local=cast(Any, toolset)) for toolset in load_mcp_toolsets(path)]
 
 
+def _build_scheduled_tasks(store, scheduled_tasks_config=None, agent_name=None, queue=None):
+    """Scheduled-tasks capability: per-conversation CRUD + manual run.
+
+    ``queue`` is the run-layer ``ScheduledTaskQueue`` (wired in paf-sse); when
+    None the ``run`` tool reports the queue as unwired. The capability owns its
+    own per-conversation store, so the shared ``store`` arg is ignored.
+    """
+    del store
+    root = "data/scheduled_tasks"
+    if isinstance(scheduled_tasks_config, dict):
+        root = scheduled_tasks_config.get("root", root)
+    return ScheduledTasks(root=root, agent=agent_name or "", queue=queue)
+
+
 def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
@@ -978,6 +993,7 @@ def build_runtime_capabilities(
     visual_config: dict | None = None,
     search_config: dict | None = None,
     workspace_config: dict | None = None,
+    scheduled_tasks_queue=None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -1025,6 +1041,7 @@ def build_runtime_capabilities(
         "Browser": _build_browser,
         # Skill library — list/load on demand + deterministic pointer trigger.
         "Skills": _build_skills,
+        "ScheduledTasks": _build_scheduled_tasks,
         # Builtin MCP servers loaded from a mcpServers JSON (env-expanded).
         "MCP": _build_mcp,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).
@@ -1115,6 +1132,14 @@ def build_runtime_capabilities(
             # context_lines / bm25_k1 / bm25_b / scope). Absent -> the builder
             # applies its defaults (scope=conversation, 10/5/1.5/0.75).
             capabilities.append(builders["ConversationSearch"](store, search_config))
+        elif name == "ScheduledTasks":
+            # Per-conversation CRUD + manual run. `scheduled_tasks_queue` is the
+            # run-layer queue (wired in paf-sse); None -> the `run` tool reports
+            # the queue as unwired. The capability owns its own per-conversation
+            # store, so the shared `store` arg is ignored.
+            capabilities.append(
+                _build_scheduled_tasks(store, None, agent_name, scheduled_tasks_queue)
+            )
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

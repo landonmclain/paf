@@ -1090,6 +1090,7 @@ def build_agent(
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
     profile: AgentProfile | None = None,
     on_complete=None,
+    scheduled_tasks_queue=None,
     **overrides: Any,
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
@@ -1143,6 +1144,7 @@ def build_agent(
             **runtime_configs,
             agent_name=agent_name,
             on_complete=on_complete,
+            scheduled_tasks_queue=scheduled_tasks_queue,
         ),
         **overrides,
     )

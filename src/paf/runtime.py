@@ -449,6 +449,7 @@ class Session:
         resume_window: int | None = None,
         store=None,
         on_complete=None,
+        scheduled_tasks_queue=None,
     ) -> None:
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how clients pick the default profile
@@ -471,7 +472,10 @@ class Session:
         if trace:
             setup_observability()
         self._agent: Agent[Any, Any] = build_agent(
-            agent_name, profile=profile, on_complete=on_complete
+            agent_name,
+            profile=profile,
+            on_complete=on_complete,
+            scheduled_tasks_queue=scheduled_tasks_queue,
         )
         # Tier A turn-boundary compaction strategy (routine trim). Built from the
         # spec's `compact:` block; None when `compact.turn_boundary` is explicitly
@@ -795,14 +799,14 @@ class Session:
                                 # Tool-call loop guard: feed each COMPLETED tool
                                 # call (full args from the node's model_response)
                                 # and remember if the same call recurs too many
-                                # times. The raise is DEFERRED until after the
-                                # node's stream runs, so the triggering tool call
-                                # is executed and has a response in the message
-                                # history — otherwise the run aborts with an
-                                # unprocessed tool call in history and the next
-                                # user prompt fails with pydantic-ai's "Cannot
-                                # provide a new user prompt when the message
-                                # history contains unprocessed tool calls."
+                                # times. The raise is raised DURING the node's
+                                # stream (at the first event), so pydantic-ai's
+                                # CallToolsNode commits the partial tool returns
+                                # as 'interrupted' — making the history consistent
+                                # instead of leaving an unprocessed tool call that
+                                # breaks the next user prompt with pydantic-ai's
+                                # "Cannot provide a new user prompt when the
+                                # message history contains unprocessed tool calls."
                                 pending_tool = None
                                 if isinstance(node, CallToolsNode):
                                     for part in node.model_response.parts:
@@ -814,6 +818,14 @@ class Session:
                                                 pending_tool = tg
                                 async with node.stream(run.ctx) as stream:
                                     async for event in stream:
+                                        if pending_tool is not None:
+                                            # Raise DURING the stream so
+                                            # pydantic-ai's CallToolsNode commits
+                                            # the partial tool returns as
+                                            # 'interrupted' (making the history
+                                            # consistent) instead of leaving the
+                                            # tool call unprocessed in history.
+                                            raise DegenerationError(pending_tool)
                                         # Guard hook: feed THINKING-only stream to
                                         # the degeneration detector and abort if it
                                         # trips (a thinking-narration repeat-loop).
@@ -829,8 +841,6 @@ class Session:
                                                 raise DegenerationError(guard_result)
                                         for ev in _dispatch_stream_event(event):
                                             yield ev
-                                if pending_tool is not None:
-                                    raise DegenerationError(pending_tool)
                             elif isinstance(node, End):
                                 break
                     finally:

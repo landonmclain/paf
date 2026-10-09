@@ -48,7 +48,8 @@ DEFAULT_CAP_S = 60.0
 class ScheduledTaskScheduler:
     """Per-agent loop that fires due scheduled jobs into a background queue.
 
-    ``root`` is the cron data root (``data/cron``) and ``agent`` scopes it to
+    ``root`` is the scheduled-tasks data root (``data/scheduled_tasks``) and
+    ``agent`` scopes it to
     one agent's conversations (``<root>/<agent>/conversations/<cid>/``). ``queue``
     is the :class:`BackgroundQueueService` the run layer (Phase 3) consumes;
     the scheduler only ever calls ``queue.enqueue(cid, job)``.
@@ -56,9 +57,9 @@ class ScheduledTaskScheduler:
 
     def __init__(
         self,
-        root: str | Path = "data/cron",
+        root: str | Path = "data/scheduled_tasks",
         *,
-        agent: str = "default",
+        agent: str | None = None,
         queue: BackgroundQueueService[ScheduledJob],
         clock: Callable[[], datetime] = now_local,
         cap: float = DEFAULT_CAP_S,
@@ -95,31 +96,36 @@ class ScheduledTaskScheduler:
         """Store ``on_change`` bridge: any mutation wakes the loop."""
         self._change.set()
 
-    def _store_for(self, cid: str) -> ScheduledTaskStore:
-        store = self._stores.get(cid)
+    def _agents(self) -> list[str]:
+        """The agents whose master lists this loop scans.
+
+        ``agent`` scopes it to one agent; ``None`` scans every agent's master
+        list under ``root`` (the single-loop, database-table shape).
+        """
+        if self._agent:
+            return [self._agent]
+        if not self._root.is_dir():
+            return []
+        return sorted(d.name for d in self._root.iterdir() if d.is_dir())
+
+    def _store_for(self, agent: str) -> ScheduledTaskStore:
+        store = self._stores.get(agent)
         if store is None:
             store = ScheduledTaskStore(
                 self._root,
-                agent=self._agent,
-                conversation_id=cid,
+                agent=agent,
                 on_change=self._wake,
             )
-            self._stores[cid] = store
+            self._stores[agent] = store
         return store
-
-    def _conversations(self) -> list[str]:
-        conv_dir = self._root / self._agent / "conversations"
-        if not conv_dir.is_dir():
-            return []
-        return sorted(d.name for d in conv_dir.iterdir() if d.is_dir())
 
     # --- schedule computation ---------------------------------------------
 
     def _next_fires(self, now: datetime) -> list[tuple[str, ScheduledJob, datetime]]:
-        """``(cid, job, next_fire)`` for every enabled, non-archived job."""
+        """``(agent, job, next_fire)`` for every enabled, non-archived job."""
         fires: list[tuple[str, ScheduledJob, datetime]] = []
-        for cid in self._conversations():
-            store = self._store_for(cid)
+        for agent in self._agents():
+            store = self._store_for(agent)
             for job in store.list_jobs():
                 if not job.enabled:
                     continue
@@ -127,20 +133,20 @@ class ScheduledTaskScheduler:
                     fire_dt = next_fire(job.schedule, now)
                 except ValueError:
                     continue  # invalid schedule: skip, don't crash the loop
-                fires.append((cid, job, fire_dt))
+                fires.append((agent, job, fire_dt))
         return fires
 
-    def _fire(self, cid: str, job: ScheduledJob) -> None:
-        """Enqueue `job` into its conversation's queue and stamp ``last_run``.
+    def _fire(self, agent: str, job: ScheduledJob) -> None:
+        """Enqueue `job` into its origin conversation's queue and stamp ``last_run``.
 
         Re-reads the job first so a job disabled/archived while the loop slept
-        is not fired.
+        is not fired. The queue routes by the job's ``agent`` + ``conversation_id``.
         """
-        store = self._store_for(cid)
+        store = self._store_for(agent)
         current = store.get_job(job.id)
         if current is None or not current.enabled or current.archived:
             return
-        self._queue.enqueue(cid, current)
+        self._queue.enqueue(current.conversation_id, current)
         store.update_job(job.id, last_run=self._clock())
 
     # --- the loop ----------------------------------------------------------
@@ -158,9 +164,9 @@ class ScheduledTaskScheduler:
                 delay = self._cap
             await self._sleep(delay)
             now2 = self._clock()
-            for cid, job, fire_dt in fires:
+            for agent, job, fire_dt in fires:
                 if fire_dt <= now2:
-                    self._fire(cid, job)
+                    self._fire(agent, job)
 
     async def _sleep(self, delay: float) -> None:
         """Wait up to `delay` seconds, returning early when a store changes.
