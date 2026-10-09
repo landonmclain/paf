@@ -45,6 +45,7 @@ dependencies = [
     # Image uploads (paf.capabilities.visual._uploads): validate, measure and
     # shrink images for the vision model.
     "pillow",
+    "croniter>=6.2.4",
 ]
 
 [project.scripts]
