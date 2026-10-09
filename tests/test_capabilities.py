@@ -87,7 +87,6 @@ def test_capability_types_resolves_and_raises_on_missing() -> None:
     assert "NoSuchCapability" in str(excinfo.value)
 
 
-@pytest.mark.live
 def test_warn_on_cache_busts_cataloged_and_wired() -> None:
     """WarnOnCacheBusts is a cataloged BUILTIN and resolves on the demo profile.
 
@@ -154,7 +153,6 @@ def test_cache_bust_warning_flips_active_span_to_error() -> None:
     # The turn continues: the `with` block above completed without raising.
 
 
-@pytest.mark.live
 def test_subagents_cataloged_and_wired() -> None:
     """Subagents is the paf-owned capability and resolves on a profile with its roster.
 
@@ -179,7 +177,6 @@ def test_subagents_cataloged_and_wired() -> None:
     assert {"delegate_task", "check_task"} <= set(toolset.tools)
 
 
-@pytest.mark.live
 def test_visual_cataloged_and_wired() -> None:
     """Visual is a cataloged paf-native capability and builds when allowlisted.
 
@@ -216,7 +213,6 @@ def test_visual_cataloged_and_wired() -> None:
     assert "no screenshot found for ref" in msg
 
 
-@pytest.mark.live
 def test_browser_cataloged_and_wired() -> None:
     """Browser is a cataloged paf-owned capability, mobile by default.
 
@@ -254,7 +250,6 @@ def test_browser_cataloged_and_wired() -> None:
     assert browser._session._viewport == (390, 844)
 
 
-@pytest.mark.live
 def test_browser_spec_config_wins_over_capability_default() -> None:
     """A spec `browser.allowed_domains` overrides the capability's default.
 
@@ -287,7 +282,6 @@ def test_browser_spec_config_wins_over_capability_default() -> None:
     ]
 
 
-@pytest.mark.live
 def test_browser_private_guard_default_and_override() -> None:
     """`block_private_addresses` stays true (secure) unless the spec opts out.
 

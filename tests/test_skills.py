@@ -63,7 +63,6 @@ def test_skill_toolset_registers_six_tools() -> None:
     }
 
 
-@pytest.mark.live
 def test_skills_cataloged_and_wired() -> None:
     """Skills is a cataloged paf icon-capability and builds when allowlisted."""
     from paf.capabilities.registry import CAPABILITY_TYPES
