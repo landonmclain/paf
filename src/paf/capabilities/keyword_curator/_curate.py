@@ -139,7 +139,9 @@ DEFAULT_CURATOR_INSTRUCTIONS = (
     "You maintain a shared vocabulary that lets an assistant recognise when a "
     "conversation is about something it has skills or notes for. For each source "
     "below, name the entities it is mainly about (one entity per product; reuse an "
-    "existing canonical name from the known-entity list), the phrases a person "
+    "existing canonical name from the known-entity list; entries marked [project] "
+    "are user-registered projects — use the slug when a source is mainly about "
+    "one, but many sources belong to no project, so never force it), the phrases a person "
     "would actually say to refer to each (at most eight; never identifiers, file "
     "names, endpoints, versions, or generic words — those are keywords), and a few "
     "searchable keywords. Answer every source exactly once, citing its exact "
@@ -162,12 +164,22 @@ def _instructions() -> str:
 
 
 def format_known(known: Sequence[dict[str, Any]], *, max_aliases: int = 5) -> str:
-    """The known-entity list as prompt lines (``- canonical (aliases: a, b)``)."""
+    """The known-entity list as prompt lines.
+
+    ``- canonical (aliases: a, b)``; a user-registered project is marked
+    ``[project]`` and carries its description, so the model can tell what it is.
+    """
     lines: list[str] = []
     for ent in known:
         aliases = [str(a) for a in (ent.get("aliases") or [])][:max_aliases]
         tail = f" (aliases: {', '.join(aliases)})" if aliases else ""
-        lines.append(f"- {ent['canonical']}{tail}")
+        if ent.get("project"):
+            desc = str(ent.get("description") or "").strip()
+            lines.append(
+                f"- {ent['canonical']} [project]{tail}" + (f": {desc}" if desc else "")
+            )
+        else:
+            lines.append(f"- {ent['canonical']}{tail}")
     return "\n".join(lines)
 
 

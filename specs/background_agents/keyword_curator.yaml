@@ -48,6 +48,12 @@ instructions: |
   one entity "foo"). Only split when they are genuinely different things with
   different uses.
 
+  Projects: entries in the known-entity list marked [project] are the user's own
+  registered projects, with a description. When a source is mainly about one, use
+  its slug as the canonical name (and add aliases to it). Many sources belong to no
+  project (a skill for a third-party service, a hardware note) — then name the real
+  entity instead; never force a source into a project it is not about.
+
   Aliases are the phrases someone would actually SAY or type when referring to
   the entity in conversation: the product's common names, abbreviations,
   informal names ("the extractor", "qc", "that gmail thing"). At most eight, and

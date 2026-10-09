@@ -28,12 +28,15 @@ from paf.capabilities.keyword_curator import (
     curate_batch,
     find_issues,
     make_batches,
+    make_record,
+    project_seeds,
     read_entity_map,
     run_keyword_pass,
     scan_notes,
     scan_skills,
     scan_sources,
 )
+from paf.capabilities.keyword_curator._background import known_entities
 from paf.capabilities.keyword_curator._curate import (
     CuratorPrompt,
     check_batch,
@@ -533,3 +536,88 @@ def test_report_flags_split_entities_that_share_sources() -> None:
     assert frozenset(("gws", "google-workspace")) in pairs
     # a small entity inside a big one is normal, not a duplicate
     assert frozenset(("composer", "quantconnect")) not in pairs
+
+
+# --- project seeds -------------------------------------------------------------
+
+
+class _FakeProjects:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def list(self):
+        return self._rows
+
+
+ROWS = [
+    {"slug": "local-llm", "name": "local llm", "description": "GPU rig notes."},
+    {"slug": "lmem", "name": "LongMemEval", "aliases": ["lme"], "description": ""},
+    {"slug": "paf", "name": "paf", "description": "The framework."},
+]
+
+
+def test_project_seeds_shape() -> None:
+    seeds = {s["canonical"]: s for s in project_seeds(_FakeProjects(ROWS))}
+    assert set(seeds) == {"local-llm", "lmem", "paf"}
+    assert seeds["local-llm"]["aliases"] == []  # name == slug once normalized
+    assert seeds["lmem"]["aliases"] == ["LongMemEval", "lme"]
+    assert seeds["paf"]["description"] == "The framework."
+    assert all(s["project"] for s in seeds.values())
+
+
+def test_format_known_marks_projects_with_description() -> None:
+    out = format_known(project_seeds(_FakeProjects(ROWS)))
+    assert "- local-llm [project]: GPU rig notes." in out
+    assert "- lmem [project] (aliases: LongMemEval, lme)" in out
+    assert "[project]" not in format_known([{"canonical": "x", "aliases": []}])
+
+
+def test_known_entities_seeds_first_and_fold_matching_derived(tmp_path: Path) -> None:
+    store = KeywordJournalStore(tmp_path)
+    for rec in [
+        make_record(
+            "skill:a", "skill", [], [{"canonical": "paf", "aliases": ["the framework"]}]
+        ),
+        make_record(
+            "skill:b", "skill", [], [{"canonical": "todoist", "aliases": ["td"]}]
+        ),
+    ]:
+        store.append(rec)
+    out = known_entities(
+        store, {"skill:a", "skill:b"}, seeds=project_seeds(_FakeProjects(ROWS))
+    )
+    names = [e["canonical"] for e in out]
+    assert names[:3] == ["local-llm", "lmem", "paf"]  # seeds first, in registry order
+    assert names[3:] == ["todoist"]  # derived non-project entities after
+    paf = next(e for e in out if e["canonical"] == "paf")
+    assert paf["description"] == "The framework." and paf.get("project")
+    assert "the framework" in paf["aliases"] and paf["sources"] == ["skill:a"]
+
+
+def test_known_entities_cap_never_drops_seeds(tmp_path: Path) -> None:
+    store = KeywordJournalStore(tmp_path)
+    for i in range(5):
+        store.append(make_record(f"skill:{i}", "skill", [], [{"canonical": f"e{i}"}]))
+    live = {f"skill:{i}" for i in range(5)}
+    out = known_entities(
+        store, live, max_known=2, seeds=project_seeds(_FakeProjects(ROWS))
+    )
+    assert [e["canonical"] for e in out] == ["local-llm", "lmem", "paf"]
+
+
+@_sync
+async def test_seeds_reach_the_first_batch(tmp_path: Path) -> None:
+    calls: list = []
+    await run_keyword_pass(
+        tmp_path / "kw",
+        {"skill:a": _item("skill:a")},
+        curate=_fake_curate(calls),
+        seeds=project_seeds(_FakeProjects(ROWS)),
+    )
+    assert calls[0][1] == ["local-llm", "lmem", "paf"]
+    # without seeds the first batch sees nothing (existing behaviour)
+    calls2: list = []
+    await run_keyword_pass(
+        tmp_path / "kw2", {"skill:a": _item("skill:a")}, curate=_fake_curate(calls2)
+    )
+    assert calls2[0][1] == []

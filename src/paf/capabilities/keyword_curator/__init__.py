@@ -15,7 +15,7 @@ phase plan. Run by hand with ``python -m paf.capabilities.keyword_curator``.
 
 from __future__ import annotations
 
-from ._background import PassResult, make_batches, run_keyword_pass
+from ._background import PassResult, make_batches, project_seeds, run_keyword_pass
 from ._curate import CurateBatch, CurateResult, Entity, curate_batch
 from ._report import find_issues, format_issues
 from ._sources import SourceItem, scan_notes, scan_skills, scan_sources
@@ -42,6 +42,7 @@ __all__ = [
     "find_issues",
     "format_issues",
     "make_batches",
+    "project_seeds",
     "run_keyword_pass",
     "scan_notes",
     "scan_skills",

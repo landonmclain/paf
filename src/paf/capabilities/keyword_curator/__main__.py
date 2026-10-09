@@ -14,7 +14,7 @@ from pathlib import Path
 
 from paf.config import DATA_DIR
 
-from ._background import make_batches, run_keyword_pass
+from ._background import make_batches, project_seeds, run_keyword_pass
 from ._report import find_issues, format_issues
 from ._sources import scan_sources, snapshots
 from ._store import read_entity_map
@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-notes", action="store_true", help="skip the vault")
     ap.add_argument("--no-skills", action="store_true", help="skip skill libraries")
     ap.add_argument("--limit", type=int, help="curate at most N changed sources")
+    ap.add_argument(
+        "--no-projects",
+        action="store_true",
+        help="do not seed the curator with the project registry",
+    )
     ap.add_argument("--dry-run", action="store_true", help="plan only; no model call")
     ap.add_argument("--report", action="store_true", help="print the review report")
     args = ap.parse_args(argv)
@@ -79,7 +84,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
 
-    result = asyncio.run(run_keyword_pass(directory, sources, limit=args.limit))
+    seeds = [] if args.no_projects else project_seeds()
+    print(f"project seeds: {len(seeds)}")
+    result = asyncio.run(
+        run_keyword_pass(directory, sources, limit=args.limit, seeds=seeds)
+    )
     print(
         f"keyed {len(result.keyed)}, failed {len(result.failed)}, "
         f"removed {len(result.removed)}; {result.entities} entities"
