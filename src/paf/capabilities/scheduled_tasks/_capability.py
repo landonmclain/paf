@@ -11,7 +11,7 @@ queue (wired in paf-sse) that ``run_scheduled_task`` enqueues into. When
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pydantic_ai.capabilities import AbstractCapability
@@ -39,13 +39,23 @@ class ScheduledTasks(AbstractCapability[AgentDepsT]):
 
         return factory
 
-    async def for_run(self, ctx) -> ScheduledTasksToolset[AgentDepsT]:
-        """Return a fresh toolset per run, scoped to the run's conversation."""
+    _conversation_id: str | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    async def for_run(self, ctx) -> ScheduledTasks[AgentDepsT]:
+        """Return a per-run clone scoped to the run's conversation."""
+        clone = replace(self)
+        clone._conversation_id = getattr(ctx, "conversation_id", None)
+        return clone
+
+    def get_toolset(self) -> ScheduledTasksToolset[AgentDepsT]:
+        """Provide the scheduled-tasks toolset for this run's conversation."""
         return ScheduledTasksToolset[AgentDepsT](
             store_factory=self._store_factory(),
             queue=self.queue,
             agent=self.agent,
-            conversation_id=getattr(ctx, "conversation_id", None),
+            conversation_id=self._conversation_id,
         )
 
     @classmethod

@@ -226,9 +226,13 @@ async def _scheduled_run_turn(agent: str, cid: str, content: str) -> None:
 
     The scheduled-tasks queue's ``run_turn`` seam: get (or create) the lane's
     Session and deliver the content through ``Session.notify`` (the steer gate),
-    exactly like a background-process completion notification.
+    exactly like a background-process completion notification. The job's
+    ``conversation_id`` carries the ``{agent}:`` profile prefix (like the shell
+    queue's cid), so strip it before the registry lookup — otherwise we build a
+    new session keyed on the prefixed id instead of the real lane.
     """
-    session = await _get_session(cid, agent, activity=True)
+    raw_cid = cid.split(":", 1)[1] if ":" in cid else cid
+    session = await _get_session(raw_cid, agent, activity=True)
     session.notify(content)
 
 
