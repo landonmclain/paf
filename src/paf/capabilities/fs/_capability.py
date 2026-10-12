@@ -76,6 +76,10 @@ class FileSystem(AbstractCapability[AgentDepsT]):
     max_search_total_bytes: int = 256 * 1024
     """Hard cap on the total `search_files` result string."""
 
+    expose_root: bool = True
+    """Whether error text names the real root path. ``False`` says "the
+    workspace root" instead, so the model never learns the host location."""
+
     def __post_init__(self) -> None:
         # Runtime validation: dataclass field annotations are advisory, not enforced.
         # A config-driven caller could pass a string that would otherwise propagate.
@@ -104,4 +108,5 @@ class FileSystem(AbstractCapability[AgentDepsT]):
             max_search_file_bytes=self.max_search_file_bytes,
             search_excerpt_chars=self.search_excerpt_chars,
             max_search_total_bytes=self.max_search_total_bytes,
+            expose_root=self.expose_root,
         )

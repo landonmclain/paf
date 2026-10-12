@@ -85,6 +85,11 @@ model_settings:
 usage_limits:
   request_limit: 30
 
+# Keep host paths (the user's home, the workspace's real location) out of the
+# model's context. Tools take workspace-relative paths only.
+workspace:
+  expose_paths: false
+
 # The one directory both the file tools and run_python see. Keep it free of
 # secrets: the file tools confine to it with traversal/symlink checks, but that
 # is in-process path logic, not an OS boundary — what is not in this directory

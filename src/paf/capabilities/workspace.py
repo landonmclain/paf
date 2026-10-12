@@ -74,16 +74,31 @@ class Workspace(AbstractCapability):
     notes: list[str] = field(default_factory=list)
     """Extra always-present lines from the spec's ``workspace.notes``."""
 
+    expose_paths: bool = True
+    """Whether the block names host filesystem paths (home dir, tool roots).
+
+    ``False`` for locked-down agents: every root is described as "the workspace
+    root" and absolute paths are not mentioned. Besides not telling the model
+    where the user's home is, this keeps the text true when a tool runs in a
+    sandbox that mounts the workspace at a different path than the host's.
+    """
+
     def render(self) -> str:
-        home = Path.home()
         now = now_local()
-        lines = [
-            f"Home: {home} (~).",
+        lines = [] if not self.expose_paths else [f"Home: {Path.home()} (~)."]
+        lines += [
             f"Message timestamps ([date: …]) are local time in {zone_name()}"
             f" — currently {now.tzname()}, UTC{now.strftime('%z')[:3]}:"
             f"{now.strftime('%z')[3:]}.",
         ]
-        if self.roots:
+        if self.roots and not self.expose_paths:
+            lines.append("Tools resolve paths relative to the workspace root:")
+            lines += [
+                f"- {label} ({tools}): {how.format(root='the workspace root')}"
+                for label, tools, how, _ in self.roots
+            ]
+            lines.append("Use relative paths; absolute paths are not supported.")
+        elif self.roots:
             lines.append("Tools resolve relative paths against different roots:")
             lines += [
                 f"- {label} ({tools}): {how.format(root=root)}"
@@ -120,7 +135,9 @@ class Workspace(AbstractCapability):
 
 
 def build_workspace(
-    capabilities: list[Any], notes: list[str] | None = None
+    capabilities: list[Any],
+    notes: list[str] | None = None,
+    expose_paths: bool = True,
 ) -> Workspace:
     """Collect the roots of the built capabilities into a :class:`Workspace`.
 
@@ -133,4 +150,4 @@ def build_workspace(
             if type(cap).__name__ == cls_name and getattr(cap, attr, None):
                 roots.append((label, tools, how, _resolved(getattr(cap, attr))))
                 break
-    return Workspace(roots=roots, notes=list(notes or []))
+    return Workspace(roots=roots, notes=list(notes or []), expose_paths=expose_paths)

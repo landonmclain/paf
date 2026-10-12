@@ -306,8 +306,10 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         search_excerpt_chars: int,
         max_search_total_bytes: int,
         walk_visit_budget: int = _WALK_VISIT_BUDGET,
+        expose_root: bool = True,
     ) -> None:
         super().__init__()
+        self._expose_root = expose_root
         self._root = root_dir.resolve()
         self._real_root = Path(os.path.realpath(self._root))
         self._allowed_patterns = list(allowed_patterns)
@@ -335,6 +337,15 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
             self.create_directory, name="create_directory", retries=_FS_TOOL_RETRIES
         )
         self.add_function(self.file_info, name="file_info", retries=_FS_TOOL_RETRIES)
+
+    @property
+    def _root_label(self) -> str:
+        """How error text names the root: the real path, or a neutral label.
+
+        Error text is model-visible; locked-down agents must not learn where the
+        workspace lives on the host.
+        """
+        return f"'{self._root}'" if self._expose_root else "the workspace root"
 
     def _matches(self, path: str, pattern: str) -> bool:
         """Glob-match a relative path, treating a leading `**/` as 'any directory, including the root'.
@@ -457,10 +468,10 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         if not resolved.is_file():
             if resolved.is_dir():
                 raise FileNotFoundError(
-                    f"'{path}' is a directory, not a file (current root: '{self._root}')."
+                    f"'{path}' is a directory, not a file (current root: {self._root_label})."
                 )
             raise FileNotFoundError(
-                f"File not found: {path} (current root: '{self._root}')"
+                f"File not found: {path} (current root: {self._root_label})"
             )
 
         raw = resolved.read_bytes()
@@ -505,7 +516,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         if not resolved.parent.exists():
             parent_rel = str(resolved.parent.relative_to(self._root))
             raise FileNotFoundError(
-                f"Parent directory '{parent_rel}' does not exist (current root: '{self._root}'). "
+                f"Parent directory '{parent_rel}' does not exist (current root: {self._root_label}). "
                 "Use create_directory first."
             )
         write_atomic(resolved, content)
@@ -540,7 +551,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         resolved = self._safe_resolve(path, write=True)
         if not resolved.is_file():
             raise FileNotFoundError(
-                f"File not found: {path} (current root: '{self._root}')"
+                f"File not found: {path} (current root: {self._root_label})"
             )
 
         result = apply_edits(
@@ -568,7 +579,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         resolved = self._safe_resolve(path, check_allowed=False)
         if not resolved.is_dir():
             raise NotADirectoryError(
-                f"Not a directory: {path} (current root: '{self._root}')"
+                f"Not a directory: {path} (current root: {self._root_label})"
             )
 
         entries: list[str] = []
@@ -744,7 +755,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         resolved = self._safe_resolve(path, check_allowed=False)
         if not resolved.is_dir():
             raise NotADirectoryError(
-                f"Not a directory: {path} (current root: '{self._root}')"
+                f"Not a directory: {path} (current root: {self._root_label})"
             )
 
         matches: list[str] = []
@@ -816,7 +827,7 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
         resolved = self._safe_resolve(path)
         if not resolved.exists():
             raise FileNotFoundError(
-                f"Path not found: {path} (current root: '{self._root}')"
+                f"Path not found: {path} (current root: {self._root_label})"
             )
 
         # Check if the original (pre-resolve) path is a symlink

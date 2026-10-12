@@ -220,7 +220,9 @@ def _build_thread_summarizer(
     return ThreadSummarizer.from_spec(agent_name=agent_name, capture_directory=None)
 
 
-def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSystem:
+def _build_filesystem(
+    store, filesystem_config: dict | None = None, expose_root: bool = True
+) -> _FileSystem:
     """Scoped filesystem access rooted at the project root (paf-owned copy).
 
     `store` is accepted for a uniform builder signature but unused — the
@@ -243,7 +245,7 @@ def _build_filesystem(store, filesystem_config: dict | None = None) -> _FileSyst
         and filesystem_config.get("root_dir")
     ):
         root_dir = Path(os.path.expanduser(filesystem_config["root_dir"]))
-    return _FileSystem(root_dir=root_dir)
+    return _FileSystem(root_dir=root_dir, expose_root=expose_root)
 
 
 # Workspace-relative paths (globs allowed) that the Docker backend overlays with
@@ -1079,7 +1081,15 @@ def build_runtime_capabilities(
         elif name == "Vault":
             capabilities.append(_build_vault(store, vault_config))
         elif name == "FileSystem":
-            capabilities.append(_build_filesystem(store, filesystem_config))
+            capabilities.append(
+                _build_filesystem(
+                    store,
+                    filesystem_config,
+                    # One spec switch (`workspace.expose_paths: false`) hides host
+                    # paths from the workspace block AND from file-tool errors.
+                    expose_root=(workspace_config or {}).get("expose_paths", True),
+                )
+            )
         elif name == "Shell":
             capabilities.append(
                 _build_shell(store, shell_config, agent_name, on_complete)
@@ -1164,7 +1174,11 @@ def build_runtime_capabilities(
         from paf.capabilities.workspace import build_workspace
 
         capabilities.append(
-            build_workspace(capabilities, (workspace_config or {}).get("notes"))
+            build_workspace(
+                capabilities,
+                (workspace_config or {}).get("notes"),
+                (workspace_config or {}).get("expose_paths", True),
+            )
         )
     # NOTE: the ThreadSummarizer no longer captures evictions — the
     # capture-WAL wiring (attach_to_window) was removed. The

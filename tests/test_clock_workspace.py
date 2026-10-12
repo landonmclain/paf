@@ -93,3 +93,27 @@ def test_workspace_without_roots_still_names_the_zone(chicago) -> None:
     text = Workspace().render()
     assert "America/Chicago" in text
     assert "Tools resolve" not in text
+
+
+def test_workspace_hiding_paths_names_no_host_path(chicago, tmp_path: Path) -> None:
+    caps = [
+        _named("FileSystem", root_dir=str(tmp_path)),
+        _named("Python", cwd=str(tmp_path)),
+    ]
+    text = build_workspace(caps, expose_paths=False).render()
+    assert str(tmp_path) not in text and str(Path.home()) not in text
+    assert "Home:" not in text and "Absolute paths work" not in text
+    assert "relative to the workspace root" in text
+    assert "programs run in the workspace root" in text
+    assert "America/Chicago" in text  # timestamps still need their zone
+
+
+def test_spec_workspace_expose_paths(tmp_path: Path) -> None:
+    from paf.specs import _spec_workspace_config
+
+    hidden = tmp_path / "a.yaml"
+    hidden.write_text("workspace:\n  expose_paths: false\n")
+    shown = tmp_path / "b.yaml"
+    shown.write_text("workspace:\n  expose_paths: true\n  notes: [hi]\n")
+    assert _spec_workspace_config(hidden) == {"expose_paths": False}
+    assert _spec_workspace_config(shown) == {"notes": ["hi"]}  # default stays true

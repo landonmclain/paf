@@ -458,3 +458,53 @@ def test_build_agent_honors_the_specs_declared_profile(tmp_path):
         _declared_profile("b", spec_dir)  # no default: caller or spec must say
     with pytest.raises(ValueError, match="not registered"):
         _declared_profile("c", spec_dir)  # a typo must not widen the agent
+
+
+def test_secure_agent_context_never_names_a_host_path(secure_home, monkeypatch):
+    """The model must not learn the user's home or the workspace's real location."""
+    from pathlib import Path
+
+    monkeypatch.setattr("paf.capabilities.build.docker_available", lambda: True)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    agent = build_agent("secure_assistant")
+    instructions = "\n".join(
+        part
+        for cap in agent._root_capability.capabilities  # noqa: SLF001
+        for part in (cap.get_instructions() or [])
+        if isinstance(part, str)
+    )
+    assert "<workspace>" in instructions
+    for leaked in (str(secure_home), str(secure_home.parent), str(Path.home())):
+        assert leaked not in instructions
+    assert "relative to the workspace root" in instructions
+    fs = next(
+        c
+        for c in agent._root_capability.capabilities  # noqa: SLF001
+        if type(c).__name__ == "FileSystem"
+    )
+    assert fs.expose_root is False  # file-tool errors hide the root too
+
+
+def test_file_tool_errors_do_not_echo_the_host_root(secure_home):
+    """Error text from the file tools is model-visible too."""
+    from paf.capabilities.fs import FileSystem
+
+    toolset = FileSystem(root_dir=secure_home, expose_root=False).get_toolset()
+    results = []
+    for call in (
+        toolset.read_file("missing.txt"),
+        toolset.read_file("../outside.txt"),
+        toolset.read_file("/etc/passwd"),
+        toolset.list_directory("nope"),
+        toolset.file_info("missing"),
+    ):
+        try:
+            results.append(str(asyncio.run(call)))
+        except Exception as exc:  # noqa: BLE001 - the message is what matters
+            results.append(str(exc))
+    for text in results:
+        assert str(secure_home) not in text, text
+    # ...and the default still names the root, so other agents are unchanged.
+    plain = FileSystem(root_dir=secure_home).get_toolset()
+    with pytest.raises(Exception, match=str(secure_home)):
+        asyncio.run(plain.read_file("missing.txt"))

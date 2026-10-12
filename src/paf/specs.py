@@ -855,10 +855,13 @@ def _spec_workspace_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``workspace:`` block (extra always-present lines).
 
         workspace:
+          expose_paths: false   # default true; false hides host paths (home,
+                                # tool roots) from the model — locked-down agents
           notes:
             - Projects live under ~/projects/Personal.
 
-    Returns ``{"notes": [...]}`` or ``None`` when absent / empty.
+    Returns ``{"notes": [...]?, "expose_paths": False?}`` with only the keys that
+    are set, or ``None`` when absent / empty.
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -868,8 +871,13 @@ def _spec_workspace_config(spec_path: Path) -> dict | None:
     block = data.get("workspace") if isinstance(data, dict) else None
     if not isinstance(block, dict):
         return None
+    config: dict = {}
     notes = [n for n in block.get("notes") or [] if isinstance(n, str) and n.strip()]
-    return {"notes": notes} if notes else None
+    if notes:
+        config["notes"] = notes
+    if block.get("expose_paths") is False:
+        config["expose_paths"] = False
+    return config or None
 
 
 def _spec_subagents_config(spec_path: Path) -> dict | None:
