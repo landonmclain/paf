@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
+from anyio.to_thread import run_sync
 
 from paf.capabilities._sandbox._protocol import (
     BackgroundHandle,
@@ -424,7 +425,7 @@ class DockerExecutor:
             assert run_name is not None and self._max_writable_bytes is not None
             while True:
                 await anyio.sleep(0.25)
-                size = await anyio.to_thread.run_sync(tree_bytes, roots)
+                size = await run_sync(tree_bytes, roots)
                 if size > self._max_writable_bytes:
                     capped["hit"] = True
                     await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
@@ -447,7 +448,7 @@ class DockerExecutor:
                     await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
             finally:
                 tg.cancel_scope.cancel()
-        notes = await anyio.to_thread.run_sync(
+        notes = await run_sync(
             lambda: enforce_writable_policy(
                 roots, max_bytes=self._max_writable_bytes, started=started
             )
