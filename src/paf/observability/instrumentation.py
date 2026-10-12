@@ -19,11 +19,6 @@ from typing import Any
 from paf.config import settings
 from paf.observability.pricing import price_usage, start_price_refresh
 
-try:
-    from opentelemetry.sdk.trace import SpanProcessor
-except ImportError:  # opentelemetry absent → tracing disabled, class unused
-    SpanProcessor = object  # type: ignore[assignment,misc]
-
 # Ref-count for observability lifecycle. A long-lived process creates a Session
 # per lane, each constructor calling setup_observability() and each close()
 # calling shutdown_observability(). We must configure the global OTel provider
@@ -165,18 +160,26 @@ class _Rollup:
             self.errors.append(f"{span.name}: {status.description or 'error'}")
 
 
-class _RollupProcessor(SpanProcessor):
-    """Feeds ended spans into the rollup of their trace, if it is tracked."""
+def _make_rollup_processor() -> Any:
+    """Build the span processor that feeds ended spans into their trace's rollup.
 
-    def on_end(self, span: Any) -> None:
-        try:
-            ctx = span.get_span_context()
-            with _rollups_lock:
-                rollup = _rollups.get(ctx.trace_id)
-                if rollup is not None:
-                    rollup.add(span)
-        except Exception:  # noqa: BLE001 - observability must never break the run
-            pass
+    Built lazily (not at import) because ``opentelemetry`` is optional: the
+    class needs ``SpanProcessor`` as a base, which only exists when it's installed.
+    """
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    class _RollupProcessor(SpanProcessor):
+        def on_end(self, span: Any) -> None:
+            try:
+                ctx = span.get_span_context()
+                with _rollups_lock:
+                    rollup = _rollups.get(ctx.trace_id)
+                    if rollup is not None:
+                        rollup.add(span)
+            except Exception:  # noqa: BLE001 - observability must never break the run
+                pass
+
+    return _RollupProcessor()
 
 
 def _apply_rollup(span: Any, rollup: _Rollup) -> None:
@@ -362,7 +365,7 @@ def setup_observability() -> bool:
         settings.langfuse_secret_key,
     )
     # Registered BEFORE the exporter so rollups see every span as it ends.
-    provider.add_span_processor(_RollupProcessor())
+    provider.add_span_processor(_make_rollup_processor())
     provider.add_span_processor(
         BatchSpanProcessor(
             OTLPSpanExporter(endpoint=settings.otlp_endpoint, headers=headers)
