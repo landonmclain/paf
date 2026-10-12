@@ -119,3 +119,107 @@ def test_integration_tool_gets_real_value_window_never_sees_it(monkeypatch):
     assert "$SECRET:stripe_key" in str(result.all_messages())
     # The real value never entered the window.
     assert REAL not in str(result.all_messages())
+
+
+# --- result redaction: credentials only, never plain configuration --------------
+from paf.capabilities.guardrails.secret_handles import (  # noqa: E402
+    make_secret_result_guard,
+)
+
+
+def _result(text: str) -> ToolResultInfo:
+    return ToolResultInfo(name="t", args={}, tool_call_id="1", result=text)
+
+
+def test_ordinary_config_values_are_not_redacted(monkeypatch):
+    """The trace bug: HOME ("/home/alice") was scrubbed to "$SECRET:HOME"."""
+    for name, value in {
+        "HOME": "/home/alice",
+        "PWD": "/home/alice/projects/paf",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "SHELL": "/bin/bash",
+        "USER": "landonmclain",
+        "LANG": "en_US.UTF-8",
+        "TERM": "xterm-256color",
+        "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+        "XAUTHORITY": "/run/user/1000/.mutter-Xwaylandauth.ABC",
+        "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH": "true",
+    }.items():
+        monkeypatch.setenv(name, value)
+    text = (
+        "/home/alice -> ERROR: FileNotFoundError /home/alice/projects/paf "
+        "en_US.UTF-8 landonmclain xterm-256color /usr/local/bin:/usr/bin:/bin"
+    )
+    for guard in (make_secret_result_guard(), make_secret_result_guard([])):
+        assert guard(_result(text)).action == "allow"
+
+
+def test_credential_named_variables_are_redacted(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-abcdef0123456789")
+    monkeypatch.setenv("GITHUB_TOKEN", "tok_0123456789abcdef")
+    monkeypatch.setenv("DB_PASSWORD", "correct horse battery")
+    out = make_secret_result_guard()(
+        _result(
+            "k=sk-or-v1-abcdef0123456789 t=tok_0123456789abcdef p=correct horse battery"
+        )
+    ).replacement
+    assert out == (
+        "k=$SECRET:OPENROUTER_API_KEY t=$SECRET:GITHUB_TOKEN p=$SECRET:DB_PASSWORD"
+    )
+
+
+def test_credential_shaped_values_are_redacted_under_any_name(monkeypatch):
+    monkeypatch.setenv("MYSTERY_VAR", "ghp_0123456789abcdefghijkl")
+    monkeypatch.setenv("OTHER_THING", "AKIAABCDEFGHIJKLMNOP")
+    out = make_secret_result_guard()(
+        _result("a=ghp_0123456789abcdefghijkl b=AKIAABCDEFGHIJKLMNOP")
+    ).replacement
+    assert "ghp_" not in out and "AKIA" not in out
+
+
+def test_path_valued_credential_named_variables_are_left_alone(monkeypatch):
+    """A key FILE path is configuration, not the key."""
+    monkeypatch.setenv("SSH_KEY_FILE", "/home/alice/.ssh/id_ed25519")
+    guard = make_secret_result_guard()
+    assert guard(_result("using /home/alice/.ssh/id_ed25519")).action == "allow"
+
+
+def test_with_an_allowlist_only_listed_names_get_a_handle(monkeypatch):
+    """Unlisted credentials become "[redacted]": no variable name, no handle."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-abcdef0123456789")
+    monkeypatch.setenv("BILLING_REF", "acct-98765-secret-ref")  # innocuous name
+    guard = make_secret_result_guard(["BILLING_REF"])
+    out = guard(_result("a=sk-or-v1-abcdef0123456789 b=acct-98765-secret-ref"))
+    assert out.replacement == "a=[redacted] b=$SECRET:BILLING_REF"
+    assert "OPENROUTER" not in out.replacement
+
+
+def test_empty_allowlist_never_reveals_a_variable_name(monkeypatch):
+    monkeypatch.setenv("STRIPE_KEY", "sk_live_1234567890abcdef")
+    out = make_secret_result_guard([])(
+        _result("x=sk_live_1234567890abcdef")
+    ).replacement
+    assert out == "x=[redacted]"
+
+
+def test_longer_secret_containing_a_shorter_one_is_fully_redacted(monkeypatch):
+    monkeypatch.setenv("SHORT_KEY", "abcdefgh1234")
+    monkeypatch.setenv("LONG_KEY", "abcdefgh1234-and-more-secret")
+    out = make_secret_result_guard([])(
+        _result("v=abcdefgh1234-and-more-secret")
+    ).replacement
+    assert out == "v=[redacted]"
+
+
+def test_builder_wires_the_allowlist_into_the_result_guard(monkeypatch):
+    monkeypatch.setenv("STRIPE_KEY", "sk_live_1234567890abcdef")
+    cap = _build_secrets(None, {"allowed": []})
+    assert cap.result_guard(_result("x=sk_live_1234567890abcdef")).replacement == (
+        "x=[redacted]"
+    )
+    assert (
+        _build_secrets(None, None)
+        .result_guard(_result("x=sk_live_1234567890abcdef"))
+        .replacement
+        == "x=$SECRET:STRIPE_KEY"
+    )

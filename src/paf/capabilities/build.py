@@ -54,8 +54,8 @@ from paf.capabilities.guardrails.prompt_injection import (
 )
 from paf.capabilities.guardrails.secret_handles import (
     make_secret_handle_guard,
+    make_secret_result_guard,
     secret_handle_guard,
-    secret_result_guard,
 )
 from paf.capabilities.guardrails.tool_gating import tool_gating_guard
 from paf.capabilities.keyword_curator import KeywordCurator
@@ -854,8 +854,10 @@ def _build_secrets(store, secrets_config: dict | None = None) -> ToolGuardrail:
     ``specs._spec_secrets_config``). Its ``allowed`` list names the only
     environment variables a handle may resolve; an empty list resolves nothing.
     Absent block (or no ``allowed`` key) keeps the original unrestricted
-    behavior. The result-side redaction backstop is unaffected: it still scrubs
-    every secret-looking environment value from tool output.
+    behavior. The result-side redaction backstop scrubs credential-looking values
+    (by variable name or value shape, never plain config like ``HOME``) from tool
+    output; only allowlisted names get a reusable ``$SECRET:`` handle in place of
+    the value, everything else becomes ``[redacted]``.
 
     `store` is accepted for a uniform builder signature but unused — the
     policy is stateless per call.
@@ -867,7 +869,7 @@ def _build_secrets(store, secrets_config: dict | None = None) -> ToolGuardrail:
             if allowed is not None
             else secret_handle_guard
         ),
-        result_guard=secret_result_guard,
+        result_guard=make_secret_result_guard(allowed),
         id="secrets",
         description=(
             "Resolves $SECRET:key handles in tool arguments at execution time "

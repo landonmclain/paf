@@ -25,6 +25,7 @@ Two guards ride the same ``ToolGuardrail``:
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Collection
 
 from pydantic_ai_harness.guardrails import GuardrailResult, ToolCallInfo, ToolResultInfo
@@ -82,22 +83,98 @@ _UNAVAILABLE = (
 secret_handle_guard = make_secret_handle_guard()
 
 
-def secret_result_guard(info: ToolResultInfo) -> GuardrailResult:
-    """Redact raw secret values that leaked into a tool result (backstop).
+# Environment variable NAMES that mark a value as a credential. Matching is
+# case-insensitive and by substring (``OPENROUTER_API_KEY``, ``stripe_key``,
+# ``GITHUB_TOKEN``). Deliberately absent: ``PWD`` (the working directory, not a
+# password) and bare ``AUTH`` (``XAUTHORITY``, ``SSH_AUTH_SOCK`` are paths).
+_SECRET_NAME_PARTS: tuple[str, ...] = (
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "PRIVATE",
+    "COOKIE",
+    "DSN",
+    "DATABASE_URL",
+    "CONNECTION_STRING",
+)
 
-    Scans the result for any env value that looks like a secret and replaces it
-    with its handle, so a tool that echoes a secret back does not hand the real
-    value to the model. Conservative by design: only values at least
-    ``_MIN_SECRET_LENGTH`` long are considered, to avoid mangling ordinary short
-    strings in tool output.
+# Value SHAPES that are credentials whatever the variable is called.
+_SECRET_VALUE_SHAPES = re.compile(
+    r"^(?:(?:sk|rk|pk)[-_]|gh[pousr]_|github_pat_|xox[abprs]-|AKIA[0-9A-Z]{16}|AIza|eyJ)"
+)
+
+_REDACTED = "[redacted]"
+
+
+def _looks_like_path(value: str) -> bool:
+    """A filesystem path (``/home/me``, ``~/x``), never a credential here."""
+    return value.startswith(("/", "~")) and not any(c.isspace() for c in value)
+
+
+def _is_secret(name: str, value: str) -> bool:
+    """Whether an environment variable's value should be scrubbed from output.
+
+    A secret is a long-enough value that is not a path and either has a
+    credential-looking NAME or a credential-looking SHAPE. Everything else
+    (``HOME``, ``PATH``, ``USER``, ``SHELL``, ``LANG``, ``TERM``...) is ordinary
+    configuration: scrubbing it corrupts legitimate output and leaks variable
+    names for no security gain.
     """
-    result = info.result
-    if not isinstance(result, str):
+    if len(value) < _MIN_SECRET_LENGTH or _looks_like_path(value):
+        return False
+    upper = name.upper()
+    return any(part in upper for part in _SECRET_NAME_PARTS) or bool(
+        _SECRET_VALUE_SHAPES.match(value)
+    )
+
+
+def make_secret_result_guard(
+    allowed: Collection[str] | None = None,
+) -> Callable[[ToolResultInfo], GuardrailResult]:
+    """Build the result-redaction backstop.
+
+    Scrubs credential values from a tool result so a tool that echoes one back
+    does not hand it to the model. A value is scrubbed when its variable
+    qualifies under :func:`_is_secret`, or when it is on the ``allowed`` list
+    (those are credentials by declaration whatever they are called).
+
+    Replacement text: a variable the model is permitted to reference becomes its
+    ``$SECRET:NAME`` handle (``allowed=None`` permits all; otherwise only listed
+    names), so it can pass it on to a tool. Any other becomes ``[redacted]``,
+    which names no variable and offers no handle. Longest values are replaced
+    first so a secret that contains another is not left half-visible.
+    """
+    permitted = None if allowed is None else frozenset(allowed)
+
+    def guard(info: ToolResultInfo) -> GuardrailResult:
+        result = info.result
+        if not isinstance(result, str):
+            return GuardrailResult.allow()
+        found: dict[str, str] = {}
+        for name, value in os.environ.items():
+            declared = permitted is not None and name in permitted
+            if value in found:
+                continue
+            if (declared and len(value) >= _MIN_SECRET_LENGTH) or _is_secret(
+                name, value
+            ):
+                found[value] = (
+                    f"{_HANDLE_PREFIX}{name}"
+                    if permitted is None or name in permitted
+                    else _REDACTED
+                )
+        redacted = result
+        for value in sorted(found, key=len, reverse=True):
+            redacted = redacted.replace(value, found[value])
+        if redacted != result:
+            return GuardrailResult.replace(redacted)
         return GuardrailResult.allow()
-    redacted = result
-    for name, value in os.environ.items():
-        if len(value) >= _MIN_SECRET_LENGTH and value in redacted:
-            redacted = redacted.replace(value, f"{_HANDLE_PREFIX}{name}")
-    if redacted != result:
-        return GuardrailResult.replace(redacted)
-    return GuardrailResult.allow()
+
+    return guard
+
+
+# Unrestricted backstop (handles for every credential-looking variable).
+secret_result_guard = make_secret_result_guard()
