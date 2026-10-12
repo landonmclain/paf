@@ -85,12 +85,16 @@ class PythonToolset(FunctionToolset[AgentDepsT]):
     async def run_python(self, code: str, timeout_seconds: float | None = None) -> str:
         """Run a Python 3 program in an isolated sandbox and return its output.
 
-        Each call is a fresh interpreter: no variables or imports carry over, so
-        put everything one run needs in `code`. Only the standard library is
-        available. There is no network. The working directory is the workspace,
-        which is read-only except where the deployment allows writes; `/tmp` is
-        scratch space that is discarded after the call. Print what you want to
-        see: only stdout, stderr and the exit code come back.
+        Each call is a fresh interpreter in a fresh container: no variables,
+        imports or files outside the writable paths carry over, so put everything
+        one run needs in `code`. Python's standard library is available, and so
+        are the container's ordinary Linux tools (`grep`, `sed`, `awk`, `find`,
+        `sort`, ...) through `subprocess`; they run inside the same sandbox, with
+        the same limits. There is no network. The working directory is the
+        workspace, which is read-only except where the deployment allows writes
+        (there is a size cap on what you may leave there); `/tmp` is scratch
+        space that is discarded after the call. Print what you want to see: only
+        stdout, stderr and the exit code come back.
 
         Args:
             code: The complete Python program to run.
@@ -126,7 +130,7 @@ class PythonToolset(FunctionToolset[AgentDepsT]):
             )
         output = self._format(result.stdout, result.stderr)
         if result.exit_code == _EXIT_KILLED:
-            output += "\n[killed: timeout or memory limit exceeded]"
+            output += "\n[killed: timeout, memory limit or output-size cap exceeded]"
         elif result.exit_code != 0:
             output += f"\n[exit code: {result.exit_code}]"
         return truncate_tail(output, self._max_output_chars)

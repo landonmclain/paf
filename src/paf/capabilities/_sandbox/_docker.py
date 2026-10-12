@@ -15,11 +15,14 @@ Background processes map to detached containers; ``check`` / ``stop`` become
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +38,115 @@ from paf.capabilities._sandbox._protocol import (
 # the host daemon, so this path is never mounted into the container (see
 # ``_overlay_mounts``).
 _HOST_DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def parse_size(value: str | int) -> int:
+    """``"100m"`` / ``"2g"`` / ``"512k"`` / ``4096`` -> bytes (binary multiples)."""
+    if isinstance(value, bool):
+        raise ValueError(f"not a size: {value!r}")
+    if isinstance(value, int):
+        if value <= 0:
+            raise ValueError(f"size must be positive, got {value}")
+        return value
+    match = re.fullmatch(r"\s*(\d+)\s*([kmg]?)b?\s*", str(value).lower())
+    if not match or int(match.group(1)) == 0:
+        raise ValueError(f"not a size (use e.g. '100m'): {value!r}")
+    unit = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}[match.group(2)]
+    return int(match.group(1)) * unit
+
+
+def _walk(root: Path) -> Iterator[tuple[Path, os.stat_result]]:
+    """Every entry under ``root`` (not following symlinks), with its ``lstat``."""
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            st = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        path = Path(entry.path)
+        yield path, st
+        if stat.S_ISDIR(st.st_mode):
+            yield from _walk(path)
+
+
+def tree_bytes(roots: Sequence[Path]) -> int:
+    """Total apparent size of the regular files under ``roots``."""
+    return sum(
+        st.st_size
+        for root in roots
+        for _, st in _walk(root)
+        if stat.S_ISREG(st.st_mode)
+    )
+
+
+def enforce_writable_policy(
+    roots: Sequence[Path], *, max_bytes: int | None, started: float
+) -> list[str]:
+    """Clean up what sandboxed code left in the host-visible writable paths.
+
+    The writable paths are the one channel from untrusted code to the host, and
+    host-side tools read them afterwards, so this runs after every call:
+
+    1. Anything that is not a regular file or directory (symlink, FIFO, socket,
+       device) is removed. A FIFO would hang a host-side read; a symlink can
+       point where the sandbox could not.
+    2. If the total is over ``max_bytes``, files written during this call
+       (``mtime >= started``) are deleted, largest first, until it fits. Files
+       from earlier calls are never deleted for being over.
+
+    Returns human-readable notes for what was removed (empty if nothing).
+    """
+    notes: list[str] = []
+    for root in roots:
+        for path, st in list(_walk(root)):
+            if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+                try:
+                    path.unlink()
+                    notes.append(f"removed non-regular entry {_rel(path, roots)}")
+                except OSError:
+                    pass
+    if max_bytes is None:
+        return notes
+    total = tree_bytes(roots)
+    if total <= max_bytes:
+        return notes
+    fresh = sorted(
+        (
+            (st.st_size, path)
+            for root in roots
+            for path, st in _walk(root)
+            if stat.S_ISREG(st.st_mode) and st.st_mtime >= started
+        ),
+        reverse=True,
+    )
+    removed = []
+    for size, path in fresh:
+        if total <= max_bytes:
+            break
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        total -= size
+        removed.append(_rel(path, roots))
+    if removed:
+        notes.append(
+            f"output cap of {max_bytes} bytes exceeded; deleted files written by "
+            f"this run: {', '.join(removed)}"
+        )
+    return notes
+
+
+def _rel(path: Path, roots: Sequence[Path]) -> str:
+    for root in roots:
+        try:
+            return str(path.relative_to(root.parent))
+        except ValueError:
+            continue
+    return path.name
 
 
 def docker_available() -> bool:
@@ -98,6 +210,7 @@ class DockerExecutor:
         workspace_readonly: bool = False,
         writable: Sequence[str] = (),
         tmpfs: Sequence[str] = (),
+        max_writable_bytes: int | None = None,
     ) -> None:
         if mode not in ("exec", "run"):
             raise ValueError("mode must be 'exec' or 'run'")
@@ -115,6 +228,15 @@ class DockerExecutor:
         self._workspace_readonly = workspace_readonly
         self._writable = [self._clean_relative(w) for w in writable]
         self._tmpfs = list(tmpfs)
+        if max_writable_bytes is not None:
+            if mode != "run":
+                raise ValueError(
+                    "max_writable_bytes needs mode='run': enforcing it kills the "
+                    "container, which in 'exec' mode is shared by every command."
+                )
+            if max_writable_bytes <= 0:
+                raise ValueError("max_writable_bytes must be positive")
+        self._max_writable_bytes = max_writable_bytes
         self._container_id: str | None = None
 
     @staticmethod
@@ -291,16 +413,57 @@ class DockerExecutor:
                 "-c",
                 command,
             ]
-        try:
-            code, out, err = await self._docker(args, timeout=timeout)
-        except TimeoutError:
-            # Killing the docker CLI client does not stop the container, so a
-            # per-command container is removed explicitly. (exec mode shares one
-            # long-lived container; callers that need a hard in-container kill
-            # wrap the command in ``timeout``.)
-            if run_name is not None:
-                await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
-            return ExecResult(stdout="", stderr="", exit_code=124, timed_out=True)
+        # Watch the host-visible writable paths for the whole call; the cleanup
+        # afterwards also runs for calls that stayed under the cap, to drop
+        # symlinks/FIFOs planted by the sandboxed code.
+        roots = [cwd / rel for rel in self._writable]
+        started = time.time()
+        capped = {"hit": False}
+
+        async def watch() -> None:
+            assert run_name is not None and self._max_writable_bytes is not None
+            while True:
+                await anyio.sleep(0.25)
+                size = await anyio.to_thread.run_sync(tree_bytes, roots)
+                if size > self._max_writable_bytes:
+                    capped["hit"] = True
+                    await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
+                    return
+
+        timed_out = False
+        code, out, err = 124, "", ""
+        async with anyio.create_task_group() as tg:
+            if roots and run_name is not None and self._max_writable_bytes:
+                tg.start_soon(watch)
+            try:
+                code, out, err = await self._docker(args, timeout=timeout)
+            except TimeoutError:
+                # Killing the docker CLI client does not stop the container, so a
+                # per-command container is removed explicitly. (exec mode shares
+                # one long-lived container; callers that need a hard in-container
+                # kill wrap the command in ``timeout``.)
+                timed_out = True
+                if run_name is not None:
+                    await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
+            finally:
+                tg.cancel_scope.cancel()
+        notes = await anyio.to_thread.run_sync(
+            lambda: enforce_writable_policy(
+                roots, max_bytes=self._max_writable_bytes, started=started
+            )
+        )
+        if capped["hit"]:
+            notes.insert(
+                0,
+                f"sandbox: writable-path size cap of {self._max_writable_bytes} "
+                "bytes exceeded; the run was killed",
+            )
+        if notes:
+            err = (err + "\n" if err and not err.endswith("\n") else err) + "".join(
+                f"[{n}]\n" for n in notes
+            )
+        if timed_out:
+            return ExecResult(stdout="", stderr=err, exit_code=124, timed_out=True)
         return ExecResult(stdout=out, stderr=err, exit_code=code)
 
     async def start(

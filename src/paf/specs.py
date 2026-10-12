@@ -685,6 +685,9 @@ def _spec_executor_block(executor: dict) -> dict:
         value = executor.get(key)
         if isinstance(value, str) and value.strip():
             resolved[key] = value
+    max_writable = executor.get("max_writable_size")
+    if isinstance(max_writable, (str, int)) and not isinstance(max_writable, bool):
+        resolved["max_writable_size"] = max_writable
     pids_limit = executor.get("pids_limit")
     if isinstance(pids_limit, int) and not isinstance(pids_limit, bool):
         resolved["pids_limit"] = pids_limit

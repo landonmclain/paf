@@ -42,6 +42,7 @@ from paf.capabilities._sandbox import (
     LocalProcessExecutor,
     SandboxedExecutor,
     docker_available,
+    parse_size,
 )
 from paf.capabilities.browser import Browser as _Browser
 from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
@@ -269,7 +270,7 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
     :class:`DockerExecutor` with the block's options (``mode`` / ``image`` /
     ``network`` / ``user`` / ``read_only`` / ``memory`` / ``cpus`` /
     ``pids_limit`` / ``workspace`` / ``container_name`` / ``exclude`` /
-    ``workspace_readonly`` / ``writable`` / ``tmpfs``), each
+    ``workspace_readonly`` / ``writable`` / ``tmpfs`` / ``max_writable_size``), each
     defaulting to the executor's secure default when omitted. ``exclude`` names
     workspace-relative paths (globs allowed) that the Docker backend overlays
     with empty files; it defaults to :data:`DEFAULT_EXCLUDE`.
@@ -306,6 +307,11 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
             workspace_readonly=executor_config.get("workspace_readonly", False),
             writable=executor_config.get("writable", ()),
             tmpfs=executor_config.get("tmpfs", ()),
+            max_writable_bytes=(
+                parse_size(executor_config["max_writable_size"])
+                if executor_config.get("max_writable_size") is not None
+                else None
+            ),
         )
     raise ValueError(f"executor.backend must be 'local' or 'docker', got {backend!r}")
 
@@ -324,6 +330,10 @@ _PYTHON_EXECUTOR_DEFAULTS: dict = {
     "mode": "run",
     "workspace_readonly": True,
     "tmpfs": ["/tmp:rw,size=64m,noexec,nosuid"],
+    # Ceiling on what programs may leave in the host-visible `writable` paths
+    # (enforced while the program runs, then cleaned up). Inert until the spec
+    # opens a `writable` path.
+    "max_writable_size": "100m",
 }
 
 

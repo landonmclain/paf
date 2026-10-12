@@ -7,7 +7,11 @@ instead of spawning processes directly, so the sandbox is one seam instead of a
 per-tool concern.
 """
 
-from paf.capabilities._sandbox._docker import DockerExecutor, docker_available
+from paf.capabilities._sandbox._docker import (
+    DockerExecutor,
+    docker_available,
+    parse_size,
+)
 from paf.capabilities._sandbox._local import LocalProcessExecutor
 from paf.capabilities._sandbox._protocol import (
     BackgroundHandle,
@@ -24,4 +28,5 @@ __all__ = [
     "LocalProcessExecutor",
     "SandboxedExecutor",
     "docker_available",
+    "parse_size",
 ]

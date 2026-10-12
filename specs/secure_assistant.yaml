@@ -10,10 +10,16 @@
 #
 #   1. Profile allowlist  - no Shell, Git, Web, Browser, MCP, Memory, Vault,
 #                           Subagents: those tools do not exist for this agent.
+#                           (There is no host shell. Programs MAY start processes
+#                           via subprocess, but only inside run_python's
+#                           container - see 2. The guarantee is "everything that
+#                           executes does so in the sandbox", not "no shell".)
 #   2. Sandbox            - run_python executes in a per-call Docker container:
 #                           no network, read-only root and workspace, non-root,
-#                           memory/CPU/pid limits. It refuses to build without
-#                           Docker (never falls back to the host).
+#                           memory/CPU/pid limits, and a size cap on what it may
+#                           leave in out/ (the one host-visible writable path).
+#                           It refuses to build without Docker (never falls back
+#                           to the host).
 #   3. Gating policy      - default-DENY per-call tool gate (below).
 #   4. Prompt-injection   - the `Guardrails` capability screens every tool
 #      defense              result and withholds high-risk content.
@@ -42,17 +48,20 @@ instructions: |
   # What you can do
 
   - Read, list and search files in your workspace.
-  - Run Python 3 (standard library only, no network) with `run_python`. Each run
-    is a fresh interpreter; nothing carries over between calls. The workspace is
-    read-only to programs except `out/`.
+  - Run Python 3 with `run_python`. Each call is a fresh, isolated container:
+    nothing carries over between calls, there is no network, and the workspace
+    is read-only to programs except `out/` (which has a size cap). The
+    container's ordinary Linux tools (`grep`, `sed`, `awk`, `find`, `sort`, ...)
+    are available to your programs through `subprocess`; they run inside the
+    same sandbox with the same limits, which is the intended boundary.
   - Write or edit files only under `out/`.
 
   # What you cannot do
 
-  You have no internet, no shell, and no other tools. Some calls are refused by
-  the runtime before they execute. When one is refused, do not retry it or look
-  for a way around it: tell the user what you were trying to do and why, and let
-  them decide.
+  You have no internet access, no tool that runs commands on the user's
+  machine, and no other tools. Some calls are refused by the runtime before they
+  execute. When one is refused, do not retry it or look for a way around it:
+  tell the user what you were trying to do and why, and let them decide.
 
   # Standards
 
@@ -107,6 +116,12 @@ python:
   max_timeout: 60
   executor:
     writable: [out]
+    # Ceiling on what programs may leave in out/. Enforced while the program
+    # runs (the container is killed if it grows past this) and again afterwards
+    # (files written by the run are deleted, largest first, until it fits; any
+    # symlink/FIFO/device planted in out/ is removed). Overshoot is bounded by
+    # one poll interval of write speed, not zero.
+    max_writable_size: 100m
     memory: 512m
     cpus: "1.0"
     pids_limit: 64

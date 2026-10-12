@@ -508,3 +508,23 @@ def test_file_tool_errors_do_not_echo_the_host_root(secure_home):
     plain = FileSystem(root_dir=secure_home).get_toolset()
     with pytest.raises(Exception, match=str(secure_home)):
         asyncio.run(plain.read_file("missing.txt"))
+
+
+def test_spec_wording_does_not_claim_the_model_has_no_shell():
+    """Programs can start processes inside the sandbox via subprocess, so telling
+    the model it has "no shell" is false and it noticed (and was confused). The
+    claim must be the true one: nothing runs on the host."""
+    import yaml
+
+    text = " ".join(yaml.safe_load(SPEC.read_text())["instructions"].lower().split())
+    assert "no shell" not in text and "standard library only" not in text
+    assert "subprocess" in text and "same sandbox" in text
+    assert (
+        "size cap" in text
+        and "no tool that runs commands on the user's machine" in text
+    )
+
+    from paf.capabilities.python import PythonToolset
+
+    doc = (PythonToolset.run_python.__doc__ or "").lower()
+    assert "subprocess" in doc and "size cap" in doc

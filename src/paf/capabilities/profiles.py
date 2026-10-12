@@ -158,7 +158,8 @@ LONGMEMEVAL_PROFILE = AgentProfile(
 
 # The locked-down profile for high-stakes deployments (specs/secure_assistant.yaml).
 # Deliberately the OPPOSITE of the everything-sandbox: no way off the machine
-# (Web, Browser, MCP), no arbitrary command execution (Shell, Git), no durable
+# (Web, Browser, MCP), no host command execution (Shell, Git; programs can still
+# start processes, but only inside run_python's throwaway container), no durable
 # cross-session state (Memory, Vault, ThreadSummarizer), no delegation
 # (Subagents) and no other skill/knowledge surfaces. What it keeps: scoped
 # file tools, the sandboxed run_python, persistence/recall for the audit trail,
