@@ -10,11 +10,19 @@ import atexit
 import base64
 import json
 import os
+import threading
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
 from paf.config import settings
+from paf.observability.pricing import price_usage, start_price_refresh
+
+try:
+    from opentelemetry.sdk.trace import SpanProcessor
+except ImportError:  # opentelemetry absent → tracing disabled, class unused
+    SpanProcessor = object  # type: ignore[assignment,misc]
 
 # Ref-count for observability lifecycle. A long-lived process creates a Session
 # per lane, each constructor calling setup_observability() and each close()
@@ -94,6 +102,122 @@ def _flag_current_span_error(message: Any, filename: str, lineno: int) -> None:
         pass
 
 
+# Child → root rollup. Langfuse v4 is observation-centric: the root-observation
+# view shows only what is on the ROOT span itself, and no longer rolls tokens,
+# errors or tool calls up from descendants (v3's trace view did). So we
+# aggregate them ourselves from ended child spans and stamp them on the root
+# when it closes. Only traces opened via ``root_span`` are tracked, so spans of
+# untracked traces never accumulate here.
+_rollups: dict[int, _Rollup] = {}
+_rollups_lock = threading.Lock()
+
+
+class _Rollup:
+    """Per-trace aggregate of what descendants of the root span did."""
+
+    def __init__(self) -> None:
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.reasoning_tokens = 0
+        self.cached_tokens = 0
+        self.cost = 0.0
+        self.tools: Counter[str] = Counter()
+        self.errors: list[str] = []
+        self.compactions = 0
+        self.compacted_tokens = 0
+
+    def add(self, span: Any) -> None:
+        attrs = span.attributes or {}
+        op = attrs.get("gen_ai.operation.name")
+        if op == "chat":
+            n_in = int(attrs.get("gen_ai.usage.input_tokens") or 0)
+            n_out = int(attrs.get("gen_ai.usage.output_tokens") or 0)
+            n_cached = int(attrs.get("gen_ai.usage.cache_read.input_tokens") or 0)
+            n_reason = int(attrs.get("gen_ai.usage.details.reasoning_tokens") or 0)
+            self.input_tokens += n_in
+            self.output_tokens += n_out
+            self.cached_tokens += n_cached
+            self.reasoning_tokens += n_reason
+            # Same usage keys Langfuse prices a generation with.
+            self.cost += price_usage(
+                str(
+                    attrs.get("gen_ai.response.model")
+                    or attrs.get("gen_ai.request.model")
+                    or ""
+                ),
+                {
+                    "input": max(n_in - n_cached, 0),
+                    "output": n_out,
+                    "input_cached_tokens": n_cached,
+                    "reasoning_tokens": n_reason,
+                },
+            )
+        elif op == "execute_tool":
+            self.tools[str(attrs.get("gen_ai.tool.name") or span.name)] += 1
+        if span.name == "compact_messages":
+            self.compactions += 1
+            before = attrs.get("compaction.tokens_before")
+            after = attrs.get("compaction.tokens_after")
+            if isinstance(before, int) and isinstance(after, int):
+                self.compacted_tokens += max(before - after, 0)
+        status = span.status
+        if status is not None and status.status_code.name == "ERROR":
+            self.errors.append(f"{span.name}: {status.description or 'error'}")
+
+
+class _RollupProcessor(SpanProcessor):
+    """Feeds ended spans into the rollup of their trace, if it is tracked."""
+
+    def on_end(self, span: Any) -> None:
+        try:
+            ctx = span.get_span_context()
+            with _rollups_lock:
+                rollup = _rollups.get(ctx.trace_id)
+                if rollup is not None:
+                    rollup.add(span)
+        except Exception:  # noqa: BLE001 - observability must never break the run
+            pass
+
+
+def _apply_rollup(span: Any, rollup: _Rollup) -> None:
+    """Stamp the aggregate onto the root span as Langfuse observation attributes."""
+    total = rollup.input_tokens + rollup.output_tokens
+    if total:
+        # Match Langfuse's per-generation split: ``input`` EXCLUDES cached tokens.
+        usage: dict[str, int] = {
+            "input": max(rollup.input_tokens - rollup.cached_tokens, 0),
+            "output": rollup.output_tokens,
+            "total": total,
+        }
+        if rollup.cached_tokens:
+            usage["input_cached_tokens"] = rollup.cached_tokens
+        if rollup.reasoning_tokens:
+            usage["output_reasoning_tokens"] = rollup.reasoning_tokens
+        span.set_attribute("langfuse.observation.usage_details", _json_dumps(usage))
+    if rollup.cost:
+        span.set_attribute(
+            "langfuse.observation.cost_details", _json_dumps({"total": rollup.cost})
+        )
+    if rollup.errors:
+        span.set_attribute("langfuse.observation.level", "ERROR")
+        span.set_attribute(
+            "langfuse.observation.status_message",
+            f"{len(rollup.errors)} error(s): " + "; ".join(rollup.errors[:3])[:500],
+        )
+    meta = "langfuse.observation.metadata."
+    if rollup.tools:
+        span.set_attribute(
+            meta + "tool_calls",
+            ", ".join(
+                f"{n}×{c}" if c > 1 else n for n, c in rollup.tools.most_common()
+            ),
+        )
+        span.set_attribute(meta + "tool_call_count", sum(rollup.tools.values()))
+    if rollup.compactions:
+        span.set_attribute(meta + "compactions", rollup.compactions)
+        span.set_attribute(meta + "compacted_tokens", rollup.compacted_tokens)
+
+
 @contextmanager
 def root_span(
     name: str,
@@ -136,6 +260,14 @@ def root_span(
     # An empty Context has no current span, so the new span roots a new trace.
     parent = otel_context.Context() if new_trace else None
     with tracer.start_as_current_span(name, context=parent) as span:
+        tid = span.get_span_context().trace_id
+        owns_rollup = False
+        if span.is_recording():
+            with _rollups_lock:
+                # A nested root (subagent) shares its parent's trace and rollup.
+                if tid not in _rollups:
+                    _rollups[tid] = _Rollup()
+                    owns_rollup = True
         for key, value in attributes.items():
             # Only the langfuse.observation.* keys feed Langfuse's structured
             # I/O parser and need JSON encoding. All OTHER attributes (notably
@@ -146,7 +278,16 @@ def root_span(
                 span.set_attribute(key, _json_dumps(value))
             else:
                 span.set_attribute(key, value)
-        yield span
+        try:
+            yield span
+        finally:
+            if owns_rollup:
+                with _rollups_lock:
+                    rollup = _rollups.pop(tid)
+                try:
+                    _apply_rollup(span, rollup)
+                except Exception:  # noqa: BLE001 - observability must never break the run
+                    pass
 
 
 def _json_dumps(value: Any) -> str:
@@ -215,6 +356,13 @@ def setup_observability() -> bool:
     }
 
     provider = TracerProvider(resource=Resource.create({"service.name": "paf"}))
+    start_price_refresh(
+        settings.otlp_endpoint,
+        settings.langfuse_public_key,
+        settings.langfuse_secret_key,
+    )
+    # Registered BEFORE the exporter so rollups see every span as it ends.
+    provider.add_span_processor(_RollupProcessor())
     provider.add_span_processor(
         BatchSpanProcessor(
             OTLPSpanExporter(endpoint=settings.otlp_endpoint, headers=headers)
