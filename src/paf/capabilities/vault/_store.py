@@ -237,7 +237,8 @@ def build_index(
         notes.append(
             {
                 "path": rel,
-                "title": meta.get("title") or Path(rel).stem,
+                # YAML parses `title: 2025` as an int; the index stores strings.
+                "title": str(meta.get("title") or Path(rel).stem),
                 "tags": _as_list(meta.get("tags")),
                 "aliases": _as_list(meta.get("aliases")),
                 "headings": headings[:50],

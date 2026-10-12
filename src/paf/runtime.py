@@ -391,7 +391,7 @@ class TurnHandle:
             pass
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
             self.error = exc
-            log.warning("turn pump ended with error: %r", exc)
+            log.warning("turn pump ended with error: %r", exc, exc_info=True)
         finally:
             self._publish(None)  # end sentinel to every subscriber
             self._session._clear_turn(self)

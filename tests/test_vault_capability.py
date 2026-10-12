@@ -198,6 +198,19 @@ def test_note_find_by_title_and_folder(vault: tuple[Path, VaultToolset]) -> None
     assert "Index.md" not in out2
 
 
+def test_note_find_with_numeric_frontmatter_title(tmp_path: Path) -> None:
+    """`title: 2025` parses as a YAML int; it must not break title matching."""
+    root = tmp_path / "vault"
+    root.mkdir()
+    _seed(root, "Years/2025.md", "---\ntitle: 2025\n---\n# Tax year\n")
+    _seed(root, "Grounding.md", _GROUNDING)
+    store = FlatFileVaultStorage(index_root=tmp_path / "idx")
+    build_index(root, ScanScope(root), store)
+    toolset = VaultToolset(vault_root=root, storage=store)
+    assert "Years/2025.md" in toolset.note_find(title="2025")
+    assert "Grounding.md" in toolset.note_find(title="Grounding")
+
+
 def test_note_find_no_match(vault: tuple[Path, VaultToolset]) -> None:
     _, toolset = vault
     assert "No notes match" in toolset.note_find(tag="nope")

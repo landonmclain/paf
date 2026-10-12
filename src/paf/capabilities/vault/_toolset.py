@@ -387,7 +387,7 @@ class VaultToolset(FunctionToolset):
             return "(vault empty)"
         hits = []
         for n in notes:
-            if title and title.lower() not in n.get("title", "").lower():
+            if title and title.lower() not in str(n.get("title", "")).lower():
                 continue
             if tag and tag not in n.get("tags", []):
                 continue
