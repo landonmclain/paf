@@ -123,11 +123,11 @@ DEMO_PROFILE = AgentProfile(
 CONTEXTBENCH_PROFILE = AgentProfile(
     name="contextbench",
     capability_names=(
-        # "CodebaseMap",
-        "Shell",
-        "FileSystem",
-        "Git",
-        "Workspace",
+        "CodebaseMap",
+        # "Shell",
+        # "FileSystem",
+        # "Git",
+        # "Workspace",
     ),
 )
 
