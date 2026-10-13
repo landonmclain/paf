@@ -415,9 +415,10 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:3001",  # paf-ui dev falls to :3001 while Langfuse holds :3000
         "http://127.0.0.1:3001",
-        "http://100.107.176.116:3000",
-        "http://100.107.176.116:3001",  # Tailscale host (paf-ui via phone/devices)
-        "http://paf.example.com:3001",  # Tailscale machine name (preferred)
+        # Same-origin HTTPS via `tailscale serve` (the phone/PWA origin). The UI
+        # and /api + /ops share it, so these requests are not cross-origin; kept for
+        # tooling that sends an Origin header.
+        "https://paf.example.com",
     ],
     allow_credentials=False,
     allow_methods=["*"],
