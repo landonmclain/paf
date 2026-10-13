@@ -503,3 +503,36 @@ def test_create_conversation_in_project(tmp_path, monkeypatch) -> None:
             client.post("/api/conversations", params={"project": "nope"}).status_code
             == 404
         )
+
+
+def test_list_conversations_reports_server_side_running_turns() -> None:
+    """A lane with a turn in flight is flagged running (any device's turn), so every
+    client's sidebar can show it; idle and persisted-only lanes are not."""
+    _reset_registry()
+    busy = sse._session_key(sse.DEFAULT_AGENT, "busy")
+    idle = sse._session_key(sse.DEFAULT_AGENT, "idle")
+    busy_session = _FakeSession([_mk_user("long task")])
+    busy_session.current_turn = object()  # type: ignore[attr-defined]  # a live TurnHandle
+    idle_session = _FakeSession([_mk_user("done already")])
+    idle_session.current_turn = None  # type: ignore[attr-defined]
+    sse._sessions[busy], sse._sessions_last_used[busy] = busy_session, 200.0
+    sse._sessions[idle], sse._sessions_last_used[idle] = idle_session, 100.0
+
+    with _empty_store():
+        client = TestClient(sse.app)
+        lanes = {
+            c["conversation_id"]: c
+            for c in client.get("/api/conversations").json()["conversations"]
+        }
+    assert lanes["busy"]["running"] is True
+    assert lanes["idle"]["running"] is False
+
+
+def test_list_conversations_tolerates_sessions_without_current_turn() -> None:
+    _reset_registry()
+    key = sse._session_key(sse.DEFAULT_AGENT, "plain")
+    sse._sessions[key] = _FakeSession([_mk_user("hi")])  # no current_turn attr at all
+    sse._sessions_last_used[key] = 1.0
+    with _empty_store():
+        lane = TestClient(sse.app).get("/api/conversations").json()["conversations"][0]
+    assert lane["running"] is False

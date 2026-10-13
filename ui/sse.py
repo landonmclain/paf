@@ -729,7 +729,8 @@ def _last_prompt(session: Session) -> str | None:
 async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
     """List known conversation lanes for the left sidebar, newest first.
 
-    Returns id + last user prompt + last-activity time. The result is a UNION of
+    Returns id + last user prompt + last-activity time + ``running`` (a turn is in
+    flight on the server). The result is a UNION of
     two sources so a sidebar survives daemon restarts:
 
     1. The live in-memory registry (current titles / last-activity, real-time).
@@ -778,6 +779,14 @@ async def list_conversations(agent: str = DEFAULT_AGENT) -> dict[str, Any]:
         log.warning("store backstop scan failed", exc_info=True)
 
     out = list(by_lane.values())
+
+    # Which lanes have a turn running on the server right now, regardless of which
+    # device started it — so every client's sidebar can show a lane as running.
+    for lane in out:
+        session = _sessions.get(agent_prefix + lane["conversation_id"])
+        lane["running"] = (
+            session is not None and getattr(session, "current_turn", None) is not None
+        )
 
     # 3. Overlay user-set meta (conversation-titles.json) — the user's rename
     #    always wins over the auto-derived title, and survives daemon restarts;
