@@ -107,6 +107,29 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+
+def _enable_info_logs(*names: str) -> None:
+    """Make INFO from these loggers reach the journal.
+
+    uvicorn's ``--log-level`` configures only uvicorn's own loggers; the root
+    logger has no handler, so application ``log.info`` lines (push decisions,
+    idle-session closes) were silently dropped. Attach a stderr handler (systemd
+    captures it) in uvicorn's ``INFO:     message`` style. Idempotent.
+    """
+    for name in names:
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.INFO)
+        if not any(getattr(h, "_paf_info", False) for h in lg.handlers):
+            h = logging.StreamHandler()
+            h.setFormatter(
+                logging.Formatter("%(levelname)s:     [%(name)s] %(message)s")
+            )
+            h._paf_info = True  # type: ignore[attr-defined]
+            lg.addHandler(h)
+
+
+_enable_info_logs(__name__, "paf.push")
+
 # Default agent when the caller doesn't specify one — mirrors ui/web.py's
 # "demo" profile convention so a bare /api/chat gives a working demo lane.
 DEFAULT_AGENT = "demo_assistant"

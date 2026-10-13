@@ -305,3 +305,36 @@ def test_turn_where_agent_pushed_gets_no_settle_push() -> None:
     asyncio.run(go())
     assert got[0].pushed is True and got[0].outcome == "ok"
     assert push.settled_payload(got[0]) is None  # the agent's push was the only one
+
+
+# --- default budget + journal visibility ---------------------------------------------
+def test_default_budget_is_ten_per_hour(tmp_path) -> None:
+    p, _, _ = _pusher(tmp_path, dedupe_seconds=0)  # no max_per_hour override
+    for i in range(10):
+        assert asyncio.run(p(_req(body=f"n{i}"))).status == "sent"
+    assert asyncio.run(p(_req(body="n10"))).status == "rate_limited"
+
+
+def test_each_agent_push_attempt_is_logged(tmp_path, caplog) -> None:
+    import logging
+
+    p, _, _ = _pusher(tmp_path, max_per_hour=1, dedupe_seconds=0)
+    with caplog.at_level(logging.INFO, logger="paf.push"):
+        asyncio.run(p(_req(title="Alpha")))
+        asyncio.run(p(_req(title="Beta", body="x")))  # over the budget
+    lines = [r.getMessage() for r in caplog.records if r.name == "paf.push"]
+    assert "agent push assistant:c-1 sent sent=1 title='Alpha'" in lines
+    assert "agent push assistant:c-1 rate_limited sent=0 title='Beta'" in lines
+
+
+def test_sse_makes_push_info_logs_reach_the_journal() -> None:
+    import logging
+
+    from ui import sse
+
+    for name in ("ui.sse", "paf.push"):
+        lg = logging.getLogger(name)
+        assert lg.isEnabledFor(logging.INFO)
+        before = len(lg.handlers)
+        sse._enable_info_logs(name)  # idempotent: no duplicate handler
+        assert len(lg.handlers) == before >= 1

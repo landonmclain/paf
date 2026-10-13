@@ -384,7 +384,7 @@ class AgentPusher:
         self,
         service: Callable[[], PushService],
         *,
-        max_per_hour: int = 5,
+        max_per_hour: int = 10,
         dedupe_seconds: float = 600.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -396,6 +396,19 @@ class AgentPusher:
         self._recent: dict[tuple[str, str, str], float] = {}
 
     async def __call__(self, req: PushRequest) -> PushResult:
+        result = await self._push(req)
+        # One line per attempt so "why did my phone buzz (or not)" is answerable.
+        log.info(
+            "agent push %s:%s %s sent=%d title=%r",
+            req.agent,
+            req.conversation_id,
+            result.status,
+            result.sent,
+            req.title[:60],
+        )
+        return result
+
+    async def _push(self, req: PushRequest) -> PushResult:
         svc = self._service()
         if not svc.enabled:
             return PushResult("not_configured")
