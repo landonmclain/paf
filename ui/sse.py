@@ -85,8 +85,20 @@ from paf.conversations import (
     persisted_lanes,
 )
 from paf.observability.instrumentation import root_span
-from paf.push import InvalidSubscription, PushService, default_push_service
-from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
+from paf.push import (
+    InvalidSubscription,
+    PushService,
+    default_push_service,
+    settled_payload,
+)
+from paf.runtime import (
+    Session,
+    StreamEvent,
+    ToolError,
+    ToolRunning,
+    TurnSettled,
+    TurnStreamEvent,
+)
 from paf.specs import spec_visual_config
 
 if TYPE_CHECKING:
@@ -131,6 +143,9 @@ _sessions_touched: dict[str, float] = {}
 _scheduled_tasks_queue: Any = None
 _scheduled_tasks_scheduler: Any = None
 
+# Set during lifespan teardown so turns aborted by shutdown don't push "stopped".
+_shutting_down = False
+
 # Idle TTL: a lane untouched for IDLE_TTL_SECONDS is closed and evicted
 # (Session.close() flushes spans; a re-touch lazily recreates + resumes from the
 # store via the same {agent}:{conversation_id}, so an idle lane is cheap, not lost).
@@ -166,6 +181,7 @@ async def _get_session(
             resume_window=300,
             on_complete=functools.partial(_notify_agent, agent),
             scheduled_tasks_queue=_scheduled_tasks_queue,
+            on_turn_settled=functools.partial(_on_turn_settled, agent),
         )
         session.attach_background()
         _sessions[key] = session
@@ -220,6 +236,35 @@ async def _notify_agent(
     # streaming to the UI, so no signal is needed.
     if started is None:
         await _emit_turn_started(agent, conversation_id, run_id)
+
+
+async def _on_turn_settled(agent: str, settled: TurnSettled) -> None:
+    """Push a settled turn per the hybrid policy (``paf.push.settled_payload``).
+
+    Runs in its own task (see ``TurnHandle._schedule_settled``), so a slow push
+    service never delays the turn; failures are the caller's to log.
+    """
+    svc = _push_service()
+    if not svc.enabled or (settled.outcome == "aborted" and _shutting_down):
+        return
+    title = "paf"
+    if settled.conversation_id:
+        title = _meta_store(agent).get(settled.conversation_id).get("title") or title
+    payload = settled_payload(settled, title=title)
+    if payload is None:
+        log.info(
+            "push skipped for %s:%s (origin=%s outcome=%s pushed=%s)",
+            agent,
+            settled.conversation_id,
+            settled.origin,
+            settled.outcome,
+            settled.pushed,
+        )
+        return
+    counts = await svc.broadcast(payload, ttl=6 * 3600)
+    log.info(
+        "push %s:%s %s -> %s", agent, settled.conversation_id, settled.outcome, counts
+    )
 
 
 async def _scheduled_run_turn(agent: str, cid: str, content: str, run_id: str) -> None:
@@ -395,6 +440,8 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        global _shutting_down
+        _shutting_down = True
         sweeper.cancel()
         await _scheduled_tasks_scheduler.stop()
         for key in list(_sessions.keys()):

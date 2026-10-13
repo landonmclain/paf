@@ -328,3 +328,113 @@ def test_route_test_unknown_endpoint_404(client) -> None:
     r = client.post("/api/push/test", json={"endpoint": _sub(9)["endpoint"]})
     assert r.status_code == 404
     assert client.sender.calls == []
+
+
+# --- settle policy (hybrid push) --------------------------------------------
+from paf.runtime import TurnSettled  # noqa: E402
+
+
+def _settled(**kw: Any) -> TurnSettled:
+    base: dict[str, Any] = dict(
+        agent="assistant",
+        conversation_id="c-1",
+        origin="user",
+        outcome="ok",
+        text="All done. Here is the summary.",
+        error=None,
+        pushed=False,
+    )
+    base.update(kw)
+    return TurnSettled(**base)
+
+
+def test_policy_user_ok_pushes_answer_snippet_with_deeplink() -> None:
+    p = push.settled_payload(_settled(), title="Quarterly review")
+    assert p == {
+        "title": "Quarterly review",
+        "body": "All done. Here is the summary.",
+        "agent": "assistant",
+        "outcome": "ok",
+        "cid": "c-1",
+        "tag": "c-1",
+        "url": "/?agent=assistant&c=c-1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("kw", "expect_push"),
+    [
+        ({"origin": "user", "outcome": "ok"}, True),
+        ({"origin": "user", "outcome": "error", "error": "boom"}, True),
+        ({"origin": "user", "outcome": "stopped"}, False),  # you pressed Stop
+        ({"origin": "user", "outcome": "aborted"}, True),
+        ({"origin": "notify", "outcome": "ok"}, False),  # agent decides via its tool
+        ({"origin": "notify", "outcome": "stopped"}, False),
+        ({"origin": "notify", "outcome": "error", "error": "boom"}, True),
+        ({"origin": "notify", "outcome": "aborted"}, True),
+        ({"origin": "user", "outcome": "ok", "pushed": True}, False),  # no double
+        ({"origin": "notify", "outcome": "error", "pushed": True}, False),
+    ],
+)
+def test_policy_table(kw: dict[str, Any], expect_push: bool) -> None:
+    assert (push.settled_payload(_settled(**kw)) is not None) is expect_push
+
+
+def test_policy_wording_and_escaping() -> None:
+    err = push.settled_payload(
+        _settled(origin="notify", outcome="error", error="disk full")
+    )
+    assert err["body"] == "Background task failed: disk full"
+    assert "idle timeout" in push.settled_payload(_settled(outcome="aborted"))["body"]
+    # Empty answer text falls back to a generic line; markdown noise is stripped.
+    assert push.settled_payload(_settled(text=""))["body"] == "Your answer is ready."
+    assert (
+        push.settled_payload(_settled(text="## Title\n\n**bold** `code`"))["body"]
+        == "Title bold code"
+    )
+    # Long text is truncated to one tidy line; ids are URL-escaped; no cid -> "/".
+    long = push.settled_payload(_settled(text="word " * 200))["body"]
+    assert len(long) <= 140 and long.endswith("…")
+    p = push.settled_payload(_settled(agent="a b", conversation_id="x/y?z"))
+    assert p["url"] == "/?agent=a%20b&c=x%2Fy%3Fz"
+    q = push.settled_payload(_settled(conversation_id=None))
+    assert q["url"] == "/" and "cid" not in q and "tag" not in q
+
+
+# --- sse wiring: settled turn -> broadcast -------------------------------------
+def _sse_with(tmp_path, monkeypatch, config=CONFIG):
+    sender = _FakeSender()
+    svc = PushService(_store(tmp_path), config, send=sender)
+    svc.store.add(_sub(1))
+    monkeypatch.setattr(sse, "_push_service", lambda: svc)
+    monkeypatch.setattr(sse, "_meta_store", lambda agent: _Meta())
+    return svc, sender
+
+
+class _Meta:
+    def get(self, cid: str) -> dict[str, Any]:
+        return {"title": "My chat"} if cid == "c-1" else {}
+
+
+def test_sse_callback_broadcasts_user_turn(tmp_path, monkeypatch) -> None:
+    _, sender = _sse_with(tmp_path, monkeypatch)
+    asyncio.run(sse._on_turn_settled("assistant", _settled()))
+    (call,) = sender.calls
+    data = json.loads(call["data"])
+    assert data["title"] == "My chat" and data["url"] == "/?agent=assistant&c=c-1"
+    assert call["ttl"] == 6 * 3600
+
+
+def test_sse_callback_quiet_cases(tmp_path, monkeypatch) -> None:
+    _, sender = _sse_with(tmp_path, monkeypatch)
+    asyncio.run(sse._on_turn_settled("assistant", _settled(origin="notify")))
+    assert sender.calls == []
+    # Unconfigured push: never touches the store or sender.
+    _, sender2 = _sse_with(tmp_path, monkeypatch, config=None)
+    asyncio.run(sse._on_turn_settled("assistant", _settled()))
+    assert sender2.calls == []
+    # Aborted by server shutdown: stay quiet.
+    _, sender3 = _sse_with(tmp_path, monkeypatch)
+    monkeypatch.setattr(sse, "_shutting_down", True)
+    asyncio.run(sse._on_turn_settled("assistant", _settled(outcome="aborted")))
+    assert sender3.calls == []

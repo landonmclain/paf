@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -333,6 +333,35 @@ def _profile_name(profile: Any) -> str | None:
     return None
 
 
+TurnOrigin = Literal["user", "notify"]
+"""Who started a turn: ``user`` (a UI/CLI message) or ``notify`` (a background
+completion / scheduled task delivered through :meth:`Session.notify`)."""
+
+TurnOutcome = Literal["ok", "error", "stopped", "aborted"]
+"""How a turn ended: ``ok`` finished; ``error`` raised; ``stopped`` the user
+cancelled it (graceful, via the cancellation token); ``aborted`` the turn task was
+hard-cancelled (idle reaper / session close / shutdown)."""
+
+_ANSWER_CAP = 600  # chars of the final answer kept for settle notifications
+
+
+@dataclass(frozen=True)
+class TurnSettled:
+    """What the ``on_turn_settled`` callback receives when a turn ends."""
+
+    agent: str
+    conversation_id: str | None
+    origin: TurnOrigin
+    outcome: TurnOutcome
+    text: str  # start of the final answer block (capped); "" if none
+    error: str | None
+    pushed: bool  # the agent already notified the user during this turn
+
+
+# Strong refs to in-flight settle callbacks so they aren't garbage-collected.
+_SETTLED_TASKS: set[asyncio.Task[None]] = set()
+
+
 class TurnHandle:
     """A Session-owned, running (or finished) turn with re-attachable subscribers.
 
@@ -353,12 +382,22 @@ class TurnHandle:
         prompt: str,
         conversation_id: str | None,
         token: CancellationToken,
+        origin: TurnOrigin = "user",
     ) -> None:
         self._session = session
         self._token = token
+        self.conversation_id = conversation_id
+        self.origin: TurnOrigin = origin
         self._subscribers: set[asyncio.Queue[TurnStreamEvent | None]] = set()
         # Set by the pump on an unexpected end (not a clean finish/cancel).
         self.error: BaseException | None = None
+        # How the turn ended; None while running. Set by the pump.
+        self.outcome: TurnOutcome | None = None
+        # Set by a notify-the-user tool so the settle hook doesn't notify again.
+        self.pushed: bool = False
+        # Start of the most recent contiguous answer (text) block.
+        self._answer = ""
+        self._last_kind: str | None = None
         self._task = asyncio.create_task(self._pump(prompt, conversation_id))
 
     @property
@@ -382,19 +421,70 @@ class TurnHandle:
             self._task.cancel()
 
     async def _pump(self, prompt: str, conversation_id: str | None) -> None:
+        outcome: TurnOutcome = "ok"
         try:
             async for ev in self._session.stream(
                 prompt, conversation_id=conversation_id, _token=self._token
             ):
+                self._track_answer(ev)
                 self._publish(ev)
         except asyncio.CancelledError:
-            pass
+            outcome = "aborted"
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
             self.error = exc
+            outcome = "error"
             log.warning("turn pump ended with error: %r", exc, exc_info=True)
         finally:
+            # A graceful Stop ends stream() cleanly (RunCancelled is swallowed),
+            # so the token is the only signal that it was cancelled.
+            if outcome == "ok" and self._token.cancelled:
+                outcome = "stopped"
+            self.outcome = outcome
             self._publish(None)  # end sentinel to every subscriber
             self._session._clear_turn(self)
+            self._schedule_settled()
+
+    def _track_answer(self, ev: TurnStreamEvent) -> None:
+        """Remember the start of the latest contiguous text block (the answer)."""
+        if not isinstance(ev, StreamEvent):
+            return
+        if ev.kind == "text":
+            if self._last_kind != "text":
+                self._answer = ""  # a new answer block (after thinking / a tool)
+            room = _ANSWER_CAP - len(self._answer)
+            if room > 0:
+                self._answer += ev.text[:room]
+        self._last_kind = ev.kind
+
+    def _schedule_settled(self) -> None:
+        """Fire the session's ``on_turn_settled`` callback in its own task.
+
+        Never awaited inline: a slow or failing callback (a push service) must not
+        delay turn cleanup, and its errors are logged, not raised.
+        """
+        cb = getattr(self._session, "_on_turn_settled", None)
+        if cb is None or self.outcome is None:
+            return
+        settled = TurnSettled(
+            agent=getattr(self._session, "agent_name", ""),
+            conversation_id=self.conversation_id
+            or getattr(self._session, "conversation_id", None),
+            origin=self.origin,
+            outcome=self.outcome,
+            text=self._answer,
+            error=str(self.error) if self.error is not None else None,
+            pushed=self.pushed,
+        )
+
+        async def _run() -> None:
+            try:
+                await cb(settled)
+            except Exception:  # noqa: BLE001 - a hook must never affect the turn
+                log.warning("on_turn_settled callback failed", exc_info=True)
+
+        task = asyncio.create_task(_run())
+        _SETTLED_TASKS.add(task)
+        task.add_done_callback(_SETTLED_TASKS.discard)
 
     def _publish(self, ev: TurnStreamEvent | None) -> None:
         for q in list(self._subscribers):
@@ -437,6 +527,8 @@ class Session:
     # Class-level default so a Session always exposes ``background`` (bare by
     # default); the app/CLI attaches a coordinator when the profile calls for it.
     background: BackgroundLanes | None = None
+    # Called with a TurnSettled when any turn ends (see TurnHandle); None = off.
+    _on_turn_settled: Callable[[TurnSettled], Awaitable[None]] | None = None
 
     def __init__(
         self,
@@ -450,7 +542,9 @@ class Session:
         store=None,
         on_complete=None,
         scheduled_tasks_queue=None,
+        on_turn_settled: Callable[[TurnSettled], Awaitable[None]] | None = None,
     ) -> None:
+        self._on_turn_settled = on_turn_settled
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how clients pick the default profile
         # (`resolve_profile_name` -> PROFILES[name]).
@@ -925,7 +1019,11 @@ class Session:
     # -- durable-turn ownership -----------------------------------------------
 
     def start_turn(
-        self, prompt: str, *, conversation_id: str | None = None
+        self,
+        prompt: str,
+        *,
+        conversation_id: str | None = None,
+        origin: TurnOrigin = "user",
     ) -> TurnHandle:
         """Start a Session-owned turn, or re-attach to the running one.
 
@@ -935,12 +1033,16 @@ class Session:
         re-attach, per the durable-turns design); start a new turn by cancelling
         or letting the current one finish first. The turn's CancellationToken is
         created synchronously so an immediate ``cancel()`` is never dropped.
+
+        ``origin`` records who started the turn (``user`` message vs a ``notify``
+        completion); it is reported to ``on_turn_settled`` so a notifier can treat
+        a user's own turn differently from a background one.
         """
         if self._turn is not None:
             return self._turn
         token = CancellationToken()
         self._token = token
-        self._turn = TurnHandle(self, prompt, conversation_id, token)
+        self._turn = TurnHandle(self, prompt, conversation_id, token, origin)
         return self._turn
 
     def _clear_turn(self, handle: TurnHandle) -> None:
@@ -993,7 +1095,7 @@ class Session:
         run = self._run
         if run is not None:
             return run.enqueue(content, priority="asap")
-        self.start_turn(content)
+        self.start_turn(content, origin="notify")
         return None
 
     # -- observability lifecycle ---------------------------------------------

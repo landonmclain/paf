@@ -340,7 +340,7 @@ def test_notify_starts_new_turn_when_idle(
 
     started: list[str] = []
     monkeypatch.setattr(
-        s, "start_turn", lambda content: started.append(content) or object()
+        s, "start_turn", lambda content, **kw: started.append(content) or object()
     )
 
     result = s.notify("[system] Background process r1 finished: exit 0")
@@ -585,3 +585,157 @@ def test_turn_handle_records_error_and_clears() -> None:
         assert s._turn is None
 
     asyncio.run(scenario())
+
+
+# --- on_turn_settled: outcome / origin / answer capture ---------------------
+
+
+def _settled_session(stream) -> tuple[runtime.Session, list[runtime.TurnSettled]]:
+    s = _fake_session()
+    s.agent_name = "agent-x"  # type: ignore[attr-defined]
+    s.conversation_id = "conv-9"  # type: ignore[attr-defined]
+    s.stream = stream  # type: ignore[method-assign]
+    got: list[runtime.TurnSettled] = []
+
+    async def cb(settled: runtime.TurnSettled) -> None:
+        got.append(settled)
+
+    s._on_turn_settled = cb  # type: ignore[attr-defined]
+    return s, got
+
+
+async def _settle(handle: runtime.TurnHandle) -> None:
+    async for _ in handle.subscribe():
+        pass
+    await asyncio.sleep(0)  # let the settle task run
+    await asyncio.gather(*runtime._SETTLED_TASKS)
+
+
+def test_settled_ok_reports_origin_and_last_answer_block() -> None:
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="Let me check.")
+        yield runtime.StreamEvent(kind="tool_call", tool_name="t")
+        yield runtime.StreamEvent(kind="tool_result", tool_name="t", text="r")
+        yield runtime.StreamEvent(kind="text", text="The answer ")
+        yield runtime.StreamEvent(kind="text", text="is 42.")
+
+    s, got = _settled_session(stream)
+
+    async def go() -> None:
+        await _settle(s.start_turn("p", conversation_id="conv-9"))
+
+    asyncio.run(go())
+    (st,) = got
+    assert (st.outcome, st.origin, st.error, st.pushed) == ("ok", "user", None, False)
+    assert st.text == "The answer is 42."  # the LAST text block, not the preamble
+    assert (st.agent, st.conversation_id) == ("agent-x", "conv-9")
+
+
+def test_settled_origin_notify_and_conversation_fallback() -> None:
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="done")
+
+    s, got = _settled_session(stream)
+
+    async def go() -> None:
+        # notify() starts the turn without a conversation_id: fall back to the Session's.
+        await _settle(s.start_turn("[system] x", origin="notify"))
+
+    asyncio.run(go())
+    assert got[0].origin == "notify" and got[0].conversation_id == "conv-9"
+
+
+def test_settled_error_outcome() -> None:
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="x")
+        raise ValueError("boom")
+
+    s, got = _settled_session(stream)
+
+    async def go() -> None:
+        await _settle(s.start_turn("p"))
+
+    asyncio.run(go())
+    assert got[0].outcome == "error" and got[0].error == "boom"
+
+
+def test_settled_stopped_when_token_cancelled_gracefully() -> None:
+    """A user Stop ends stream() cleanly; only the token reveals it."""
+
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="partial")
+        _token.cancel()  # what Session.cancel() does; stream then returns normally
+
+    s, got = _settled_session(stream)
+
+    async def go() -> None:
+        await _settle(s.start_turn("p"))
+
+    asyncio.run(go())
+    assert got[0].outcome == "stopped"
+
+
+def test_settled_aborted_when_task_hard_cancelled() -> None:
+    gate = asyncio.Event
+
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="working")
+        await gate().wait()  # blocks until cancelled
+
+    s, got = _settled_session(stream)
+
+    async def go() -> None:
+        h = s.start_turn("p")
+        await asyncio.sleep(0.01)
+        h.cancel()  # what the idle reaper / Session.close() does
+        await _settle(h)
+
+    asyncio.run(go())
+    assert got[0].outcome == "aborted"
+
+
+def test_settled_reports_pushed_flag_and_isolates_callback_errors() -> None:
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="x")
+
+    s, got = _settled_session(stream)
+
+    async def go() -> None:
+        h = s.start_turn("p")
+        h.pushed = True  # a notify-the-user tool ran during the turn
+        await _settle(h)
+
+    asyncio.run(go())
+    assert got[0].pushed is True
+
+    # A raising callback must not break turn cleanup or leak an exception.
+    s2 = _fake_session()
+    s2.stream = stream  # type: ignore[method-assign]
+
+    async def bad(_settled) -> None:
+        raise RuntimeError("push exploded")
+
+    s2._on_turn_settled = bad  # type: ignore[attr-defined]
+
+    async def go2() -> None:
+        h = s2.start_turn("p")
+        await _settle(h)
+        assert h.done and s2._turn is None
+
+    asyncio.run(go2())
+
+
+def test_no_callback_is_a_noop() -> None:
+    async def stream(prompt, *, conversation_id=None, _token=None):  # noqa: ARG001
+        yield runtime.StreamEvent(kind="text", text="x")
+
+    s = _fake_session()
+    s.stream = stream  # type: ignore[method-assign]
+
+    async def go() -> None:
+        h = s.start_turn("p")
+        async for _ in h.subscribe():
+            pass
+        assert h.outcome == "ok"
+
+    asyncio.run(go())

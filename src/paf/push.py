@@ -28,10 +28,13 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import quote, urlparse
 
 from paf.capabilities._storage import FlatFileStorage
+
+if TYPE_CHECKING:
+    from paf.runtime import TurnSettled
 
 log = logging.getLogger(__name__)
 
@@ -273,6 +276,71 @@ class PushService:
         for o in outcomes:
             counts[o] += 1
         return counts
+
+
+# --- settle policy -----------------------------------------------------------
+_SNIPPET_CHARS = 140
+
+
+def _snippet(text: str, limit: int = _SNIPPET_CHARS) -> str:
+    """One tidy line from model text: strip markdown noise, collapse whitespace."""
+    import re
+
+    t = re.sub(r"[`*_>#]+", "", text)  # markdown emphasis / headings / quotes
+    t = re.sub(r"\s+", " ", t).strip()
+    return t if len(t) <= limit else t[: limit - 1].rstrip() + "…"
+
+
+def settled_payload(
+    settled: TurnSettled, *, title: str = "paf"
+) -> dict[str, str] | None:
+    """The push for a settled turn, or ``None`` when it should stay quiet.
+
+    Hybrid policy (PWA-Push-Notifications-Spec, "Agent-chosen push"):
+
+    * the agent already notified during the turn (``pushed``) → nothing (no double);
+    * a ``user`` turn → push when it finishes ("answer ready") or fails; stay quiet
+      if they pressed Stop themselves;
+    * a ``notify`` turn (process / subagent / scheduled task) → quiet when it
+      finishes (the agent decides via its own push tool), but always push a failure
+      so a scheduled task can't die silently;
+    * a hard abort (idle reaper / close) → push either way, since the user would
+      otherwise wait on work that is never coming.
+
+    Whether the user is *looking* is decided on the device (service worker), so
+    this never tries to guess it.
+    """
+    if settled.pushed:
+        return None
+    background = settled.origin == "notify"
+    outcome = settled.outcome
+    if outcome == "ok":
+        if background:
+            return None
+        body = _snippet(settled.text) or "Your answer is ready."
+    elif outcome == "stopped":
+        return None
+    elif outcome == "aborted":
+        body = "The turn was stopped before it finished (idle timeout)."
+    else:  # error
+        what = "Background task failed" if background else "The turn failed"
+        detail = _snippet(settled.error or "", 100)
+        body = f"{what}: {detail}" if detail else f"{what}."
+    payload: dict[str, str] = {
+        "title": _snippet(title, 60) or "paf",
+        "body": body,
+        "agent": settled.agent,
+        "outcome": outcome,
+        "url": "/",
+    }
+    cid = settled.conversation_id
+    if cid:
+        payload["cid"] = cid
+        payload["tag"] = cid
+        payload["url"] = (
+            f"/?agent={quote(settled.agent, safe='')}&c={quote(cid, safe='')}"
+        )
+    return payload
 
 
 def default_push_service(data_dir: Path) -> PushService:
