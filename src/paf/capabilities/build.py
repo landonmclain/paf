@@ -64,6 +64,7 @@ from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
 from paf.capabilities.planning import Planning
 from paf.capabilities.profiles import AgentProfile
+from paf.capabilities.push import Push
 from paf.capabilities.python import Python as _Python
 from paf.capabilities.scheduled_tasks import ScheduledTasks
 from paf.capabilities.shell import Shell as _Shell
@@ -986,6 +987,13 @@ def _build_scheduled_tasks(
     return ScheduledTasks(root=root, agent=agent_name or "", queue=queue)
 
 
+def _build_push(notifier=None):
+    """Push capability: the ``send_push`` tool, present only when ``notifier`` is
+    wired (paf-sse). Profile-gated like every capability: no ``"Push"`` in the
+    profile's allowlist, no tool."""
+    return Push(notifier=notifier)
+
+
 def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
@@ -1010,6 +1018,7 @@ def build_runtime_capabilities(
     search_config: dict | None = None,
     workspace_config: dict | None = None,
     scheduled_tasks_queue=None,
+    push_notifier=None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -1058,6 +1067,7 @@ def build_runtime_capabilities(
         # Skill library — list/load on demand + deterministic pointer trigger.
         "Skills": _build_skills,
         "ScheduledTasks": _build_scheduled_tasks,
+        "Push": _build_push,
         # Builtin MCP servers loaded from a mcpServers JSON (env-expanded).
         "MCP": _build_mcp,
         # Framework-level tool-return reduction (BUILTIN, paf-supplied config).
@@ -1164,6 +1174,8 @@ def build_runtime_capabilities(
             capabilities.append(
                 _build_scheduled_tasks(store, None, agent_name, scheduled_tasks_queue)
             )
+        elif name == "Push":
+            capabilities.append(_build_push(push_notifier))
         else:
             capabilities.append(builder(store))
     if _COMPACTION_CAPABILITY in profile.capability_names:

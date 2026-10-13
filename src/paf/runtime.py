@@ -78,6 +78,7 @@ from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
+from paf.push import PushRequest, PushResult
 from paf.specs import build_agent, resolve_profile_name, spec_usage_limits
 
 log = logging.getLogger(__name__)
@@ -543,8 +544,10 @@ class Session:
         on_complete=None,
         scheduled_tasks_queue=None,
         on_turn_settled: Callable[[TurnSettled], Awaitable[None]] | None = None,
+        push_notifier: Callable[[PushRequest], Awaitable[PushResult]] | None = None,
     ) -> None:
         self._on_turn_settled = on_turn_settled
+        self._push_notifier = push_notifier
         # Resolve the spec-declared profile when the caller didn't pass one
         # explicitly, matching how clients pick the default profile
         # (`resolve_profile_name` -> PROFILES[name]).
@@ -570,6 +573,9 @@ class Session:
             profile=profile,
             on_complete=on_complete,
             scheduled_tasks_queue=scheduled_tasks_queue,
+            # The Push capability's `send_push` tool, only when the embedder
+            # supplied a delivery backend (paf-sse); the CLI has none.
+            push_notifier=self._notify_user if push_notifier is not None else None,
         )
         # Tier A turn-boundary compaction strategy (routine trim). Built from the
         # spec's `compact:` block; None when `compact.turn_boundary` is explicitly
@@ -1044,6 +1050,31 @@ class Session:
         self._token = token
         self._turn = TurnHandle(self, prompt, conversation_id, token, origin)
         return self._turn
+
+    async def _notify_user(self, title: str, body: str, urgent: bool) -> PushResult:
+        """Backend of the agent's ``send_push`` tool.
+
+        Adds what only the Session knows (agent, the conversation the running turn
+        belongs to) and, when the push really went out, marks the running turn
+        ``pushed`` so the settle hook doesn't notify a second time.
+        """
+        assert self._push_notifier is not None
+        turn = self._turn
+        cid = (
+            turn.conversation_id if turn is not None else None
+        ) or self.conversation_id
+        result = await self._push_notifier(
+            PushRequest(
+                agent=self.agent_name,
+                conversation_id=cid,
+                title=title,
+                body=body,
+                urgent=urgent,
+            )
+        )
+        if result.status == "sent" and turn is not None:
+            turn.pushed = True
+        return result
 
     def _clear_turn(self, handle: TurnHandle) -> None:
         """Drop the owned-turn ref once its pump settles (idempotent)."""

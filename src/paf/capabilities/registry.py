@@ -36,6 +36,7 @@ from paf.capabilities.git import Git
 from paf.capabilities.keyword_curator import KeywordCurator
 from paf.capabilities.memory import Memory
 from paf.capabilities.planning import Planning
+from paf.capabilities.push import Push
 from paf.capabilities.python import Python
 from paf.capabilities.scheduled_tasks import ScheduledTasks
 from paf.capabilities.search import ConversationSearch
@@ -85,6 +86,7 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # (needs the run-layer queue wired in paf-sse); cataloged so the allowlist
     # + schema stay complete.
     "ScheduledTasks": ScheduledTasks,
+    "Push": Push,
     # Safe git inspection + checkpoint tools rooted at a workspace dir.
     "Git": Git,
     # Navigation-first codebase browser. Built in Python (needs a real scan_root

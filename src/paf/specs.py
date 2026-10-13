@@ -1102,6 +1102,7 @@ def build_agent(
     profile: AgentProfile | None = None,
     on_complete=None,
     scheduled_tasks_queue=None,
+    push_notifier=None,
     **overrides: Any,
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
@@ -1156,6 +1157,7 @@ def build_agent(
             agent_name=agent_name,
             on_complete=on_complete,
             scheduled_tasks_queue=scheduled_tasks_queue,
+            push_notifier=push_notifier,
         ),
         **overrides,
     )

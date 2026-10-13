@@ -343,6 +343,102 @@ def settled_payload(
     return payload
 
 
+# --- agent-chosen push ---------------------------------------------------------
+PushStatus = Literal[
+    "sent", "rate_limited", "duplicate", "no_devices", "not_configured", "failed"
+]
+
+
+@dataclass(frozen=True)
+class PushRequest:
+    """A notification the AGENT chose to send (the ``send_push`` tool)."""
+
+    agent: str
+    conversation_id: str | None
+    title: str
+    body: str
+    urgent: bool = False
+
+
+@dataclass(frozen=True)
+class PushResult:
+    status: PushStatus
+    sent: int = 0  # devices reached (status == "sent")
+
+
+class AgentPusher:
+    """Applies the guardrails to agent-chosen pushes, then broadcasts.
+
+    Fixed, in-memory limits (they reset on restart; promote to spec config when
+    you know what you want): at most ``max_per_hour`` pushes per agent per rolling
+    hour, and an identical (title, body) from one agent is suppressed for
+    ``dedupe_seconds``. Only pushes that actually reached a device count, so
+    "no devices" or a push-service outage never burns the budget. The link is
+    built here from the conversation the agent is in; the agent can't choose it.
+    """
+
+    TITLE_MAX = 60
+    BODY_MAX = 200
+
+    def __init__(
+        self,
+        service: Callable[[], PushService],
+        *,
+        max_per_hour: int = 5,
+        dedupe_seconds: float = 600.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._service = service
+        self._max_per_hour = max_per_hour
+        self._dedupe_seconds = dedupe_seconds
+        self._clock = clock
+        self._sent: dict[str, list[float]] = {}
+        self._recent: dict[tuple[str, str, str], float] = {}
+
+    async def __call__(self, req: PushRequest) -> PushResult:
+        svc = self._service()
+        if not svc.enabled:
+            return PushResult("not_configured")
+        title = _snippet(req.title, self.TITLE_MAX) or "paf"
+        body = _snippet(req.body, self.BODY_MAX)
+        now = self._clock()
+
+        key = (req.agent, title.lower(), body.lower())
+        self._recent = {
+            k: t for k, t in self._recent.items() if now - t < self._dedupe_seconds
+        }
+        if key in self._recent:
+            return PushResult("duplicate")
+        window = [t for t in self._sent.get(req.agent, []) if now - t < 3600]
+        self._sent[req.agent] = window
+        if len(window) >= self._max_per_hour:
+            return PushResult("rate_limited")
+        if not svc.store.all():
+            return PushResult("no_devices")
+
+        payload: dict[str, str] = {
+            "title": title,
+            "body": body,
+            "agent": req.agent,
+            "url": "/",
+        }
+        if req.conversation_id:
+            cid = req.conversation_id
+            payload.update(
+                cid=cid,
+                tag=cid,
+                url=f"/?agent={quote(req.agent, safe='')}&c={quote(cid, safe='')}",
+            )
+        counts = await svc.broadcast(
+            payload, ttl=6 * 3600, urgency="high" if req.urgent else "normal"
+        )
+        if counts["sent"] == 0:
+            return PushResult("failed")
+        self._sent[req.agent].append(now)
+        self._recent[key] = now
+        return PushResult("sent", counts["sent"])
+
+
 def default_push_service(data_dir: Path) -> PushService:
     """The production service: store under ``<data_dir>/push``, config from env."""
     return PushService(

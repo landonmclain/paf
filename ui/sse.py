@@ -86,6 +86,7 @@ from paf.conversations import (
 )
 from paf.observability.instrumentation import root_span
 from paf.push import (
+    AgentPusher,
     InvalidSubscription,
     PushService,
     default_push_service,
@@ -182,6 +183,7 @@ async def _get_session(
             on_complete=functools.partial(_notify_agent, agent),
             scheduled_tasks_queue=_scheduled_tasks_queue,
             on_turn_settled=functools.partial(_on_turn_settled, agent),
+            push_notifier=_agent_pusher,
         )
         session.attach_background()
         _sessions[key] = session
@@ -236,6 +238,12 @@ async def _notify_agent(
     # streaming to the UI, so no signal is needed.
     if started is None:
         await _emit_turn_started(agent, conversation_id, run_id)
+
+
+# Agent-chosen pushes (the `send_push` tool) share one rate-limit / dedupe state
+# across all lanes. It resolves the push service lazily, so tests can swap
+# `_push_service`.
+_agent_pusher = AgentPusher(lambda: _push_service())
 
 
 async def _on_turn_settled(agent: str, settled: TurnSettled) -> None:
