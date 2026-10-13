@@ -46,6 +46,7 @@ dependencies = [
     # shrink images for the vision model.
     "pillow",
     "croniter>=6.2.4",
+    "pywebpush>=2.5.0",
 ]
 
 [project.scripts]

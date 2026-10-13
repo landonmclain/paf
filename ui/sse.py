@@ -85,6 +85,7 @@ from paf.conversations import (
     persisted_lanes,
 )
 from paf.observability.instrumentation import root_span
+from paf.push import InvalidSubscription, PushService, default_push_service
 from paf.runtime import Session, StreamEvent, ToolError, ToolRunning, TurnStreamEvent
 from paf.specs import spec_visual_config
 
@@ -1391,6 +1392,93 @@ async def cancel(body: dict[str, Any]) -> dict[str, Any]:
     )
     await session.cancel()
     return {"cancelled": True}
+
+
+# --- Web Push (PWA-Push-Notifications-Spec, Phase 2) -----------------------
+_push_service_singleton: PushService | None = None
+
+
+def _push_service() -> PushService:
+    """The process-wide push service (store under ``data/push``, VAPID from env).
+
+    Tests swap this for a temp-rooted service with a fake sender.
+    """
+    global _push_service_singleton
+    if _push_service_singleton is None:
+        _push_service_singleton = default_push_service(DATA_DIR)
+    return _push_service_singleton
+
+
+def _require_push() -> PushService:
+    svc = _push_service()
+    if not svc.enabled:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "push is not configured (set PAF_VAPID_* — see scripts/gen_vapid.py)",
+        )
+    return svc
+
+
+def _subscription_from(body: dict[str, Any]) -> dict[str, Any]:
+    """Accept ``{subscription: {...}}`` or the raw ``PushSubscription.toJSON()``."""
+    sub = body.get("subscription", body)
+    return sub if isinstance(sub, dict) else {}
+
+
+@app.get("/api/push/vapid-public-key")
+async def push_public_key() -> dict[str, str]:
+    """The VAPID public key the browser passes as ``applicationServerKey``."""
+    return {"public_key": _require_push().public_key}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    """Register (or refresh) this device's push subscription, keyed by endpoint."""
+    svc = _require_push()
+    try:
+        svc.store.add(
+            _subscription_from(body),
+            user_agent=request.headers.get("user-agent", ""),
+        )
+    except InvalidSubscription as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    return {"ok": True, "subscriptions": len(svc.store.all())}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(body: dict[str, Any]) -> dict[str, Any]:
+    """Forget a device's subscription (idempotent)."""
+    endpoint = _subscription_from(body).get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "endpoint required")
+    return {"ok": True, "removed": _push_service().store.remove(endpoint)}
+
+
+@app.post("/api/push/test")
+async def push_test(body: dict[str, Any]) -> dict[str, Any]:
+    """Send a test notification to ONE registered endpoint (the caller's own).
+
+    Never broadcasts: an unauthenticated endpoint must not be able to ping every
+    device. The endpoint must already be subscribed.
+    """
+    svc = _require_push()
+    endpoint = _subscription_from(body).get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "endpoint required")
+    outcome = await svc.send_to(
+        endpoint,
+        {
+            "title": "paf",
+            "body": "Test notification — push is working.",
+            "tag": "paf-test",
+            "url": "/",
+        },
+        ttl=60,
+        urgency="high",
+    )
+    if outcome is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "endpoint is not subscribed")
+    return {"ok": outcome == "sent", "outcome": outcome}
 
 
 # --- entry point -----------------------------------------------------------

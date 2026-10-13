@@ -24,7 +24,7 @@ graded benchmark harness has its own guide — **see
 |---|---|---|
 | `paf-sse` | `ui/sse.py` FastAPI SSE + REST transport over `Session` | 8090 |
 | `paf-ops` | `ui/ops.py` ops transport (systemd control for paf-sse) | 8091 |
-| `paf-ui` | paf-ui Next.js dev server | 3001 |
+| `paf-ui` | paf-ui Next.js production server (rebuilds on start; behind `tailscale serve` HTTPS) | 3001 |
 
 A chat-spawned server collides on the port and leaves orphans. **After changing
 Python code under `src/` or `ui/`, restart `paf-sse`** to pick it up:
