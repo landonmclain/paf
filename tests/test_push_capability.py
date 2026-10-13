@@ -338,3 +338,33 @@ def test_sse_makes_push_info_logs_reach_the_journal() -> None:
         before = len(lg.handlers)
         sse._enable_info_logs(name)  # idempotent: no duplicate handler
         assert len(lg.handlers) == before >= 1
+
+
+# --- agent push respects presence ----------------------------------------------------
+def test_agent_push_is_not_sent_to_a_device_that_is_watching(tmp_path) -> None:
+    p, sender, _ = _pusher(tmp_path, devices=2)
+    svc = p._service()
+    svc.presence.report(_sub(0)["endpoint"], "assistant", "c-1", True)
+    assert asyncio.run(p(_req())).status == "sent"
+    assert [c["subscription_info"]["endpoint"] for c in sender.calls] == [
+        _sub(1)["endpoint"]
+    ]
+
+
+def test_agent_push_watching_status_when_all_devices_watch(tmp_path) -> None:
+    p, sender, _ = _pusher(tmp_path, max_per_hour=1, dedupe_seconds=0)
+    svc = p._service()
+    svc.presence.report(_sub(0)["endpoint"], "assistant", "c-1", True)
+    assert asyncio.run(p(_req())).status == "watching"
+    assert sender.calls == []
+    # It spent no budget and wasn't remembered: once they look away, it goes out.
+    svc.presence.report(_sub(0)["endpoint"], "assistant", "c-1", False)
+    assert asyncio.run(p(_req())).status == "sent"
+
+
+def test_tool_tells_the_agent_the_user_is_watching() -> None:
+    async def notifier(title: str, body: str, urgent: bool) -> PushResult:
+        return PushResult("watching")
+
+    out = asyncio.run(PushToolset(notifier).send_push("t", "b"))
+    assert "looking at this conversation" in out and "No notification is needed" in out

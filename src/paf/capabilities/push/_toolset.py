@@ -14,6 +14,10 @@ _MESSAGES: dict[str, str] = {
     ),
     "duplicate": "Not sent: an identical notification was sent a few minutes ago.",
     "no_devices": "Not sent: no device is subscribed to notifications.",
+    "watching": (
+        "Not sent: the user is looking at this conversation right now, so they "
+        "will see your reply. No notification is needed."
+    ),
     "not_configured": "Not sent: push notifications aren't configured on the server.",
     "failed": "Not sent: the push service didn't accept it. Mention it in your reply.",
 }

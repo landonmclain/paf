@@ -292,9 +292,25 @@ async def _on_turn_settled(agent: str, settled: TurnSettled) -> None:
             settled.pushed,
         )
         return
-    counts = await svc.broadcast(payload, ttl=6 * 3600)
+    # Skip any device that is looking at this conversation right now (it sees the
+    # result); only push to the others. Nothing is sent if that's every device.
+    watching = svc.presence.watching(agent, settled.conversation_id)
+    devices = svc.store.all()
+    if devices and all(d["endpoint"] in watching for d in devices):
+        log.info(
+            "push skipped for %s:%s: every device is watching it",
+            agent,
+            settled.conversation_id,
+        )
+        return
+    counts = await svc.broadcast(payload, exclude=watching, ttl=6 * 3600)
     log.info(
-        "push %s:%s %s -> %s", agent, settled.conversation_id, settled.outcome, counts
+        "push %s:%s %s -> %s (watching, skipped: %d)",
+        agent,
+        settled.conversation_id,
+        settled.outcome,
+        counts,
+        len(watching),
     )
 
 
@@ -1539,6 +1555,27 @@ async def push_unsubscribe(body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(endpoint, str) or not endpoint:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "endpoint required")
     return {"ok": True, "removed": _push_service().store.remove(endpoint)}
+
+
+@app.post("/api/push/presence")
+async def push_presence(body: dict[str, Any]) -> dict[str, bool]:
+    """Heartbeat: this device is (or stopped) looking at a conversation.
+
+    Sent every ~10s while the page is visible and focused. Used to skip pushes to
+    a device that is already watching; a report expires on its own after 30s.
+    """
+    endpoint, agent, cid = body.get("endpoint"), body.get("agent"), body.get("cid")
+    if not (
+        isinstance(endpoint, str) and isinstance(agent, str) and isinstance(cid, str)
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "endpoint, agent and cid required"
+        )
+    svc = _push_service()
+    if svc.store.get(endpoint) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "endpoint is not subscribed")
+    svc.presence.report(endpoint, agent, cid, bool(body.get("watching")))
+    return {"ok": True}
 
 
 @app.post("/api/push/test")

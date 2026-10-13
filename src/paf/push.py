@@ -164,6 +164,39 @@ class PushStore:
         return list(self._load().values())
 
 
+class PresenceTracker:
+    """Which devices are looking at which conversation RIGHT NOW (in memory).
+
+    Each device's page reports ``(endpoint, agent, cid, watching)`` as a heartbeat
+    while it is visible and focused; a report expires after ``TTL`` seconds, so a
+    backgrounded, locked or closed app drops out on its own with no goodbye needed.
+    The sender skips a device that is watching the conversation a push is about:
+    suppressing on the server (rather than the service worker hiding a push the
+    phone already received) is reliable on iOS, which also expects every push it
+    receives to show a notification and can revoke subscriptions that stay silent.
+    """
+
+    TTL = 30.0  # seconds; heartbeats come every ~10s
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._seen: dict[str, tuple[str, str, float]] = {}
+
+    def report(self, endpoint: str, agent: str, cid: str, watching: bool) -> None:
+        if watching:
+            self._seen[endpoint] = (agent, cid, self._clock())
+        else:
+            self._seen.pop(endpoint, None)
+
+    def watching(self, agent: str, cid: str | None) -> set[str]:
+        """Endpoints currently watching this conversation (empty if ``cid`` is None)."""
+        now = self._clock()
+        self._seen = {e: v for e, v in self._seen.items() if now - v[2] < self.TTL}
+        if not cid:
+            return set()
+        return {e for e, (a, c, _) in self._seen.items() if a == agent and c == cid}
+
+
 # (subscription, payload-json, vapid-private-key, claims, ttl, headers) -> awaited
 SendFn = Callable[..., Awaitable[Any]]
 
@@ -191,9 +224,11 @@ class PushService:
         config: VapidConfig | None,
         *,
         send: SendFn | None = None,
+        presence: PresenceTracker | None = None,
     ) -> None:
         self.store = store
         self.config = config
+        self.presence = presence or PresenceTracker()
         self._send = send or _default_send
 
     @property
@@ -263,15 +298,26 @@ class PushService:
             return None
         return await self.send_one(record, payload, **kw)
 
-    async def broadcast(self, payload: Mapping[str, Any], **kw: Any) -> dict[str, int]:
-        """Push to every subscription; returns ``{sent, gone, failed}`` counts."""
+    async def broadcast(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        exclude: set[str] | None = None,
+        **kw: Any,
+    ) -> dict[str, int]:
+        """Push to every subscription except ``exclude`` (endpoints that are
+        watching this conversation); returns ``{sent, gone, failed}`` counts."""
         counts = {"sent": 0, "gone": 0, "failed": 0}
         if not self.enabled:
             return counts
         import asyncio
 
         outcomes = await asyncio.gather(
-            *(self.send_one(r, payload, **kw) for r in self.store.all())
+            *(
+                self.send_one(r, payload, **kw)
+                for r in self.store.all()
+                if r["endpoint"] not in (exclude or ())
+            )
         )
         for o in outcomes:
             counts[o] += 1
@@ -345,7 +391,13 @@ def settled_payload(
 
 # --- agent-chosen push ---------------------------------------------------------
 PushStatus = Literal[
-    "sent", "rate_limited", "duplicate", "no_devices", "not_configured", "failed"
+    "sent",
+    "rate_limited",
+    "duplicate",
+    "no_devices",
+    "watching",  # every device is looking at this conversation right now
+    "not_configured",
+    "failed",
 ]
 
 
@@ -426,8 +478,14 @@ class AgentPusher:
         self._sent[req.agent] = window
         if len(window) >= self._max_per_hour:
             return PushResult("rate_limited")
-        if not svc.store.all():
+        devices = svc.store.all()
+        if not devices:
             return PushResult("no_devices")
+        # A device that is looking at this conversation sees the reply: don't buzz
+        # it. If that's every device, nothing is sent (and no budget is spent).
+        watching = svc.presence.watching(req.agent, req.conversation_id)
+        if all(d["endpoint"] in watching for d in devices):
+            return PushResult("watching")
 
         payload: dict[str, str] = {
             "title": title,
@@ -443,7 +501,10 @@ class AgentPusher:
                 url=f"/?agent={quote(req.agent, safe='')}&c={quote(cid, safe='')}",
             )
         counts = await svc.broadcast(
-            payload, ttl=6 * 3600, urgency="high" if req.urgent else "normal"
+            payload,
+            exclude=watching,
+            ttl=6 * 3600,
+            urgency="high" if req.urgent else "normal",
         )
         if counts["sent"] == 0:
             return PushResult("failed")

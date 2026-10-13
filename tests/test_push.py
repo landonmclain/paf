@@ -438,3 +438,94 @@ def test_sse_callback_quiet_cases(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(sse, "_shutting_down", True)
     asyncio.run(sse._on_turn_settled("assistant", _settled(outcome="aborted")))
     assert sender3.calls == []
+
+
+# --- presence: skip devices that are already watching -------------------------------
+class _Tick:
+    def __init__(self) -> None:
+        self.t = 100.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_presence_tracks_expires_and_scopes_by_conversation() -> None:
+    clock = _Tick()
+    pt = push.PresenceTracker(clock)
+    pt.report("ep1", "assistant", "c-1", True)
+    pt.report("ep2", "assistant", "c-2", True)
+    pt.report("ep3", "other_agent", "c-1", True)
+    assert pt.watching("assistant", "c-1") == {"ep1"}  # same agent AND conversation
+    assert pt.watching("assistant", None) == set()
+    clock.t += push.PresenceTracker.TTL - 1
+    assert pt.watching("assistant", "c-1") == {"ep1"}
+    clock.t += 2  # heartbeat stopped (app backgrounded / closed): drops out alone
+    assert pt.watching("assistant", "c-1") == set()
+
+
+def test_presence_explicit_stop_and_refresh() -> None:
+    clock = _Tick()
+    pt = push.PresenceTracker(clock)
+    pt.report("ep1", "a", "c", True)
+    pt.report("ep1", "a", "c", False)  # left the conversation / hid the app
+    assert pt.watching("a", "c") == set()
+    pt.report("ep1", "a", "c", True)
+    clock.t += 25
+    pt.report("ep1", "a", "c", True)  # heartbeat refreshes the TTL
+    clock.t += 25
+    assert pt.watching("a", "c") == {"ep1"}
+
+
+def test_broadcast_excludes_watching_devices(tmp_path) -> None:
+    store = _store(tmp_path)
+    for n in (1, 2, 3):
+        store.add(_sub(n))
+    sender = _FakeSender()
+    svc = PushService(store, CONFIG, send=sender)
+    counts = asyncio.run(svc.broadcast({"title": "t"}, exclude={_sub(2)["endpoint"]}))
+    assert counts["sent"] == 2
+    assert sorted(c["subscription_info"]["endpoint"] for c in sender.calls) == [
+        _sub(1)["endpoint"],
+        _sub(3)["endpoint"],
+    ]
+
+
+def test_sse_settle_push_skips_only_the_watching_device(tmp_path, monkeypatch) -> None:
+    svc, sender = _sse_with(tmp_path, monkeypatch)
+    svc.store.add(_sub(2))  # a second device
+    svc.presence.report(_sub(1)["endpoint"], "assistant", "c-1", True)  # phone watching
+    asyncio.run(sse._on_turn_settled("assistant", _settled()))
+    assert [c["subscription_info"]["endpoint"] for c in sender.calls] == [
+        _sub(2)["endpoint"]  # the desktop still gets it; the watching phone doesn't
+    ]
+
+
+def test_sse_settle_push_skipped_when_every_device_is_watching(
+    tmp_path, monkeypatch
+) -> None:
+    svc, sender = _sse_with(tmp_path, monkeypatch)
+    svc.presence.report(_sub(1)["endpoint"], "assistant", "c-1", True)
+    asyncio.run(sse._on_turn_settled("assistant", _settled()))
+    assert sender.calls == []
+    # Watching a DIFFERENT conversation does not suppress this one.
+    svc.presence.report(_sub(1)["endpoint"], "assistant", "other", True)
+    asyncio.run(sse._on_turn_settled("assistant", _settled()))
+    assert len(sender.calls) == 1
+
+
+def test_presence_route(tmp_path, monkeypatch) -> None:
+    svc, _ = _sse_with(tmp_path, monkeypatch)
+    c = TestClient(sse.app)
+    ep = _sub(1)["endpoint"]
+    body = {"endpoint": ep, "agent": "assistant", "cid": "c-1", "watching": True}
+    assert c.post("/api/push/presence", json=body).json() == {"ok": True}
+    assert svc.presence.watching("assistant", "c-1") == {ep}
+    assert (
+        c.post("/api/push/presence", json={**body, "watching": False}).status_code
+        == 200
+    )
+    assert svc.presence.watching("assistant", "c-1") == set()
+    # Only registered endpoints; malformed bodies rejected.
+    unknown = {**body, "endpoint": _sub(9)["endpoint"]}
+    assert c.post("/api/push/presence", json=unknown).status_code == 404
+    assert c.post("/api/push/presence", json={"endpoint": ep}).status_code == 422
