@@ -176,6 +176,7 @@ FLOOD = (
 )
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_a_runaway_writer_is_killed_and_cleaned_up(tmp_path):
     ts = _toolset(tmp_path)
@@ -194,6 +195,7 @@ def test_docker_a_runaway_writer_is_killed_and_cleaned_up(tmp_path):
     assert "paf-run-" not in names
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_a_normal_write_under_the_cap_is_kept(tmp_path):
     ts = _toolset(tmp_path)
@@ -202,6 +204,7 @@ def test_docker_a_normal_write_under_the_cap_is_kept(tmp_path):
     assert (tmp_path / "out" / "r.txt").stat().st_size == 1000
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_overflow_deletes_only_this_runs_files(tmp_path):
     ts = _toolset(tmp_path)
@@ -212,6 +215,7 @@ def test_docker_overflow_deletes_only_this_runs_files(tmp_path):
     assert not (tmp_path / "out" / "flood.bin").exists()
 
 
+@pytest.mark.live
 @needs_docker
 def test_docker_fifos_and_symlinks_planted_in_out_are_removed(tmp_path):
     ts = _toolset(tmp_path)

@@ -55,14 +55,19 @@ def test_corpus_covers_the_cases_that_matter():
     [
         pytest.param(
             r["id"],
-            marks=(
-                pytest.mark.xfail(
-                    strict=True,
-                    reason="known wrong verdict; delete known_issue if fixed",
-                )
-                if r["id"] in KNOWN
-                else ()
-            ),
+            marks=[
+                *(
+                    [
+                        pytest.mark.xfail(
+                            strict=True,
+                            reason="known wrong verdict; delete known_issue if fixed",
+                        )
+                    ]
+                    if r["id"] in KNOWN
+                    else []
+                ),
+                *([pytest.mark.live] if r["id"] == "tb-oserror-trace" else []),
+            ],
         )
         for r in ROWS
     ],
