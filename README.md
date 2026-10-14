@@ -92,6 +92,7 @@ specs/assistant.yaml ──► build_agent ──► Agent ──► Session ─
 | --- | --- | --- |
 | `demo_assistant` | `specs/demo_assistant.yaml` | Default for `paf chat`. Everything enabled, including experimental pieces. |
 | `assistant` | `specs/assistant.yaml` | General assistant with the same capabilities, configured for everyday use. |
+| `secure_assistant` | `specs/secure_assistant.yaml` | Locked-down agent: scoped file tools and sandboxed Python only, with every guard on. Needs Docker. |
 
 Other specs in `specs/` serve benchmarks and tests. Subagents that agents can
 delegate to (coding, code review, research, writing) live in
@@ -150,6 +151,9 @@ these.
   backlinks.
 - **Workspace** tells the model where each tool family's relative paths start,
   and the user's time zone.
+- **Python** runs model-written code with `run_python` in a per-call Docker
+  container (no network, read-only root, resource limits). It refuses to run on
+  the host unless a spec explicitly allows it.
 
 **Web and vision**
 
@@ -166,14 +170,32 @@ these.
 - **Planning** gives the model a task plan it maintains as it works
   (`write_plan`, `add_task`, `update_task_status`, and so on), shown live in the
   CLI toolbar.
-- **Skills** lists and loads skill documents on demand, and points the model at
-  a relevant one when a message matches it.
+- **Skills** lists and loads skill documents on demand, and lets the model
+  create and edit them.
+- **KeywordCurator** points the model at relevant skills and notes. A
+  background agent (on when the spec sets `keywords: curate: true`) maintains a
+  vocabulary of entities and their aliases from the agent's skill libraries and
+  vault; each turn, matching terms inject a short `<relevance-hints>` block,
+  with no model call on the hot path.
+- **ScheduledTasks** lets the agent schedule work on cron expressions
+  (`schedule_task`, `list_scheduled_tasks`, `run_scheduled_task`, and so on).
+  A job runs either as an agent turn in the conversation that scheduled it, or
+  as a script. Jobs fire while the SSE server (`ui/sse.py`) is running, since
+  the scheduler lives there.
+- **Push** gives the agent `send_push`, to notify devices subscribed through a
+  web front end, via Web Push. Sends are rate-limited and deduplicated. It
+  pairs naturally with scheduled tasks ("check X, and tell me only if Y").
 - **ToolOutputLimits** shrinks oversized tool results before they reach the
   model.
 - **WarnOnCacheBusts** warns when the cacheable prompt prefix changes mid-run.
 
-Native pydantic-ai capabilities (web search, thinking, MCP, and others) can be
-listed directly in a spec's `capabilities:` block, with no Python needed.
+`demo_assistant` also connects MCP servers configured in its spec. Native
+pydantic-ai capabilities (web search, thinking, MCP, and others) can be listed
+directly in a spec's `capabilities:` block, with no Python needed.
+
+Guard capabilities (prompt-injection screening, per-call tool gating, and secret
+handles that keep raw credentials out of the context) are enabled in the
+`secure` profile.
 
 ## Memory
 
@@ -221,8 +243,10 @@ background jobs and plan progress.
 
 A FastAPI server exposing the same sessions over Server-Sent Events: a stream
 per turn, a separate feed for background processes, steer and cancel, and
-endpoints for conversations, projects, plans, and image uploads. Turns run on
-the server, so a page refresh reattaches to a turn in progress.
+endpoints for conversations, projects, plans, image uploads, and Web Push
+subscriptions. Turns run on the server, so a page refresh reattaches to a turn
+in progress. It also hosts the scheduler for scheduled tasks, and can push a
+notification to your devices when a turn finishes.
 
 ```bash
 uv run python ui/sse.py   # serves on port 8090
@@ -263,6 +287,7 @@ Settings come from the environment or a `.env` file (see `.env.example`):
 | `OTLP_ENDPOINT`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Send traces to Langfuse. Leave blank to turn tracing off. |
 | `PAF_HOME` | Where `specs/` and `data/` live. Defaults to the repository root in a source checkout, otherwise the current directory. |
 | `TIMEZONE` | The user's IANA time zone, for the date stamped on messages. Defaults to the machine's. |
+| `PAF_VAPID_PRIVATE_KEY`, `PAF_VAPID_PUBLIC_KEY`, `PAF_VAPID_SUBJECT` | Enable Web Push. Generate once with `scripts/gen_vapid.py --write`; unset means push is off. |
 
 Everything paf writes goes under `data/`, as plain files:
 
@@ -273,6 +298,9 @@ data/
   conversations/  conversation titles, projects, hidden flags
   plans/          the model's task plans, per conversation
   processes/      background shell and subagent records
+  scheduled_tasks/ scheduled jobs and their run history
+  keywords/       the keyword curator's vocabulary
+  push/           Web Push device subscriptions
   uploads/        images sent to the agent
 ```
 
@@ -297,6 +325,7 @@ src/paf/
   specs.py          spec loading (agent name → YAML → Agent)
   background.py     post-turn background work (memory, summaries)
   clients.py        helpers shared by the CLI and the SSE server
+  push.py           Web Push delivery (VAPID, subscriptions, sender)
   config.py         settings and paths
   capabilities/     the catalog, profiles, builders, and each capability
   cli/              paf chat
