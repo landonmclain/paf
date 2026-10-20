@@ -44,6 +44,7 @@ from paf.capabilities._sandbox import (
     docker_available,
     parse_size,
 )
+from paf.capabilities._secret_files import fs_denied_patterns, sandbox_excludes
 from paf.capabilities.browser import Browser as _Browser
 from paf.capabilities.codebase_map import CodebaseMap as _CodebaseMap
 from paf.capabilities.compaction import build_compaction
@@ -238,7 +239,11 @@ def _build_filesystem(
     ``specs._spec_filesystem_config``): ``root_dir`` overrides the default
     ``PROJECT_ROOT`` so an agent can be pointed at a specific working repo.
     Absent/``None`` -> ``PROJECT_ROOT``. Traversal/symlink/protected-pattern
-    gates always apply, whichever root is in effect.
+    gates always apply, whichever root is in effect. ``denied_patterns`` adds
+    paths the tools refuse to read OR write, list or search, and
+    ``deny_secret_files: true`` adds the shared credential-file set
+    (``_secret_files.py``, the same one the Docker sandbox blanks) at any depth.
+    Both are opt-in per spec; the default policy is unchanged.
     """
     root_dir = PROJECT_ROOT
     if (
@@ -247,20 +252,23 @@ def _build_filesystem(
         and filesystem_config.get("root_dir")
     ):
         root_dir = Path(os.path.expanduser(filesystem_config["root_dir"]))
-    return _FileSystem(root_dir=root_dir, expose_root=expose_root)
+    denied: list[str] = []
+    if isinstance(filesystem_config, dict):
+        denied += [p for p in filesystem_config.get("denied_patterns") or [] if p]
+        if filesystem_config.get("deny_secret_files") is True:
+            denied += fs_denied_patterns()
+    return _FileSystem(
+        root_dir=root_dir, expose_root=expose_root, denied_patterns=denied
+    )
 
 
-# Workspace-relative paths (globs allowed) that the Docker backend overlays with
-# empty files so the sandbox never sees the real secret files. ``~/.ssh`` is a
+# Credential-bearing files (matched at ANY depth; see _secret_files.py) that the
+# Docker backend overlays with empty files so the sandbox never sees the real
+# secret files. The host-side file tools deny the same set (`deny_secret_files`). ``~/.ssh`` is a
 # host path outside the repo workspace and is not overlaid (the container cannot
 # reach it anyway); it is listed for completeness when the workspace is the home
 # dir.
-DEFAULT_EXCLUDE: tuple[str, ...] = (
-    ".env",
-    ".env.*",
-    ".git-credentials",
-    ".git",
-)
+DEFAULT_EXCLUDE: tuple[str, ...] = sandbox_excludes()
 
 
 def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:

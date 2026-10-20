@@ -704,8 +704,25 @@ def _spec_executor_block(executor: dict) -> dict:
 
 
 def _spec_filesystem_config(spec_path: Path) -> dict | None:
-    """Read the spec's top-level ``filesystem:`` block (root_dir)."""
-    return _spec_rooted_config(spec_path, "filesystem", "root_dir")
+    """Read the spec's top-level ``filesystem:`` block.
+
+        filesystem:
+          root_dir: ~/workspace
+          deny_secret_files: true        # refuse to read/write/list credential files
+          denied_patterns: ["**/*.sqlite"]   # extra globs the file tools refuse
+
+    ``root_dir`` as before; the two deny keys are kept only when well-typed.
+    """
+    config = _spec_rooted_config(spec_path, "filesystem", "root_dir") or {}
+    block = _spec_mapping_block(spec_path, "filesystem") or {}
+    if block.get("deny_secret_files") is True:
+        config["deny_secret_files"] = True
+    patterns = block.get("denied_patterns")
+    if isinstance(patterns, list):
+        cleaned = [p for p in patterns if isinstance(p, str) and p.strip()]
+        if cleaned:
+            config["denied_patterns"] = cleaned
+    return config or None
 
 
 def _spec_shell_config(spec_path: Path) -> dict | None:

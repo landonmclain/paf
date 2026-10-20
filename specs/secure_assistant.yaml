@@ -105,6 +105,11 @@ workspace:
 # cannot leak through a confinement bug.
 filesystem:
   root_dir: ~/paf-secure-workspace
+  # Refuse to read, write, list or search credential-bearing files (.env, keys,
+  # .ssh/, .aws/, ...) at any depth, even if one lands in the workspace. The
+  # sandbox blanks the same set for run_python (shared list: _secret_files.py);
+  # this closes the host side, where the sandbox overlay does not apply.
+  deny_secret_files: true
 
 # run_python. The defaults are already the strictest the Docker backend offers
 # (fresh container per call, no network, read-only workspace); `writable` opens
