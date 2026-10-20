@@ -11,6 +11,7 @@ from paf.capabilities._sandbox._docker import (
     DockerExecutor,
     docker_available,
     parse_size,
+    reap_stale_containers,
 )
 from paf.capabilities._sandbox._local import LocalProcessExecutor
 from paf.capabilities._sandbox._protocol import (
@@ -29,4 +30,5 @@ __all__ = [
     "SandboxedExecutor",
     "docker_available",
     "parse_size",
+    "reap_stale_containers",
 ]

@@ -14,6 +14,7 @@ Background processes map to detached containers; ``check`` / ``stop`` become
 
 from __future__ import annotations
 
+import atexit
 import fnmatch
 import os
 import re
@@ -218,6 +219,130 @@ def _rel(path: Path, roots: Sequence[Path]) -> str:
     return path.name
 
 
+# --- container lifecycle: labels, reaping, cleanup -----------------------------------
+#
+# Every container the executor creates carries these labels. `exec` mode keeps one
+# `sleep infinity` container per executor for the life of the process; if the
+# process ends without removing it (restart, crash, Docker/host restart) the husk
+# used to stay forever. Two layers now keep that bounded: `close()` + an `atexit`
+# hook remove what this process made, and `reap_stale_containers()` clears what a
+# process that could not clean up left behind.
+LABEL = "paf.sandbox"
+_LABEL_KIND = "paf.sandbox.kind"
+_LABEL_PID = "paf.sandbox.pid"
+_LEGACY_NAME_PREFIX = "paf-sandbox-"
+_REAP_RUNNING_KINDS = frozenset({"exec", "run"})
+
+_owned: set[str] = set()
+"""Names of long-lived (exec-mode) containers created by this process."""
+_reaped = False
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    return True
+
+
+def select_reapable(
+    rows: Sequence[tuple[str, str, str, str]],
+    is_alive: Callable[[int], bool] = _pid_alive,
+) -> list[str]:
+    """Which ``(id, state, kind, pid)`` rows are safe to remove.
+
+    - Anything not running (exited/created/dead) is a husk: remove it.
+    - A RUNNING ``exec``/``run`` container whose owner pid is gone was orphaned by
+      a crash: remove it. A live owner (this process or another, e.g. the CLI next
+      to ``paf-sse``) is never touched; neither is a running container with no
+      readable owner, nor a running background (``bg``) one, which is allowed to
+      outlive its starter.
+    """
+    reap: list[str] = []
+    for cid, state, kind, pid_text in rows:
+        if state in ("exited", "created", "dead"):
+            reap.append(cid)
+        elif state == "running" and kind in _REAP_RUNNING_KINDS:
+            try:
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if not is_alive(pid):
+                reap.append(cid)
+    return reap
+
+
+def reap_stale_containers(is_alive: Callable[[int], bool] = _pid_alive) -> list[str]:
+    """Remove sandbox containers nobody owns any more; returns the removed ids.
+
+    Best effort: any Docker failure returns quietly, because housekeeping must
+    never stop a command from running. Also removes exited containers from before
+    labels existed (``paf-sandbox-*`` names).
+    """
+    template = (
+        '{{.ID}}\t{{.State}}\t{{.Label "' + _LABEL_KIND + '"}}\t'
+        '{{.Label "' + _LABEL_PID + '"}}'
+    )
+    rows: dict[str, tuple[str, str, str, str]] = {}
+    queries = (
+        ["--filter", f"label={LABEL}=1"],
+        ["--filter", f"name={_LEGACY_NAME_PREFIX}", "--filter", "status=exited"],
+    )
+    try:
+        for flt in queries:
+            out = subprocess.run(
+                ["docker", "ps", "-a", *flt, "--format", template],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
+            ).stdout
+            for line in out.splitlines():
+                parts = (line.split("\t") + ["", "", ""])[:4]
+                rows.setdefault(parts[0], (parts[0], parts[1], parts[2], parts[3]))
+        doomed = select_reapable(list(rows.values()), is_alive)
+        if doomed:
+            subprocess.run(
+                ["docker", "rm", "-f", *doomed],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+        return doomed
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def _close_owned_sync() -> None:
+    """``atexit``: remove the long-lived containers this process created."""
+    for name in list(_owned):
+        try:
+            subprocess.run(
+                ["docker", "rm", "-f", name],
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _owned.discard(name)
+
+
+atexit.register(_close_owned_sync)
+
+
+async def _reap_once() -> None:
+    """Reap stale containers the first time this process needs Docker."""
+    global _reaped
+    if _reaped:
+        return
+    _reaped = True
+    await run_sync(reap_stale_containers)
+
+
 def docker_available() -> bool:
     """Whether the Docker CLI and daemon are reachable on this host.
 
@@ -309,6 +434,7 @@ class DockerExecutor:
                 raise ValueError("max_writable_bytes must be positive")
         self._max_writable_bytes = max_writable_bytes
         self._container_id: str | None = None
+        self._exec_overlay_root: Path | None = None
 
     @staticmethod
     def _clean_relative(path: str) -> str:
@@ -390,8 +516,15 @@ class DockerExecutor:
             mounts.extend(["-v", f"{overlay_path}:{self._workspace}/{rel}"])
         return mounts, overlay_root
 
-    def _base_run_args(self) -> list[str]:
+    def _base_run_args(self, kind: str) -> list[str]:
+        """Flags shared by every container; ``kind`` is exec | run | bg."""
         args = [
+            "--label",
+            f"{LABEL}=1",
+            "--label",
+            f"{_LABEL_KIND}={kind}",
+            "--label",
+            f"{_LABEL_PID}={os.getpid()}",
             "--network",
             self._network,
             "--user",
@@ -451,6 +584,7 @@ class DockerExecutor:
         """Create the long-lived container for ``mode='exec'`` on first use."""
         if self._container_id is not None:
             return
+        await _reap_once()
         name = self._container_name or f"paf-sandbox-{uuid.uuid4().hex[:8]}"
         workspace_args, overlay_root = self._workspace_args(cwd)
         args = [
@@ -459,7 +593,7 @@ class DockerExecutor:
             "-d",
             "--name",
             name,
-            *self._base_run_args(),
+            *self._base_run_args("exec"),
             *workspace_args,
             self._image,
             "sleep",
@@ -475,7 +609,25 @@ class DockerExecutor:
         self._container_id = out.strip()
         self._container_name = name
         # The long-lived container keeps its overlays mounted for as long as it
-        # lives, so this temp dir is deliberately not removed here.
+        # lives, so the temp dir is removed by `close()`, not here.
+        self._exec_overlay_root = overlay_root
+        _owned.add(name)
+
+    async def close(self) -> None:
+        """Remove this executor's long-lived (exec-mode) container, if any.
+
+        Safe to call more than once and when nothing was started. Per-command
+        (``run``) containers remove themselves; background ones are removed by
+        ``stop``.
+        """
+        name = self._container_name if self._container_id is not None else None
+        self._container_id = None
+        if name is not None:
+            await self._docker(["docker", "rm", "-f", name], timeout=30.0)
+            _owned.discard(name)
+        if self._exec_overlay_root is not None:
+            shutil.rmtree(self._exec_overlay_root, ignore_errors=True)
+            self._exec_overlay_root = None
 
     async def run(
         self,
@@ -504,6 +656,7 @@ class DockerExecutor:
         overlays: list[Path],
     ) -> ExecResult:
         run_name: str | None = None
+        await _reap_once()
         if self._mode == "exec":
             await self._ensure_container(cwd)
             args = ["docker", "exec", self._container_id, "sh", "-c", command]
@@ -518,7 +671,7 @@ class DockerExecutor:
                 "--rm",
                 "--name",
                 run_name,
-                *self._base_run_args(),
+                *self._base_run_args("run"),
                 *workspace_args,
                 self._image,
                 "sh",
@@ -586,6 +739,7 @@ class DockerExecutor:
         env: dict[str, str] | None,
         output_path: Path | None = None,
     ) -> BackgroundHandle:
+        await _reap_once()
         command_id = uuid.uuid4().hex[:12]
         name = f"paf-bg-{command_id}"
         workspace_args, overlay_root = self._workspace_args(cwd)
@@ -595,7 +749,7 @@ class DockerExecutor:
             "-d",
             "--name",
             name,
-            *self._base_run_args(),
+            *self._base_run_args("bg"),
             *workspace_args,
             self._image,
             "sh",
