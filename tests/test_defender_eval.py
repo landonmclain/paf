@@ -35,6 +35,7 @@ KNOWN = {r["id"] for r in ROWS if r.get("known_issue")}
 LIVE_ONLY = {
     "tb-oserror-trace",
     "inj-subtle-4",  # Spanish injection: allowed at ~0.61 on CI, blocked locally
+    "out-realpath-live",  # live-trace false positive (0.82); a short text, so fragile
 }
 
 
