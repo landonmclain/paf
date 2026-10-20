@@ -829,6 +829,22 @@ def _spec_gating_config(spec_path: Path) -> dict | None:
     return _spec_mapping_block(spec_path, "gating")
 
 
+def _spec_injection_config(spec_path: Path) -> dict | None:
+    """Read the spec's ``guardrails.injection`` block (prompt-injection policy).
+
+        guardrails:
+          injection:
+            default_action: block      # off | observe | block
+            tools: {list_directory: observe}
+
+    Returned as written; ``injection.parse_injection_policy`` validates it and
+    raises on a malformed block. ``None`` when absent.
+    """
+    block = _spec_mapping_block(spec_path, "guardrails")
+    injection = (block or {}).get("injection")
+    return injection if isinstance(injection, dict) else None
+
+
 def _spec_secrets_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``secrets:`` block.
 
@@ -992,6 +1008,7 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
         "python_config": _spec_python_config(spec_path),
         "gating_config": _spec_gating_config(spec_path),
         "secrets_config": _spec_secrets_config(spec_path),
+        "injection_config": _spec_injection_config(spec_path),
         "git_config": _spec_git_config(spec_path),
         "codebase_map_config": _spec_codebase_map_config(spec_path),
         # Skill library dirs from the spec's `skills:` block.

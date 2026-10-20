@@ -28,7 +28,7 @@ from typing import Any, cast
 
 from pydantic_ai.capabilities import MCP
 from pydantic_ai.mcp import load_mcp_toolsets
-from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
+from pydantic_ai_harness import ToolGuardrail
 from pydantic_ai_harness.tool_output_limits import (
     Band,
     Spill,
@@ -51,15 +51,14 @@ from paf.capabilities.compaction import build_compaction
 from paf.capabilities.fs import FileSystem as _FileSystem
 from paf.capabilities.git import Git as _Git
 from paf.capabilities.guardrails.gating_policy import make_gating_guard, parse_policy
-from paf.capabilities.guardrails.prompt_injection import (
-    prompt_injection_on_detection,
-)
 from paf.capabilities.guardrails.secret_handles import (
     make_secret_handle_guard,
     make_secret_result_guard,
     secret_handle_guard,
 )
 from paf.capabilities.guardrails.tool_gating import tool_gating_guard
+from paf.capabilities.injection import InjectionGuard as _InjectionGuard
+from paf.capabilities.injection import parse_injection_policy
 from paf.capabilities.keyword_curator import KeywordCurator
 from paf.capabilities.memory import Memory
 from paf.capabilities.persistence import PERSISTENCE_BUILDERS, _build_store
@@ -785,36 +784,23 @@ def _build_planning(store) -> Planning:
     )
 
 
-def _build_guardrails(store) -> PromptInjectionDefender:
-    """Structural prompt-injection defense (BUILTIN, not a paf port).
+def _build_injection_guard(
+    store, injection_config: dict | None = None
+) -> _InjectionGuard:
+    """paf-owned prompt-injection defense (``capabilities/injection``).
 
-    Adopts the harness's ``PromptInjectionDefender`` rather than building a
-    paf-owned wrapper: it is a ready-made
-    ``AbstractCapability`` that screens tool results before the model sees them
-    and withholds high-risk content. This is the structural detector paf's
-    locked principle demands — a deterministic system decision by meaning, not
-    regex shape-matching.
+    A swappable scorer (stackone: patterns + local MiniLM classifier) plus a
+    per-tool policy from the spec's ``guardrails.injection`` block (see
+    ``specs._spec_injection_config``): ``off`` / ``observe`` / ``block`` per tool
+    glob, a default action and an optional threshold. Absent block -> every tool
+    ``block`` at the scorer's calibrated default, i.e. the behaviour of the
+    harness ``PromptInjectionDefender`` it replaces. A malformed block raises at
+    build time. Every noteworthy decision emits a ``paf.guardrail.
+    prompt_injection`` span.
 
-    ``semantic_detection=True`` enables Tier 2 (the local MiniLM classifier via
-    ``stackone-defender`` + ``onnxruntime``), which catches injections under
-    unrecognized fields that Tier 1 pattern detection alone lets through.
-    ``block_high_risk=True`` withholds flagged
-    results. ``on_detection`` is paf's own handler (see
-    ``guardrails/prompt_injection.py``): it emits a ``paf.guardrail.
-    prompt_injection`` span so a withheld result is observable in Langfuse
-    instead of silently dropped. Loaded eagerly (no ``defer_loading``): the
-    defender screens every tool result, so there is nothing to put off — and
-    deferring a builtin that has no stable explicit ``id`` makes pydantic-ai
-    reject it at build time.
-
-    `store` is accepted for a uniform builder signature but unused — the
-    defender is stateless per call.
+    `store` is accepted for a uniform builder signature but unused.
     """
-    return PromptInjectionDefender(
-        block_high_risk=True,
-        semantic_detection=True,
-        on_detection=prompt_injection_on_detection,
-    )
+    return _InjectionGuard(policy=parse_injection_policy(injection_config))
 
 
 def _build_tool_gating(store, gating_config: dict | None = None) -> ToolGuardrail:
@@ -1014,6 +1000,7 @@ def build_runtime_capabilities(
     python_config: dict | None = None,
     gating_config: dict | None = None,
     secrets_config: dict | None = None,
+    injection_config: dict | None = None,
     git_config: dict | None = None,
     codebase_map_config: dict | None = None,
     skills_config: dict | None = None,
@@ -1086,10 +1073,11 @@ def build_runtime_capabilities(
         "Subagents": _build_subagents,
         # Model-owned task plan for long turns (paf-owned port).
         "Planning": _build_planning,
-        # Structural prompt-injection defense (BUILTIN, not a paf port) —
-        # screens tool results and withholds high-risk content before the model
-        # sees it.
-        "Guardrails": _build_guardrails,
+        # Prompt-injection defense (paf-owned): scores every tool result and
+        # applies the spec's per-tool policy (off / observe / block).
+        "InjectionGuard": _build_injection_guard,
+        # Deprecated alias of InjectionGuard (profiles written before the rehome).
+        "Guardrails": _build_injection_guard,
         # Per-call execution-time tool gate (BUILTIN shell, paf-owned policy) —
         # refuses the highest-risk tools before they execute. The profile is
         # only a build-time tool allowlist; this is the missing per-call gate.
@@ -1124,6 +1112,10 @@ def build_runtime_capabilities(
             capabilities.append(
                 _build_shell(store, shell_config, agent_name, on_complete)
             )
+        elif name in ("InjectionGuard", "Guardrails"):
+            if name == "Guardrails" and "InjectionGuard" in profile.capability_names:
+                continue  # alias listed alongside the real name: build once
+            capabilities.append(_build_injection_guard(store, injection_config))
         elif name == "ToolGating":
             capabilities.append(_build_tool_gating(store, gating_config))
         elif name == "Secrets":

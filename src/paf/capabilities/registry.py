@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic_ai.capabilities import MCP
-from pydantic_ai_harness import PromptInjectionDefender, ToolGuardrail
+from pydantic_ai_harness import ToolGuardrail
 from pydantic_ai_harness.compaction import (
     ClampOversizedMessages,
     ClearToolResults,
@@ -33,6 +33,7 @@ from paf.capabilities.browser import Browser
 from paf.capabilities.codebase_map import CodebaseMap
 from paf.capabilities.fs import FileSystem
 from paf.capabilities.git import Git
+from paf.capabilities.injection import InjectionGuard
 from paf.capabilities.keyword_curator import KeywordCurator
 from paf.capabilities.memory import Memory
 from paf.capabilities.planning import Planning
@@ -125,9 +126,11 @@ CAPABILITY_TYPES: dict[str, type[Any]] = {
     # Model-owned task plan for long turns. Spec-serializable, but wired via the
     # Python seam so the profile gate controls it.
     "Planning": Planning,
-    # Structural prompt-injection defense. Built in Python so the profile gate
-    # controls it.
-    "Guardrails": PromptInjectionDefender,
+    # Prompt-injection defense (paf-owned scorer + per-tool policy). Built in
+    # Python so the profile gate controls it.
+    "InjectionGuard": InjectionGuard,
+    # Deprecated alias of InjectionGuard, for profiles written before the rehome.
+    "Guardrails": InjectionGuard,
     # Per-call execution-time tool gate. Built in Python so the profile gate
     # controls it.
     "ToolGating": ToolGuardrail,

@@ -1,7 +1,8 @@
 """Prompt-injection defender calibration eval.
 
 Scores a labeled corpus of tool outputs (``fixtures.jsonl``) with the defender
-EXACTLY as production builds it (``build._build_guardrails``), and reports where
+EXACTLY as production builds it (``build._build_injection_guard``'s scorer), and
+reports where
 it is wrong: benign outputs it would withhold (false positives, which break the
 agent) and injections it would let through (false negatives, which break the
 guarantee). No LLM is involved, so a run is free, offline and deterministic.
@@ -75,14 +76,14 @@ def load_fixtures(path: Path = FIXTURES) -> list[dict[str, Any]]:
 
 
 def build_defense():
-    """The production defender, built by the production builder."""
-    from paf.capabilities.build import _build_guardrails
+    """The production scorer, from the production builder (default policy)."""
+    from paf.capabilities.build import _build_injection_guard
 
-    return _build_guardrails(None)._defense  # noqa: SLF001 - the eval must match prod
+    return _build_injection_guard(None).scorer
 
 
-def block_threshold(defense) -> float:
-    return float(defense._tier2.get_config()["high_risk_threshold"])  # noqa: SLF001
+def block_threshold(scorer) -> float:
+    return float(scorer.threshold)
 
 
 def evaluate(rows: list[dict[str, Any]] | None = None, defense=None) -> list[Verdict]:
@@ -91,19 +92,19 @@ def evaluate(rows: list[dict[str, Any]] | None = None, defense=None) -> list[Ver
     threshold = block_threshold(defense)
     out: list[Verdict] = []
     for r in rows:
-        res = defense.defend_tool_result(r["text"], r["tool"])
-        score = float(res.tier2_score or 0.0)
+        res = defense.score_sync(r["text"], r["tool"])
+        score = float(res.score or 0.0)
         out.append(
             Verdict(
                 id=r["id"],
                 label=r["label"],
                 category=r["category"],
                 tool=r["tool"],
-                blocked=not res.allowed,
+                blocked=res.hit,
                 risk_level=res.risk_level,
                 score=score,
-                pattern_blocked=(not res.allowed) and score < threshold,
-                trigger=res.max_sentence,
+                pattern_blocked=res.hit and score < threshold,
+                trigger=res.trigger,
                 known_issue=bool(r.get("known_issue")),
                 note=r.get("note", ""),
             )
@@ -182,6 +183,8 @@ def aux_sweep(
     from stackone_defender import PromptDefense
     from stackone_defender.types import MultiheadConfig
 
+    from paf.capabilities.injection._scorer import _payload
+
     main_t = block_threshold(build_defense())
     probe = PromptDefense(
         config={"traversal": {"skip_large_arrays": False}},
@@ -193,7 +196,7 @@ def aux_sweep(
     )
     scored = []
     for r in rows:
-        res = probe.defend_tool_result(r["text"], r["tool"])
+        res = probe.defend_tool_result(_payload(r["text"]), r["tool"])
         scored.append((r["label"], res.tier2_raw_score or 0.0, res.tier2_aux_score))
     out = []
     for a in aux_thresholds:

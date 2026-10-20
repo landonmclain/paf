@@ -1,7 +1,7 @@
 # Defender calibration eval
 
-Measures the prompt-injection defender (`PromptInjectionDefender` /
-`stackone-defender`, built by `paf.capabilities.build._build_guardrails`) against a
+Measures the prompt-injection defender (paf's `InjectionGuard`, scoring with
+`stackone-defender`; built by `paf.capabilities.build._build_injection_guard`) against a
 labeled corpus of tool outputs. Local ONNX classifier only: no LLM, no cost,
 deterministic, ~1 s.
 

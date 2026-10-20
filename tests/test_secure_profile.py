@@ -221,7 +221,7 @@ def test_secure_profile_is_registered_and_resolves():
 
 def test_secure_profile_has_every_guard_and_no_escape_hatches():
     names = set(SECURE_PROFILE.capability_names)
-    assert {"Guardrails", "ToolGating", "Secrets", "Python"} <= names
+    assert {"InjectionGuard", "ToolGating", "Secrets", "Python"} <= names
     # Anything that reaches the network, runs arbitrary commands, persists
     # across sessions, or delegates must stay out.
     forbidden = {
@@ -328,7 +328,7 @@ def test_secure_agent_builds_with_all_guards_and_python(secure_home, monkeypatch
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
     agent = build_agent("secure_assistant")
     kinds = {type(c).__name__ for c in agent._root_capability.capabilities}  # noqa: SLF001
-    assert {"PromptInjectionDefender", "ToolGuardrail", "Python", "FileSystem"} <= kinds
+    assert {"InjectionGuard", "ToolGuardrail", "Python", "FileSystem"} <= kinds
     assert not kinds & {"Shell", "Git", "Web", "Browser", "Subagents", "Memory"}
 
 

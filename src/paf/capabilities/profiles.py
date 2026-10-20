@@ -72,7 +72,7 @@ ASSISTANT_PROFILE = AgentProfile(
         "Planning",
         "ThreadSummarizer",
         # "Secrets",
-        # "Guardrails",
+        # "InjectionGuard",
         # "ToolGating",
         "KeywordCurator",  # per-turn relevance hints; injects nothing until a store exists
         "ScheduledTasks",  # per-conversation scheduled tasks (CRUD + manual run)
@@ -110,7 +110,7 @@ DEMO_PROFILE = AgentProfile(
         "ScheduledTasks",  # per-conversation scheduled tasks (CRUD + manual run)
         "Push",  # send_push: the agent can notify the user's phone (guardrailed)
         # "Secrets",
-        # "Guardrails",
+        # "InjectionGuard",
         # "ToolGating",
         # "MCP",  # experimental — enabled in the DEMO sandbox, absent from assistant
     ),
@@ -177,7 +177,7 @@ SECURE_PROFILE = AgentProfile(
         "Python",
         "Workspace",
         "ToolOutputLimits",
-        "Guardrails",
+        "InjectionGuard",
         "ToolGating",
         "Secrets",
     ),
