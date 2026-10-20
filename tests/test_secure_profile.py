@@ -524,6 +524,14 @@ def test_spec_wording_does_not_claim_the_model_has_no_shell():
         and "no tool that runs commands on the user's machine" in text
     )
 
+    # Hidden files must not be reported as empty, and workarounds must not be
+    # offered (both seen in the first live run).
+    assert "never conclude that it is empty or absent" in text
+    assert "say that you could not read the file" in text
+    assert "do not guess at its contents" in text
+    assert "do not suggest ways around a restriction" in text
+    assert "copying a protected file under another name" in text
+
     from paf.capabilities.python import PythonToolset
 
     doc = (PythonToolset.run_python.__doc__ or "").lower()
