@@ -13,6 +13,7 @@ from paf.capabilities import PROFILES, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
 from paf.config import SPECS_DIR
+from paf.providers.ollama import model_with_client as ollama_model_with_client
 from paf.providers.openrouter import model_with_client
 
 DEFAULT_SPEC_DIRECTORY = SPECS_DIR
@@ -1174,6 +1175,14 @@ def build_agent(
         custom_model = model_with_client(spec.model.split(":", 1)[1])
         if custom_model is not None:
             overrides["model"] = custom_model
+    # Bounded-timeout local client for `ollama:` models (see
+    # providers/ollama.py).
+    if (
+        "model" not in overrides
+        and isinstance(spec.model, str)
+        and spec.model.startswith("ollama:")
+    ):
+        overrides["model"] = ollama_model_with_client(spec.model.split(":", 1)[1])
     return Agent.from_spec(
         spec,
         # Resolve the agent kind's allowlist to the capability TYPES the loader

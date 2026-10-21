@@ -16,12 +16,11 @@ name: demo_assistant
 # invocation like `python ui/chat.py demo_assistant`.
 profile: demo
 
-# Provider-qualified model string. Same default as the assistant: DeepSeek V4
-# Flash via OpenRouter. Bare slug (NO `:nitro` suffix) — `build_agent` applies
-# the OpenRouter determinism pin (provider order + fp8 quantization) via
-# model_settings, and `:nitro`'s throughput routing would fight that pin and
-# reintroduce run-to-run provider bounce. Requires OPENROUTER_API_KEY in .env.
-model: openrouter:deepseek/deepseek-v4-flash-0731
+# Provider-qualified model string. Default: DeepSeek V4 Flash via OpenRouter
+# (requires OPENROUTER_API_KEY in .env). Commented out in favor of a local
+# Ollama model (qwen3.8:27b-90k, 90k context; needs OLLAMA_BASE_URL).
+# model: openrouter:deepseek/deepseek-v4-flash-0731
+model: ollama:qwen3.8:27b-90k
 # model: openrouter:deepseek/deepseek-v4.1-flash
 # model: openrouter:openai/gpt-5.6-luna
 # instructions: |
@@ -81,28 +80,28 @@ model_settings:
   # top_p: 1.0
   # seed: 20260815
 
-  # OpenRouter prompt caching.
-  openrouter_cache_instructions: true
-  openrouter_cache_messages: true
-  openrouter_cache_tool_definitions: true
+  # OpenRouter prompt caching (OpenRouter-only; ignored by Ollama).
+  # openrouter_cache_instructions: true
+  # openrouter_cache_messages: true
+  # openrouter_cache_tool_definitions: true
 
-  # OpenRouter provider routing pin.
+  # OpenRouter provider routing pin (OpenRouter-only; ignored by Ollama).
+  # extra_body:
+  #   provider:
+  #     order: [deepinfra, parasail, coreweave]
+  #     quantizations: [fp8]
+  # Anti-repetition sampler param (OpenAI request-body, forwarded by
+  # OpenRouter): breaks output-repetition loops (thinking/narration stuck
+  # repeating the same sentences). 1.0 is a moderate value — enough to break
+  # a loop, low enough to avoid degrading quality. Additive penalty, applied
+  # per token already emitted (OpenAI-style). Ollama's /v1 endpoint honors it.
   extra_body:
-    provider:
-      order: [deepinfra, parasail, coreweave]
-      quantizations: [fp8]
-    # Anti-repetition sampler param (OpenAI request-body, forwarded by
-    # OpenRouter): breaks output-repetition loops (thinking/narration stuck
-    # repeating the same sentences). 1.0 is a moderate value — enough to break
-    # a loop, low enough to avoid degrading quality. Additive penalty, applied
-    # per token already emitted (OpenAI-style).
     frequency_penalty: 1.0
 
-  # Reasoning effort for DeepSeek V4.1 Flash. `medium` avoids the 'thinking
-  # forever' loops on simple turns. OpenRouterModelSettings.openrouter_reasoning
-  # forwards to the OpenRouter `reasoning` body.
-  openrouter_reasoning:
-    effort: none
+  # Reasoning effort for DeepSeek V4.1 Flash (OpenRouter-only; ignored by
+  # Ollama). `medium` avoids the 'thinking forever' loops on simple turns.
+  # openrouter_reasoning:
+  #   effort: none
 
 # ---------------------------------------------------------------------------
 # Web trust boundary (lives in the spec — the source of truth). Read by
@@ -311,13 +310,16 @@ mcp:
   config: data/mcp_servers/demo_servers.json
 compact:
   turn_boundary: true          # Run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (single mid-turn behavior).
-  turn_boundary_target: 150000 # Routine budget at the turn boundary — keeps each turn small/stable (well under the 300k emergency). 150k for now; tuneable.
-  target_tokens: 300000        # Emergency ceiling: 300k = the reliable context ceiling (mid-turn near-limits). deepseek rates 1M but attention degrades; do NOT use 1M. Only fires when a single turn approaches the ceiling.
+  # turn_boundary_target: 150000  # OLD (300k-context tuning)
+  turn_boundary_target: 50000 # Routine budget at the turn boundary — keeps each turn small/stable (well under the 80k emergency). 50k for now; tuneable.
+  # target_tokens: 300000         # OLD (300k-context tuning)
+  target_tokens: 80000        # Emergency ceiling: 80k = the reliable context ceiling for the 90k-context Ollama model (mid-turn near-limits). Only fires when a single turn approaches the ceiling.
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 20
-  min_clear_tokens: 20000
+  # min_clear_tokens: 20000        # OLD (300k-context tuning)
+  min_clear_tokens: 10000
 
 # Per-assistant memory tuning.
 # Read by `build_agent` -> `_spec_memory_config` -> `_build_memory` -> the
