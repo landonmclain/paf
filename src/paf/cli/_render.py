@@ -26,6 +26,7 @@ from rich.cells import cell_len
 from rich.console import Console, JustifyMethod
 from rich.markdown import Heading, Markdown, MarkdownElement
 
+from paf.approvals import ApprovalRequest, ApprovalResolved
 from paf.runtime import StreamEvent, ToolError
 
 _DATE_STAMP = re.compile(r"^\[date: [^\]]*\]\s*")
@@ -259,6 +260,10 @@ class TurnPrinter:
         self.open_step: str | None = None  # tool whose line is still open
         self.pending: dict[str, str] = {}  # step_id -> tool name (awaiting result)
         self.resolving: str | None = None  # step whose result arrived, outcome unknown
+        # step_id -> why it did not run (an approval that was not granted). The
+        # tool still "returns" (the denial message), so without this the line
+        # would end in a misleading ✓.
+        self.not_run: dict[str, str] = {}
 
     def _write(self, s: str) -> None:
         if s:
@@ -276,6 +281,8 @@ class TurnPrinter:
 
     def _settle(self, step: str, error: str | None) -> None:
         name = self.pending.pop(step, "tool")
+        if error is None and step in self.not_run:
+            error = self.not_run.pop(step)
         if self.open_step == step:
             self.open_step = None
             if error is None:
@@ -294,6 +301,12 @@ class TurnPrinter:
             self._settle(step, error)
 
     def feed(self, ev: Any) -> None:
+        if isinstance(ev, ApprovalResolved):
+            self._newline()
+            self._write(render_approval_resolved(ev))
+            if ev.outcome != "approved":
+                self.not_run[ev.tool_call_id] = _NOT_RUN[ev.outcome]
+            return
         if isinstance(ev, ToolError):
             if self.resolving == ev.step_id:
                 self._flush_result(ev.error)
@@ -351,6 +364,85 @@ class TurnPrinter:
     def finish(self) -> None:
         self._flush_result()
         self._newline()
+
+
+# --- approvals ------------------------------------------------------------------
+
+_NOT_RUN = {
+    "denied": "denied, not run",
+    "timeout": "no answer, not run",
+    "cancelled": "cancelled, not run",
+    "unattended": "needs approval, not run",
+}
+_OUTCOME = {
+    "approved": f"{GREEN}✓ approved{RESET}",
+    "denied": f"{RED}✗ denied{RESET}",
+    "timeout": f"{RED}✗ no answer in time, denied{RESET}",
+    "cancelled": f"{RED}✗ cancelled{RESET}",
+    "unattended": f"{RED}✗ nobody to ask, denied{RESET}",
+}
+
+
+def _pretty_args(args: str) -> list[str]:
+    """Arguments as readable lines: one ``key: value`` per argument when JSON."""
+    import json
+
+    try:
+        data = json.loads(args)
+    except (TypeError, ValueError):
+        return [args]
+    if not isinstance(data, dict):
+        return [json.dumps(data, ensure_ascii=False)]
+    lines = []
+    for key, value in data.items():
+        text = (
+            value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        )
+        lines.append(f"{key}: {text}")
+    return lines
+
+
+def render_approval_request(req: ApprovalRequest, *, now: float | None = None) -> str:
+    """The panel shown when a tool call is waiting for the user."""
+    import time
+
+    width = max(40, _width() - 4)
+    minutes = max(1, round((req.expires_at - (now or time.time())) / 60))
+    lines = [f"\n{YELLOW}⚠ approval needed{RESET}  {req.tool_name}"]
+    for line in _pretty_args(req.args):
+        for chunk in textwrap.wrap(_safe(line), width - 4) or [""]:
+            lines.append(f"    {chunk}")
+    lines.append(f"  {DIM}why: {_safe(req.reason)}{RESET}")
+    if req.preview:
+        for key, value in req.preview.items():
+            lines.append(f"  {DIM}{key}: {_safe(str(value))}{RESET}")
+    lines.append(
+        f"  {DIM}y approve · n deny (text after n is sent to the agent) · "
+        f"Enter or Ctrl-C deny · expires in {minutes} min{RESET}"
+    )
+    return "\n".join(lines) + "\n"
+
+
+def render_approval_resolved(ev: ApprovalResolved) -> str:
+    who = f" by {ev.actor}" if ev.actor and ev.actor not in ("system", "cli") else ""
+    note = (
+        f" {DIM}({_safe(ev.note)}){RESET}" if ev.note and ev.outcome == "denied" else ""
+    )
+    return f"  {_OUTCOME.get(ev.outcome, ev.outcome)}{who}{note}  {DIM}{ev.tool_name}{RESET}\n"
+
+
+def parse_approval_answer(text: str | None) -> tuple[bool, str]:
+    """``y``/``yes`` approves. Anything else denies; text after ``n``/``no``
+    (or any other text) becomes the note the agent sees."""
+    t = (text or "").strip()
+    if not t:
+        return False, ""
+    first, _, rest = t.partition(" ")
+    if first.lower() in ("y", "yes"):
+        return True, ""
+    if first.lower() in ("n", "no"):
+        return False, rest.strip()
+    return False, t
 
 
 # --- history rendering --------------------------------------------------------

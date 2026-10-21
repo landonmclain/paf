@@ -49,6 +49,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 
+from paf.approvals import ApprovalRequest, ApprovalRequested
 from paf.background_processes._events import get_agent_emitter
 from paf.capabilities import PROFILES
 from paf.capabilities.planning import PlanItem
@@ -67,7 +68,9 @@ from paf.cli._render import (
     TurnPrinter,
     _out,
     _width,
+    parse_approval_answer,
     print_history,
+    render_approval_request,
     render_user,
 )
 from paf.clients import notify_message, plan_items, prompt_with_images, task_frames
@@ -86,6 +89,7 @@ DEFAULT_AGENT = "demo_assistant"
 _ACTIVE = {"queued", "running", "processing"}
 _COORDINATOR_JOBS = {"consolidation", "review", "thread_summarize", "keyword_curate"}
 _NOTIFY = object()  # prompt result: a background notify started a turn
+_SETTLED = object()  # approval prompt result: the request was settled elsewhere
 
 # Prompt-toolkit styling. The default bottom toolbar is reverse video (a solid
 # white bar); this keeps it in the terminal's own colors, dimmed, with state
@@ -217,6 +221,13 @@ class ChatApp:
                     "<placeholder>sent into the running turn · Ctrl-C drops it"
                     "</placeholder>"
                 ),
+            )
+            # Approval answers: one line, never saved to the input history.
+            self.approve_ps: PromptSession = PromptSession(
+                key_bindings=kb,
+                multiline=False,
+                style=_PT_STYLE,
+                erase_when_done=False,
             )
         get_agent_emitter(agent).on_any(self._on_process)
 
@@ -420,6 +431,14 @@ class ChatApp:
                 if kind == "end":
                     break
                 if kind == "event":
+                    if isinstance(item, ApprovalRequested):
+                        printer.pause()
+                        if keys is not None:
+                            keys.pause()
+                        await self._approve(item.request)
+                        if keys is not None and not handle.done:
+                            keys.resume()
+                        continue
                     printer.feed(item)
                     continue
                 printer.pause()
@@ -439,6 +458,45 @@ class ChatApp:
         elif self._sigints:
             _out(f"{DIM}(cancelled){RESET}\n")
         _out("\n")
+
+    async def _approve(self, req: ApprovalRequest) -> None:
+        """Ask the user to approve one tool call, then settle it.
+
+        ``y`` approves; ``n``, Enter or Ctrl-C denies, and text after ``n`` is
+        passed to the agent as the reason. If the request is settled some other
+        way while the prompt is open (it timed out, the turn was stopped, another
+        client answered) the prompt closes by itself.
+        """
+        assert self.session is not None
+        _out(render_approval_request(req))
+        if getattr(self, "approve_ps", None) is None:
+            return  # no terminal: the request times out (it should not be asked)
+        session = self.session
+
+        async def watch() -> None:
+            while True:
+                await asyncio.sleep(0.2)
+                if all(r.id != req.id for r in session.pending_approvals()):
+                    app = self.approve_ps.app
+                    if app.is_running:
+                        app.exit(result=_SETTLED)
+                    return
+
+        watcher = asyncio.create_task(watch())
+        try:
+            answer = await self.approve_ps.prompt_async(
+                HTML("<marker>approve? [y/N] ❯</marker> ")
+            )
+        except (KeyboardInterrupt, EOFError):
+            answer = ""
+        finally:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+        if answer is _SETTLED:
+            return  # the ApprovalResolved event that follows says how
+        approved, note = parse_approval_answer(answer)
+        if not session.resolve_approval(req.id, approved, note=note, actor="cli"):
+            _out(f"{DIM}  (already settled){RESET}\n")
 
     async def _steer(self, typed: str) -> None:
         """Read a steer message (starting with the keys already typed) and send it.
@@ -491,7 +549,13 @@ class ChatApp:
         await self.drain_detached()  # never let start_turn re-attach + drop us
         assert self.session is not None
         _out("\n")
-        await self.stream(self.session.start_turn(prompt, conversation_id=self.cid))
+        # A person at a terminal can answer approval requests; piped input
+        # cannot, so its turns refuse anything that needs approval.
+        await self.stream(
+            self.session.start_turn(
+                prompt, conversation_id=self.cid, interactive=self.ps is not None
+            )
+        )
         # A steer that missed its turn (it ended first) becomes the next message.
         while self.queued:
             await self.send(self.queued.pop(0))
