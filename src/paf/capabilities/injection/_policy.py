@@ -5,7 +5,7 @@
         scorer: stackone          # the only scorer so far
         semantic: true            # stackone's ML tier (false = patterns only)
         threshold: null           # null = the scorer's calibrated default
-        default_action: block     # off | observe | flag | block   (redact: later)
+        default_action: block     # off | observe | flag | redact | block
         tools:                    # glob -> action, first match wins
           list_directory: observe
           read_file: flag
@@ -17,8 +17,8 @@
 With no block at all the policy is the old behaviour: every tool ``block`` at the
 scorer's default threshold, nothing marked, no tightening. A malformed block
 raises at build time rather than loading half a policy, and a reserved feature
-that is not built yet (``redact``, ``scope: conversation``) refuses to load
-instead of being silently ignored.
+that is not built yet (``scope: conversation``) refuses to load instead of
+being silently ignored.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 ACTIONS: tuple[str, ...] = ("off", "observe", "flag", "redact", "block")
-IMPLEMENTED_ACTIONS: frozenset[str] = frozenset({"off", "observe", "flag", "block"})
+IMPLEMENTED_ACTIONS: frozenset[str] = frozenset(ACTIONS)
 TAINTING_ACTIONS: frozenset[str] = frozenset({"flag", "redact", "block"})
 """A hit under one of these tightens gating for the rest of the run (``on_flag``).
 ``observe`` is for measuring, so it never changes behaviour."""
@@ -80,7 +80,7 @@ class InjectionPolicy:
         actions = {self.default_action, *(a for _, a in self.tools)}
         if self.mark_untrusted == "always":
             return bool(actions - {"off"})
-        return "flag" in actions
+        return bool(actions & {"flag", "redact"})
 
 
 def _action(value: Any, where: str) -> str:

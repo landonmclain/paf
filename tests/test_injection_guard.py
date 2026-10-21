@@ -122,8 +122,7 @@ def test_tool_globs_first_match_wins_then_default():
     ("config", "match"),
     [
         ({"default_action": "allow"}, "must be one of"),
-        ({"default_action": "redact"}, "not implemented yet"),
-        ({"tools": {"read_file": "redact"}}, "not implemented yet"),
+        ({"tools": {"read_file": "quarantine"}}, "must be one of"),
         ({"mark_untrusted": "sometimes"}, "must be one of"),
         ({"on_flag": {"scope": "conversation"}}, "not implemented yet"),
         ({"on_flag": {"scope": "forever"}}, "must be one of"),
@@ -262,7 +261,7 @@ def test_builder_defaults_and_spec_policy():
     guard = _build_injection_guard(None, {"default_action": "observe"})
     assert guard.policy.default_action == "observe"
     with pytest.raises(ValueError):
-        _build_injection_guard(None, {"default_action": "redact"})
+        _build_injection_guard(None, {"default_action": "allow"})
 
 
 def test_registry_has_the_new_name_and_the_alias():

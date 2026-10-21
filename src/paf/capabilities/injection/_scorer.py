@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import anyio.to_thread
 from pydantic_core import to_jsonable_python
 
 # Risk levels that mean the scorer escalated beyond stackone's 'medium' baseline.
@@ -50,6 +51,16 @@ class InjectionScorer(Protocol):
         ...
 
     async def score(self, value: object, tool_name: str) -> Score: ...
+
+    async def localize(
+        self, text: str, tool_name: str
+    ) -> list[tuple[str, float]] | None:
+        """Per-segment scores for ``text``: verbatim substrings and their scores.
+
+        Used by the ``redact`` action. ``None`` means the scorer cannot say where
+        in the text the problem is, and the caller falls back to ``block``.
+        """
+        ...
 
 
 def _payload(value: object) -> object:
@@ -107,6 +118,23 @@ class StackoneScorer:
             _payload(value), tool_name
         )
         return self._to_score(verdict)
+
+    def localize_sync(self, text: str) -> list[tuple[str, float]] | None:
+        """Sentence-level scores from the same classifier (``None`` without it)."""
+        if not self._semantic:
+            return None
+        result = self._defense._tier2.classify_by_sentence(text)  # noqa: SLF001
+        if result.get("skipped"):
+            return None
+        return [
+            (s["sentence"], float(s["score"]))
+            for s in result.get("sentence_scores", [])
+        ]
+
+    async def localize(
+        self, text: str, tool_name: str
+    ) -> list[tuple[str, float]] | None:
+        return await anyio.to_thread.run_sync(self.localize_sync, text)
 
     @staticmethod
     def _to_score(verdict: Any) -> Score:
