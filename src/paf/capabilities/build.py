@@ -69,6 +69,7 @@ from paf.capabilities.push import Push
 from paf.capabilities.python import Python as _Python
 from paf.capabilities.scheduled_tasks import ScheduledTasks
 from paf.capabilities.shell import Shell as _Shell
+from paf.capabilities.shell._command_policy import parse_command_policy
 from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.subagents import Subagents
 from paf.capabilities.thread_summarizer import ThreadSummarizer
@@ -416,9 +417,13 @@ def _build_shell(
     executor = None
     if isinstance(shell_config, dict):
         executor = _resolve_shell_executor(shell_config.get("executor"))
+    command_policy = None
+    if isinstance(shell_config, dict) and shell_config.get("command_policy"):
+        command_policy = parse_command_policy(shell_config["command_policy"])
     return _Shell(
         cwd=cwd,
         executor=executor,
+        command_policy=command_policy,
         processes_root=str(PROCESSES_DIR),
         agent=agent_name or "assistant",
         on_complete=on_complete,

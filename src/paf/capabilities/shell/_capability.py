@@ -8,13 +8,46 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
+from opentelemetry import trace
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.tools import AgentDepsT
+from pydantic_ai.exceptions import ApprovalRequired, SkipToolExecution
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.tools import AgentDepsT, RunContext, ToolDefinition
 
+from paf.approvals import approvals_available, current_channel
 from paf.capabilities._sandbox import SandboxedExecutor
 
+from ._analyze import analyze
+from ._command_policy import CommandPolicy, evaluate
+from ._preview import preview
 from ._toolset import ShellToolset
+
+# Tools whose `command` argument the command policy inspects.
+_COMMAND_TOOLS = ("run_command", "start_command")
+POLICY_SPAN = "paf.shell.command_policy"
+_TRACER = trace.get_tracer("paf")
+
+COMMAND_POLICY_INSTRUCTIONS = (
+    "Some shell commands (deleting files, discarding git changes, force-pushing, "
+    "writing to disks) ask the user for approval before they run. When the task "
+    "needs one, run the correct, direct command: the user will be shown it and "
+    "asked. Do not substitute a workaround to avoid the prompt (find -delete, a "
+    "Python one-liner, moving files elsewhere): those ask too, and are harder for "
+    "the user to review. If a command is denied or refused, do not retry it or "
+    "work around it; ask the user how to proceed."
+)
+_BLOCKED = (
+    "This shell command was refused by the agent's command policy before it ran: "
+    "{reason}. Do not retry it or work around it; tell the user what you wanted "
+    "to do."
+)
+_UNATTENDED = (
+    "This shell command needs the user's approval ({reason}), and no one is "
+    "attached to this turn to give it, so it was refused before it ran. Do not "
+    "retry it or work around it; tell the user what you wanted to do."
+)
 
 _DEFAULT_DENIED_COMMANDS: tuple[str, ...] = (
     "rm",
@@ -134,12 +167,70 @@ class Shell(AbstractCapability[AgentDepsT]):
     notify turn through the originating session. ``None`` disables the hook.
     """
 
+    command_policy: CommandPolicy | None = None
+    """Per-command allow / approve / block (``_command_policy``). When set it
+    replaces the first-word deny list: a destructive command reaches the person
+    for approval instead of being refused. Paths are resolved against ``cwd``
+    (a ``cd`` earlier in the turn is not tracked here when ``persist_cwd`` is on)."""
+
     def __post_init__(self) -> None:
         """Resolve the built-in denylist according to the selected policy."""
         if self.denied_commands is _DEFAULT_DENIED_COMMANDS:
-            self.denied_commands = (
-                [] if self.allowed_commands else list(_DEFAULT_DENIED_COMMANDS)
+            replaced = self.allowed_commands or self.command_policy is not None
+            self.denied_commands = [] if replaced else list(_DEFAULT_DENIED_COMMANDS)
+
+    def get_instructions(self) -> list[str] | None:
+        return (
+            [COMMAND_POLICY_INSTRUCTIONS] if self.command_policy is not None else None
+        )
+
+    async def before_tool_execute(
+        self,
+        ctx: RunContext[AgentDepsT],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply the command policy before a shell command runs."""
+        policy = self.command_policy
+        if policy is None or call.tool_name not in _COMMAND_TOOLS:
+            return args
+        command = args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return args
+        cwd = Path(self.cwd).expanduser()
+        decision = evaluate(policy, analyze(command), cwd)
+        if decision.action == "allow":
+            return args
+        self._trace(call, command, decision)
+        if decision.action == "block":
+            raise SkipToolExecution(_BLOCKED.format(reason=decision.reason))
+        if ctx.tool_call_approved:
+            return args
+        if not approvals_available():
+            raise SkipToolExecution(_UNATTENDED.format(reason=decision.reason))
+        channel = current_channel()
+        if channel is not None:
+            channel.annotate(
+                call.tool_call_id,
+                reason=decision.reason,
+                preview=preview(decision.deciding, cwd),
             )
+        raise ApprovalRequired
+
+    @staticmethod
+    def _trace(call: ToolCallPart, command: str, decision: Any) -> None:
+        try:
+            from paf.capabilities.guardrails.secret_handles import scrub_secrets
+
+            with _TRACER.start_as_current_span(POLICY_SPAN) as span:
+                span.set_attribute("tool", call.tool_name)
+                span.set_attribute("action", decision.action)
+                span.set_attribute("command", scrub_secrets(command)[:500])
+                span.set_attribute("reason", decision.reason[:500])
+        except Exception:  # noqa: BLE001 - observability must never fail the run
+            pass
 
     def get_toolset(self) -> ShellToolset[AgentDepsT]:
         """Build and return the shell toolset."""

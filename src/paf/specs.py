@@ -763,6 +763,10 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
         resolved = _spec_executor_block(executor)
         if resolved:
             config["executor"] = resolved
+    # Per-command allow / approve / block; validated by the builder
+    # (shell._command_policy.parse_command_policy), which raises on a bad block.
+    if isinstance(block.get("command_policy"), dict):
+        config["command_policy"] = block["command_policy"]
     return config or None
 
 
