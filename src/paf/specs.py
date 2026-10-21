@@ -1095,6 +1095,31 @@ def load_agent_spec(
     return AgentSpec.from_file(path)
 
 
+def spec_approval_timeout(
+    agent_name: str,
+    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
+) -> float:
+    """Seconds an approval request waits for a person (spec ``approvals.timeout``).
+
+        approvals:
+          timeout: 600     # default 600 (10 minutes); then the call is denied
+
+    Falls back to the default when the spec or the key is absent or invalid.
+    """
+    from paf.approvals import DEFAULT_TIMEOUT_S
+
+    try:
+        block = _spec_mapping_block(
+            get_spec_path(agent_name, spec_directory), "approvals"
+        )
+    except AgentSpecNotFoundError:
+        return DEFAULT_TIMEOUT_S
+    value = (block or {}).get("timeout")
+    if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
+        return float(value)
+    return DEFAULT_TIMEOUT_S
+
+
 def spec_usage_limits(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,

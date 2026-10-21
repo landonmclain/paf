@@ -139,13 +139,23 @@ def test_profile_is_the_gatekeeper_for_runtime_capabilities() -> None:
     assert Memory in types
     assert TieredCompaction in types
 
+    # The one exception to "exactly what the profile lists": the ApprovalBroker
+    # is plumbing on every agent. It never approves anything by itself, and
+    # without it a guard asking for approval would leave the run with an
+    # unhandled deferred request. Everything else is the profile's call.
+    from paf.approvals import ApprovalBroker
+
+    def chosen(caps):
+        return {type(c) for c in caps} - {ApprovalBroker}
+
     # A minimal profile with only StepPersistence must get ONLY StepPersistence.
     minimal = _runtime_capabilities_for(("StepPersistence",))
-    assert {type(c) for c in minimal} == {StepPersistence}
+    assert chosen(minimal) == {StepPersistence}
+    assert ApprovalBroker in {type(c) for c in minimal}
 
     # A profile that allows persistence + recall gets both, none of the others.
     no_index = _runtime_capabilities_for(("StepPersistence", "ConversationSearch"))
-    assert {type(c) for c in no_index} == {StepPersistence, ConversationSearch}
+    assert chosen(no_index) == {StepPersistence, ConversationSearch}
 
     # A profile WITHOUT "Compaction" gets no compaction at all.
     no_compaction = _runtime_capabilities_for(("StepPersistence", "ConversationSearch"))

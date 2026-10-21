@@ -37,6 +37,7 @@ from pydantic_ai_harness.tool_output_limits import (
 )
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from paf.approvals import ApprovalBroker, approvals_available
 from paf.capabilities._sandbox import (
     DockerExecutor,
     LocalProcessExecutor,
@@ -816,8 +817,8 @@ def _build_tool_gating(store, gating_config: dict | None = None) -> ToolGuardrai
     ``specs._spec_gating_config``): an ordered rule list compiled by
     ``guardrails.gating_policy`` into ``allow`` / ``block`` / ``approve``
     outcomes, optionally conditioned on a path argument. ``approve`` is enforced
-    as ``block`` here (``approval_available=False``) until a transport can show
-    the request to a person and resume the run. Absent block -> the legacy
+    as a request to the person attached to the turn (``paf.approvals``), and as
+    ``block`` when nobody is attached (background turns, piped runs). Absent block -> the legacy
     ``tool_gating_guard`` (``DEFAULT_GATED_TOOLS``). A malformed block raises at
     build time rather than loading half a policy.
 
@@ -827,7 +828,7 @@ def _build_tool_gating(store, gating_config: dict | None = None) -> ToolGuardrai
     policy = parse_policy(gating_config)
     if policy is not None:
         return ToolGuardrail(
-            guard=make_gating_guard(policy, approval_available=False),
+            guard=make_gating_guard(policy, approval_available=approvals_available),
             id="tool_gating",
             description=(
                 "Applies this agent's declarative gating policy to every tool "
@@ -1204,6 +1205,12 @@ def build_runtime_capabilities(
                 (workspace_config or {}).get("expose_paths", True),
             )
         )
+    # Approval plumbing, not a capability choice: the broker never approves
+    # anything by itself. It answers pydantic-ai's deferred-tool hook by asking
+    # the person attached to the turn, and denies at once when nobody is
+    # (background turns, piped runs), so a guard that asks for approval can never
+    # leave a run ending in an unhandled deferred request.
+    capabilities.append(ApprovalBroker())
     # NOTE: the ThreadSummarizer no longer captures evictions — the
     # capture-WAL wiring (attach_to_window) was removed. The
     # runtime trigger resolves the unsummarized span directly from the step

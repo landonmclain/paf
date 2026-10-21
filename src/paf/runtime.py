@@ -52,6 +52,15 @@ from pydantic_ai_harness.compaction import compact_now
 from pydantic_ai_harness.step_persistence import continue_run
 from pydantic_graph import End
 
+from paf.approvals import (
+    DEFAULT_TIMEOUT_S,
+    ApprovalAudit,
+    ApprovalChannel,
+    ApprovalRequest,
+    ApprovalRequested,
+    ApprovalResolved,
+    bind_channel,
+)
 from paf.background import (
     DONE,
     ERROR,
@@ -67,6 +76,7 @@ from paf.capabilities import PROFILES
 from paf.capabilities.compaction import build_boundary_compaction_for_agent
 from paf.capabilities.persistence import _build_store
 from paf.clock import now_local
+from paf.config import APPROVALS_DIR
 from paf.degeneration_guard import (
     DegenerationError,
     DegenerationGuard,
@@ -79,7 +89,12 @@ from paf.observability.instrumentation import (
     shutdown_observability,
 )
 from paf.push import PushRequest, PushResult
-from paf.specs import build_agent, resolve_profile_name, spec_usage_limits
+from paf.specs import (
+    build_agent,
+    resolve_profile_name,
+    spec_approval_timeout,
+    spec_usage_limits,
+)
 
 log = logging.getLogger(__name__)
 
@@ -172,9 +187,12 @@ class MaintenanceEvent:
 
 
 #: The per-tool lifecycle events that ride the turn ``stream()``, in addition
-#: to the :class:`StreamEvent` kinds. Background/Maintenance events live on
+#: to the :class:`StreamEvent` kinds, plus the approval events an interactive
+#: turn publishes (``paf.approvals``). Background/Maintenance events live on
 #: their own ``subscribe_tasks`` timeline, never the turn.
-TurnStreamEvent = StreamEvent | ToolRunning | ToolError
+TurnStreamEvent = (
+    StreamEvent | ToolRunning | ToolError | ApprovalRequested | ApprovalResolved
+)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +402,7 @@ class TurnHandle:
         conversation_id: str | None,
         token: CancellationToken,
         origin: TurnOrigin = "user",
+        interactive: bool = False,
     ) -> None:
         self._session = session
         self._token = token
@@ -399,6 +418,17 @@ class TurnHandle:
         # Start of the most recent contiguous answer (text) block.
         self._answer = ""
         self._last_kind: str | None = None
+        # A person is attached (CLI prompt, browser): approval requests go to
+        # them through this channel. None = nobody to ask, so guards refuse.
+        self.approvals: ApprovalChannel | None = None
+        if interactive:
+            self.approvals = ApprovalChannel(
+                emit=self._publish,
+                timeout=getattr(session, "_approval_timeout", DEFAULT_TIMEOUT_S),
+                conversation_id=conversation_id
+                or getattr(session, "conversation_id", None),
+                audit=getattr(session, "_approval_audit", None),
+            )
         self._task = asyncio.create_task(self._pump(prompt, conversation_id))
 
     @property
@@ -424,11 +454,15 @@ class TurnHandle:
     async def _pump(self, prompt: str, conversation_id: str | None) -> None:
         outcome: TurnOutcome = "ok"
         try:
-            async for ev in self._session.stream(
-                prompt, conversation_id=conversation_id, _token=self._token
-            ):
-                self._track_answer(ev)
-                self._publish(ev)
+            # Bind this turn's approval channel for the whole run: the stream's
+            # generator executes in this task, so guards deep inside the agent
+            # run see it (paf.approvals.approvals_available).
+            with bind_channel(self.approvals):
+                async for ev in self._session.stream(
+                    prompt, conversation_id=conversation_id, _token=self._token
+                ):
+                    self._track_answer(ev)
+                    self._publish(ev)
         except asyncio.CancelledError:
             outcome = "aborted"
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
@@ -441,6 +475,8 @@ class TurnHandle:
             if outcome == "ok" and self._token.cancelled:
                 outcome = "stopped"
             self.outcome = outcome
+            if self.approvals is not None:
+                self.approvals.cancel_all("turn ended")
             self._publish(None)  # end sentinel to every subscriber
             self._session._clear_turn(self)
             self._schedule_settled()
@@ -586,6 +622,8 @@ class Session:
         # Per-run usage limits from the spec's `usage_limits:` block (None when
         # absent -> pydantic-ai's default UsageLimits()). Passed to iter() below.
         self._usage_limits = spec_usage_limits(agent_name)
+        self._approval_timeout = spec_approval_timeout(agent_name)
+        self._approval_audit = ApprovalAudit(APPROVALS_DIR / f"{agent_name}.jsonl")
         self.history: list = []
         # Background orchestrator — BARE by default. The app/CLI attaches a
         # :class:`paf.background.BackgroundLanes` facade (via
@@ -1030,6 +1068,7 @@ class Session:
         *,
         conversation_id: str | None = None,
         origin: TurnOrigin = "user",
+        interactive: bool = False,
     ) -> TurnHandle:
         """Start a Session-owned turn, or re-attach to the running one.
 
@@ -1043,13 +1082,47 @@ class Session:
         ``origin`` records who started the turn (``user`` message vs a ``notify``
         completion); it is reported to ``on_turn_settled`` so a notifier can treat
         a user's own turn differently from a background one.
+
+        ``interactive`` means a person is attached who can answer approval
+        requests (the interactive CLI, a browser). Without it, anything that
+        needs approval is refused, as for background and piped turns.
         """
         if self._turn is not None:
             return self._turn
         token = CancellationToken()
         self._token = token
-        self._turn = TurnHandle(self, prompt, conversation_id, token, origin)
+        self._turn = TurnHandle(
+            self, prompt, conversation_id, token, origin, interactive=interactive
+        )
         return self._turn
+
+    # -- approvals --------------------------------------------------------------
+
+    def pending_approvals(self) -> list[ApprovalRequest]:
+        """Approval requests the running turn is waiting on (empty if none)."""
+        turn = self._turn
+        if turn is None or turn.approvals is None:
+            return []
+        return turn.approvals.pending()
+
+    @property
+    def has_pending_approvals(self) -> bool:
+        return bool(self.pending_approvals())
+
+    def resolve_approval(
+        self,
+        approval_id: str,
+        approved: bool,
+        *,
+        note: str = "",
+        actor: str = "user",
+    ) -> bool:
+        """Decide a pending request. ``False`` if it is unknown or already
+        decided (the first decision wins; a second client gets ``False``)."""
+        turn = self._turn
+        if turn is None or turn.approvals is None:
+            return False
+        return turn.approvals.resolve(approval_id, approved, note=note, actor=actor)
 
     async def _notify_user(self, title: str, body: str, urgent: bool) -> PushResult:
         """Backend of the agent's ``send_push`` tool.
@@ -1089,7 +1162,12 @@ class Session:
         Returns once the token is cancelled; the running ``stream()`` loop
         observes it at its next natural boundary and ends with ``RunCancelled``
         (carrying completed history for resume). No-op if nothing is running.
+        A turn waiting on an approval would not reach that boundary, so pending
+        requests are denied first.
         """
+        turn = getattr(self, "_turn", None)
+        if turn is not None and turn.approvals is not None:
+            turn.approvals.cancel_all("turn stopped")
         self._token.cancel()
 
     async def enqueue(self, content: str, *, priority: str = "asap") -> str | None:

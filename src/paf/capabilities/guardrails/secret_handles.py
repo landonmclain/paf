@@ -131,44 +131,48 @@ def _is_secret(name: str, value: str) -> bool:
     )
 
 
+def scrub_secrets(text: str, allowed: Collection[str] | None = None) -> str:
+    """Replace credential values in ``text`` (the result backstop's rules).
+
+    A value is scrubbed when its variable qualifies under :func:`_is_secret`, or
+    when it is on the ``allowed`` list (those are credentials by declaration
+    whatever they are called). A variable the model is permitted to reference
+    becomes its ``$SECRET:NAME`` handle (``allowed=None`` permits all; otherwise
+    only listed names); any other becomes ``[redacted]``, which names no variable
+    and offers no handle. Longest values are replaced first so a secret that
+    contains another is not left half-visible.
+    """
+    permitted = None if allowed is None else frozenset(allowed)
+    found: dict[str, str] = {}
+    for name, value in os.environ.items():
+        declared = permitted is not None and name in permitted
+        if value in found:
+            continue
+        if (declared and len(value) >= _MIN_SECRET_LENGTH) or _is_secret(name, value):
+            found[value] = (
+                f"{_HANDLE_PREFIX}{name}"
+                if permitted is None or name in permitted
+                else _REDACTED
+            )
+    for value in sorted(found, key=len, reverse=True):
+        text = text.replace(value, found[value])
+    return text
+
+
 def make_secret_result_guard(
     allowed: Collection[str] | None = None,
 ) -> Callable[[ToolResultInfo], GuardrailResult]:
-    """Build the result-redaction backstop.
+    """Build the result-redaction backstop (see :func:`scrub_secrets`).
 
     Scrubs credential values from a tool result so a tool that echoes one back
-    does not hand it to the model. A value is scrubbed when its variable
-    qualifies under :func:`_is_secret`, or when it is on the ``allowed`` list
-    (those are credentials by declaration whatever they are called).
-
-    Replacement text: a variable the model is permitted to reference becomes its
-    ``$SECRET:NAME`` handle (``allowed=None`` permits all; otherwise only listed
-    names), so it can pass it on to a tool. Any other becomes ``[redacted]``,
-    which names no variable and offers no handle. Longest values are replaced
-    first so a secret that contains another is not left half-visible.
+    does not hand it to the model.
     """
-    permitted = None if allowed is None else frozenset(allowed)
 
     def guard(info: ToolResultInfo) -> GuardrailResult:
         result = info.result
         if not isinstance(result, str):
             return GuardrailResult.allow()
-        found: dict[str, str] = {}
-        for name, value in os.environ.items():
-            declared = permitted is not None and name in permitted
-            if value in found:
-                continue
-            if (declared and len(value) >= _MIN_SECRET_LENGTH) or _is_secret(
-                name, value
-            ):
-                found[value] = (
-                    f"{_HANDLE_PREFIX}{name}"
-                    if permitted is None or name in permitted
-                    else _REDACTED
-                )
-        redacted = result
-        for value in sorted(found, key=len, reverse=True):
-            redacted = redacted.replace(value, found[value])
+        redacted = scrub_secrets(result, allowed)
         if redacted != result:
             return GuardrailResult.replace(redacted)
         return GuardrailResult.allow()

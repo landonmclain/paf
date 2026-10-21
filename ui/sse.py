@@ -403,6 +403,10 @@ def _session_is_busy(session: Session) -> bool:
     reapable — that is the cost guard.
     """
     turn = session.current_turn
+    if turn is not None and getattr(turn, "approvals", None) is not None:
+        # A turn waiting on a person must not be reaped mid-wait.
+        if turn.approvals.pending():
+            return True
     return turn is not None and turn.has_subscribers
 
 

@@ -42,6 +42,8 @@ from pydantic_ai.tools import AgentDepsT, RunContext, ToolDefinition
 from pydantic_ai_harness import ToolGuardrail
 from pydantic_core import to_jsonable_python
 
+from paf.approvals import approvals_available, current_channel
+
 from ._policy import TAINTING_ACTIONS, InjectionPolicy
 from ._scorer import InjectionScorer, Score, StackoneScorer
 
@@ -153,9 +155,10 @@ class InjectionGuard(AbstractCapability[AgentDepsT]):
     """Defaults to the policy's scorer (``StackoneScorer``)."""
     blocked_message: str = DEFAULT_BLOCKED_MESSAGE
     on_decision: OnDecision | None = None
-    approval_available: bool = False
-    """True once a transport can ask a person and resume the run; until then a
-    call that needs approval is refused instead of deferred to nobody."""
+    approval_available: bool | None = None
+    """``None`` (default): ask a person when one is attached to the running
+    turn (``paf.approvals``), otherwise refuse. ``True`` / ``False`` force it
+    (tests)."""
 
     # --- per-run state (fresh in every run via `for_run`) --------------------
     _hits: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
@@ -216,15 +219,29 @@ class InjectionGuard(AbstractCapability[AgentDepsT]):
         if ctx.tool_call_approved:
             return args
         flagged_by = ", ".join(sorted({h["tool"] for h in self._hits}))
+        available = (
+            approvals_available()
+            if self.approval_available is None
+            else self.approval_available
+        )
         _emit(
             REFUSAL_SPAN_NAME,
             {
                 "tool": call.tool_name,
                 "flagged_by": flagged_by,
-                "approval_available": self.approval_available,
+                "approval_available": available,
             },
         )
-        if self.approval_available:
+        if available:
+            channel = current_channel()
+            if channel is not None:
+                channel.annotate(
+                    call.tool_call_id,
+                    reason=(
+                        "earlier content in this turn was flagged as a possible "
+                        f"prompt injection (flagged: {flagged_by})"
+                    ),
+                )
             raise ApprovalRequired
         self._refused.add(call.tool_call_id)
         raise SkipToolExecution(

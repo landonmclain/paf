@@ -148,10 +148,37 @@ def _block_message(name: str, rule: GatingRule | None, action: Action) -> str:
     )
 
 
+def _approval_reason(name: str, rule: GatingRule | None) -> str:
+    """Why this call needs a person, in words a person can act on."""
+    if rule is None:
+        return f"this agent's gating policy requires approval for every '{name}' call"
+    where = ""
+    if rule.inside is not None:
+        where = f" under {', '.join(rule.inside)}"
+    elif rule.outside is not None:
+        where = f" outside {', '.join(rule.outside)}"
+    target = f" ({rule.path_arg}{where})" if where else ""
+    return f"this agent's gating policy requires approval for '{name}'{target}"
+
+
 def make_gating_guard(
-    policy: GatingPolicy, *, approval_available: bool = False
+    policy: GatingPolicy,
+    *,
+    approval_available: bool | Callable[[], bool] = False,
 ) -> Callable[[ToolCallInfo], GuardrailResult]:
-    """Compile a policy into a ``ToolGuardrail`` ``guard=`` callable."""
+    """Compile a policy into a ``ToolGuardrail`` ``guard=`` callable.
+
+    ``approval_available`` may be a callable checked at call time (the builder
+    passes ``paf.approvals.approvals_available``: is a person attached to THIS
+    turn?). When it is, an ``approve`` outcome asks that person, with the reason
+    attached for the approval request; when it is not, ``approve`` is refused
+    exactly as before approvals existed.
+    """
+
+    def available() -> bool:
+        return (
+            approval_available() if callable(approval_available) else approval_available
+        )
 
     def guard(info: ToolCallInfo) -> GuardrailResult:
         rule = next(
@@ -160,7 +187,14 @@ def make_gating_guard(
         action = rule.action if rule is not None else policy.default
         if action == "allow":
             return GuardrailResult.allow()
-        if action == "approve" and approval_available:
+        if action == "approve" and available():
+            from paf.approvals import current_channel
+
+            channel = current_channel()
+            if channel is not None:
+                channel.annotate(
+                    info.tool_call_id, reason=_approval_reason(info.name, rule)
+                )
             return GuardrailResult.approve()
         return GuardrailResult.block(_block_message(info.name, rule, action))
 

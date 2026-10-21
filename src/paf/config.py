@@ -31,6 +31,8 @@ SPECS_DIR = PROJECT_ROOT / "specs"
 DATA_DIR = PROJECT_ROOT / "data"
 PLANS_DIR = DATA_DIR / "plans"
 PROCESSES_DIR = DATA_DIR / "processes"
+APPROVALS_DIR = DATA_DIR / "approvals"
+"""Approval audit trail: ``<agent>.jsonl``, one request and one decision record each."""
 
 
 class Settings(BaseSettings):

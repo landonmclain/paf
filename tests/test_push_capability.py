@@ -208,7 +208,15 @@ def test_profile_gate_controls_whether_the_tool_exists() -> None:
 
     with_push = AgentProfile(name="t1", capability_names=("Push",))
     without = AgentProfile(name="t2", capability_names=("StepPersistence",))
-    caps = build_runtime_capabilities(with_push, push_notifier=notifier)
+    # ApprovalBroker is plumbing on every agent (see test_build_agent); the
+    # profile decides everything else.
+    from paf.approvals import ApprovalBroker
+
+    caps = [
+        c
+        for c in build_runtime_capabilities(with_push, push_notifier=notifier)
+        if not isinstance(c, ApprovalBroker)
+    ]
     assert [type(c) for c in caps] == [Push] and caps[0].get_toolset() is not None
     assert not any(
         isinstance(c, Push)
