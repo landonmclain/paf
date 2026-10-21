@@ -122,10 +122,15 @@ def test_tool_globs_first_match_wins_then_default():
     ("config", "match"),
     [
         ({"default_action": "allow"}, "must be one of"),
-        ({"default_action": "flag"}, "not implemented yet"),
+        ({"default_action": "redact"}, "not implemented yet"),
         ({"tools": {"read_file": "redact"}}, "not implemented yet"),
-        ({"mark_untrusted": "flagged"}, "not implemented yet"),
-        ({"on_flag": {"require_approval": ["write_file"]}}, "not implemented yet"),
+        ({"mark_untrusted": "sometimes"}, "must be one of"),
+        ({"on_flag": {"scope": "conversation"}}, "not implemented yet"),
+        ({"on_flag": {"scope": "forever"}}, "must be one of"),
+        ({"on_flag": {"require_approval": "write_file"}}, "list of tool globs"),
+        ({"on_flag": {"require_approval": [""]}}, "list of tool globs"),
+        ({"on_flag": {"bogus": 1}}, "unknown keys"),
+        ({"on_flag": ["write_file"]}, "must be a mapping"),
         ({"bogus": 1}, "unknown keys"),
         ({"scorer": "gpt"}, "scorer must be one of"),
         ({"semantic": "yes"}, "true or false"),
@@ -257,7 +262,7 @@ def test_builder_defaults_and_spec_policy():
     guard = _build_injection_guard(None, {"default_action": "observe"})
     assert guard.policy.default_action == "observe"
     with pytest.raises(ValueError):
-        _build_injection_guard(None, {"default_action": "flag"})
+        _build_injection_guard(None, {"default_action": "redact"})
 
 
 def test_registry_has_the_new_name_and_the_alias():
