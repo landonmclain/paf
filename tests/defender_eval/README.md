@@ -84,6 +84,48 @@ guarantee. Report both.
 - The gate (`test_aggregate_floors`) holds general and code fixtures to separate
   floors, over stable verdicts only.
 
+## Comparing policies (`--compare`)
+
+`eval.py` measures the classifier. `--compare` measures what a whole
+`guardrails.injection` policy does to each result: delivered whole, delivered
+wrapped and warned, partly redacted, or withheld, plus whether the turn was
+tightened (`on_flag`), how much benign text survived, and, for injections tagged
+with an `injected_marker`, whether the injected text itself reached the model.
+That last row is ground truth, not the scorer grading itself.
+
+```bash
+PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --compare observe,flag,redact,block,spec:secure_assistant
+```
+
+Presets tighten the file-writing tools after a hit; `spec:<agent>` uses the
+agent's own block. Results on the full corpus (104 fixtures):
+
+| | flag | redact | block |
+|---|---|---|---|
+| Benign lost (withheld) | 0 / 76 | 6 / 76 | 11 / 76 |
+| Benign text kept (all / code) | 100% / 100% | 88% / 74% | 86% / 71% |
+| Turns tightened by a false alarm | 11 | 11 | 11 |
+| Injections reaching the model **unmarked** | 5 / 28 | 5 / 28 | 5 / 28 |
+| Embedded injected text reaching the model | 13 / 13 (wrapped) | 2 / 13 | 2 / 13 |
+
+- **`redact` dominates `block`.** It catches exactly the same injections and
+  lets no more injected text through (the 2 that reach the model are the
+  classifier's misses, under every policy), while losing about half as many
+  benign files and keeping the useful parts of documents around an injection.
+- **`flag` loses nothing benign but shows the model every injection**, wrapped
+  and warned. That is only acceptable with tightening, and the gate test asserts
+  every flagged injection tightens its turn.
+- **Tightening has a price set by the false-positive rate.** Every false alarm
+  tightens its turn just like a real hit. On code (29% false positives) a coder
+  that tightens file edits could not edit after reading about a third of an LLM
+  repo's files. So the tighten list must be chosen per agent: for an agent whose
+  writes are reviewed by a human (the coder's diff), tighten the tools that are
+  NOT reviewed, not the edits.
+
+The gates in `tests/test_defender_eval_policies.py` hold relationships that are
+true on any machine (redact never lets more injected text through than block; flag
+never loses benign content; observe changes nothing), not absolute counts.
+
 ## Options this eval can judge (none adopted yet)
 
 1. **Do nothing**: 6% FP, fail-safe, honest "withheld" message to the model.

@@ -21,6 +21,7 @@ Usage:
     PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval
     PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --json out.json
     PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --harvest 24
+    PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --compare block,redact,flag
 
 ``--harvest N`` lists tool outputs from the last N hours of Langfuse traces in
 which the defender fired, as unlabeled candidates: label them and append to
@@ -341,10 +342,39 @@ def main() -> None:
     ap.add_argument("--fixtures", type=Path, default=FIXTURES)
     ap.add_argument("--json", type=Path, help="write per-fixture verdicts here")
     ap.add_argument("--harvest", type=int, metavar="HOURS")
+    ap.add_argument(
+        "--compare",
+        metavar="POLICIES",
+        help="compare policies, e.g. block,redact,flag or spec:secure_assistant",
+    )
     args = ap.parse_args()
     if args.harvest is not None:
         for row in harvest(args.harvest):
             print(json.dumps(row, ensure_ascii=False))
+        return
+    if args.compare:
+        from tests.defender_eval.policies import (
+            evaluate_policy,
+            is_code,
+            render_comparison,
+            resolve,
+        )
+
+        rows = load_fixtures(args.fixtures)
+        scorer = build_defense()
+        names = [n.strip() for n in args.compare.split(",") if n.strip()]
+        results = {n: evaluate_policy(rows, resolve(n), scorer) for n in names}
+        print(render_comparison(results, title=f"All fixtures ({len(rows)})"))
+        for title, keep in (("General tool output", False), ("Code", True)):
+            subset = {
+                n: [o for o in r if is_code(o) == keep] for n, r in results.items()
+            }
+            print()
+            print(
+                render_comparison(
+                    subset, title=f"{title} ({len(next(iter(subset.values())))})"
+                )
+            )
         return
     defense = build_defense()
     rows = load_fixtures(args.fixtures)
