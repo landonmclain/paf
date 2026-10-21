@@ -21,8 +21,11 @@
 #                           It refuses to build without Docker (never falls back
 #                           to the host).
 #   3. Gating policy      - default-DENY per-call tool gate (below).
-#   4. Prompt-injection   - the `Guardrails` capability screens every tool
-#      defense              result and withholds high-risk content.
+#   4. Prompt-injection   - `InjectionGuard` scores every tool result. Flagged
+#      defense              passages are redacted (the rest of the result still
+#                           arrives, marked as untrusted data), and once anything
+#                           in a turn is flagged, every tool that can change
+#                           something is refused for the rest of that turn.
 #   5. Secrets            - `$SECRET:` handles resolve only for names listed in
 #                           `secrets.allowed`; raw secrets are scrubbed from
 #                           tool output.
@@ -168,6 +171,26 @@ gating:
     # Recall over this conversation's own history (audit/continuity).
     - tools: [search_conversation_history, read_turn]
       action: allow
+
+# Prompt-injection policy (InjectionGuard). Chosen from the policy eval
+# (`python -m tests.defender_eval.eval --compare redact,block,spec:secure_assistant`):
+# `redact` catches exactly what `block` catches and lets no more injected text
+# through, but loses about half as many benign files, because only the flagged
+# passages are withheld. If redaction cannot be trusted (nothing specific to
+# remove, or what is left still scores as a hit) the whole result is withheld.
+#
+# on_flag: once anything in a turn is flagged, every tool that can change
+# something is refused for the rest of that turn, so injected text the model saw
+# cannot be acted on. That includes run_python (it can write to out/). The cost:
+# a false alarm (about 8% of ordinary tool output in the eval) also stops writes
+# and computation for the rest of that turn; the next turn starts clean.
+guardrails:
+  injection:
+    default_action: redact
+    mark_untrusted: flagged
+    on_flag:
+      require_approval: [write_file, edit_file, create_directory, run_python]
+      scope: run
 
 # Secret handles. The model may only name variables listed here; the empty list
 # means no handle resolves at all. Leave empty unless a tool genuinely needs one.
