@@ -77,7 +77,7 @@ def test_turn_frames_teardown_detaches_without_cancelling() -> None:
         def __init__(self) -> None:
             self.cancel_called = False
 
-        def start_turn(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None, interactive=False):
             del prompt, conversation_id
             return _FakeHandle(_FakeTurn())
 
@@ -126,7 +126,7 @@ def test_turn_frames_does_not_forward_task_frames() -> None:
             raise StopAsyncIteration
 
     class _FakeSession:
-        def start_turn(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None, interactive=False):
             del prompt, conversation_id
             return _FakeHandle(_FakeTurn())
 
@@ -154,7 +154,7 @@ def test_turn_frames_teardown_survives_no_active_turn() -> None:
     """Closing a generator whose turn already finished must be a clean no-op."""
 
     class _FakeSession:
-        def start_turn(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None, interactive=False):
             del prompt, conversation_id
 
             async def _g():

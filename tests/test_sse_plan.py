@@ -74,7 +74,7 @@ def _fake_session(block_on: asyncio.Event) -> object:
         def scoped_id(self, cid):
             return cid  # bare session -> identity (mirrors Session.scoped_id)
 
-        def start_turn(self, prompt, *, conversation_id=None):
+        def start_turn(self, prompt, *, conversation_id=None, interactive=False):
             del prompt, conversation_id
             return _FakeHandle(_fake_turn(block_on))
 

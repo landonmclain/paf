@@ -50,6 +50,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from paf.approvals import ApprovalRequest, ApprovalRequested, ApprovalResolved
 from paf.background_processes._events import (
     ProcessEvent,
     ProcessEventType,
@@ -547,7 +548,34 @@ def _serialize_turn(ev: TurnStreamEvent) -> tuple[str, dict[str, Any]]:
         return "tool_running", {"tool_name": ev.tool_name, "step_id": ev.step_id}
     if isinstance(ev, ToolError):
         return "tool_error", {"step_id": ev.step_id, "error": ev.error}
+    if isinstance(ev, ApprovalRequested):
+        return "approval_requested", _approval_payload(ev.request)
+    if isinstance(ev, ApprovalResolved):
+        return "approval_resolved", {
+            "approval_id": ev.approval_id,
+            "step_id": ev.tool_call_id,
+            "tool_name": ev.tool_name,
+            "outcome": ev.outcome,
+            "actor": ev.actor,
+            "note": ev.note,
+        }
     return "unknown", {"raw": repr(ev)}
+
+
+def _approval_payload(req: ApprovalRequest) -> dict[str, Any]:
+    """An approval request for the UI. ``step_id`` is the tool call's step id, so
+    the card can sit on the tool row it belongs to."""
+    return {
+        "approval_id": req.id,
+        "step_id": req.tool_call_id,
+        "tool_name": req.tool_name,
+        "args": req.args,
+        "reason": req.reason,
+        "preview": req.preview,
+        "created_at": req.created_at,
+        "expires_at": req.expires_at,
+        "conversation_id": req.conversation_id,
+    }
 
 
 def _task_frame(got: Any) -> tuple[str, dict[str, Any]] | None:
@@ -1272,7 +1300,11 @@ def _turn_frames(
             # already running on this lane, start_turn returns that running
             # handle and the prompt is ignored (re-attach, per the durable-turns
             # design).
-            handle = session.start_turn(prompt, conversation_id=conversation_id)
+            # A browser is a person who can answer approval requests, so the
+            # turn is interactive (scheduled and notify turns are not).
+            handle = session.start_turn(
+                prompt, conversation_id=conversation_id, interactive=True
+            )
 
         async def _on_plan(_ev: Any) -> None:
             # Full-snapshot per mutation (Plan-Live-Sidebar-Spec): read the
@@ -1488,6 +1520,53 @@ async def steer(body: dict[str, Any]) -> dict[str, Any]:
         str(body.get("content", "")), priority=str(body.get("priority", "asap"))
     )
     return {"enqueue_id": enq_id}
+
+
+@app.get("/api/conversations/{conversation_id}/approvals")
+async def conversation_approvals(
+    conversation_id: str, agent: str = DEFAULT_AGENT
+) -> dict[str, Any]:
+    """Approval requests the conversation's running turn is waiting on.
+
+    For a client that (re)attaches mid-turn: the ``approval_requested`` frame was
+    sent before it subscribed. A read: it never creates a session.
+    """
+    session = _sessions.get(_session_key(agent, conversation_id))
+    pending = session.pending_approvals() if session is not None else []
+    return {"approvals": [_approval_payload(r) for r in pending]}
+
+
+@app.post("/api/approvals/{approval_id}")
+async def decide_approval(approval_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """Approve or deny a pending tool call: ``{decision: approve|deny, note?}``.
+
+    ``agent`` / ``conversation_id`` narrow the lookup; without them every live
+    session is searched for the request. The first decision wins: deciding one
+    that was already settled (by the CLI, a timeout, a stop) is a 409, and an
+    unknown or finished one a 404.
+    """
+    decision = body.get("decision")
+    if decision not in ("approve", "deny"):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "decision must be approve or deny"
+        )
+    note = body.get("note") or ""
+    if not isinstance(note, str):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "note must be text")
+    agent, cid = body.get("agent"), body.get("conversation_id")
+    if isinstance(agent, str) and isinstance(cid, str):
+        candidates = [s for s in [_sessions.get(_session_key(agent, cid))] if s]
+    else:
+        candidates = list(_sessions.values())
+    for session in candidates:
+        if any(r.id == approval_id for r in session.pending_approvals()):
+            approved = decision == "approve"
+            if not session.resolve_approval(
+                approval_id, approved, note=note[:2000], actor="web"
+            ):
+                raise HTTPException(status.HTTP_409_CONFLICT, "already decided")
+            return {"ok": True, "approved": approved}
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "no pending approval with that id")
 
 
 @app.post("/api/cancel")
