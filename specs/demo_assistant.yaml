@@ -234,6 +234,41 @@ shell:
     #   mode: exec -> one long-lived container, state persists between commands (~60ms)
     #   mode: run  -> fresh container per command, strongest isolation (~250ms)
     #   image: python:3.12-slim -> the container image to run commands in
+  # Command policy: what happens to a command BEFORE it runs, decided from its
+  # parsed structure (every command in a chain/pipeline/substitution, not just
+  # the first word). Lenient, for personal use: almost everything runs; commands
+  # that destroy work pause for YOUR approval (CLI prompt / paf-ui card) with a
+  # preview of what they would touch, so the model can do the right `rm` instead
+  # of inventing a workaround. With nobody attached (piped runs, background
+  # turns), "approve" means refused. Rules match in order; first match wins.
+  # This REPLACES the old first-word denylist.
+  command_policy:
+    default: allow
+    unparseable: approve       # could not parse it -> ask rather than guess
+    unknown_scripts: allow     # ./script.sh you wrote is fine on this profile
+    rules:
+      - effects_any: [delete]
+        targets_any: ["/", "/*", "~", "~/", "$HOME", "/home", "/etc", "/usr"]
+        action: block
+        why: deletes the root, your home, or a system directory
+      # Anything irreversible asks:
+      # delete: rm/rmdir/unlink/shred, find -delete, git clean, rsync --delete,
+      #         docker rm/rmi/prune/volume rm, crontab -r, ...
+      # discard: git reset --hard, checkout -- ., restore, branch -D, tag -d, ...
+      # force_push: git push --force / -f / --delete / +refspec
+      # disk: dd, mkfs, wipefs, ...
+      # overwrite: >, mv, cp, tee, truncate, rsync onto a file that EXISTS
+      #            (writing a new file does not ask)
+      # data: DROP / DELETE FROM / UPDATE / TRUNCATE / FLUSHALL given to psql,
+      #       sqlite3, mysql, redis-cli, ...
+      # Not covered (can't be seen from the command text): what a script or
+      # `make` / `npm run` target does (unknown_scripts below), in-place edits
+      # (sed -i, like edit_file), and side effects on remote services.
+      - effects_any: [delete, discard, force_push, disk, overwrite, data]
+        action: approve
+      - commands: [chmod, chown]
+        flags_any: [-R, --recursive]
+        action: approve
 git:
   root: ~/projects/Personal/pydantic-agent-framework/
 codebase_map:

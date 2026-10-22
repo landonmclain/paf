@@ -96,6 +96,15 @@ def _rel(path: Path, cwd: Path) -> str:
         return str(path)
 
 
+def _find_roots(argv: tuple[str, ...]) -> list[str]:
+    roots = []
+    for arg in argv[1:]:
+        if arg.startswith("-") or arg in ("(", "!", ")"):
+            break
+        roots.append(arg)
+    return roots or ["."]
+
+
 def preview(commands: tuple[SimpleCommand, ...], cwd: Path) -> dict[str, Any] | None:
     """A small, human-readable summary for the approval request (or ``None``)."""
     deadline = time.monotonic() + _MAX_SECONDS
@@ -103,12 +112,37 @@ def preview(commands: tuple[SimpleCommand, ...], cwd: Path) -> dict[str, Any] | 
     missing: list[str] = []
     empty_globs: list[str] = []
     notes: list[str] = []
+    overwrites: list[str] = []
     for cmd in commands:
+        if "overwrite" in cmd.effects and "delete" not in cmd.effects:
+            for target in cmd.targets:
+                paths, _ = _expand(target, cwd)
+                for path in paths:
+                    try:
+                        size = _human(path.lstat().st_size)
+                    except OSError:
+                        size = "?"
+                    overwrites.append(f"{_rel(path, cwd)} ({size})")
+            if not cmd.targets:
+                notes.append(f"{cmd.argv[0]}: destination is computed at run time")
+            continue
+        if "data" in cmd.effects:
+            notes.append(f"{cmd.name} runs destructive statements; there is no undo")
+            continue
         if "delete" not in cmd.effects:
             continue
         if cmd.name == "find":
-            roots = ", ".join(cmd.targets) or "."
+            roots = ", ".join(cmd.targets or _find_roots(cmd.argv))
             notes.append(f"find deletes whatever its expression matches under {roots}")
+            continue
+        if cmd.name == "rsync":
+            dest = cmd.targets[0] if cmd.targets else "the destination"
+            notes.append(f"rsync deletes files in {dest} that are not in the source")
+            continue
+        if cmd.name in ("docker", "podman", "nerdctl", "crontab"):
+            notes.append(
+                f"{' '.join(cmd.argv[:3])} removes what it names; there is no undo"
+            )
             continue
         if cmd.name == "git":
             notes.append(
@@ -128,9 +162,12 @@ def preview(commands: tuple[SimpleCommand, ...], cwd: Path) -> dict[str, Any] | 
                 empty_globs.append(target)
             else:
                 missing.append(target)
-    if not (found or missing or empty_globs or notes):
+    if not (found or missing or empty_globs or notes or overwrites):
         return None
     result: dict[str, Any] = {}
+    if overwrites:
+        shown = ", ".join(overwrites[:6]) + (" …" if len(overwrites) > 6 else "")
+        result["overwrites"] = f"{shown}: current contents are lost"
     if found:
         unique = list(
             dict.fromkeys(p.resolve() if not p.is_symlink() else p for p in found)

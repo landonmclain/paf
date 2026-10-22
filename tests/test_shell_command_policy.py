@@ -53,7 +53,14 @@ LENIENT = {
             "why": "deletes the root, your home, or a system directory",
         },
         {
-            "effects_any": ["delete", "discard", "force_push", "disk"],
+            "effects_any": [
+                "delete",
+                "discard",
+                "force_push",
+                "disk",
+                "overwrite",
+                "data",
+            ],
             "action": "approve",
         },
         {
@@ -118,7 +125,7 @@ def test_analyzer_finds_the_command_that_matters(command, name, effects, via):
         "git push origin main",
         "git status",
         "ls -la",
-        "cat file | tee out.txt",
+        "cat file | tee -a out.txt",  # plain `tee out.txt` may overwrite (policy checks)
         "python -m pytest -q",
     ],
 )
@@ -461,3 +468,109 @@ def test_spec_reader_passes_the_block_through(tmp_path):
     )
     cfg = _spec_shell_config(spec)
     assert cfg["command_policy"]["rules"][0]["action"] == "approve"
+
+
+# --- find from your home directory (demo_assistant's shell cwd is ~) -----------------------
+@pytest.mark.parametrize(
+    ("command", "action"),
+    [
+        # A narrowing test means the root is only where the search starts.
+        ("find . -name '*.pyc' -delete", "approve"),
+        ("find ~ -path '*/node_modules/*' -delete", "approve"),
+        ("find . -name '*.tmp' -exec rm {} \\;", "approve"),
+        ("find . -mtime +30 -size +1M -delete", "approve"),
+        # Nothing narrows it (or a negation / -o widens it): it empties the root.
+        ("find . -delete", "block"),
+        ("find ~ -type f -delete", "block"),
+        ("find ~ ! -name keep -delete", "block"),
+        ("find ~ -name a -o -type f -delete", "block"),
+        ("find . -exec rm -rf {} +", "block"),
+    ],
+)
+def test_find_from_home_blocks_only_what_empties_it(command, action):
+    assert _decide(command, Path.home()) == action
+
+
+# --- anything irreversible asks; reversible work does not --------------------------------
+@pytest.fixture
+def files(tmp_path):
+    (tmp_path / "notes.txt").write_text("my notes")
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "b.txt").write_text("b")
+    (tmp_path / "dst").mkdir()
+    (tmp_path / "dst" / "a.txt").write_text("old a")
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    ("command", "action"),
+    [
+        # Overwriting a file that exists loses its contents ...
+        ("echo x > notes.txt", "approve"),
+        ("cat <<EOF > notes.txt\nhi\nEOF", "approve"),
+        ("ls &> notes.txt", "approve"),
+        ("echo $(cat a.txt > notes.txt)", "approve"),
+        ("mv a.txt b.txt", "approve"),
+        ("mv a.txt dst/", "approve"),  # dst/a.txt exists
+        ("cp a.txt b.txt", "approve"),
+        ("tee notes.txt", "approve"),
+        ("truncate -s 0 notes.txt", "approve"),
+        ("ln -sf a.txt b.txt", "approve"),
+        # ... writing a new file, appending, or refusing to clobber does not.
+        ("echo x > new.txt", "allow"),
+        ("echo x >> notes.txt", "allow"),
+        ("ls 2>/dev/null > out.log", "allow"),
+        ("mv a.txt c.txt", "allow"),
+        ("mv -n a.txt b.txt", "allow"),
+        ("cp --backup a.txt b.txt", "allow"),
+        ("tee -a notes.txt", "allow"),
+        ("ln -s a.txt z", "allow"),
+        # Deletes that are not rm.
+        ("rsync -a --delete src/ dst/", "approve"),
+        ("rsync -a src/ new/", "allow"),
+        ("docker rm -f web", "approve"),
+        ("docker volume rm data", "approve"),
+        ("docker system prune -a", "approve"),
+        ("docker compose down -v", "approve"),
+        ("docker compose down", "allow"),
+        ("docker ps", "allow"),
+        ("crontab -r", "approve"),
+        ("crontab -l", "allow"),
+        ("git tag -d v1", "approve"),
+        # Destructive statements given to a database client.
+        ("psql -c 'DROP TABLE users'", "approve"),
+        ("sqlite3 app.db 'DELETE FROM t'", "approve"),
+        ('sqlite3 app.db "UPDATE t SET x = 1"', "approve"),
+        ("redis-cli FLUSHALL", "approve"),
+        ("sqlite3 app.db 'SELECT * FROM t'", "allow"),
+        # Recoverable from the reflog / a reinstall: no prompt.
+        ("git rebase main", "allow"),
+        ("git commit --amend -m x", "allow"),
+        ("pip uninstall -y x", "allow"),
+    ],
+)
+def test_irreversible_asks(files, command, action):
+    assert _decide(command, files) == action
+
+
+@pytest.mark.parametrize(
+    "command", ["make clean", "npm run clean", "uv run task.py", "psql -f m.sql"]
+)
+def test_opaque_runners_follow_unknown_scripts(files, command):
+    assert _decide(command, files) == "allow"  # LENIENT: unknown_scripts: allow
+    strict = {**LENIENT, "unknown_scripts": "approve"}
+    assert _decide(command, files, strict) == "approve"
+
+
+def test_rsync_delete_onto_home_is_blocked(files):
+    assert _decide("rsync -a --delete src/ ~/", files) == "block"
+
+
+def test_overwrite_preview_names_what_is_lost(files):
+    decision = evaluate(
+        parse_command_policy(LENIENT),
+        analyze("mv a.txt b.txt; echo x > notes.txt"),
+        files,
+    )
+    out = preview(decision.deciding, files)
+    assert "b.txt (1 B)" in out["overwrites"] and "notes.txt (8 B)" in out["overwrites"]

@@ -30,7 +30,8 @@ POLICY_SPAN = "paf.shell.command_policy"
 _TRACER = trace.get_tracer("paf")
 
 COMMAND_POLICY_INSTRUCTIONS = (
-    "Some shell commands (deleting files, discarding git changes, force-pushing, "
+    "Shell commands that cannot be undone (deleting files, overwriting an existing "
+    "file, discarding git changes, force-pushing, destructive database statements, "
     "writing to disks) ask the user for approval before they run. When the task "
     "needs one, run the correct, direct command: the user will be shown it and "
     "asked. Do not substitute a workaround to avoid the prompt (find -delete, a "

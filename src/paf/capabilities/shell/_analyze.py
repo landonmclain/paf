@@ -11,8 +11,11 @@ command with the bash grammar and reports every simple command that would run:
 - with the *effects* that matter for approval: ``delete`` (rm and friends,
   ``find -delete``, ``git rm`` / ``git clean``, interpreter one-liners that
   delete), ``discard`` (git changes thrown away), ``force_push``, ``disk``,
-  ``permissions``, ``privileged`` (sudo), and ``script`` (a local script whose
-  contents are not visible).
+  ``permissions``, ``privileged`` (sudo), ``overwrite`` (``>``, ``mv``, ``cp``,
+  ``tee``, ``truncate``, ``rsync`` onto a path; the policy keeps it only when
+  that path already exists), ``data`` (destructive SQL / redis given to a
+  database client), and ``script`` (a local script, or a project task runner
+  like ``make`` or ``npm run``, whose contents are not visible).
 
 This reads the command TEXT. It cannot see what a script does, and variables,
 ``eval`` and aliases defeat it; those are reported as ``problems`` so policy can
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import posixpath
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -72,6 +76,27 @@ _EVALS = {"eval", "source", "."}
 _DELETE_COMMANDS = {"rm", "rmdir", "unlink", "shred", "srm", "trash", "trash-put"}
 _DISK_COMMANDS = {"dd", "fdisk", "sfdisk", "parted", "wipefs", "mkswap"}
 _PERM_COMMANDS = {"chmod", "chown", "chgrp"}
+# Commands that replace a destination path's contents (the last positional
+# argument, or the directory given with -t).
+_COPY_COMMANDS = {"mv", "cp", "install", "ln"}
+_NO_CLOBBER = {"-n", "--no-clobber", "-b", "--backup", "--update=none"}
+_CONTAINER_CLIS = {"docker", "podman", "nerdctl"}
+_DB_CLIS = {"psql", "mysql", "mariadb", "sqlite3", "duckdb", "mongosh", "mongo", "redis-cli", "clickhouse-client", "clickhouse"}  # fmt: skip
+_DESTRUCTIVE_SQL = re.compile(
+    r"\b(drop\s+(table|database|schema|index|view|collection)|truncate\b|delete\s+from|"
+    r"update\s+\S+\s+set|alter\s+table\s+\S+\s+drop|flushall|flushdb|"
+    r"\.drop\(|\.delete(one|many)\(|\.remove\(|dropdatabase)",
+    re.IGNORECASE,
+)
+_TASK_RUNNERS = {"make", "gmake", "just", "task", "rake"}
+_RUN_SUBCOMMANDS = {
+    "npm": {"run", "run-script", "exec"},
+    "yarn": {"run", "exec"},
+    "pnpm": {"run", "exec"},
+    "bun": {"run"},
+    "uv": {"run"},
+    "poetry": {"run"},
+}
 _INTERPRETERS = re.compile(r"^(python[0-9.]*|perl|ruby|node|php)$")
 _DELETE_API = re.compile(
     r"os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|\.unlink\(|\.rmdir\(|"
@@ -231,6 +256,8 @@ def _analyze_into(
         problems.append("could not parse the command")
 
     def walk(node) -> None:
+        if node.type == "file_redirect":
+            _redirect(node, src, via, out)
         if node.type == "command":
             argv, dynamic, name_dynamic = _argv(node, src)
             if name_dynamic:
@@ -241,6 +268,27 @@ def _analyze_into(
             walk(child)
 
     walk(tree.root_node)
+
+
+def _redirect(node, src: bytes, via, out) -> None:
+    """``> path`` / ``>| path`` / ``&> path`` truncate the file (``>>`` appends)."""
+    op = next((c.type for c in node.children if not c.is_named), "")
+    if op not in (">", ">|", "&>"):
+        return
+    dest = next(
+        (c for c in node.children if c.is_named and c.type != "file_descriptor"),
+        None,
+    )
+    if dest is None:
+        return
+    value, dyn = _word(dest, src)
+    if value.startswith(("/dev/", "&")) or value.isdigit():
+        return
+    out.append(
+        SimpleCommand(
+            (op, value), _text(node, src), via, dyn, frozenset({"overwrite"}), (value,)
+        )
+    )
 
 
 def _strip_wrapper(name: str, args: list[str]) -> list[str]:
@@ -314,6 +362,15 @@ def _expand(argv, raw, via, dynamic, out, problems, depth) -> None:
     )
 
 
+_FIND_NARROWING = {
+    "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex",
+    "-iregex", "-lname", "-ilname", "-newer", "-mtime", "-mmin", "-atime", "-amin",
+    "-ctime", "-cmin", "-size", "-empty", "-user", "-group", "-perm", "-inum",
+    "-samefile", "-links",
+}  # fmt: skip
+_FIND_WIDENING = {"!", "-not", "-o", "-or", ","}
+
+
 def _find(argv, raw, via, dynamic, out, problems, depth) -> None:
     roots: list[str] = []
     i = 1
@@ -323,9 +380,20 @@ def _find(argv, raw, via, dynamic, out, problems, depth) -> None:
     effects: set[str] = set()
     if "-delete" in argv[i:]:
         effects.add("delete")
+    # The roots are what gets deleted only when nothing narrows the match:
+    # `find ~ -delete` (or `-type f -delete`) empties your home, while
+    # `find ~ -name '*.pyc' -delete` searches it. Negation and `-o` can widen a
+    # filter to nearly everything, so they count as not narrowed.
+    expr = argv[i:]
+    narrowed = bool(_FIND_NARROWING & set(expr)) and not (_FIND_WIDENING & set(expr))
     out.append(
         SimpleCommand(
-            tuple(argv), raw, via, dynamic, frozenset(effects), tuple(roots or ["."])
+            tuple(argv),
+            raw,
+            via,
+            dynamic,
+            frozenset(effects),
+            () if narrowed else tuple(roots or ["."]),
         )
     )
     # -exec / -execdir / -ok / -okdir CMD ... ; or +
@@ -338,9 +406,9 @@ def _find(argv, raw, via, dynamic, out, problems, depth) -> None:
                 inner.append(argv[k])
                 k += 1
             if inner:
-                inner = [
-                    a if a != "{}" else (roots[0] if roots else ".") for a in inner
-                ]
+                # `{}` is each match: the root itself only when nothing narrows.
+                each = "{}" if narrowed else (roots[0] if roots else ".")
+                inner = [a if a != "{}" else each for a in inner]
                 _expand(
                     inner, raw, (*via, f"find {argv[j]}"), True, out, problems, depth
                 )
@@ -395,6 +463,47 @@ def _effects(argv: list[str]) -> tuple[set[str], list[str]]:
     elif name in _PERM_COMMANDS:
         effects.add("permissions")
         targets = _positional(args)[1:]
+    elif name in _COPY_COMMANDS:
+        if (name != "ln" or {"-f", "--force"} & _flags(args)) and not (
+            _NO_CLOBBER & _flags(args)
+        ):
+            targets = _copy_destinations(args)
+            if targets:
+                effects.add("overwrite")
+    elif name == "tee":
+        if not {"-a", "--append"} & _flags(args):
+            targets = _positional(args)
+            if targets:
+                effects.add("overwrite")
+    elif name == "truncate":
+        targets = _positional(_drop_values(args, {"-s", "--size", "-r", "--reference"}))
+        if targets:
+            effects.add("overwrite")
+    elif name == "rsync":
+        pos = _positional(args)
+        if len(pos) >= 2:
+            targets = [pos[-1]]
+            effects.add("overwrite")
+            if any(
+                a.startswith("--delete") or a == "--remove-source-files" for a in args
+            ):
+                effects.add("delete")
+    elif name in _CONTAINER_CLIS:
+        if _container_deletes(args):
+            effects.add("delete")
+    elif name in _DB_CLIS:
+        if _DESTRUCTIVE_SQL.search(" ".join(args)):
+            effects.add("data")
+        elif {"-f", "--file"} & set(args):
+            effects.add("script")  # runs a SQL file this analysis cannot see
+    elif name == "crontab":
+        if "-r" in _flags(args):
+            effects.add("delete")
+    elif name in _TASK_RUNNERS:
+        effects.add("script")
+    elif name in _RUN_SUBCOMMANDS:
+        if _subcommand(argv) in _RUN_SUBCOMMANDS[name]:
+            effects.add("script")
     elif _INTERPRETERS.match(name):
         for flag in ("-c", "-e", "-E"):
             if flag in args:
@@ -419,6 +528,82 @@ def _effects(argv: list[str]) -> tuple[set[str], list[str]]:
     if "/" in argv[0] and not argv[0].startswith(_SYSTEM_PREFIXES):
         effects.add("script")
     return effects, targets
+
+
+def _flags(args: list[str]) -> set[str]:
+    out: set[str] = set()
+    for a in args:
+        if a == "--":
+            break
+        if a.startswith("--"):
+            out.add(a)
+            out.add(a.split("=", 1)[0])
+        elif a.startswith("-") and len(a) > 1:
+            out.add(a)
+            out.update(f"-{c}" for c in a[1:])
+    return out
+
+
+def _drop_values(args: list[str], with_value: set[str]) -> list[str]:
+    """``args`` without the options in ``with_value`` and their values."""
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in with_value:
+            skip = True
+        elif not any(a.startswith(f"{o}=") for o in with_value if o.startswith("--")):
+            out.append(a)
+    return out
+
+
+def _copy_destinations(args: list[str]) -> list[str]:
+    """Paths ``mv``/``cp``/``install``/``ln`` would replace: the destination
+    itself, or each source's name inside a destination directory (the policy
+    checks which exist)."""
+    target_dir = None
+    for i, a in enumerate(args):
+        if a in ("-t", "--target-directory") and i + 1 < len(args):
+            target_dir = args[i + 1]
+        elif a.startswith("--target-directory="):
+            target_dir = a.split("=", 1)[1]
+    pos = _positional(
+        _drop_values(
+            args, {"-t", "--target-directory", "-S", "--suffix", "-m", "-o", "-g"}
+        )
+    )
+    if target_dir is not None:
+        sources, dest = pos, target_dir
+    elif len(pos) >= 2:
+        sources, dest = pos[:-1], pos[-1]
+    else:
+        return []
+    inside = [
+        posixpath.join(dest, posixpath.basename(src.rstrip("/"))) for src in sources
+    ]
+    return [dest, *inside]
+
+
+def _container_deletes(args: list[str]) -> bool:
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        return False
+    head = pos[0]
+    nxt = pos[1] if len(pos) > 1 else ""
+    if head in ("rm", "rmi", "prune"):
+        return True
+    if head in (
+        "container",
+        "image",
+        "volume",
+        "network",
+        "system",
+        "builder",
+    ) and nxt in ("rm", "prune", "remove"):
+        return True
+    if head == "compose" and "down" in pos and {"-v", "--volumes", "--rmi"} & set(args):
+        return True
+    return False
 
 
 def _git_effects(argv: list[str]) -> set[str]:
@@ -450,6 +635,8 @@ def _git_effects(argv: list[str]) -> set[str]:
     ):
         return {"discard"}
     if sub == "stash" and rest and rest[0] in ("drop", "clear"):
+        return {"discard"}
+    if sub == "tag" and {"-d", "--delete"} & flags:
         return {"discard"}
     if sub == "push" and (
         {"-f", "--force", "--force-with-lease", "--mirror", "--delete", "-d"} & flags

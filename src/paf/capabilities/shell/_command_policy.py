@@ -35,7 +35,7 @@ import fnmatch
 import os
 import posixpath
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -60,6 +60,8 @@ EFFECTS = (
     "disk",
     "permissions",
     "privileged",
+    "overwrite",
+    "data",
     "script",
 )
 _DESCRIBE = {
@@ -69,6 +71,8 @@ _DESCRIBE = {
     "disk": "writes to a disk device",
     "permissions": "changes permissions or ownership",
     "privileged": "runs with elevated privileges",
+    "overwrite": "replaces the contents of an existing file",
+    "data": "changes or deletes data in a database",
     "script": "runs a script whose contents are not visible",
 }
 
@@ -256,6 +260,30 @@ def _describe(cmd: SimpleCommand, rule: CommandRule | None) -> str:
     return f"`{shown}`{via}: {why}"
 
 
+def _exists(target: str, cwd: Path) -> bool:
+    home = str(Path.home())
+    path = os.path.expanduser(target.replace("$HOME", home).replace("${HOME}", home))
+    full = Path(path) if path.startswith("/") else cwd / path
+    return full.is_file() or full.is_symlink()
+
+
+def _settle_overwrite(cmd: SimpleCommand, cwd: Path) -> SimpleCommand:
+    """Writing to a path is only irreversible when a file is already there.
+
+    ``echo x > new.txt`` loses nothing; ``echo x > notes.txt`` over your notes
+    does. A target computed at run time cannot be checked, so it stays."""
+    if "overwrite" not in cmd.effects or cmd.dynamic:
+        return cmd
+    hit = tuple(t for t in cmd.targets if _exists(t, cwd))
+    if hit:
+        return replace(cmd, targets=hit)
+    return replace(
+        cmd,
+        effects=cmd.effects - {"overwrite"},
+        targets=() if not cmd.effects - {"overwrite"} - {"script"} else cmd.targets,
+    )
+
+
 def evaluate(
     policy: CommandPolicy, analysis: CommandAnalysis, cwd: Path
 ) -> CommandDecision:
@@ -277,6 +305,7 @@ def evaluate(
                 deciding.append(cmd)
 
     for cmd in analysis.commands:
+        cmd = _settle_overwrite(cmd, cwd)
         rule = next((r for r in policy.rules if _matches(r, cmd, cwd)), None)
         if rule is not None:
             consider(rule.action, _describe(cmd, rule), cmd)
