@@ -593,9 +593,7 @@ def test_egress_default_blocks_private_and_metadata() -> None:
     assert _refuse(p, "http://192.168.1.50/admin") is not None
 
     # A public host is allowed when named in the allowlist.
-    p_public = _policy(
-        block_private=True, allowed=["staging.example.com"]
-    )
+    p_public = _policy(block_private=True, allowed=["staging.example.com"])
     assert _refuse(p_public, "http://staging.example.com/") is None
 
 

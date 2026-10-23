@@ -536,7 +536,7 @@ def test_render_from_explicit_record_list(tmp_path) -> None:
         _rec("current", "newer current state", "2026-08-17T01:00:00Z", tier="t2"),
         _rec(
             "current",
-            "currently rebuilding staging.com",
+            "currently rebuilding example.com",
             "2026-08-17T00:00:00Z",
             tier="t2",
         ),

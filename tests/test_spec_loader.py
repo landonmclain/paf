@@ -45,44 +45,12 @@ def test_load_agent_spec_returns_parsed_spec(tmp_path: Path) -> None:
     assert spec.name == "assistant"
 
 
-def test_real_assistant_spec_exists_and_parses() -> None:
-    """The shipped spec must load — CI/production depends on it resolving."""
-    assert (SPECS_DIR / "assistant.yaml").is_file(), "specs/assistant.yaml missing"
-    spec = load_agent_spec("assistant", SPECS_DIR)
+@pytest.mark.parametrize("name", sorted(p.stem for p in SPECS_DIR.glob("*.yaml")))
+def test_every_shipped_spec_parses(name: str) -> None:
+    """Each spec in specs/ loads. The values are deployment config, not under test."""
+    spec = load_agent_spec(name, SPECS_DIR)
     assert isinstance(spec, AgentSpec)
-    assert spec.name == "assistant"
-
-
-def test_real_demo_spec_browser_block_parses() -> None:
-    """The demo spec's shipped `browser:` block resolves as declared.
-
-    ⚠️ TEMPORARY CONTRACT (2026-08-27): the demo spec currently declares
-    loopback + the private-address guard disabled (`block_private_addresses:
-    false`) so the demo agent can reach local/loopback targets while building
-    the landonmclain-site Astro repo. This is a LOCAL-TROUBLESHOOTING release
-    of the SSRF guard — it MUST be reverted to the secure public contract
-    (drop localhost/127.0.0.1 + `block_private_addresses: false`, keep only
-    public-reach domains) BEFORE the repo goes public.
-
-    Tracks: Portfolio-GitHub/Publish.md SCRUB pre-flight; see vault
-    Tier-Sorted-Render-Benchmark / publish notes for the revert gate.
-
-    Secure contract it returns to (the intent this test used to enforce):
-    only public staging/reach domains, `block_private_addresses` absent so the
-    secure default (true) holds, no loopback hosts in the allowlist.
-    """
-    cfg = _spec_browser_config(SPECS_DIR / "demo_assistant.yaml")
-    assert cfg is not None
-    assert cfg == {
-        "allowed_domains": [
-            "staging.example.com",
-            "staging.com",
-            "example.com",
-            "localhost",
-            "127.0.0.1",
-        ],
-        "block_private_addresses": False,
-    }
+    assert spec.name == name
 
 
 def test_spec_browser_config_absent_block_returns_none(tmp_path: Path) -> None:

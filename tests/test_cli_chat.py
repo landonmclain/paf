@@ -42,7 +42,7 @@ def test_exact_name_breaks_a_tie() -> None:
 
 
 def test_no_match() -> None:
-    assert match_conversation(ROWS, "staging") == (None, [])
+    assert match_conversation(ROWS, "no-such-project") == (None, [])
 
 
 def test_status_refreshes_coalesce_during_a_burst() -> None:

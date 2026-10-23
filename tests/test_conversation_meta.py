@@ -32,9 +32,9 @@ def test_slugify() -> None:
 def test_create_and_list_projects(tmp_path) -> None:
     store = _projects(tmp_path)
     paf = store.create("paf", "Agent framework")
-    store.create("Kitestring")
+    store.create("Acme")
     assert paf["slug"] == "paf" and paf["description"] == "Agent framework"
-    assert [p["slug"] for p in store.list()] == ["staging", "paf"]
+    assert [p["slug"] for p in store.list()] == ["acme", "paf"]
     assert (tmp_path / "projects" / "projects.json").exists()
 
 
