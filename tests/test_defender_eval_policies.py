@@ -15,6 +15,9 @@ import pytest
 
 pytest.importorskip("onnxruntime")
 
+# A calibration eval over a labeled corpus, not a unit test: opt-in with `-m eval`.
+pytestmark = pytest.mark.eval
+
 from tests.defender_eval.eval import build_defense, load_fixtures  # noqa: E402
 from tests.defender_eval.policies import (  # noqa: E402
     PRESETS,

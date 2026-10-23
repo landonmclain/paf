@@ -62,10 +62,12 @@ packages = ["src/paf"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-# Live/integration tests are opt-in: they hit the real model + Langfuse and need `.env`.
-addopts = "-m 'not live'"
+# Opt-in groups: live tests hit the real model + Langfuse and need `.env`; eval
+# tests are slow calibration runs over labeled corpora (`pytest -m eval`).
+addopts = "-m 'not live and not eval'"
 markers = [
     "live: integration test requiring .env (real model call + Langfuse tracing)",
+    "eval: calibration eval over a labeled corpus; slow, opt-in (pytest -m eval)",
 ]
 # pydantic_graph emits "There is no current event loop" when run_sync executes
 # outside a running loop (pytest). It's a third-party deprecation unrelated to

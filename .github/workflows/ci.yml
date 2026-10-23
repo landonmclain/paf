@@ -51,3 +51,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -n auto
+
+      - name: Run evals
+        run: uv run pytest -n auto -m "eval and not live"
