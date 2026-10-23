@@ -1,10 +1,7 @@
-"""Shared fixtures for the codebase_map gate tests.
+"""Shared test fixtures.
 
-The paf-src fixture (a frozen snapshot of ``src/paf/``) is scanned by several
-codebase_map test modules. Scanning it is the slowest part of the suite, so it is
-built ONCE per test run and shared — across modules and across pytest-xdist
-workers (see ``tests/_shared.py``). Fixtures are lazy: they only run when a test
-requests them.
+The codebase-map tests analyze ``tests/fixtures/sample_repo``, a small committed
+codebase built to exercise specific analyzer behaviors (see its README).
 """
 
 from __future__ import annotations
@@ -15,38 +12,38 @@ import pytest
 
 from paf.capabilities.codebase_map._analyze import analyze_file
 from paf.capabilities.codebase_map._schema import FileInfo
-from tests._shared import shared_build
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests" / "fixtures" / "paf-src"
+SAMPLE_REPO = ROOT / "tests" / "fixtures" / "sample_repo"
 
 
-def _scan_paf_src() -> tuple[list[FileInfo], dict[str, str]] | None:
-    if not (FIXTURE / "capabilities").exists():
-        return None
-    infos: list[FileInfo] = []
-    sources: dict[str, str] = {}
-    for py in sorted(FIXTURE.rglob("*.py")):
-        if "node_modules" in py.parts or ".agent-codeindex" in py.parts:
-            continue
-        fi = analyze_file(py, FIXTURE)
-        if fi is not None:
-            infos.append(fi)
-            sources[fi.path] = py.read_text()
-    return infos, sources
+def _analyze(suffixes: tuple[str, ...]) -> dict[str, FileInfo]:
+    infos: dict[str, FileInfo] = {}
+    for path in sorted(SAMPLE_REPO.rglob("*")):
+        if path.is_file() and path.suffix in suffixes:
+            fi = analyze_file(path, SAMPLE_REPO)
+            if fi is not None:
+                infos[fi.path] = fi
+    return infos
 
 
 @pytest.fixture(scope="session")
-def paf_src_scan(
-    pytestconfig: pytest.Config, tmp_path_factory: pytest.TempPathFactory
-) -> tuple[list[FileInfo], dict[str, str]] | None:
-    """Analyze every .py in the paf-src fixture once per test run (lazy).
+def sample_repo() -> Path:
+    return SAMPLE_REPO
 
-    Returns ``(infos, sources)`` — the FileInfo records plus the original source
-    text keyed by repo-relative path (needed for call-site re-parsing). ``None``
-    if the gitignored fixture is absent (callers skip).
-    """
-    return shared_build(pytestconfig, tmp_path_factory, "paf_src_scan", _scan_paf_src)
+
+@pytest.fixture(scope="session")
+def sample_py() -> tuple[list[FileInfo], dict[str, str]]:
+    """The sample repo's Python files: ``(infos, sources)`` for ``build_edges``."""
+    infos = _analyze((".py",))
+    sources = {p: (SAMPLE_REPO / p).read_text(encoding="utf-8") for p in infos}
+    return list(infos.values()), sources
+
+
+@pytest.fixture(scope="session")
+def sample_ts() -> dict[str, FileInfo]:
+    """The sample repo's TypeScript files, keyed by repo-relative path."""
+    return _analyze((".ts", ".tsx"))
 
 
 @pytest.fixture(autouse=True)
