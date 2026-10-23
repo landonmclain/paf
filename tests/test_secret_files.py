@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -275,7 +276,20 @@ needs_docker = pytest.mark.skipif(not docker_available(), reason="Docker not ava
 
 
 def _overlay_dirs() -> set[Path]:
-    return set(Path("/tmp").glob("paf-overlay-*"))
+    return set(Path(tempfile.gettempdir()).glob("paf-overlay-*"))
+
+
+@pytest.fixture
+def private_tmpdir(tmp_path, monkeypatch) -> Path:
+    """Point this process's temp dir at a fresh folder, so overlay counts are ours.
+
+    Overlays are created with ``tempfile.mkdtemp``; in the shared system temp dir,
+    other pytest-xdist workers' overlays come and go while we count.
+    """
+    private = tmp_path / "tmp"
+    private.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(private))
+    return private
 
 
 @needs_docker
@@ -321,7 +335,9 @@ def test_docker_blanks_nested_secrets_and_aliases_but_not_source(tmp_path):
 
 
 @needs_docker
-def test_docker_overlay_temp_dirs_are_cleaned_up_after_each_call(tmp_path):
+def test_docker_overlay_temp_dirs_are_cleaned_up_after_each_call(
+    tmp_path, private_tmpdir
+):
     root = _tree(tmp_path)
     before = _overlay_dirs()
 
@@ -344,7 +360,7 @@ def test_docker_overlay_temp_dirs_are_cleaned_up_after_each_call(tmp_path):
 
 
 @needs_docker
-def test_docker_background_overlay_is_removed_on_stop(tmp_path):
+def test_docker_background_overlay_is_removed_on_stop(tmp_path, private_tmpdir):
     root = _tree(tmp_path)
     before = _overlay_dirs()
 

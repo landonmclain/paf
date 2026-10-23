@@ -32,10 +32,21 @@ def _alive_only(*pids: int):
     return lambda pid: pid in pids
 
 
-@pytest.mark.parametrize("state", ["exited", "created", "dead"])
-def test_any_non_running_labeled_container_is_a_husk(state):
+@pytest.mark.parametrize("state", ["exited", "dead"])
+def test_any_stopped_labeled_container_is_a_husk(state):
     rows = [("a", state, "exec", "42"), ("b", state, "bg", ""), ("c", state, "", "")]
     assert select_reapable(rows, _alive_only(42)) == ["a", "b", "c"]
+
+
+def test_a_created_container_with_a_live_owner_is_mid_start_and_spared():
+    """``docker run -d`` shows ``created`` until the container is running; another
+    process's sweep in that window must not delete it out from under its owner."""
+    rows = [
+        ("starting", "created", "exec", "42"),  # live owner: about to start it
+        ("crashed", "created", "exec", "7"),  # owner died between create and start
+        ("ownerless", "created", "", ""),  # nobody will ever start it
+    ]
+    assert select_reapable(rows, _alive_only(42)) == ["crashed", "ownerless"]
 
 
 def test_running_container_with_a_dead_owner_is_orphaned():
@@ -289,8 +300,9 @@ def test_docker_reap_removes_orphans_and_husks_but_spares_the_living(docker_clea
         timeout=60,
     )
 
-    removed = reap_stale_containers()
+    reap_stale_containers()
 
-    assert removed, "expected at least our fixtures to be reaped"
+    # Judge by what is left, not by what this call returned: under pytest-xdist,
+    # another worker's first-use sweep may legitimately reap these orphans first.
     for name, (_, _, reaped) in cases.items():
         assert _exists(name) is (not reaped), f"{name}: reaped={reaped}"

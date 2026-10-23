@@ -254,7 +254,10 @@ def select_reapable(
 ) -> list[str]:
     """Which ``(id, state, kind, pid)`` rows are safe to remove.
 
-    - Anything not running (exited/created/dead) is a husk: remove it.
+    - An exited or dead container is a husk: remove it.
+    - A ``created`` container is usually mid-start: ``docker run -d`` shows that
+      state until the container is running. Remove it only when its owner pid is
+      gone (a crash between create and start); a live owner is about to use it.
     - A RUNNING ``exec``/``run`` container whose owner pid is gone was orphaned by
       a crash: remove it. A live owner (this process or another, e.g. the CLI next
       to ``paf-sse``) is never touched; neither is a running container with no
@@ -263,8 +266,15 @@ def select_reapable(
     """
     reap: list[str] = []
     for cid, state, kind, pid_text in rows:
-        if state in ("exited", "created", "dead"):
+        if state in ("exited", "dead"):
             reap.append(cid)
+        elif state == "created":
+            try:
+                owner_alive = is_alive(int(pid_text))
+            except ValueError:
+                owner_alive = False  # no readable owner: nobody will start it
+            if not owner_alive:
+                reap.append(cid)
         elif state == "running" and kind in _REAP_RUNNING_KINDS:
             try:
                 pid = int(pid_text)
