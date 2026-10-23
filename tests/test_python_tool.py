@@ -14,7 +14,12 @@ import shlex
 import pytest
 from pydantic_ai.exceptions import ModelRetry
 
-from paf.capabilities._sandbox import DockerExecutor, ExecResult, LocalProcessExecutor
+from paf.capabilities._sandbox import (
+    DockerExecutor,
+    ExecResult,
+    LocalProcessExecutor,
+    default_sandbox_user,
+)
 from paf.capabilities._sandbox._docker import docker_available
 from paf.capabilities.build import _build_python
 from paf.capabilities.python import Python, PythonToolset
@@ -300,9 +305,11 @@ def test_docker_each_call_is_a_fresh_interpreter(tmp_path):
 @needs_docker
 def test_docker_runs_as_non_root_without_host_env(tmp_path, monkeypatch):
     monkeypatch.setenv("PAF_TEST_SECRET_VALUE", "do-not-leak")
+    uid = default_sandbox_user().split(":")[0]  # the host user, never root
+    assert uid != "0"
     out = _run(
         _docker_python(tmp_path).run_python(
             "import os\nprint(os.getuid(), os.environ.get('PAF_TEST_SECRET_VALUE'))"
         )
     )
-    assert "1000 None" in out
+    assert f"{uid} None" in out
