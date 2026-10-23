@@ -62,10 +62,7 @@ packages = ["src/paf"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-# Archived reference tests (tests/retired/) import legacy modules that no longer
-# exist (archived under archive/); never collected or linted. Live/integration
-# tests are opt-in: they hit the real model + Langfuse and need `.env`.
-norecursedirs = ["tests/retired"]
+# Live/integration tests are opt-in: they hit the real model + Langfuse and need `.env`.
 addopts = "-m 'not live'"
 markers = [
     "live: integration test requiring .env (real model call + Langfuse tracing)",
@@ -85,10 +82,9 @@ package = true
 # conventional 88 (Black-compatible) so formatting and lint agree.
 line-length = 88
 target-version = "py312"
-# Archived reference files (tests/retired/, archive/) are deliberately preserved
-# as-is from their original state — not collected by pytest and not linted, so
-# stale import-order/deprecation noise from historical code doesn't block CI.
-exclude = ["tests/retired", "archive"]
+# Archived code (archive/) is preserved as-is and not linted, so stale
+# import-order/deprecation noise from historical code doesn't block CI.
+exclude = ["archive"]
 
 # Lint rules: E (pycodestyle errors), F (pyflakes), I (isort), W (warnings),
 # UP (pyupgrade modernizations), B (flake8-bugbear). E501 (line too long) is

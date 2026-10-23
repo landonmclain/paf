@@ -1,6 +1,6 @@
 {
   "include": ["src"],
-  "exclude": ["tests/retired", "archive"],
+  "exclude": ["archive"],
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.12",

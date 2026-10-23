@@ -3,7 +3,7 @@
 Covers the retrieval TOOLS the built assistant exposes and the `read_turn`
 full-content read primitive (owned by `search`). The turn-index-specific tools
 (`search_index`, index ladder, escalation geometry) were retired with the
-turn-index experiment — see `tests/retired/` and `archive/turn_index/`.
+turn-index experiment (see `archive/turn_index/`).
 
 No live model. Runs in default `pytest`. Uses a real FileStepStore in a tmp dir.
 """
