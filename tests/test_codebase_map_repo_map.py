@@ -31,6 +31,7 @@ import pytest
 
 from paf.capabilities.codebase_map import CodebaseMapToolset, FlatFileStorage
 from paf.capabilities.codebase_map._scan import scan_and_write
+from tests._shared import shared_dir
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root
 FIXTURE = ROOT / "tests" / "fixtures" / "paf-src"
@@ -42,7 +43,7 @@ def _fixture_present() -> bool:
 
 
 @pytest.fixture(scope="module")
-def scanned(tmp_path_factory) -> tuple[Path, CodebaseMapToolset]:
+def scanned(pytestconfig, tmp_path_factory) -> tuple[Path, CodebaseMapToolset]:
     """A fresh scan of a COPY of the paf-src fixture into a temp dir (has call_graph).
 
     The fixture lives gitignored *inside* the repo, and ScanScope honours ``git
@@ -57,10 +58,14 @@ def scanned(tmp_path_factory) -> tuple[Path, CodebaseMapToolset]:
         )
     import shutil
 
-    dst = tmp_path_factory.mktemp("pafcopy") / "paf-src"
-    shutil.copytree(FIXTURE, dst)
-    store = FlatFileStorage(index_root=tmp_path_factory.mktemp("idx"))
-    scan_and_write(dst, store)
+    def build(root: Path) -> None:
+        shutil.copytree(FIXTURE, root / "paf-src")
+        scan_and_write(root / "paf-src", FlatFileStorage(index_root=root / "idx"))
+
+    # Scanned once per run and shared read-only across xdist workers.
+    root = shared_dir(pytestconfig, tmp_path_factory, "repo_map_scan", build)
+    dst = root / "paf-src"
+    store = FlatFileStorage(index_root=root / "idx")
     return dst, CodebaseMapToolset(scan_root=dst, storage=store)
 
 

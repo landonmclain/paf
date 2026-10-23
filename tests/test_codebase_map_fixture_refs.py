@@ -40,6 +40,7 @@ from pathlib import Path
 import pytest
 
 from paf.capabilities.codebase_map._analyze import analyze_file
+from tests._shared import shared_build
 
 ROOT = Path(__file__).resolve().parents[1]
 CB_FIXTURE = ROOT / "tests" / "fixtures" / "chatbot"
@@ -80,10 +81,15 @@ def paf_infos(paf_src_scan) -> dict[str, object]:
 
 
 @pytest.fixture(scope="module")
-def cb_infos() -> dict[str, object]:
+def cb_infos(pytestconfig, tmp_path_factory) -> dict[str, object]:
     if not CB_FIXTURE.exists():
         pytest.skip("chatbot fixture not present (gitignored)")
-    return _analyze_dir(CB_FIXTURE, (".ts", ".tsx", ".js", ".jsx"))
+    return shared_build(
+        pytestconfig,
+        tmp_path_factory,
+        "chatbot_infos",
+        lambda: _analyze_dir(CB_FIXTURE, (".ts", ".tsx", ".js", ".jsx")),
+    )
 
 
 def test_python_import_names_are_plausible(paf_infos) -> None:

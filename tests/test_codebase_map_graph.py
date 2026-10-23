@@ -40,6 +40,7 @@ from pathlib import Path
 import pytest
 
 from paf.capabilities.codebase_map._graph import build_edges
+from tests._shared import shared_build
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root
 GOLD = ROOT / "tests" / "code_search_eval" / "gold_edges.jsonl"
@@ -73,14 +74,19 @@ def _gold_no_call() -> list[dict]:
 
 
 @pytest.fixture(scope="module")
-def edges(paf_src_scan) -> list[dict]:
+def edges(pytestconfig, tmp_path_factory, paf_src_scan) -> list[dict]:
     """The full edge set over the fixture (reference + call refinement)."""
     if paf_src_scan is None:
         pytest.skip(
             "paf-src fixture not present (gitignored) — sync per tests/fixtures/README.md"
         )
     infos, sources = paf_src_scan
-    return build_edges(infos, sources)
+    return shared_build(
+        pytestconfig,
+        tmp_path_factory,
+        "paf_src_edges",
+        lambda: build_edges(infos, sources),
+    )
 
 
 @pytest.fixture(scope="module")
