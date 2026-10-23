@@ -99,9 +99,10 @@ class StackoneScorer:
 
     @property
     def threshold(self) -> float | None:
-        if not self._semantic:
+        tier2 = self._defense._tier2  # noqa: SLF001
+        if not self._semantic or tier2 is None:
             return None
-        return float(self._defense._tier2.get_config()["high_risk_threshold"])  # noqa: SLF001
+        return float(tier2.get_config()["high_risk_threshold"])
 
     def warmup(self) -> None:
         if self._semantic:
@@ -121,9 +122,10 @@ class StackoneScorer:
 
     def localize_sync(self, text: str) -> list[tuple[str, float]] | None:
         """Sentence-level scores from the same classifier (``None`` without it)."""
-        if not self._semantic:
+        tier2 = self._defense._tier2  # noqa: SLF001
+        if not self._semantic or tier2 is None:
             return None
-        result = self._defense._tier2.classify_by_sentence(text)  # noqa: SLF001
+        result = tier2.classify_by_sentence(text)
         if result.get("skipped"):
             return None
         return [
