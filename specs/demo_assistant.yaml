@@ -20,28 +20,10 @@ profile: demo
 # (requires OPENROUTER_API_KEY in .env). Commented out in favor of a local
 # Ollama model (qwen3.8:27b-90k, served by llama-server at 160k context; needs OLLAMA_BASE_URL).
 # model: openrouter:deepseek/deepseek-v4-flash-0731
-model: ollama:qwen3.8:27b-90k
+# model: ollama:qwen3.8:27b-90k
 # model: openrouter:deepseek/deepseek-v4.1-flash
 # model: openrouter:openai/gpt-5.6-luna
-# instructions: |
-#   You are a helpful, general-purpose AI assistant. You answer questions, help
-#   with work, use your tools when they genuinely help, and keep your responses
-#   clear, direct, and useful. The current conversation is in your context —
-#   you do not need to retrieve it; answer from what is in front of you.
-
-#   Use your tools to ground answers — search the web, inspect files, run a
-#   browser, execute code, or delegate subtasks when that produces a better,
-#   more correct result than reasoning from memory alone. If a tool call fails,
-#   say so plainly and try a reasonable alternative instead of inventing a
-#   result. When you are genuinely unsure, say you are unsure rather than
-#   guessing.
-
-#   You are a decisive operator. Trust your own prior tool results in this turn —
-#   if a step already confirmed something, don't re-check it later; treat it as
-#   settled unless a later action contradicts it. Decide and act on the first
-#   reasonable interpretation; don't re-litigate an earlier choice. Retry errors
-#   once with the fix and move on — don't re-investigate or re-confirm. Finish
-#   with a brief confirmation. Don't second-guess your work after the fact.
+model: openai:gpt-6-luna
 
 instructions: |
   # Role
@@ -95,8 +77,8 @@ model_settings:
   # repeating the same sentences). 1.0 is a moderate value — enough to break
   # a loop, low enough to avoid degrading quality. Additive penalty, applied
   # per token already emitted (OpenAI-style). Ollama's /v1 endpoint honors it.
-  extra_body:
-    frequency_penalty: 1.0
+  # extra_body:
+  #   frequency_penalty: 1.0
 
   # Reasoning effort for DeepSeek V4.1 Flash (OpenRouter-only; ignored by
   # Ollama). `medium` avoids the 'thinking forever' loops on simple turns.
@@ -108,7 +90,7 @@ model_settings:
   # pydantic-ai silently drops a bare `reasoning_effort`. It is sent as the
   # request's `reasoning_effort`, which llama-server's chat template reads
   # (the template's own default applies when unset).
-  openai_reasoning_effort: none
+  openai_reasoning_effort: low
 
 # ---------------------------------------------------------------------------
 # Web trust boundary (lives in the spec — the source of truth). Read by
@@ -190,11 +172,8 @@ browser:
 # `model_settings` is passed to every vision call. Absent block -> the Visual
 # capability is inert (images pass through to the main model untouched).
 visual:
-  model: ollama:qwen3.5:4b
-  model_settings:
-    # qwen3.5 thinks by default; a description doesn't need it, and turning it
-    # off halves the time (measured: 74s -> 37s on a 1920x1080 screenshot).
-    openai_reasoning_effort: none
+  # model: ollama:qwen3.5:4b
+  model: openai/gpt-6-luna
 
 # ---------------------------------------------------------------------------
 # Per-assistant root scoping. Read
@@ -325,8 +304,8 @@ skills:
 #   the entire live context (system + turns + tool results) exceeds this, the
 #   OLDEST tool results get collapsed to a placeholder. NOT per-tool-call. 5000 is
 #   intentionally low-ish so it only scavenges bulky dumps after keep_pairs.
-# clear_tool_keep_pairs: always keep the 20 most-recent tool-call/result pairs.
-#   A normal exploration turn runs fewer than 20 tools, so none of its results
+# clear_tool_keep_pairs: always keep the 6 most-recent tool-call/result pairs (was 20: each compaction busts the llama.cpp prompt cache, so clear more per pass to compact less often).
+#   A normal exploration turn runs fewer than ~6 tools, so none of its results
 #   get cleared mid-turn — the destructive blanking only kicks in on genuinely
 #   long/huge turns.
 # min_clear_tokens: ClearToolResults CACHE-COST GUARD — do NOT clear a tool
@@ -359,7 +338,7 @@ compact:
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
-  clear_tool_keep_pairs: 20
+  clear_tool_keep_pairs: 6
   # min_clear_tokens: 20000        # OLD (300k-context tuning)
   min_clear_tokens: 10000
 
