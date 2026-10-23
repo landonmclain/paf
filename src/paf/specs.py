@@ -573,17 +573,20 @@ def resolve_profile_name(
     agent-name mapping in each `ui/*.py`.
 
     pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so the value is
-    read off disk directly. Returns ``None`` when the spec is absent,
-    unreadable, or declares no ``profile:`` key — callers fall back to their
-    own default.
+    read off disk directly. Returns ``None`` when the spec is absent, unreadable,
+    or declares no ``profile:`` key — callers fall back to their own default. A
+    spec that exists but is not valid YAML raises :class:`InvalidSpecError`:
+    reporting it as "no profile" would hide the real problem.
     """
     try:
-        with get_spec_path(agent_name, spec_directory).open(
-            "r", encoding="utf-8"
-        ) as fh:
-            data = yaml.safe_load(fh)
-    except (OSError, yaml.YAMLError):
+        path = get_spec_path(agent_name, spec_directory)
+        text = path.read_text(encoding="utf-8")
+    except OSError:
         return None
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise InvalidSpecError.from_yaml(path, exc) from exc
     if not isinstance(data, dict):
         return None
     value = data.get("profile")
@@ -1035,6 +1038,30 @@ class AgentSpecNotFoundError(FileNotFoundError):
     """Raised when an agent specification cannot be found."""
 
 
+class MissingProfileError(ValueError):
+    """Raised when a spec declares no ``profile:`` and none was passed."""
+
+
+class InvalidSpecError(ValueError):
+    """Raised when an agent specification exists but is not valid YAML."""
+
+    @classmethod
+    def from_yaml(cls, path: Path, exc: yaml.YAMLError) -> InvalidSpecError:
+        where = ""
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            where = f" at line {mark.line + 1}, column {mark.column + 1}"
+        problem = getattr(exc, "problem", None) or str(exc)
+        return cls(f"{path} is not valid YAML{where}: {problem}")
+
+
+def known_agent_names(spec_directory: Path = DEFAULT_SPEC_DIRECTORY) -> list[str]:
+    """The top-level specs a user can run (``specs/*.yaml``), sorted."""
+    return sorted(
+        p.stem for suffix in _SPEC_SUFFIXES for p in spec_directory.glob(f"*{suffix}")
+    )
+
+
 def get_spec_path(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
@@ -1148,7 +1175,14 @@ def _declared_profile(agent_name: str, spec_directory: Path) -> AgentProfile:
     """
     declared = resolve_profile_name(agent_name, spec_directory)
     if declared is None:
-        raise ValueError(
+        try:
+            get_spec_path(agent_name, spec_directory)
+        except AgentSpecNotFoundError:
+            raise AgentSpecNotFoundError(
+                f"Unknown agent {agent_name!r}: no spec named {agent_name}.yaml in "
+                f"{spec_directory}. Known: {', '.join(known_agent_names(spec_directory))}"
+            ) from None
+        raise MissingProfileError(
             f"No profile for agent {agent_name!r}: pass `profile=` to build_agent "
             f"or declare `profile:` in the spec. Known: {sorted(PROFILES)}"
         )

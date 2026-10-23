@@ -103,3 +103,39 @@ def test_spec_browser_config_private_override_true(tmp_path: Path) -> None:
     assert _spec_browser_config(tmp_path / "e.yaml") == {
         "block_private_addresses": True
     }
+
+
+def test_a_spec_with_invalid_yaml_is_reported_with_its_line(tmp_path: Path) -> None:
+    """A syntax error must not masquerade as "no profile" (which hid the real cause)."""
+    from paf.specs import InvalidSpecError, resolve_profile_name
+
+    (tmp_path / "broken.yaml").write_text(
+        "name: broken\nprofile: assistant\nmodel_settings:\n  # a comment\n"
+        "  an uncommented note (oops)\n  temperature: 0\n"
+    )
+    with pytest.raises(
+        InvalidSpecError, match=r"broken\.yaml is not valid YAML at line 6"
+    ):
+        resolve_profile_name("broken", tmp_path)
+
+
+def test_a_missing_spec_still_resolves_to_no_profile(tmp_path: Path) -> None:
+    from paf.specs import resolve_profile_name
+
+    assert resolve_profile_name("absent", tmp_path) is None
+
+
+def test_building_an_unknown_agent_names_the_known_ones(tmp_path: Path) -> None:
+    from paf.specs import build_agent
+
+    (tmp_path / "real_one.yaml").write_text("name: real_one\nprofile: assistant\n")
+    with pytest.raises(AgentSpecNotFoundError, match=r"Unknown agent 'typo'.*real_one"):
+        build_agent("typo", spec_directory=tmp_path)
+
+
+def test_building_a_spec_without_a_profile_says_so(tmp_path: Path) -> None:
+    from paf.specs import MissingProfileError, build_agent
+
+    (tmp_path / "noprof.yaml").write_text("name: noprof\nmodel: test\n")
+    with pytest.raises(MissingProfileError, match="No profile for agent 'noprof'"):
+        build_agent("noprof", spec_directory=tmp_path)

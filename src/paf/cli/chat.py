@@ -83,7 +83,12 @@ from paf.conversations import (
     list_conversations,
 )
 from paf.runtime import Session, TurnHandle
-from paf.specs import spec_visual_config
+from paf.specs import (
+    AgentSpecNotFoundError,
+    InvalidSpecError,
+    MissingProfileError,
+    spec_visual_config,
+)
 
 DEFAULT_AGENT = "demo_assistant"
 _ACTIVE = {"queued", "running", "processing"}
@@ -1101,7 +1106,12 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
         finally:
             await app.shutdown()
 
-    return asyncio.run(_amain())
+    try:
+        return asyncio.run(_amain())
+    except (AgentSpecNotFoundError, InvalidSpecError, MissingProfileError) as exc:
+        # A spec problem the user fixes by editing a file: one line, no traceback.
+        print(f"paf chat: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
