@@ -9,6 +9,7 @@ per-tool concern.
 
 from paf.capabilities._sandbox._docker import (
     DockerExecutor,
+    default_sandbox_user,
     docker_available,
     parse_size,
     reap_stale_containers,
@@ -28,6 +29,7 @@ __all__ = [
     "ExecResult",
     "LocalProcessExecutor",
     "SandboxedExecutor",
+    "default_sandbox_user",
     "docker_available",
     "parse_size",
     "reap_stale_containers",

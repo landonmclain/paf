@@ -306,7 +306,7 @@ def _resolve_executor(executor_config: dict | None) -> SandboxedExecutor:
             mode=executor_config.get("mode", "exec"),
             image=executor_config.get("image", "python:3.12-slim"),
             network=executor_config.get("network", "none"),
-            user=executor_config.get("user", "1000:1000"),
+            user=executor_config.get("user"),
             read_only=executor_config.get("read_only", True),
             memory=executor_config.get("memory", "1g"),
             cpus=executor_config.get("cpus", "1.0"),

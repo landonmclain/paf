@@ -7,7 +7,11 @@ the Shell capability.
 
 import pytest
 
-from paf.capabilities._sandbox import DockerExecutor, LocalProcessExecutor
+from paf.capabilities._sandbox import (
+    DockerExecutor,
+    LocalProcessExecutor,
+    default_sandbox_user,
+)
 from paf.capabilities._sandbox._docker import docker_available
 from paf.capabilities.build import _build_shell, _resolve_shell_executor
 
@@ -90,7 +94,7 @@ def test_resolve_docker_defaults_when_unspecified():
     ex = _resolve_shell_executor({"backend": "docker"})
     assert isinstance(ex, DockerExecutor)
     assert ex._network == "none"
-    assert ex._user == "1000:1000"
+    assert ex._user == default_sandbox_user()
     assert ex._read_only is True
     assert ex._memory == "1g"
     assert ex._cpus == "1.0"
@@ -114,3 +118,19 @@ def test_build_shell_passes_docker_executor():
         pytest.skip("Docker not available")
     shell = _build_shell(store=None, shell_config={"executor": {"backend": "docker"}})
     assert isinstance(shell.executor, DockerExecutor)
+
+
+def test_default_sandbox_user_matches_the_host_but_is_never_root(monkeypatch):
+    """The container runs as the host user (so the workspace is readable), not root."""
+    import os
+
+    monkeypatch.setattr(os, "getuid", lambda: 1001)
+    monkeypatch.setattr(os, "getgid", lambda: 121)
+    assert default_sandbox_user() == "1001:121"
+    monkeypatch.setattr(os, "getuid", lambda: 0)
+    monkeypatch.setattr(os, "getgid", lambda: 0)
+    assert default_sandbox_user() == "1000:1000"
+
+
+def test_an_explicit_sandbox_user_wins():
+    assert DockerExecutor(mode="run", user="4242:4242")._user == "4242:4242"

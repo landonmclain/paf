@@ -386,6 +386,22 @@ def _save_logs(state: _DockerBackgroundState, out: str, err: str) -> tuple[str, 
     return text, ""
 
 
+def default_sandbox_user() -> str:
+    """The container user: the host's own ``uid:gid``, never root.
+
+    The workspace is bind-mounted with its host permissions, so a fixed uid only
+    works for the host user who happens to have it: anyone else gets a workspace
+    the container cannot read. Matching the host user keeps the files readable
+    without loosening their permissions. A root host (or a platform without
+    ``os.getuid``) falls back to ``1000:1000`` so the container is never root.
+    """
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None or getuid() == 0:
+        return "1000:1000"
+    return f"{getuid()}:{getgid()}"
+
+
 class DockerExecutor:
     """Runs commands inside a locked-down Docker container."""
 
@@ -395,7 +411,7 @@ class DockerExecutor:
         image: str = "python:3.12-slim",
         mode: str = "exec",
         network: str = "none",
-        user: str = "1000:1000",
+        user: str | None = None,
         read_only: bool = True,
         memory: str = "1g",
         cpus: str = "1.0",
@@ -413,7 +429,7 @@ class DockerExecutor:
         self._image = image
         self._mode = mode
         self._network = network
-        self._user = user
+        self._user = user or default_sandbox_user()
         self._read_only = read_only
         self._memory = memory
         self._cpus = cpus

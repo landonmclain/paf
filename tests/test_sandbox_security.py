@@ -1,7 +1,7 @@
 """Security tests for the Docker sandbox backend.
 
 These assert the *containment properties* of the sandbox, not just the plumbing:
-the locked-down flags (``--network=none``, ``--read-only``, ``--user 1000:1000``)
+the locked-down flags (``--network=none``, ``--read-only``, ``--user <host uid:gid>``, never root)
 must actually hold at runtime. Each test drives a fresh ``mode="run"`` container
 (the strongest isolation) and checks that a hostile action is contained.
 
@@ -17,7 +17,7 @@ import subprocess
 
 import pytest
 
-from paf.capabilities._sandbox import DockerExecutor
+from paf.capabilities._sandbox import DockerExecutor, default_sandbox_user
 
 
 def _run(coro):
@@ -93,14 +93,16 @@ def test_docker_workspace_writable(tmp_path):
 
 
 def test_docker_non_root(tmp_path):
-    """The sandbox runs as the non-root user 1000:1000."""
+    """The sandbox runs as the host's (non-root) user, so the workspace is readable."""
+    expected = default_sandbox_user().split(":")[0]
+    assert expected != "0"
 
     async def scenario() -> None:
         ex = DockerExecutor(mode="run")
         res = await ex.run("id -u", cwd=tmp_path, env=None, timeout=30.0)
         assert res.exit_code == 0
-        assert res.stdout.strip() == "1000", (
-            f"expected uid 1000, got {res.stdout.strip()!r}"
+        assert res.stdout.strip() == expected, (
+            f"expected uid {expected}, got {res.stdout.strip()!r}"
         )
 
     _run(scenario())
