@@ -119,34 +119,28 @@ def test_root_span_non_observation_values_are_set_raw(captured) -> None:
 
 
 def test_output_attribute_must_be_json_string_not_raw_dict(captured) -> None:
-    """A raw dict passed to set_attribute is silently dropped by OTel.
+    """The run output goes on the span as a JSON *string* (what Langfuse reads).
 
-    Regression guard: ``runtime.stream`` sets ``langfuse.observation.output`` with
-    ``_json_dumps(_run_output(result))`` -- the dict MUST be serialized to a JSON
-    string first. If a future edit passes ``_run_output(result)`` (a dict) raw,
-    OTel rejects the value ("Invalid type dict for attribute ... Expected one of
-    ['bool','str','bytes','int','float']") and Langfuse shows a BLANK Output
-    column while Input (serialized in ``root_span``) still works. This test pins
-    the asymmetry so it can't regress silently.
+    ``runtime.stream`` sets ``langfuse.observation.output`` with
+    ``_json_dumps(_run_output(result))``: the dict is serialized first. Older
+    OpenTelemetry SDKs silently dropped a raw dict attribute (Langfuse then showed
+    a BLANK Output column while Input, serialized in ``root_span``, still worked);
+    newer ones keep it as a mapping. Either way Langfuse needs the string, so this
+    pins the string contract without depending on what OTel does with a dict.
     """
     with root_span(
         "paf.run.out-regression",
         _tracer(captured),
         **(json.loads(_json_dumps({"prompt": "p", "conversation_id": "c"}))),
     ) as span:
-        # BUG path (what silently dropped): raw dict.
-        span.set_attribute("langfuse.observation.output", {"output": "apple"})
-        # FIX path (what runtime.stream now does): JSON-string attribute.
         span.set_attribute(
-            "langfuse.observation.output_fixed", _json_dumps({"output": "apple"})
+            "langfuse.observation.output", _json_dumps({"output": "apple"})
         )
     captured.force_flush()
     attrs = _attrs(captured.get_finished_spans()[0])
 
-    # The raw dict is REJECTED and dropped entirely -- it never reaches the span.
-    assert "langfuse.observation.output" not in attrs, attrs
-    # The serialized form survives and round-trips to structured JSON.
-    saved = attrs["langfuse.observation.output_fixed"]
+    saved = attrs["langfuse.observation.output"]
+    assert isinstance(saved, str), type(saved)
     assert json.loads(saved) == {"output": "apple"}, saved
 
 
