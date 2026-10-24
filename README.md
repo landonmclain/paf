@@ -189,9 +189,14 @@ these.
   model.
 - **WarnOnCacheBusts** warns when the cacheable prompt prefix changes mid-run.
 
-`demo_assistant` also connects MCP servers configured in its spec. Native
-pydantic-ai capabilities (web search, thinking, MCP, and others) can be listed
-directly in a spec's `capabilities:` block, with no Python needed.
+`demo_assistant` also connects MCP servers, and ships with two keyless examples
+in `specs/mcp/demo_servers.json`: Time (a local server started with `uvx`, pinned to
+a tested version) and DeepWiki (docs for public GitHub repos; its requests go to
+DeepWiki's hosted service). Point the spec's `mcp: config:` at your own
+`mcpServers` JSON to use other servers.
+
+Native pydantic-ai capabilities (web search, thinking, MCP, and others) can be
+listed directly in a spec's `capabilities:` block, with no Python needed.
 
 Guard capabilities (prompt-injection screening, per-call tool gating, and secret
 handles that keep raw credentials out of the context) are enabled in the

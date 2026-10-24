@@ -324,11 +324,14 @@ skills:
 #   `memory.consolidate_every`. Eviction is pure context management — it never
 #   calls memory, and it can never evict the active user turn.
 # MCP servers (builtin pydantic-ai MCP via load_mcp_toolsets). The `config` is the
-# path to a Claude-Desktop-style `mcpServers` JSON; server creds come from .env via
-# the builtin `${VAR}` expander (env-var-only — never in the spec). DEMO_PROFILE
-# allowlists "MCP". Connection is lazy: no server starts until a turn needs it.
+# path (relative to the project root) of a Claude-Desktop-style `mcpServers` JSON;
+# server creds come from .env via the builtin `${VAR}` expander (env-var-only —
+# never in the spec). The demo profile allowlists "MCP", and this config holds two
+# keyless examples: `time` (a local stdio server run with uvx) and `deepwiki`
+# (docs for public GitHub repos). Add your own servers to a separate file and point
+# this at it. Connection is lazy: no server starts until a turn needs it.
 mcp:
-  config: data/mcp_servers/demo_servers.json
+  config: specs/mcp/demo_servers.json
 compact:
   turn_boundary: true          # Run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (single mid-turn behavior).
   # turn_boundary_target: 150000  # OLD (300k-context tuning)

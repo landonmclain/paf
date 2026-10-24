@@ -112,7 +112,7 @@ DEMO_PROFILE = AgentProfile(
         # "Secrets",
         # "InjectionGuard",
         # "ToolGating",
-        # "MCP",  # experimental — enabled in the DEMO sandbox, absent from assistant
+        "MCP",  # experimental: the keyless example servers in specs/mcp/demo_servers.json
     ),
 )
 

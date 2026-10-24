@@ -99,3 +99,37 @@ def test_spec_mcp_config_absent(tmp_path):
     spec = tmp_path / "agent.yaml"
     spec.write_text("model: openai:gpt-4o\n")
     assert _spec_mcp_config(spec) is None
+
+
+# --- the shipped demo config ----------------------------------------------------------
+# The demo agent ships with two keyless example servers so MCP works on a fresh clone.
+
+
+def test_shipped_demo_config_is_valid_keyless_and_lazy():
+    """It parses, builds one lazy capability per server, and holds no credentials."""
+    from paf.config import PROJECT_ROOT
+
+    path = PROJECT_ROOT / "specs" / "mcp" / "demo_servers.json"
+    raw = path.read_text(encoding="utf-8")
+    servers = json.loads(raw)["mcpServers"]
+    assert set(servers) == {"time", "deepwiki"}
+    # A stdio server runs third-party code, so it is pinned to the tested version.
+    assert servers["time"]["args"] == ["mcp-server-time@2026.10.19"]
+    for name, cfg in servers.items():
+        assert ("command" in cfg) ^ ("url" in cfg), f"{name}: stdio or http, not both"
+        assert not {"env", "headers", "authorization_token"} & set(cfg), (
+            f"{name}: the tracked config must stay keyless"
+        )
+    assert "${" not in raw  # no env placeholders either: nothing to set up
+    caps = _build_mcp(None, str(path))  # building connects to nothing
+    assert len(caps) == 2 and all(isinstance(c, MCP) for c in caps)
+
+
+def test_the_demo_spec_and_profile_use_the_shipped_config():
+    from paf.capabilities.profiles import PROFILES
+    from paf.config import PROJECT_ROOT, SPECS_DIR
+
+    configured = _spec_mcp_config(SPECS_DIR / "demo_assistant.yaml")
+    assert configured == "specs/mcp/demo_servers.json"
+    assert (PROJECT_ROOT / configured).is_file()
+    assert "MCP" in PROFILES["demo"].capability_names
