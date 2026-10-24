@@ -880,3 +880,41 @@ def test_note_create_accepts_absolute_path_inside_root(
     root, toolset = vault
     target = toolset._in_scope_path(str(root / "Concepts" / "New Note.md"))
     assert target == (root / "Concepts" / "New Note.md").resolve()
+
+
+# --- a vault folder that does not exist yet -----------------------------------------
+# A fresh install (nothing has made data/vault yet), or a folder deleted while paf
+# runs, must read as an empty vault. It used to raise FileNotFoundError mid-turn.
+
+
+@pytest.fixture
+def absent_vault(tmp_path: Path) -> tuple[Path, VaultToolset]:
+    root = tmp_path / "not-created-yet"
+    storage = FlatFileVaultStorage(index_root=tmp_path / "idx")
+    return root, VaultToolset(vault_root=root, storage=storage)
+
+
+def test_every_read_tool_copes_with_a_missing_root(
+    absent_vault: tuple[Path, VaultToolset],
+) -> None:
+    root, toolset = absent_vault
+    assert not root.exists()
+    assert "does not exist yet" in toolset.vault_overview()
+    assert toolset.note_find() == "(vault empty)"
+    assert toolset.note_search("anything") == "(vault empty)"
+    # An unknown note is reported (None / a hint), exactly as in an existing vault.
+    assert toolset.lookup_note("Index") is None
+    assert toolset.read_note("Index") is None
+    assert toolset.note_links("Index") is None
+    assert "unknown note" in str(toolset.note_backlinks("Index"))
+    assert not root.exists()  # reading never creates the folder
+
+
+def test_the_first_note_creates_the_vault_folder(
+    absent_vault: tuple[Path, VaultToolset],
+) -> None:
+    root, toolset = absent_vault
+    assert "Created First.md" in toolset.note_create("First", body="hello")
+    assert (root / "First.md").is_file()
+    overview = toolset.vault_overview()
+    assert "First.md" in overview and "does not exist yet" not in overview

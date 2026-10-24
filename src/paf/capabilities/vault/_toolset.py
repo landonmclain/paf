@@ -263,6 +263,12 @@ class VaultToolset(FunctionToolset):
         self._ensure_index()
         notes = self._notes()
         if not notes:
+            if not self._root.is_dir():
+                return (
+                    f"Vault folder {self._root} does not exist yet, so there are no "
+                    "notes. note_create makes it; if you expected existing notes, "
+                    "the vault path in the spec may be wrong."
+                )
             return f"Vault at {self._root} is empty (no in-scope .md notes)."
         # Build the nested folder tree from note paths.
         lines: list[str] = [

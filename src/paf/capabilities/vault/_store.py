@@ -89,7 +89,14 @@ class ScanScope:
         return True
 
     def iter_notes(self) -> list[Path]:
-        """Stable-ordered, in-scope ``*.md`` files under the root."""
+        """Stable-ordered, in-scope ``*.md`` files under the root.
+
+        A root that does not exist yet has no notes (the first ``note_create``
+        makes it), so a fresh install, or a folder deleted while paf runs,
+        reads as an empty vault instead of raising.
+        """
+        if not self.root.is_dir():
+            return []
 
         def _walk(d: Path) -> list[Path]:
             out: list[Path] = []
