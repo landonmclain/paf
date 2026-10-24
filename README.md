@@ -117,7 +117,8 @@ shell:
 ```
 
 To add an agent, copy a spec, give it a new `name`, and point `profile` at the
-capability set it should have.
+capability set it should have. Every key a spec can set, with its default, is in
+the [spec reference](docs/spec-reference.md).
 
 ## Capabilities
 
@@ -198,9 +199,29 @@ DeepWiki's hosted service). Point the spec's `mcp: config:` at your own
 Native pydantic-ai capabilities (web search, thinking, MCP, and others) can be
 listed directly in a spec's `capabilities:` block, with no Python needed.
 
-Guard capabilities (prompt-injection screening, per-call tool gating, and secret
-handles that keep raw credentials out of the context) are enabled in the
-`secure` profile.
+## Security
+
+The runtime, not the model, enforces what an agent may do:
+
+- **Approvals.** A risky call pauses until a person approves or denies it, in
+  the terminal or in the browser. With nobody attached, it is refused.
+- **Shell command policy.** Each command is parsed (pipes, `sudo`, `bash -c`,
+  `find -delete` included) and allowed, sent for approval, or refused. The
+  lenient policy asks before anything irreversible.
+- **Tool gating.** Per-call allow / approve / block rules for any tool, by path
+  ("writes are fine under `out/`, elsewhere ask").
+- **Prompt-injection screening.** Tool results are scored by a local
+  classifier; hits are withheld, redacted or marked untrusted, and later writes
+  in the run need approval.
+- **Secret handles.** The model names credentials as `$SECRET:NAME` and never
+  sees the values; credentials in tool output are scrubbed.
+- **Sandbox.** Shell commands and `run_python` can run in a Docker container
+  with no network and a read-only root; credential files are blanked inside it
+  and refused by the file tools.
+
+The `secure` profile (`secure_assistant`) turns all of it on. See
+[docs/security](docs/security/README.md) for how the layers fit and how to
+configure each.
 
 ## Memory
 
@@ -307,6 +328,7 @@ data/
   keywords/       the keyword curator's vocabulary
   push/           Web Push device subscriptions
   uploads/        images sent to the agent
+  approvals/      approval requests and decisions, per agent (JSONL)
 ```
 
 ## Development

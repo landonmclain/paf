@@ -827,8 +827,8 @@ def _spec_gating_config(spec_path: Path) -> dict | None:
               action: allow
               inside: [out]       # only when the path is under out/
             - tools: [write_file, edit_file]
-              action: approve     # everything else; enforced as block until
-                                  # an approval transport exists
+              action: approve     # everything else; asks the person, or
+                                  # refused when nobody is attached
 
     Returned as written (a raw mapping); ``guardrails.gating_policy.parse_policy``
     validates it and raises on a malformed block, so a half-applied security
@@ -842,7 +842,7 @@ def _spec_injection_config(spec_path: Path) -> dict | None:
 
         guardrails:
           injection:
-            default_action: block      # off | observe | block
+            default_action: block      # off | observe | flag | redact | block
             tools: {list_directory: observe}
 
     Returned as written; ``injection.parse_injection_policy`` validates it and

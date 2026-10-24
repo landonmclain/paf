@@ -11,11 +11,10 @@ First matching rule wins; no match falls to ``default``. Anything the policy
 cannot interpret (a non-string path, an absolute path, ``..``) counts as
 OUTSIDE every allowed directory, so ambiguity fails closed.
 
-``approve`` needs a host that can show the request to a person and resume the
-run. Until a transport does, the builder passes ``approval_available=False`` and
-``approve`` is enforced as a ``block`` with an explanatory message — never as a
-deferred call nothing will answer, which would end the run in a state no one
-handles.
+``approve`` asks the person attached to the turn (``paf.approvals``). With
+nobody attached (piped runs, background turns) it is enforced as a ``block``
+with an explanatory message — never as a deferred call nothing will answer,
+which would end the run in a state no one handles.
 """
 
 from __future__ import annotations

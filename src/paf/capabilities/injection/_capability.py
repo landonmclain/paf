@@ -15,7 +15,8 @@ model-visible part, trace anything noteworthy, and act:
 
 A hit under ``flag``, ``redact`` or ``block`` *taints* the run. From then on, tools listed in
 the policy's ``on_flag.require_approval`` need human approval for the rest of
-the run; with no approval transport yet, they are refused before they execute.
+the run: the person attached to the turn is asked, and with nobody attached they
+are refused before they execute.
 That is the control that matters when the model has seen injected text: it can
 read the content, but it cannot act on it with a consequential tool.
 

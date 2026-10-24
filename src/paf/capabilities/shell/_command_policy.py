@@ -12,7 +12,7 @@ Declared in the spec's ``shell.command_policy`` block:
             targets_any: ["/", "/*", "~", "~/", "$HOME", "/home", "/etc", "/usr"]
             action: block
             why: deletes the root, your home, or a system directory
-          - effects_any: [delete, discard, force_push, disk]
+          - effects_any: [delete, discard, force_push, disk, overwrite, data]
             action: approve
           - commands: [chmod, chown]
             flags_any: [-R, --recursive]
