@@ -87,7 +87,7 @@ The SSE server exposes the approval flow to any front end:
 | `approval_requested` frame | Sent on the turn's stream: `approval_id`, `step_id` (the tool call), `tool_name`, `args`, `reason`, `preview`, `created_at`, `expires_at`, `conversation_id`. |
 | `approval_resolved` frame | `approval_id`, `step_id`, `tool_name`, `outcome`, `actor`, `note`. |
 | `GET /api/conversations/{id}/approvals?agent=` | What is pending for a conversation. Used to rebuild cards after a reload. |
-| `POST /api/approvals/{approval_id}` | Body `{"decision": "approve" \| "deny", "note"?: str}`. Returns 404 when nothing with that id is pending, 409 when someone else already decided, 422 for a bad body. |
+| `POST /api/approvals/{approval_id}` | Body `{"decision": "approve"}` or `{"decision": "deny"}`, with an optional `"note"`. Returns 404 when nothing with that id is pending, 409 when someone else already decided, 422 for a bad body. |
 
 The SSE server has no authentication of its own. It is meant to be reached over
 a private network (paf's deployment puts it behind Tailscale).

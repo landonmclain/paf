@@ -339,10 +339,12 @@ uv run pytest -m live              # real model calls (needs .env)
 uv run ruff check src tests ui
 uv run ruff format --check src tests ui
 npx pyright
+uv run --group docs mkdocs serve   # documentation site at 127.0.0.1:8000
 ```
 
 The offline suite uses pydantic-ai's `TestModel`, so it needs no API key. CI
-runs the same checks on every push.
+runs the same checks on every push, plus a strict build of the documentation
+site (`mkdocs.yml`, `docs/`), so a broken link or anchor fails it.
 
 ## Project layout
 

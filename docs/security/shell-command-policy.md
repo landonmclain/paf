@@ -70,7 +70,7 @@ one rule covers every command with that effect, however it's spelled.
 | `discard` | git work thrown away: `reset --hard`, `checkout -- .`, `restore`, `branch -D`, `stash drop`/`clear`, `tag -d` |
 | `force_push` | `git push --force`, `-f`, `--force-with-lease`, `--mirror`, `--delete`, `+refspec`, `:ref` |
 | `disk` | `dd`, `mkfs*`, `fdisk`, `parted`, `wipefs`, `mkswap` |
-| `overwrite` | `>`, `>|`, `&>`, `mv`, `cp`, `install`, `ln -f`, `tee`, `truncate`, `rsync` onto a file that **already exists**. Writing a new file, appending (`>>`, `tee -a`) and `-n`/`--backup` don't count. |
+| `overwrite` | `>`, <code>&gt;&#124;</code>, `&>`, `mv`, `cp`, `install`, `ln -f`, `tee`, `truncate`, `rsync` onto a file that **already exists**. Writing a new file, appending (`>>`, `tee -a`) and `-n`/`--backup` don't count. |
 | `data` | `DROP`, `TRUNCATE`, `DELETE FROM`, `UPDATE … SET`, `ALTER TABLE … DROP`, `FLUSHALL`/`FLUSHDB` given to `psql`, `mysql`, `sqlite3`, `duckdb`, `mongosh`, `redis-cli`, `clickhouse-client` |
 | `permissions` | `chmod`, `chown`, `chgrp` |
 | `privileged` | anything run through `sudo` or `doas` |

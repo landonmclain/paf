@@ -1,0 +1,55 @@
+name: Docs deploy
+
+# Publishes the MkDocs site (mkdocs.yml, docs/) to GitHub Pages.
+#
+# Manual only for now: GitHub Pages needs a public repository on the free plan.
+# Once the repository is public, enable Pages (Settings → Pages → Source:
+# GitHub Actions) and add a push trigger:
+#
+#   push:
+#     branches: [main]
+#     paths: [docs/**, mkdocs.yml]
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the site
+        run: uv run --only-group docs mkdocs build --strict
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -88,7 +88,7 @@ How good it is, measured by `tests/defender_eval/` on 104 labeled tool outputs:
   clears the false positives also drops detection.
 
 That is why it is one layer of several. See
-[`tests/defender_eval/README.md`](../../tests/defender_eval/README.md) for the
+[`tests/defender_eval/README.md`](https://github.com/landonmclain/paf/blob/main/tests/defender_eval/README.md) for the
 corpus, how to grow it from live traffic, and the full findings.
 
 ## Tracing

@@ -1,0 +1,67 @@
+# paf documentation site. The pages are the Markdown files in docs/, which also
+# read fine on GitHub as they are.
+#
+#   uv run --group docs mkdocs serve            # live preview at 127.0.0.1:8000
+#   uv run --group docs mkdocs build --strict   # what CI runs; warnings fail it
+site_name: paf
+site_description: A small, opinionated agent framework built on pydantic-ai.
+repo_url: https://github.com/landonmclain/paf
+repo_name: landonmclain/paf
+edit_uri: edit/main/docs/
+copyright: MIT License
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes      # a section's README.md is its landing page
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+nav:
+  - Home: README.md
+  - Spec reference: spec-reference.md
+  - Security:
+      - security/README.md
+      - Approvals: security/approvals.md
+      - Shell command policy: security/shell-command-policy.md
+      - Tool gating: security/tool-gating.md
+      - Prompt injection: security/prompt-injection.md
+      - Secrets: security/secrets.md
+      - Sandbox: security/sandbox.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+
+# Broken links and anchors are build errors under --strict.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn

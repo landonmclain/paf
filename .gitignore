@@ -38,3 +38,6 @@ demo.db
 .agent-codeindex/
 
 .hermes-backups/
+
+# MkDocs build output (mkdocs build)
+site/

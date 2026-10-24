@@ -121,3 +121,9 @@ dev = [
     "pydantic-ai-harness[playwright, prompt-injection-defender, prompt-injection-defender-ml]",
     "ruff>=0.16.1",
 ]
+# The documentation site (mkdocs.yml, docs/). Build: `uv run --group docs mkdocs
+# build --strict`. MkDocs is held below 2.0, which Material does not support.
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.7",
+]
