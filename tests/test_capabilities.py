@@ -104,9 +104,8 @@ def test_warn_on_cache_busts_cataloged_and_wired() -> None:
     monitor = next((c for c in built if type(c).__name__ == "WarnOnCacheBusts"), None)
     assert monitor is not None
     assert isinstance(monitor, WarnOnCacheBusts)
-    assert monitor.collapse_ratio == 0.5
-    assert monitor.min_prefix_tokens == 1024
-    assert monitor.cache_ttl_seconds == 300.0
+    assert monitor.min_missed_ratio == 0.5
+    assert monitor.min_missed_tokens == 1024
 
 
 def test_cache_bust_warning_flips_active_span_to_error() -> None:
@@ -142,7 +141,13 @@ def test_cache_bust_warning_flips_active_span_to_error() -> None:
     tracer = trace.get_tracer("test")
     with tracer.start_as_current_span("model-req") as _:
         warnings.warn(  # noqa: B028 - deliberate: firing the signal under test
-            "cache hit collapsed at model request 3", CacheBustWarning
+            CacheBustWarning(
+                "cache hit collapsed at model request 3",
+                reason="unexpected",
+                established_tokens=8000,
+                cache_read_tokens=500,
+                missed_tokens=7500,
+            )
         )
 
     spans = exporter.get_finished_spans()

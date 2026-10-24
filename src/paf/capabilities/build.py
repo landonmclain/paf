@@ -31,6 +31,7 @@ from pydantic_ai.mcp import load_mcp_toolsets
 from pydantic_ai_harness import ToolGuardrail
 from pydantic_ai_harness.tool_output_limits import (
     Band,
+    LocalFileStore,
     Spill,
     ToolOutputLimits,
     Truncate,
@@ -686,16 +687,19 @@ def _build_tool_output_limits(store) -> ToolOutputLimits:
     payload is offloaded to the flat-file store instead of being retained in
     history, then paged back on demand via the builtin `read_tool_result`.
 
-    By default, returns over 20_000 chars are LOSS LESSLY SPILLED to a
-    `LocalFileStore` with a bounded truncation fallback — zero LLM
+    Returns over 20_000 chars are LOSSLESSLY SPILLED to a `LocalFileStore` (a
+    per-user temp directory) with a bounded truncation fallback — zero LLM
     cost, no silent drop. `read_tool_result` is registered by the capability's
-    own toolset.
+    own toolset. The store is passed explicitly: the harness default is a store
+    in the run's workspace, and most paf agents have none attached.
 
     `store` (the shared persistence store) is accepted for a uniform builder
-    signature but unused — ToolOutputLimits uses its own `LocalFileStore` spill
-    backend by default (swap via `store=` for a custom OverflowStore).
+    signature but unused.
     """
-    return ToolOutputLimits(bands=[Band(over=20_000, action=Spill(then=Truncate()))])
+    return ToolOutputLimits(
+        bands=[Band(over=20_000, action=Spill(then=Truncate()))],
+        store=LocalFileStore(),
+    )
 
 
 def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
@@ -709,12 +713,15 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     stable prefix would have served from cache. Purely observational: no tools,
     instructions, or model-settings, so it composes with every other capability.
 
-    Defaults are conservative (collapse_ratio 0.5, min_prefix_tokens 1024,
-    cache_ttl_seconds 300): only a drop below half of an established >=1024-token
-    prefix fires, so ordinary rounding or partial misses don't warn. Silent when
-    caching is off or unreported (cache_read_tokens stays 0), so it never fires
-    spuriously in runs that don't cache. Same drop-in pattern as ToolOutputLimits
-    — consumed as a pydantic-ai AbstractCapability.
+    Thresholds are conservative (``min_missed_ratio`` 0.5, ``min_missed_tokens``
+    1024): only a drop below half of an established >=1024-token prefix fires, so
+    ordinary rounding or partial misses don't warn. The harness defaults (5% of
+    2,000 tokens) are far more sensitive, and each warning becomes a red span in
+    Langfuse. Whether a bust is "unexpected" is judged against the provider's own
+    published cache window. Silent when caching is off or unreported
+    (cache_read_tokens stays 0), so it never fires spuriously in runs that don't
+    cache. Same drop-in pattern as ToolOutputLimits — consumed as a pydantic-ai
+    AbstractCapability.
 
     BUSTS SURFACE AS LANGFUSE ERRORS (observability/instrumentation.py):
     a ``CacheBustWarning`` is a ``UserWarning`` (suppressed by default), so on its
@@ -724,7 +731,7 @@ def _build_warn_on_cache_busts(store) -> WarnOnCacheBusts:
     the bust — it appears as a red error observation in Langfuse, and never aborts the turn.
     """
 
-    return WarnOnCacheBusts()
+    return WarnOnCacheBusts(min_missed_ratio=0.5, min_missed_tokens=1024)
 
 
 def _build_planning(store) -> Planning:

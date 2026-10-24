@@ -163,12 +163,26 @@ def test_capture_drops_thinking_and_intermediate_keeps_final_text():
     user1 = ModelRequest(
         parts=[UserPromptPart(content="next question")], run_id="run-z"
     )
+    # The harness always keeps the newest settled message, so give it a trailing
+    # settled turn to keep: everything up to and including `final0` is evicted.
+    final1 = ModelResponse(parts=[TextPart("A later answer.")], run_id="run-z")
+    user2 = ModelRequest(
+        parts=[UserPromptPart(content="the active question")], run_id="run-z"
+    )
 
-    msgs: list[ModelMessage] = [user0, intermediate, toolret, final0, user1]
+    msgs: list[ModelMessage] = [
+        user0,
+        intermediate,
+        toolret,
+        final0,
+        user1,
+        final1,
+        user2,
+    ]
     captured: list[tuple[list[dict], int]] = []
     window = TurnBoundSlidingWindow(
         max_messages=100,
-        keep_messages=0,
+        keep_messages=1,
         capture_hook=lambda rows, keep: captured.append((rows, keep)),
     )
     asyncio.run(window.compact(msgs, _ctx_like("prof:cid")))
