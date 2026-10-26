@@ -41,3 +41,6 @@ demo.db
 
 # MkDocs build output (mkdocs build)
 site/
+
+# Claude Code / desktop app local config (e.g. the docs preview launcher)
+.claude/
