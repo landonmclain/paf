@@ -282,12 +282,25 @@ def test_docker_infinite_loop_times_out_and_leaves_no_container(tmp_path):
     ts = _docker_python(tmp_path)
     out = _run(ts.run_python("while True: pass", timeout_seconds=2))
     assert "timed out" in out
+    import os
     import subprocess
 
+    # Only this process's containers: under pytest-xdist another worker may be
+    # running its own sandbox at the same moment. Containers are labeled with the
+    # owning pid.
     names = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}"], capture_output=True, text=True
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=paf.sandbox.pid={os.getpid()}",
+            "--format",
+            "{{.Names}}",
+        ],
+        capture_output=True,
+        text=True,
     ).stdout
-    assert not re.search(r"paf-run-", names)
+    assert not re.search(r"paf-run-", names), names
 
 
 @needs_docker
