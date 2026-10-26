@@ -16,7 +16,7 @@ from pydantic_ai import ModelRetry
 from paf.capabilities.build import PROJECT_ROOT, _build_skills
 from paf.capabilities.skills import Skills, SkillToolset
 from paf.capabilities.skills._corpus import HintCorpus, parse_frontmatter
-from paf.specs import _spec_skills_config, get_spec_path
+from paf.specs import _spec_skills_config
 
 # Deterministic, checked-in test corpus (NOT the live, gitignored data/skills/).
 # `data/skills/` is the real running library and is free to grow; the tests pin
@@ -411,10 +411,3 @@ def test_spec_skills_config_absent_returns_none(tmp_path: Path) -> None:
     spec = tmp_path / "agent.yaml"
     spec.write_text("name: agent\nmodel: openai:gpt-5.4-nano\n")
     assert _spec_skills_config(spec) is None
-
-
-def test_demo_spec_resolves_skills_block() -> None:
-    """The shipped demo_assistant.yaml declares a skills: block that resolves."""
-    cfg = _spec_skills_config(get_spec_path("demo_assistant"))
-    assert cfg is not None
-    assert "libraries" in cfg and cfg["libraries"]

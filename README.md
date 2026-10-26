@@ -108,9 +108,9 @@ instructions: |
   You are a capable general-purpose assistant and technical collaborator...
 
 filesystem:
-  root_dir: ~/
+  root_dir: ~/projects/my-project
 shell:
-  cwd: ~/
+  cwd: ~/projects/my-project
   executor:
     backend: local   # or docker, for a locked-down container
 ```

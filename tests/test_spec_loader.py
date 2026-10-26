@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -139,3 +140,31 @@ def test_building_a_spec_without_a_profile_says_so(tmp_path: Path) -> None:
     (tmp_path / "noprof.yaml").write_text("name: noprof\nmodel: test\n")
     with pytest.raises(MissingProfileError, match="No profile for agent 'noprof'"):
         build_agent("noprof", spec_directory=tmp_path)
+
+
+# --- the shipped specs name no machine --------------------------------------------------
+# The specs that ship (the demo and secure agents, the sub-agent and background-agent
+# leaves, and the example MCP config) must work on any checkout, so they carry no paths
+# into a particular person's home folder, notes or tooling. A personal spec such as
+# `assistant.yaml` is gitignored and not covered here.
+_MACHINE_SPECIFIC = re.compile(
+    r"/home/|/Users/|Obsidian|Documents/|\.hermes", re.IGNORECASE
+)
+
+
+def _shipped_spec_files() -> list[Path]:
+    files = [SPECS_DIR / "demo_assistant.yaml", SPECS_DIR / "secure_assistant.yaml"]
+    for sub in ("sub_agents", "background_agents"):
+        files += sorted((SPECS_DIR / sub).glob("*.yaml"))
+    files += sorted((SPECS_DIR / "mcp").glob("*.json"))
+    return files
+
+
+@pytest.mark.parametrize("path", _shipped_spec_files(), ids=lambda p: p.name)
+def test_shipped_specs_name_no_machine_specific_paths(path: Path) -> None:
+    hits = [
+        f"line {n}: {line.strip()[:90]}"
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if _MACHINE_SPECIFIC.search(line)
+    ]
+    assert not hits, f"{path.name} names a specific machine:\n" + "\n".join(hits)

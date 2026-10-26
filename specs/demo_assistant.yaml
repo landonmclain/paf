@@ -1,28 +1,12 @@
-# Demo/live-testing agent spec — the "EVERYTHING" sandbox.
-#
-# The surface for building out and tuning the FULL stack in the CLI (`python
-# ui/chat.py demo_assistant`): persistence, recall, durable memory (journal),
-# and context compaction.
-#
-# The `demo` profile (src/paf/capabilities/profiles.py) allowlists the harness
-# capabilities that need a Python build step — StepPersistence,
-# ConversationSearch, Memory, Compaction — mirroring the production assistant.
-# These resolve via `build_agent`'s `capabilities=` seam (shared store).
+# The demo agent: every capability on, working in the project folder. `paf chat`
+# runs it by default. Every key is documented in docs/spec-reference.md; an omitted
+# block uses the default listed there (files, shell, git and the code map default
+# to the repository root, the vault to data/vault/, skills to data/skills/).
 
 name: demo_assistant
-
-# The profile (capability allowlist) this spec belongs to. Read by the CLI
-# (`resolve_profile_name`) to choose the default profile for a one-arg
-# invocation like `python ui/chat.py demo_assistant`.
 profile: demo
 
-# Provider-qualified model string. Default: DeepSeek V4 Flash via OpenRouter
-# (requires OPENROUTER_API_KEY in .env). Commented out in favor of a local
-# Ollama model (qwen3.8:27b-90k, served by llama-server at 160k context; needs OLLAMA_BASE_URL).
-# model: openrouter:deepseek/deepseek-v4-flash-0731
-# model: ollama:qwen3.8:27b-90k
-# model: openrouter:deepseek/deepseek-v4.1-flash
-# model: openrouter:openai/gpt-5.6-luna
+# Needs OPENAI_API_KEY. Any pydantic-ai model string works (openrouter:..., ollama:...).
 model: openai:gpt-6-luna
 
 instructions: |
@@ -32,7 +16,7 @@ instructions: |
 
   # Style
 
-  Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default. 
+  Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default.
 
   # Working
 
@@ -53,65 +37,15 @@ instructions: |
 model_settings:
   temperature: 0
   max_tokens: 32768
-  # Runaway safety valve (output-token ceiling, incl. reasoning). Same value the
-  # benchmark harness pins for this model (tests/framework.py max_tokens=12288).
-
-  # Benchmark-matching determinism (tests/framework.py): temp 0, top_p 1.0, and a
-  # fixed sampler seed give reproducible outputs.
-  # temperature: 0
-  # top_p: 1.0
-  # seed: 20260815
-
-  # OpenRouter prompt caching (OpenRouter-only; ignored by Ollama).
-  # openrouter_cache_instructions: true
-  # openrouter_cache_messages: true
-  # openrouter_cache_tool_definitions: true
-
-  # OpenRouter provider routing pin (OpenRouter-only; ignored by Ollama).
-  # extra_body:
-  #   provider:
-  #     order: [deepinfra, parasail, coreweave]
-  #     quantizations: [fp8]
-  # Anti-repetition sampler param (OpenAI request-body, forwarded by
-  # OpenRouter): breaks output-repetition loops (thinking/narration stuck
-  # repeating the same sentences). 1.0 is a moderate value — enough to break
-  # a loop, low enough to avoid degrading quality. Additive penalty, applied
-  # per token already emitted (OpenAI-style). Ollama's /v1 endpoint honors it.
-  # extra_body:
-  #   frequency_penalty: 1.0
-
-  # Reasoning effort for DeepSeek V4.1 Flash (OpenRouter-only; ignored by
-  # Ollama). `medium` avoids the 'thinking forever' loops on simple turns.
-  # openrouter_reasoning:
-  #   effort: none
-
-  # Reasoning effort for the local ollama model (Qwen3.8). `low` avoids
-  # over-thinking on simple turns. Must be the `openai_`-prefixed key:
-  # pydantic-ai silently drops a bare `reasoning_effort`. It is sent as the
-  # request's `reasoning_effort`, which llama-server's chat template reads
-  # (the template's own default applies when unset).
+  # The `openai_` prefix is required: a bare `reasoning_effort` is silently dropped.
   openai_reasoning_effort: low
 
-# ---------------------------------------------------------------------------
-# Web trust boundary (lives in the spec — the source of truth). Read by
-# `build_agent` -> `_spec_web_config` -> the `fetch_web_page` extract allowlist.
-#
-# `search_domains` gates EXTRACT only (which domains `fetch_web_page` may pull
-# full page content from into context — the real prompt-injection surface).
-# Open web SEARCH is never restricted: `search_web` returns only low-risk
-# snippets/pills. So a general assistant can search anything, but can only
-# *read* pages from these trusted source domains.
-#
-# Absent block -> the built-in PREFERRED_DOC_DOMAINS default (same list).
-# Curate here per agent: add a domain when you trust its source content with
-# model attention; drop one you no longer want readable in-context.
+# Pages `fetch_web_page` may pull into context. Search itself is unrestricted.
 web:
   search_domains:
     - docs.pydantic.dev
     - ai.pydantic.dev
     - pydantic.dev
-    - docs.streamlit.io
-    - docs.tavily.com
     - docs.python.org
     - github.com
     - developer.mozilla.org
@@ -120,291 +54,79 @@ web:
     - react.dev
     - playwright.dev
     - pytest.org
-    - api.composer.trade
-    - astro.build
-    - docs.astro.build
-    - developers.cloudflare.com
-    - example.com
-# ---------------------------------------------------------------------------
-# Browser egress policy. Read by
-# `build_agent` -> `_spec_browser_config` -> the Browser capability's egress
-# policy. SECURE BY DEFAULT in code; only what is declared here loosens it, so
-# a published repo gives every agent the locked-down default.
-#
-# `allowed_domains` bounds which hosts (and their subdomains) the browser may
-# navigate to and which request kinds that move data (fetch, XHR, EventSource,
-# WebSocket, sendBeacon) may reach. A non-empty list here WINS (overrides the
-# capability's loopback-only default); absent/null/empty -> the capability's
-# own default.
-#
-# `block_private_addresses` controls the MECHANICAL SSRF guard that refuses
-# loopback / RFC-1918 LAN / link-local / cloud-metadata addresses. It defaults
-# to `true` (secure) and, when true, OUTRANKS the allowlist — so listing a
-# private host here does NOT make it reachable on its own. To let the browser
-# reach a LOCAL dev/LAN host you must BOTH name it above AND set this to
-# `false`. The cloud-metadata endpoint (169.254.169.254 and aliases) is
-# ALWAYS refused; the override can never release it.
-#
-# This spec intentionally ships with NO private reach (the secure default):
-# only the public staging host is allowed, and `block_private_addresses` is
-# left off so the guard stays ON. If you want local dev browsing, uncomment and
-# set it to `false`:
-#
-#   block_private_addresses: false   # uncomment to reach local/LAN hosts
+    - docs.streamlit.io
+    - docs.tavily.com
+
+# Hosts the browser may visit, and their subdomains. Private and loopback addresses
+# stay blocked; to browse a local site, name it here and set
+# `block_private_addresses: false`.
 browser:
   allowed_domains:
-    - staging.example.com
-    - staging.com
+    - docs.python.org
+    - developer.mozilla.org
+    - github.com
     - example.com
-    - localhost
-    - 127.0.0.1
-  block_private_addresses: false   # local troubleshooting: release the SSRF guard for loopback only
 
-# ---------------------------------------------------------------------------
-# Vision model (lives in the spec — the source of truth). Read by
-# `build_agent` -> `_spec_visual_config` -> the Visual capability's
-# `describe_screenshot` side-call + the before_model_request routing hook.
-#
-# `model` is the vision-capable model that inspects captured screenshots and
-# describes images uploaded in paf-ui (ui/sse.py, saved under data/uploads) when
-# the main model is text-only. Any pydantic-ai model string works — a remote
-# `openrouter:...` model or a local `ollama:...` one (needs OLLAMA_BASE_URL).
-# `model_settings` is passed to every vision call. Absent block -> the Visual
-# capability is inert (images pass through to the main model untouched).
+# Describes images and screenshots for the main model.
 visual:
-  # model: ollama:qwen3.5:4b
-  model: openai/gpt-6-luna
+  model: openai:gpt-6-luna
 
-# ---------------------------------------------------------------------------
-# Per-assistant root scoping. Read
-# by `build_agent` -> `_spec_{filesystem,shell,git,codebase_map}_config` -> the
-# root-bearing builders in build.py. These point each capability at a working
-# directory OTHER than PROJECT_ROOT (the paf repo itself).
-#
-# The demo agent's filesystem + shell are scoped to the user root (`~/`) so it
-# can work across the whole home tree. git/codebase_map point at the paf repo,
-# and vault at the Obsidian vault. Absent block -> the builder's PROJECT_ROOT
-# (paf repo) default, so a spec block is purely additive and never weakens a
-# secure default.
-#
-# Filesystem traversal/symlink/protected-pattern gates, Shell deny-list +
-# interactive-command block, and Git path-confinement ALWAYS apply — these
-# blocks only move the base path, they never loosen those gates.
-#
-# Shell note: do NOT set `allowed_commands` here. Shell's `__post_init__` turns
-# OFF the built-in destructive deny-list (rm/dd/shutdown/...) whenever an
-# allowlist is set, and this build agent needs git/curl/npm/node — allowlisting
-# them would strip exactly the protection we want on. Keep the default deny-list
-# and move only `cwd`.
-filesystem:
-  root_dir: ~/
+# Commands run on the host. Anything irreversible pauses for your approval with a
+# preview of what it would touch; with nobody attached it is refused. See
+# docs/security/shell-command-policy.md. For a container instead, add
+# `executor: {backend: docker}`.
 shell:
-  cwd: ~/
-  # Execution backend for shell commands. This is the sandbox toggle.
-  #   backend: local  -> run on the host, no sandbox (default)
-  #   backend: docker -> run inside a locked-down Docker container (no network,
-  #                      read-only root, non-root user, resource limits)
-  # The model cannot change this at runtime; it is fixed at build time.
-  # If backend: docker is set but the Docker daemon is down, the agent
-  # hard-fails at build time (it will NOT silently fall back to local).
-  executor:
-    backend: local
-    # Docker-only options (ignored when backend: local):
-    #   mode: exec -> one long-lived container, state persists between commands (~60ms)
-    #   mode: run  -> fresh container per command, strongest isolation (~250ms)
-    #   image: python:3.12-slim -> the container image to run commands in
-  # Command policy: what happens to a command BEFORE it runs, decided from its
-  # parsed structure (every command in a chain/pipeline/substitution, not just
-  # the first word). Lenient, for personal use: almost everything runs; commands
-  # that destroy work pause for YOUR approval (CLI prompt / paf-ui card) with a
-  # preview of what they would touch, so the model can do the right `rm` instead
-  # of inventing a workaround. With nobody attached (piped runs, background
-  # turns), "approve" means refused. Rules match in order; first match wins.
-  # This REPLACES the old first-word denylist.
   command_policy:
     default: allow
-    unparseable: approve       # could not parse it -> ask rather than guess
-    unknown_scripts: allow     # ./script.sh you wrote is fine on this profile
+    unparseable: approve
+    unknown_scripts: allow
     rules:
       - effects_any: [delete]
         targets_any: ["/", "/*", "~", "~/", "$HOME", "/home", "/etc", "/usr"]
         action: block
         why: deletes the root, your home, or a system directory
-      # Anything irreversible asks:
-      # delete: rm/rmdir/unlink/shred, find -delete, git clean, rsync --delete,
-      #         docker rm/rmi/prune/volume rm, crontab -r, ...
-      # discard: git reset --hard, checkout -- ., restore, branch -D, tag -d, ...
-      # force_push: git push --force / -f / --delete / +refspec
-      # disk: dd, mkfs, wipefs, ...
-      # overwrite: >, mv, cp, tee, truncate, rsync onto a file that EXISTS
-      #            (writing a new file does not ask)
-      # data: DROP / DELETE FROM / UPDATE / TRUNCATE / FLUSHALL given to psql,
-      #       sqlite3, mysql, redis-cli, ...
-      # Not covered (can't be seen from the command text): what a script or
-      # `make` / `npm run` target does (unknown_scripts below), in-place edits
-      # (sed -i, like edit_file), and side effects on remote services.
       - effects_any: [delete, discard, force_push, disk, overwrite, data]
         action: approve
       - commands: [chmod, chown]
         flags_any: [-R, --recursive]
         action: approve
-git:
-  root: ~/projects/Personal/pydantic-agent-framework/
-codebase_map:
-  scan_root: ~/projects/Personal/pydantic-agent-framework/
-# Vault: the real Obsidian vault. `~` expands via os.path.expanduser. Deliberate
-# departure from the other four roots (which point at the site repo) — the vault
-# cap is a separate navigation-first note ladder over markdown, rooted here.
-# Absent `allow` = the whole root is readable; add allow/deny glob subtrees to
-# scope a workspace-vs-personal boundary (e.g. `Hermes/Projects/**`).
-vault:
-  root: ~/Documents/notes
 
-# ---------------------------------------------------------------------------
-# Skill library. Read by
-# `build_agent` -> `_spec_skills_config` -> `_build_skills` -> the Skills
-# capability's `libraries`.
-#
-# `libraries` are FULL absolute paths (`~` expands). Each is scanned for
-# SKILL.md skills and plain .md notes. Multiple directories are supported
-# (merged into one hint corpus). Absent block -> the paf-owned `data/skills/`
-# default, so a spec block is purely additive and never weakens the default.
-skills:
-  libraries:
-    - ~/projects/Personal/pydantic-agent-framework/data/skills
-
-# ---------------------------------------------------------------------------
-# Per-assistant context-compaction tuning. Read by `build_agent` ->
-# `CompactionConfig` -> the no-summary ladder
-# in `build_compaction()`. The `demo` profile allowlists `Compaction`, so this
-# block is ACTIVE here — the sandbox where we tune compaction for a 300k-context
-# live agent (NOT the benchmark harness, which keeps ~5000 to force-evict
-# evidence out of context for retrieval testing). Live we want the OPPOSITE:
-# keep real conversation in context, compact only when near the ceiling, and
-# scavenge bulk (tool dumps) when we do.
-#
-# All keys optional; unset -> the builder's benchmark-tuned defaults.
-#
-# target_tokens: live-history size (tokens) that triggers compaction to start
-#   escalating. 50000 tokens (~200k chars at 4 chars/token) — at 20k a normal
-#   tool-heavy turn sat AT the ceiling and oscillated across it with every tool
-#   result, so `TieredCompaction` (which fires on `target_tokens` alone,
-#   bypassing per-tier triggers) re-ran the consolidation ladder repeatedly in
-#   ONE turn. 50k is ~1/6 of the 300k context — eviction only fires on genuinely
-#   huge turns. Can push further (e.g. ~100k) if heavy turns still oscillate.
-# window_max_messages / window_keep_messages: window trigger / tail. The
-#   sliding window keeps the 20 most-recent messages (+1 preserved first prompt)
-#   and drops the rest, so eviction trims hard and consolidation replays the
-#   about-to-evict slice into the journal each turn it fires. A 5-message tail
-#   dropped the current user prompt on a long run, so after eviction the model
-#   lost its task anchor and derailed (latched onto stale build.py facts in
-#   injected memory). 20 keeps the live prompt + recent exchange survivable.
-#   Still a probe, not tuned.
-# clear_tool_max_tokens: whole-context token trigger for ClearToolResults — when
-#   the entire live context (system + turns + tool results) exceeds this, the
-#   OLDEST tool results get collapsed to a placeholder. NOT per-tool-call. 5000 is
-#   intentionally low-ish so it only scavenges bulky dumps after keep_pairs.
-# clear_tool_keep_pairs: always keep the 6 most-recent tool-call/result pairs (was 20: each compaction busts the llama.cpp prompt cache, so clear more per pass to compact less often).
-#   A normal exploration turn runs fewer than ~6 tools, so none of its results
-#   get cleared mid-turn — the destructive blanking only kicks in on genuinely
-#   long/huge turns.
-# min_clear_tokens: ClearToolResults CACHE-COST GUARD — do NOT clear a tool
-#   result unless clearing actually reclaims at least this many tokens.
-#   Clearing rewrites message content in place, which busts the provider's
-#   prompt cache from the cleared point onward (the next request re-pays a
-#   cache-write at 1.25x input, then 0.1x reads). A trivial reclamation is a
-#   net LOSS (pay a write to reclaim a few tokens). 2000 = skip clears that
-#   reclaim <2k tokens. Meant to sit well below clear_tool_max_tokens so it
-#   stops only the pointless busts, not the real scavenging. (pydantic-ai-harness
-#   `ClearToolResults(min_clear_tokens=...)`; default None = always clear.)
-# Window tier is TurnBoundSlidingWindow — ALWAYS turn-bounded + trim-only. There
-#   is no `consolidate` option: the inline eviction fold is gone. Durable-fact
-#   capture is owned SOLELY by the background watermark worker,
-#   which reads from the persisted store (durable, lossless) on
-#   `memory.consolidate_every`. Eviction is pure context management — it never
-#   calls memory, and it can never evict the active user turn.
-# MCP servers (builtin pydantic-ai MCP via load_mcp_toolsets). The `config` is the
-# path (relative to the project root) of a Claude-Desktop-style `mcpServers` JSON;
-# server creds come from .env via the builtin `${VAR}` expander (env-var-only —
-# never in the spec). The demo profile allowlists "MCP", and this config holds two
-# keyless examples: `time` (a local stdio server run with uvx) and `deepwiki`
-# (docs for public GitHub repos). Add your own servers to a separate file and point
-# this at it. Connection is lazy: no server starts until a turn needs it.
+# Two keyless example servers. Put your own in another file and point this at it.
 mcp:
   config: specs/mcp/demo_servers.json
+
+# Sized for a model with a context window of about 160k tokens or more; lower
+# `turn_boundary_target` and `target_tokens` for a smaller one.
 compact:
-  turn_boundary: true          # Run routine window trim at each turn boundary (compact_now). ON by default; false = control arm (single mid-turn behavior).
-  # turn_boundary_target: 150000  # OLD (300k-context tuning)
-  turn_boundary_target: 100000 # Routine budget at the turn boundary. Raised with the llama-server context (160k): every compaction edits old messages and busts the prompt cache (a 35-65k re-prefill, minutes), so run it rarely. Tuneable.
-  # target_tokens: 300000         # OLD (300k-context tuning)
-  target_tokens: 140000       # Emergency ceiling: ~140k of the 163,840-token llama-server context (--ctx-size 163840), leaving headroom for generation. Only fires when a single turn approaches the ceiling.
+  turn_boundary: true
+  turn_boundary_target: 100000
+  target_tokens: 140000
   window_max_messages: 150
   window_keep_messages: 20
   clear_tool_max_tokens: 5000
   clear_tool_keep_pairs: 6
-  # min_clear_tokens: 20000        # OLD (300k-context tuning)
   min_clear_tokens: 10000
 
-# Per-assistant memory tuning.
-# Read by `build_agent` -> `_spec_memory_config` -> `_build_memory` -> the
-# Memory capability. Memory owns every memory config variable; the background
-# consolidation queue (a framework-level service) never reads the spec itself —
-# it is handed these values as injected constructor args when it gets a live
-# construction site.
-#
-# consolidate_every: background-consolidation cadence, in **minutes** —
-#   a time metric (time-anchored watermark: `should_fire` fires once at least
-#   this many minutes have elapsed since the watermark's `consumed_ts`).
-#   Decoupled from context eviction (eviction is trim-only and never calls
-#   memory); the owner just folds durable turns at least this often when new
-#   material has accumulated. Absent -> default (30m in build.py).
-#   Background consolidation is LIVE — the runtime triggers it off the
-#   completed-turn path via `_maybe_trigger_consolidation`.
-# - tier_caps (default {t1: 75, t2: 25, t3: 15}): PER-TIER COUNT caps — the
-#   primary bounding mechanism for the injected <memory> section. The index
-#   render keeps at most this many most-recent winners per tier, so MEMORY.md
-#   stays small instead of a growing wall. A missing key keeps the default;
-#   `t1: null` means unbounded for that tier. Old facts fall out of the
-#   injected view but stay in the journal/index (never lost).
-# - max_memory_size (65536)  chars: per-read safety cap JournalViewStore
-#   truncates MEMORY.md to (independent of tier counts; bounds even a
-#   no-index raw fallback render).
-#   (max_tokens / max_lines were removed — per-tier caps own injection size.)
 memory:
-  consolidate_every: 10
-  # The pairwise reviewer runs after each fold by default: each new fact vs
-  # its BM25 candidates (same project + global); DeepSeek labels
-  # same/update/different, code archives/supersedes via the overrides sidecar.
-  # `pairwise_review: false` turns it off. Dry run:
-  # scripts/memory_review.py --last 30
-  # Scoped render: per turn, inject About you (global) + this conversation's
-  # project (BM25 vs the latest user turns) + a mentioned project + Recent
-  # history (events and replaced values), each to a token budget. Every key
-  # below is optional; omitted keys use the defaults shown. mode: tiers
-  # restores the old tier-capped MEMORY.md injection.
+  consolidate_every: 10   # minutes between background consolidation passes
   render:
-    mode: scoped
+    mode: scoped          # `tiers` restores the older tier-capped MEMORY.md
     global_tokens: 2000
     project_tokens: 2500
     history_tokens: 1000
     mentioned_tokens: 300
     history_days: 30
     mentioned_max: 5
-    redundancy: 0.8      # skip a fact this covered by one already shown
+    redundancy: 0.8
   tier_caps:
     t1: 75
     t2: 25
     t3: 15
-  # max_memory_size: 65536
 
-# Subagent roster. `agents:` REPLACES the default roster (build.py
-# `_SUBAGENT_ROSTER` = writer only), so list every leaf this agent may
-# delegate to. Each name is a leaf spec under specs/sub_agents/. The
-# `code_reviewer` leaf is review-and-report only (filesystem tools, no writes).
+# The leaves this agent may delegate to (specs/sub_agents/).
 subagents:
   agents: [writer_subagent, code_reviewer_subagent, coding_subagent]
   max_concurrent: 5
-
 
 keywords:
   curate: true
