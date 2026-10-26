@@ -12,6 +12,7 @@ from pydantic_ai import Agent, AgentSpec, UsageLimits
 from paf.capabilities import PROFILES, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
+from paf.capabilities.web._toolset import SEARCH_BACKENDS
 from paf.config import SPECS_DIR
 from paf.providers.ollama import model_with_client as ollama_model_with_client
 from paf.providers.openrouter import model_with_client
@@ -73,8 +74,8 @@ def _spec_usage_limits(spec_path: Path) -> UsageLimits | None:
     return UsageLimits(request_limit=request_limit)
 
 
-def _spec_web_config(spec_path: Path) -> list[str] | None:
-    """Read the spec's top-level ``web:`` block into an extract domain list.
+def _spec_web_config(spec_path: Path) -> dict | None:
+    """Read the spec's top-level ``web:`` block into a Web config dict.
 
     pydantic-ai's ``AgentSpec`` drops unknown top-level keys, so `build_agent`
     reads the raw YAML separately. The block shape:
@@ -83,11 +84,15 @@ def _spec_web_config(spec_path: Path) -> list[str] | None:
           search_domains:
             - docs.pydantic.dev
             - github.com
+          search_backend: auto   # auto | tavily | duckduckgo
 
     ``search_domains`` is the **extract** allowlist for ``fetch_web_page``
     (which domains may be pulled into context); open web *search* is never
-    restricted by it. Absent/unreadable block or empty list -> None, which
-    makes ``_build_web`` fall back to the ``PREFERRED_DOC_DOMAINS`` default.
+    restricted by it. ``search_backend`` picks the provider (``auto`` = Tavily
+    when ``TAVILY_API_KEY`` is set, else keyless DuckDuckGo); an unknown value
+    raises ``ValueError``. Absent/unreadable block -> None; an absent or empty
+    ``search_domains`` makes ``_build_web`` use the ``PREFERRED_DOC_DOMAINS``
+    default.
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -100,9 +105,18 @@ def _spec_web_config(spec_path: Path) -> list[str] | None:
     if not isinstance(block, dict):
         return None
     domains = block.get("search_domains")
-    if not isinstance(domains, list) or not domains:
-        return None
-    return [str(d) for d in domains]
+    backend = block.get("search_backend", "auto")
+    if backend not in SEARCH_BACKENDS:
+        raise ValueError(
+            f"web.search_backend must be one of {', '.join(SEARCH_BACKENDS)}; "
+            f"got {backend!r} in {spec_path}"
+        )
+    return {
+        "search_domains": [str(d) for d in domains]
+        if isinstance(domains, list) and domains
+        else None,
+        "search_backend": backend,
+    }
 
 
 def _spec_browser_config(spec_path: Path) -> dict | None:
@@ -999,8 +1013,8 @@ def _spec_runtime_configs(spec_path: Path) -> dict[str, Any]:
     return {
         # Per-agent compaction tuning from the spec's `compact:` block.
         "compaction_config": _spec_compaction_config(spec_path),
-        # Web extract allowlist from the spec's `web:` block.
-        "web_search_domains": _spec_web_config(spec_path),
+        # Web extract allowlist + search backend from the spec's `web:` block.
+        "web_config": _spec_web_config(spec_path),
         # Browser egress allowlist from the spec's `browser:` block.
         "browser_config": _spec_browser_config(spec_path),
         # Vault root + allow/deny from the spec's `vault:` block.

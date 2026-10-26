@@ -482,19 +482,24 @@ def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _Code
     return _CodebaseMap(scan_root=scan_root)
 
 
-def _build_web(store, search_domains: list[str] | None = None) -> _Web:
-    """Tavily-backed web search + page extraction tools.
+def _build_web(store, web_config: dict | None = None) -> _Web:
+    """Web search + page extraction tools (Tavily or keyless DuckDuckGo).
 
     `store` is accepted for a uniform builder signature but unused — web tool
     state is just the Tavily client, read lazily from `TAVILY_API_KEY` at call
     time (so the capability constructs and registers even before a key exists,
     and each tool reports the missing key/package rather than failing hard).
 
-    `search_domains` is the extract trust boundary for `fetch_web_page`,
-    declared per-spec (`web.search_domains` in the spec YAML); None -> the
-    `PREFERRED_DOC_DOMAINS` default. Open web *search* is never restricted.
+    `web_config` is the spec's `web:` block (see `specs._spec_web_config`):
+    `search_domains` is the extract trust boundary for `fetch_web_page` (None ->
+    the `PREFERRED_DOC_DOMAINS` default; open web *search* is never
+    restricted) and `search_backend` is `auto | tavily | duckduckgo`.
     """
-    return _Web(search_domains=search_domains)
+    config = web_config or {}
+    return _Web(
+        search_domains=config.get("search_domains"),
+        search_backend=config.get("search_backend", "auto"),
+    )
 
 
 # Vault capability default root (no spec `vault:` block): a paf-owned playground
@@ -1004,7 +1009,7 @@ def _build_push(notifier=None):
 def build_runtime_capabilities(
     profile: AgentProfile,
     compaction_config=None,
-    web_search_domains: list[str] | None = None,
+    web_config: dict | None = None,
     browser_config: dict | None = None,
     vault_config: dict | None = None,
     memory_config: dict | None = None,
@@ -1106,7 +1111,7 @@ def build_runtime_capabilities(
         if name not in profile.capability_names:
             continue
         if name == "Web":
-            capabilities.append(_build_web(store, web_search_domains))
+            capabilities.append(_build_web(store, web_config))
         elif name == "Browser":
             capabilities.append(_build_browser(store, browser_config))
         elif name == "Vault":

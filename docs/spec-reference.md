@@ -307,6 +307,7 @@ never cuts into the turn in progress.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `search_domains` | a list of documentation sites | Domains `fetch_web_page` may pull into context. Search itself is never restricted. |
+| `search_backend` | `auto` | `auto` (Tavily if `TAVILY_API_KEY` is set, else DuckDuckGo), `tavily`, or `duckduckgo`. |
 
 ### `browser`
 

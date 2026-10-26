@@ -1,9 +1,9 @@
-"""Web capability -- Tavily-backed web search and page extraction.
+"""Web capability -- web search and page extraction (Tavily or DuckDuckGo).
 
 paf-owned web capability in the standard seam (`AbstractCapability` +
-`WebToolset`). Reads `TAVILY_API_KEY` from the environment at call time; without
-it (or without `tavily-python`) the tools degrade to clear, model-visible
-messages.
+`WebToolset`). `search_backend: auto` uses Tavily when `TAVILY_API_KEY` is set and
+keyless DuckDuckGo otherwise; a missing key or package degrades to a clear,
+model-visible message.
 """
 
 from __future__ import annotations
@@ -12,18 +12,21 @@ from dataclasses import dataclass
 
 from pydantic_ai.capabilities import AbstractCapability
 
-from ._toolset import WebToolset
+from ._toolset import SearchBackend, WebToolset
 
 
 @dataclass
 class Web(AbstractCapability):
-    """Tavily-backed web search + page extraction tools for an agent.
+    """Web search + page extraction tools for an agent.
 
-    Exposes two tools (`search_web`, `fetch_web_page`). The Tavily API key and
-    `tavily-python` package are loaded lazily from the environment at call time,
-    so the capability constructs and registers even before a key is configured;
-    individual tools then report the missing key/package rather than failing
-    hard.
+    Exposes two tools (`search_web`, `fetch_web_page`). The Tavily key and
+    package are loaded lazily at call time, so the capability constructs and
+    registers even before a key is configured; tools then report what is
+    missing rather than failing hard.
+
+    `search_backend` (`web.search_backend` in the spec) is `tavily`,
+    `duckduckgo` (no key; page fetch runs locally behind an SSRF guard), or
+    `auto` (Tavily when `TAVILY_API_KEY` is set, otherwise DuckDuckGo).
 
     `search_domains` is the extract trust boundary — which domains
     `fetch_web_page` will pull content from, declared per-spec
@@ -33,7 +36,10 @@ class Web(AbstractCapability):
     """
 
     search_domains: list[str] | None = None
+    search_backend: SearchBackend = "auto"
 
     def get_toolset(self) -> WebToolset:
         """Build and return the web toolset."""
-        return WebToolset(search_domains=self.search_domains)
+        return WebToolset(
+            search_domains=self.search_domains, search_backend=self.search_backend
+        )

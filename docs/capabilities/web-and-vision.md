@@ -8,13 +8,14 @@ them, and in the others every result passes through
 
 | Capability | Tools | Spec block | Needs |
 | --- | --- | --- | --- |
-| [Web](#web) | `search_web`, `fetch_web_page` | `web` | `TAVILY_API_KEY` |
+| [Web](#web) | `search_web`, `fetch_web_page` | `web` None (optional `TAVILY_API_KEY`) |
 | [Browser](#browser) | `navigate`, `click`, `type_text`, `snapshot`, `screenshot`, … | `browser` | Playwright and Chromium |
 | [Visual](#visual) | `describe_screenshot` | `visual` | a vision model |
 
 ## Web
 
-Search and page extraction through [Tavily](https://tavily.com).
+Search and page extraction, through [Tavily](https://tavily.com) or, with no
+key at all, DuckDuckGo.
 
 - **`search_web(query, max_results?, search_depth?, include_answer?, preferred_domains?)`**
   is open search over the public web. `preferred_domains` narrows one query to
@@ -38,9 +39,27 @@ Absent, a built-in list of documentation sites applies. The page is marked as
 untrusted data in what the model reads, and the model is told to treat it as a
 document to quote, never as instructions.
 
-The key is read from the environment when a tool is called. Without the key (or
-the `tavily-python` package) the tools reply with a clear message instead of
-failing the run.
+### Backends
+
+```yaml
+web:
+  search_backend: auto   # auto | tavily | duckduckgo
+```
+
+`auto` uses Tavily when `TAVILY_API_KEY` is set and DuckDuckGo otherwise, so the
+tools work out of the box. `tavily` and `duckduckgo` pin one provider.
+`search_depth`, `include_answer`, `extract_depth` and `content_format` apply to
+Tavily only.
+
+With DuckDuckGo the page is fetched and converted on your machine rather than by
+a service, so the fetch is **SSRF-protected**: DNS is resolved up front and
+loopback, private, link-local and cloud-metadata addresses are refused even if
+the domain is on the allowlist, the resolved address is pinned for the request,
+and every redirect hop is re-checked against the allowlist. Size and time are
+capped, and binary content is skipped.
+
+The Tavily key is read from the environment when a tool is called. A missing
+key or package produces a clear message instead of failing the run.
 
 ## Browser
 

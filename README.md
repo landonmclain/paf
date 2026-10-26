@@ -159,7 +159,7 @@ these.
 **Web and vision**
 
 - **Web** searches the web and extracts pages (`search_web`, `fetch_web_page`,
-  backed by Tavily).
+  Tavily when a key is set, otherwise keyless DuckDuckGo).
 - **Browser** drives headless Chromium with a mobile-first viewport, limited to
   allowed domains.
 - **Visual** describes screenshots and images with a vision model.

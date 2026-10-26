@@ -42,6 +42,9 @@ dependencies = [
     # degraded to "tavily-python is not installed". Same rule as above:
     # no package the repo's own code imports may be ad-hoc only.
     "tavily-python",
+    # Keyless web backend: DuckDuckGo search + local page-to-markdown fetch.
+    "ddgs>=9.0.0",
+    "markdownify>=1.2",
     # Image uploads (paf.capabilities.visual._uploads): validate, measure and
     # shrink images for the vision model.
     "pillow",
