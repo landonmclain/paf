@@ -130,7 +130,7 @@ data/memory/<agent>/
   MEMORY.md                the rendered view
 ```
 
-Memory settings (`consolidate_every`, `max_memory_size`, `tier_caps`,
+Memory settings (`consolidate_turns`, `max_memory_size`, `tier_caps`,
 `pairwise_review`, `render`) are in the [spec reference](../spec-reference.md#memory).
 
 ### Limits

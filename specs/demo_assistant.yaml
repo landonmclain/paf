@@ -108,7 +108,7 @@ compact:
   min_clear_tokens: 10000
 
 memory:
-  consolidate_every: 10   # minutes between background consolidation passes
+  consolidate_turns: 5    # complete turns between background consolidation passes
   render:
     mode: scoped          # `tiers` restores the older tier-capped MEMORY.md
     global_tokens: 2000

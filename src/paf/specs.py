@@ -253,7 +253,7 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     reads the raw YAML separately. The block shape:
 
         memory:
-          consolidate_every: 10      # optional; background consolidation cadence
+          consolidate_turns: 5       # optional; turns between background consolidation passes
           max_memory_size: 65536     # optional; per-read char cap for MEMORY.md
           tier_caps:                 # optional; per-tier COUNT caps (render-owned)
             t1: 75
@@ -267,7 +267,9 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
             history_tokens: 1000
             history_days: 30
 
-    ``consolidate_every`` is the background-consolidation cadence in **minutes**;
+    ``consolidate_turns`` is the background-consolidation cadence in complete
+    user turns (default ``DEFAULT_CONSOLIDATE_TURNS``). The older
+    ``consolidate_every`` (minutes) is still parsed but no longer gates anything;
     ``max_memory_size`` bounds how much of the rendered journal is injected per
     read; ``tier_caps`` (a ``{t1/t2/t3: int|None}`` dict) are PER-TIER COUNT caps
     on the injected index render, resolved by ``resolve_memory_tier_caps``.
@@ -291,6 +293,7 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     cfg: dict[str, object] = {}
     for key in (
         "consolidate_every",
+        "consolidate_turns",
         "max_memory_size",
     ):
         value = block.get(key)
@@ -456,7 +459,7 @@ def resolve_memory_config(
     "pairwise_review": bool}`` (always present, defaults applied; the pairwise
     reviewer runs after each fold unless the spec sets
     ``memory.pairwise_review: false``). The minute cadence remains for
-    explicitness/back-compat; the TURN count is the active gate.
+    back-compat only; ``consolidate_turns`` (spec-settable) is the active gate.
     """
     from paf.capabilities.build import (
         DEFAULT_CONSOLIDATE_EVERY,
@@ -478,6 +481,9 @@ def resolve_memory_config(
             and candidate > 0
         ):
             every = candidate
+        candidate_turns = cfg.get("consolidate_turns")
+        if isinstance(candidate_turns, int) and not isinstance(candidate_turns, bool):
+            turns = candidate_turns
         if isinstance(cfg.get("pairwise_review"), bool):
             pairwise_review = cfg["pairwise_review"]
     return {

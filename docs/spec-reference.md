@@ -243,7 +243,8 @@ See [Secrets](security/secrets.md).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `consolidate_every` | `30` | Minutes between background consolidation passes (turn count is the active trigger: every 5 turns). |
+| `consolidate_turns` | `5` | Complete user turns between background consolidation passes. |
+| `consolidate_every` | `30` | Legacy, in minutes; accepted but no longer gates anything. Use `consolidate_turns`. |
 | `max_memory_size` | `65536` | Characters of `MEMORY.md` injected per request, at most. |
 | `tier_caps` | `{t1: 75, t2: 25, t3: 15}` | How many records of each tier the injected index shows. `null` means unbounded. |
 | `pairwise_review` | `true` | Run the pairwise reviewer (merge duplicates, apply updates) after each pass. |

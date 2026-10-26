@@ -666,3 +666,11 @@ def test_pairwise_review_is_on_by_default_and_spec_can_turn_it_off(
     )
     assert bg.pairwise_review is True
     assert [p.id_namespace for p in bg._processes] == ["consolidation"]
+
+
+def test_consolidate_turns_is_spec_settable(tmp_path):
+    from paf.specs import _spec_memory_config
+
+    p = tmp_path / "s.yaml"
+    p.write_text("memory:\n  consolidate_turns: 8\n")
+    assert _spec_memory_config(p)["consolidate_turns"] == 8
