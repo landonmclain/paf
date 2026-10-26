@@ -32,7 +32,7 @@ class Subagents(AbstractCapability[Any]):
     processes_root: str | Path = "data/processes"
     """Root of the durable task store (``data/processes`` in the app)."""
 
-    agent: str = "assistant"
+    agent: str = "demo_assistant"
     """paf agent name — scopes the task store and the process-feed emitter."""
 
     on_complete: OnComplete | None = None

@@ -29,7 +29,7 @@ model_settings:
       quantizations:
         - fp8
   # Reasoning effort for DeepSeek V4.1 Flash, pinned to `low` (matching the chat
-  # agent's `assistant.yaml`). A bounded structured-output leaf (block -> BeatsRecord)
+  # agents' specs). A bounded structured-output leaf (block -> BeatsRecord)
   # does not need high-effort thinking; default/high burns reasoning tokens for
   # nothing (reviewer hit ~23k). `low` avoids 'thinking forever' loops.
   openrouter_reasoning:

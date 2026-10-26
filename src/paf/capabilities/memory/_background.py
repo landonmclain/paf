@@ -335,7 +335,7 @@ class MemoryConsolidationQueue(BackgroundQueueService[ConsolidationJob]):
         self,
         *,
         memory_directory: str = "",
-        agent_name: str = "assistant",
+        agent_name: str = "demo_assistant",
         name: str = "memory-consolidation",
         span_source: SpanSource | None = None,
         consolidate_span: ConsolidateSpan | None = None,

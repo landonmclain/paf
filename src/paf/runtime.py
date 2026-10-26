@@ -569,7 +569,7 @@ class Session:
 
     def __init__(
         self,
-        agent_name: str = "assistant",
+        agent_name: str = "demo_assistant",
         *,
         profile=None,
         conversation_id: str | None = None,

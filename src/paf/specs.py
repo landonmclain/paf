@@ -1205,7 +1205,7 @@ def build_agent(
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
 
-    ```agent_name`` is the spec file base name (``assistant`` → ``assistant.yaml``).
+    ```agent_name`` is the spec file base name (``demo_assistant`` → ``demo_assistant.yaml``).
 
     ``profile`` is the capability allowlist for this agent kind — resolved to
     ``custom_capability_types`` so the spec's ``capabilities:`` entries can only

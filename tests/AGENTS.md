@@ -293,7 +293,7 @@ deselected as of 2026-08-13).
 
 > **FOOTGUN — adding a profile breaks `test_profiles_are_the_complete_intentional_set`.**
 > `tests/test_capabilities.py` asserts the EXACT set of registered profiles
-> (`{assistant, demo, contextbench, longmemeval}`). Adding a new profile to
+> (`{assistant, demo, contextbench, longmemeval, secure}`). Adding a new profile to
 > `PROFILES` in `src/paf/capabilities/profiles.py` requires updating this test
 > (the set + the identity assertions) or the unit suite fails. Check it before
 > adding a profile.

@@ -47,7 +47,7 @@ that isn't registered, so a typo can never widen what an agent can do.
 
 | Profile | For | Includes |
 | --- | --- | --- |
-| `assistant` | everyday use | conversation, memory, files, shell, git, codebase map, vault, web, browser, vision, skills, subagents, planning, scheduled tasks, push |
+| `assistant` | your own everyday agent (no shipped spec uses it) | conversation, memory, files, shell, git, codebase map, vault, web, browser, vision, skills, subagents, planning, scheduled tasks, push |
 | `demo` | trying new things | everything in `assistant`, plus MCP |
 | `secure` | high-stakes work | persistence, conversation search, compaction, scoped files, sandboxed Python, workspace, output limits, and all three guards (InjectionGuard, ToolGating, Secrets). No shell, no network, no memory. |
 | `contextbench`, `longmemeval` | benchmarks | the minimum each benchmark needs |

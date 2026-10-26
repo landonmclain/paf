@@ -426,7 +426,7 @@ def _build_shell(
         executor=executor,
         command_policy=command_policy,
         processes_root=str(PROCESSES_DIR),
-        agent=agent_name or "assistant",
+        agent=agent_name or "demo_assistant",
         on_complete=on_complete,
     )
 
@@ -946,7 +946,7 @@ def _build_subagents(
     return Subagents(
         leaves=leaves,
         processes_root=str(PROCESSES_DIR),
-        agent=agent_name or "assistant",
+        agent=agent_name or "demo_assistant",
         on_complete=on_complete,
         max_concurrent=config.get("max_concurrent", DEFAULT_MAX_CONCURRENT),
     )

@@ -431,7 +431,7 @@ class BackgroundCoordinator:
         self,
         store,
         *,
-        agent_name: str = "assistant",
+        agent_name: str = "demo_assistant",
         profile=None,
         lane: Literal["agent", "conversation"] | None = None,
         conversation_id: str | None = None,

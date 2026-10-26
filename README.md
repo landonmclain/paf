@@ -53,7 +53,7 @@ Start a conversation:
 
 ```bash
 uv run paf chat                    # the default agent, demo_assistant
-uv run paf chat assistant --new    # another agent, in a fresh conversation
+uv run paf chat --new              # the same agent, in a fresh conversation
 ```
 
 The default model is DeepSeek V4 Flash via [OpenRouter](https://openrouter.ai),
@@ -63,12 +63,12 @@ capability, install Chromium once with `uv run playwright install chromium`.
 ## How it fits together
 
 ```
-specs/assistant.yaml ──► build_agent ──► Agent ──► Session ──► paf chat
-  model, instructions,       │                       │          ui/sse.py
-  profile, per-capability    │                       │          your code
-  settings                   ▼                       ▼
-                    profile (allowlist)        data/  (runs, memory,
-                    + capability catalog              conversations, plans)
+specs/<name>.yaml ──► build_agent ──► Agent ──► Session ──► paf chat
+  model, instructions,    │                       │          ui/sse.py
+  profile, per-capability │                       │          your code
+  settings                ▼                       ▼
+                 profile (allowlist)        data/  (runs, memory,
+                 + capability catalog              conversations, plans)
 ```
 
 - A **spec** (`specs/<name>.yaml`) names the model, the instructions, the
@@ -91,7 +91,6 @@ specs/assistant.yaml ──► build_agent ──► Agent ──► Session ─
 | Agent | Spec | Purpose |
 | --- | --- | --- |
 | `demo_assistant` | `specs/demo_assistant.yaml` | Default for `paf chat`. Everything enabled, including experimental pieces. |
-| `assistant` | `specs/assistant.yaml` | General assistant with the same capabilities, configured for everyday use. |
 | `secure_assistant` | `specs/secure_assistant.yaml` | Locked-down agent: scoped file tools and sandboxed Python only, with every guard on. Needs Docker. |
 
 Other specs in `specs/` serve benchmarks and tests. Subagents that agents can
@@ -102,7 +101,7 @@ summaries live in `specs/background_agents/`.
 A spec is plain YAML. Abridged:
 
 ```yaml
-name: assistant
+name: my_agent
 profile: assistant
 model: openrouter:deepseek/deepseek-v4-flash-0731
 instructions: |
@@ -284,7 +283,7 @@ uv run python ui/sse.py   # serves on port 8090
 ```python
 from paf.runtime import Session, StreamEvent
 
-session = Session("assistant", conversation_id="notes-1")
+session = Session("demo_assistant", conversation_id="notes-1")
 
 # One turn, final text only.
 print(session.run_sync("What did we decide about the release date?"))

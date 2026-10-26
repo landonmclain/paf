@@ -6,8 +6,8 @@ sidecar (archive / reclassify — reversible, the journal is untouched).
 
 Usage (from the repo root):
     set -a && . ./.env && set +a
-    PYTHONPATH= .venv/bin/python scripts/memory_backfill.py --agent assistant --limit 10
-    PYTHONPATH= .venv/bin/python scripts/memory_backfill.py --agent assistant --apply
+    PYTHONPATH= .venv/bin/python scripts/memory_backfill.py --agent demo_assistant --limit 10
+    PYTHONPATH= .venv/bin/python scripts/memory_backfill.py --agent demo_assistant --apply
 
 --refile FROM:TO splits a project instead: each fact filed under FROM is asked
 "is this specifically about TO?" and moved if so (TO needs a description).

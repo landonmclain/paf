@@ -27,10 +27,10 @@ model_settings:
       quantizations:
         - fp8
   # Reasoning effort for DeepSeek V4.1 Flash, pinned to `low` (matching the chat
-  # agent's `assistant.yaml`). Without it the extractor — a deterministic
+  # agents' specs). Without it the extractor — a deterministic
   # consolidation pass over large seeds — runs at default/high effort and burns
   # tens of thousands of reasoning tokens (the reviewer hit ~23k for 3 actions).
-  # `low` avoids 'thinking forever' loops (assistant.yaml:108); frequency_penalty
+  # `low` avoids 'thinking forever' loops; frequency_penalty
   # breaks output/thinking repetition loops.
   openrouter_reasoning:
     effort: low

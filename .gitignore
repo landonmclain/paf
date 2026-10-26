@@ -8,6 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+# A personal agent spec: not shipped. Keep your own copy here; the public specs are
+# demo_assistant and secure_assistant (and the sub_agents / background_agents leaves).
+specs/assistant.yaml
+
 # Retired snapshot fixtures (replaced by tests/fixtures/sample_repo). Still ignored
 # so a leftover local copy is never committed.
 tests/fixtures/chatbot/

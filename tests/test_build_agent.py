@@ -1,6 +1,6 @@
 """Integration test: build_agent resolves the hybrid capability merge.
 
-Pins the M2 contract: building the assistant from specs/assistant.yaml yields an
+Pins the M2 contract: building the demo agent from specs/demo_assistant.yaml yields an
 Agent carrying —
   * a spec-declared StepPersistence (resolved from YAML via from_spec),
   * Python-assembled recall + memory capabilities (the `capabilities=` runtime seam),
@@ -86,7 +86,7 @@ def _find_compaction(node: Any) -> TieredCompaction | None:
 
 
 def test_build_agent_merges_spec_and_runtime_capabilities() -> None:
-    agent = build_agent("assistant")
+    agent = build_agent("demo_assistant")
     root = getattr(agent, "root_capability", None) or getattr(
         agent, "_root_capability", None
     )

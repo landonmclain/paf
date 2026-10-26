@@ -13,7 +13,9 @@ capability (`shell:`, `memory:`, …). Every key is in the
 ## The catalog
 
 `assistant`, `demo` and `secure` are the three profiles you'd run an agent
-under (`demo` is `assistant` plus MCP). `●` means the profile includes it.
+under. `assistant` is the one to give an everyday agent you write yourself (no
+shipped spec uses it), `demo` is `assistant` plus MCP, and `secure` is the
+locked-down set. `●` means the profile includes it.
 
 **Conversations, memory and context.**
 [Conversations and memory](conversations-and-memory.md) ·
