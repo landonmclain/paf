@@ -89,7 +89,7 @@ visual:
 # codebase_map:
 #   scan_root: .
 
-# A folder of Markdown notes (an Obsidian vault, say). Defaults to data/vault/.
+# A folder of Markdown notes. Defaults to data/vault/.
 # vault:
 #   root: /path/to/your/notes
 #   allow: ["Projects/**"]
