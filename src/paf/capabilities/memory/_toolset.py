@@ -60,8 +60,7 @@ def render_memory_prompt(
 ) -> str:
     """Render a complete memory section for injection.
 
-    Bounding is handled upstream, not here: MEMORY.md is capped per-tier by
-    count (``tier_caps`` in the index render) and read capped by
+    Bounding is handled upstream, not here: MEMORY.md is read capped by
     ``max_memory_size``, so ``main_content`` arrives already bounded. This
     function only assembles the markdown and keeps the informational
     truncation markers (older lines dropped / files omitted / notebook over

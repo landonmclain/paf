@@ -332,21 +332,18 @@ model_settings:
       quantizations: [fp8]
 
 
-# Memory block: v2 SCOPED render (mode: scoped) — per turn, inject About you
+# Memory block: the SCOPED render — per turn, inject About you
 # (global) + this conversation's project (BM25 vs the latest user turns, here
 # forced to `lmem` by the harness via render_project) + a mentioned project +
 # Recent history (events and replaced values), each to a token budget. Every
 # key below is optional; omitted keys use the defaults shown (RenderBudget in
-# src/paf/capabilities/memory/_scoped.py). `mode: tiers` restores the old
-# tier-capped MEMORY.md injection.
+# src/paf/capabilities/memory/_scoped.py).
 #
 # The harness (tests/framework.py _build_agent) reads this block via
-# _spec_memory_config and builds RenderBudget.from_config when mode: scoped —
-# mirroring the live _build_memory path. tier_caps/max_memory_size are kept for
-# the tier render fallback and the per-read safety cap.
+# _spec_memory_config and builds RenderBudget.from_config, mirroring the live
+# _build_memory path. max_memory_size is the per-read safety cap.
 memory:
   render:
-    mode: scoped
     global_tokens: 2000
     project_tokens: 2500
     history_tokens: 1000
@@ -354,10 +351,6 @@ memory:
     history_days: 30
     mentioned_max: 5
     redundancy: 0.8      # skip a fact this covered by one already shown
-  tier_caps:
-    t1: 75
-    t2: 25
-    t3: 15
   max_memory_size: 65536
 
 

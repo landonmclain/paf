@@ -110,9 +110,7 @@ DEFAULT_CONSOLIDATE_TURNS = 5
 
 # Default bounds for the assistant's Memory capability. `max_memory_size`
 # remains the per-read char cap JournalViewStore truncates MEMORY.md to (a
-# hard safety net, independent of tier counts). Per-tier COUNT caps
-# (`memory: tier_caps`) are owned by the render (_render.py), which resolves
-# them from the agent's spec itself — see `_render._resolve_tier_caps`.
+# hard safety net).
 # Memory owns every memory config variable; the spec overrides per agent.
 DEFAULT_MEMORY_MAX_SIZE = 65_536
 
@@ -143,9 +141,7 @@ def _build_memory(
     ``specs._spec_memory_config``): ``consolidate_every`` (background-
     consolidation cadence) and ``max_memory_size`` (a hard, non-evicting
     per-read char cap on the injected journal) are read here and overridable
-    per agent. Per-tier COUNT caps (``memory: tier_caps``) are owned by the
-    render (`_render._resolve_tier_caps`), which reads them from the agent's
-    spec directly.
+    per agent.
     """
     from paf.capabilities.memory._overrides import OverrideStore
     from paf.capabilities.memory._view import JournalViewStore
@@ -159,13 +155,12 @@ def _build_memory(
 
     memory_dir = str(memory_dir_for(agent_name)) if agent_name else Path(_MEMORY_DIR)
 
-    # `memory: render: {mode: scoped, ...}` injects the per-turn scoped render
-    # (global / this project / mentioned / recent history) instead of the static
-    # tier-capped MEMORY.md; the other `render` keys override RenderBudget.
+    # Named agents inject the per-turn scoped render (global / this project /
+    # mentioned / recent history); `memory: render:` keys override RenderBudget.
     render = cfg.get("render")
     render_cfg = render if isinstance(render, dict) else {}
     render_budget = None
-    if render_cfg.get("mode") == "scoped" and agent_name:
+    if agent_name:
         from paf.capabilities.memory._scoped import RenderBudget
 
         render_budget = RenderBudget.from_config(render_cfg)

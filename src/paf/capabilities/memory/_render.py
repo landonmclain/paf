@@ -19,7 +19,7 @@ least fact, date (born_on), and source (source_ref)**:
 
 Type grouping is gone — type remains a journal search tag only, not a render
 axis. The raw-journal render is deliberately **unbound** (emits every record);
-the index render bounds each tier by count (see :data:`_TIER_CAPS`).
+
 
 Determinism: tiers iterate in fixed order (t1 -> t2 -> t3); records within a
 tier sort by born_on descending (lexical ISO == chronological, reversed for
@@ -52,7 +52,6 @@ _TIER_ORDER = ("t1", "t2", "t3")
 # instead of a growing wall that a small model misreads as corruption: t1 (stable
 # identity/prefs) 75, t2 (goals/current) 25, t3 (ephemeral) 15. Old facts fall out
 # of the injected view but stay in the journal/index — never lost.
-_TIER_CAPS: dict[str, int | None] = {"t1": 75, "t2": 25, "t3": 15}
 
 
 def _group_by_tier(records: list[MemoryRecord]) -> dict[str, list[MemoryRecord]]:
@@ -205,7 +204,6 @@ def render_index_memory(
     store: JournalStore,
     index,
     overrides: dict[int, OverrideState] | None = None,
-    tier_caps: dict[str, int | None] | None = None,
 ) -> str:
     """Render MEMORY.md **from the derived index** (surviving facts only).
 
@@ -215,26 +213,14 @@ def render_index_memory(
     Dedup is meaningless if it doesn't shrink what the answerer reads, and this
     is the render the live write path uses when an index exists.
 
-    **Bounded:** each tier is capped to the most-recent N winners
-    (``tier_caps``, default :data:`_TIER_CAPS`) — t1 capped, t2 capped, t3
-    capped. Winners are already deduped and sorted by recency, so the cap keeps
-    the newest facts and lets old ephemeral/goal entries fall out of the
-    injected view (they remain reachable in the journal / index, never lost).
-
     ``overrides`` (optional, folded sidecar map) is honored deterministically
     before grouping: applied archives drop the fact, applied tier-changes move
     it under a new tier, and pending assistant archives render with a
     ``*(archive pending review)*`` marker.
     """
-    caps = tier_caps if tier_caps is not None else _TIER_CAPS
     winners = _select_index_winners(store, index)
     kept, pending = _apply_overrides(winners, overrides)
     groups = _group_by_tier([r for _, r in kept])
-    # Bound each already-recency-sorted group to its tier cap.
-    groups = {
-        tier: recs[: caps[tier]] if caps.get(tier) else recs
-        for tier, recs in groups.items()
-    }
 
     # Map a record back to its journal line id (the rendered provenance).
     line_of = {id(r): ln for ln, r in kept}
@@ -260,28 +246,6 @@ def render_index_memory(
     return "\n\n".join(sections) + ("\n" if sections else "")
 
 
-def _resolve_tier_caps(agent_name: str | None) -> dict[str, int | None]:
-    """Resolve the per-tier injection caps for an agent from its spec.
-
-    The render owns its own caps: it reads ``memory.tier_caps`` from the agent's
-    spec directly (via ``paf.specs.resolve_memory_tier_caps``), merging any
-    partial overrides over the built-in :data:`_TIER_CAPS`. When ``agent_name``
-    is ``None``, or the spec is absent / declares no ``tier_caps``, the built-in
-    caps apply unchanged. Neither the runtime Session nor the background queue
-    carries ``tier_caps`` anywhere.
-    """
-    if not agent_name:
-        return dict(_TIER_CAPS)
-    from paf.specs import resolve_memory_tier_caps
-
-    overrides = resolve_memory_tier_caps(agent_name)
-    if not overrides:
-        return dict(_TIER_CAPS)
-    caps = dict(_TIER_CAPS)
-    caps.update(overrides)
-    return caps
-
-
 def write_render(
     store: JournalStore | list[MemoryRecord],
     md_path: str,
@@ -299,10 +263,7 @@ def write_render(
     back to the raw journal render — preserving the benchmark's measured
     contract unchanged.
 
-    ``agent_name`` (optional) lets the render resolve its own per-tier
-    injection caps from the agent's spec (:func:`_resolve_tier_caps`), falling
-    back to :data:`_TIER_CAPS`. Absent, it uses the built-in caps. Bounding
-    applies only to the index-aware render.
+    ``agent_name`` is accepted for call-site compatibility and unused.
 
     Returns the rendered markdown. Uses the memory package's atomic writer so a
     crash mid-write never leaves a torn notebook.
@@ -316,14 +277,11 @@ def write_render(
     )
 
     overrides = load_overrides(str(Path(md_path).parent))
-    tier_caps = _resolve_tier_caps(agent_name)
 
     if isinstance(store, JournalStore):
         index = _load_index_beside(md_path)
         if index is not None:
-            content = render_index_memory(
-                store, index, overrides=overrides, tier_caps=tier_caps
-            )
+            content = render_index_memory(store, index, overrides=overrides)
         else:
             content = render_journal_memory(store, overrides=overrides)
     else:

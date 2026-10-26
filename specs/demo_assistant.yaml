@@ -110,7 +110,6 @@ compact:
 memory:
   consolidate_turns: 5    # complete turns between background consolidation passes
   render:
-    mode: scoped          # `tiers` restores the older tier-capped MEMORY.md
     global_tokens: 2000
     project_tokens: 2500
     history_tokens: 1000
@@ -118,10 +117,6 @@ memory:
     history_days: 30
     mentioned_max: 5
     redundancy: 0.8
-  tier_caps:
-    t1: 75
-    t2: 25
-    t3: 15
 
 # The leaves this agent may delegate to (specs/sub_agents/).
 subagents:

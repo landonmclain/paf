@@ -246,9 +246,8 @@ See [Secrets](security/secrets.md).
 | `consolidate_turns` | `5` | Complete user turns between background consolidation passes. |
 | `consolidate_every` | `30` | Legacy, in minutes; accepted but no longer gates anything. Use `consolidate_turns`. |
 | `max_memory_size` | `65536` | Characters of `MEMORY.md` injected per request, at most. |
-| `tier_caps` | `{t1: 75, t2: 25, t3: 15}` | How many records of each tier the injected index shows. `null` means unbounded. |
 | `pairwise_review` | `true` | Run the pairwise reviewer (merge duplicates, apply updates) after each pass. |
-| `render` | tiered | `mode: scoped` switches to the scoped render, with token budgets `global_tokens` (2000), `project_tokens` (2500), `history_tokens` (1000), `mentioned_tokens` (300), `history_days` (30), `mentioned_max` (5), `redundancy` (0.8). |
+| `render` | scoped defaults | Token budgets for the scoped render: `global_tokens` (2000), `project_tokens` (2500), `history_tokens` (1000), `mentioned_tokens` (300), `history_days` (30), `mentioned_max` (5), `redundancy` (0.8). |
 
 ### `search`
 

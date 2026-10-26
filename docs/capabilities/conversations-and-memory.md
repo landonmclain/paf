@@ -85,13 +85,13 @@ stale or wrong, it calls `memory_archive_suggestion(journal_id, reason)`. That
 records a *pending* request; the fact stays visible, marked
 *(archive pending review)*, until the reviewer decides.
 
-### Two renders
+### What is injected
 
-| | Tiered (default) | Scoped (`render.mode: scoped`) |
-| --- | --- | --- |
-| What is injected | The same capped view every turn: `t1` who you are (always kept), `t2` goals and current work, `t3` recent and ephemeral (capped, may age out) | Rebuilt each turn for this conversation: **About you**, **this project**, any **mentioned project**, **recent history**, and a line naming other projects |
-| Chosen by | Tier caps (`tier_caps`) | Token budgets per section, then BM25 against your latest messages, then recency |
-| Extra tools | none | `search_memory(query, project?)`, `list_memory(project, type?, offset?)` |
+Each turn the memory is rebuilt for this conversation: **About you**, **this
+project**, any **mentioned project**, **recent history**, and a line naming
+other projects. Sections are filled to a token budget, ranked by BM25 against
+your latest messages and then by recency. The agent also gets
+`search_memory(query, project?)` and `list_memory(project, type?, offset?)`.
 
 Every fact shown ends with its id (`#N`), so `read_turn("#N")` shows where it
 came from.
@@ -99,7 +99,6 @@ came from.
 ```yaml
 memory:
   render:
-    mode: scoped
     global_tokens: 2000
     project_tokens: 2500
 ```
@@ -130,7 +129,7 @@ data/memory/<agent>/
   MEMORY.md                the rendered view
 ```
 
-Memory settings (`consolidate_turns`, `max_memory_size`, `tier_caps`,
+Memory settings (`consolidate_turns`, `max_memory_size`,
 `pairwise_review`, `render`) are in the [spec reference](../spec-reference.md#memory).
 
 ### Limits

@@ -255,13 +255,8 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
         memory:
           consolidate_turns: 5       # optional; turns between background consolidation passes
           max_memory_size: 65536     # optional; per-read char cap for MEMORY.md
-          tier_caps:                 # optional; per-tier COUNT caps (render-owned)
-            t1: 75
-            t2: 25
-            t3: 15
           pairwise_review: false     # optional; pairwise reviewer after each fold (default on)
-          render:                    # optional; scoped render + its token knobs
-            mode: scoped             #   scoped | tiers (default tiers)
+          render:                    # optional; token knobs for the scoped render
             global_tokens: 2000      #   any RenderBudget field overrides its default
             project_tokens: 2500
             history_tokens: 1000
@@ -271,14 +266,12 @@ def _spec_memory_config(spec_path: Path) -> dict | None:
     user turns (default ``DEFAULT_CONSOLIDATE_TURNS``). The older
     ``consolidate_every`` (minutes) is still parsed but no longer gates anything;
     ``max_memory_size`` bounds how much of the rendered journal is injected per
-    read; ``tier_caps`` (a ``{t1/t2/t3: int|None}`` dict) are PER-TIER COUNT caps
-    on the injected index render, resolved by ``resolve_memory_tier_caps``.
+    read.
 
     Returns a dict (or ``None`` when the block is absent/unreadable). Absent
     members fall back to their code-level defaults in ``_build_memory`` / the
     ``Memory`` capability (``consolidate_every`` defaults to
-    ``DEFAULT_CONSOLIDATE_EVERY``; ``max_memory_size`` to ``DEFAULT_MEMORY_MAX_SIZE``;
-    ``tier_caps`` to ``_render._TIER_CAPS``).
+    ``DEFAULT_CONSOLIDATE_EVERY``; ``max_memory_size`` to ``DEFAULT_MEMORY_MAX_SIZE``).
     """
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
@@ -491,52 +484,6 @@ def resolve_memory_config(
         "consolidate_turns": turns,
         "pairwise_review": pairwise_review,
     }
-
-
-def resolve_memory_tier_caps(
-    agent_name: str,
-    spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
-) -> dict[str, int | None] | None:
-    """Best-effort read of the spec's ``memory: tier_caps`` block.
-
-    ``tier_caps`` is a per-tier count bound for the injected index render
-    (``{t1/t2/t3: int | None}``). It is not a single int like the cadence
-    values, so it needs its own reader rather than riding inside
-    :func:`resolve_memory_config`; the render (``_render.py``) calls this
-    directly.
-
-    Returns a **partial** dict of only the per-tier caps the spec declares
-    (``None`` meaning unbounded for that tier), or ``None`` when the spec is
-    absent/unreadable or declares no usable ``tier_caps`` block. The caller
-    merges this over its built-in defaults (``_TIER_CAPS``), so unspecified
-    tiers keep the code default.
-    """
-    try:
-        with get_spec_path(agent_name, spec_directory).open(
-            "r", encoding="utf-8"
-        ) as fh:
-            data = yaml.safe_load(fh)
-    except Exception:  # noqa: BLE001 - spec read is best-effort sugar
-        return None
-    if not isinstance(data, dict):
-        return None
-    block = data.get("memory")
-    if not isinstance(block, dict):
-        return None
-    raw = block.get("tier_caps")
-    if not isinstance(raw, dict) or not raw:
-        return None
-    from paf.capabilities.memory._journal import MEMORY_TIERS
-
-    out: dict[str, int | None] = {}
-    for tier, cap in raw.items():
-        if tier not in MEMORY_TIERS:
-            continue  # ignore unknown tiers so schema can grow safely
-        if cap is None:
-            out[tier] = None  # explicit unbounded
-        elif isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
-            out[tier] = cap
-    return out or None
 
 
 def _spec_scalar(spec_path: Path, key: str) -> int | str | None:

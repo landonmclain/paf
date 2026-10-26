@@ -319,38 +319,21 @@ def _build_agent(
         # per-question dir points at that question's journal.
         overrides_store = _OverrideStore(_CURRENT_MEMORY_DIR or mem_dir)
 
-        # v2 scoped render (opt-in): when the runner passes render_project /
-        # render_now (the LongMemEval v2 arms), switch injection from the static
-        # tier-capped MEMORY.md to the per-turn scoped render. The benchmark's
-        # per-question conversations are never registered, so the project must
-        # be forced in code; and the seeds are dated 2023, so the recent-history
-        # window must anchor to the question date instead of now_local().
-        # Default (both None) keeps the tier render — live behavior unchanged.
-        scoped = render_project is not None or render_now is not None
-        if scoped:
-            from paf.capabilities.memory._scoped import RenderBudget
+        # Scoped render: the benchmark's per-question conversations are never
+        # registered, so the runner forces the project (render_project) and
+        # anchors the recent-history window to the question date (render_now,
+        # since the seeds are dated 2023). Knobs come from the spec's
+        # `memory: render:` block, as in live _build_memory.
+        from paf.capabilities.memory._scoped import RenderBudget
 
-            # The spec's `memory: render:` block is the source of truth for the
-            # scoped-render knobs (mode/token budgets/history window), read the
-            # same way live _build_memory does (_spec_memory_config ->
-            # RenderBudget.from_config). mode: scoped in longmemeval.yaml gates
-            # the switch; the harness still activates it per-question via
-            # render_project/render_now.
-            memory_cfg = _spec_memory_config(get_spec_path("longmemeval")) or {}
-            render_cfg = (
-                memory_cfg.get("render")
-                if isinstance(memory_cfg.get("render"), dict)
-                else {}
-            )
-            render_budget = (
-                RenderBudget.from_config(render_cfg)
-                if render_cfg.get("mode") == "scoped"
-                else RenderBudget()
-            )
-            memory_directory = str(_CURRENT_MEMORY_DIR or mem_dir)
-        else:
-            render_budget = None
-            memory_directory = None
+        memory_cfg = _spec_memory_config(get_spec_path("longmemeval")) or {}
+        render_cfg = (
+            memory_cfg.get("render")
+            if isinstance(memory_cfg.get("render"), dict)
+            else {}
+        )
+        render_budget = RenderBudget.from_config(render_cfg)
+        memory_directory = str(_CURRENT_MEMORY_DIR or mem_dir)
 
         caps.append(
             Memory(
