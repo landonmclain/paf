@@ -40,6 +40,13 @@ theme:
 nav:
   - Home: README.md
   - Spec reference: spec-reference.md
+  - Capabilities:
+      - capabilities/README.md
+      - Conversations and memory: capabilities/conversations-and-memory.md
+      - Context management: capabilities/context.md
+      - Files and code: capabilities/files-and-code.md
+      - Web and vision: capabilities/web-and-vision.md
+      - Orchestration: capabilities/orchestration.md
   - Security:
       - security/README.md
       - Approvals: security/approvals.md

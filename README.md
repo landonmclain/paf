@@ -118,7 +118,8 @@ shell:
 
 To add an agent, copy a spec, give it a new `name`, and point `profile` at the
 capability set it should have. Every key a spec can set, with its default, is in
-the [spec reference](docs/spec-reference.md).
+the [spec reference](docs/spec-reference.md), and what each capability does is in
+[docs/capabilities](docs/capabilities/README.md).
 
 ## Capabilities
 

@@ -109,3 +109,18 @@ def test_relative_links_resolve():
             assert (page.parent / target).exists(), (
                 f"{page.relative_to(DOCS)} → {target}"
             )
+
+
+def test_capability_catalog_lists_every_capability_a_profile_can_enable():
+    doc = _doc("capabilities/README.md")
+    names = {n for profile in PROFILES.values() for n in profile.capability_names}
+    # Benchmark-only and deprecated names are not part of the user catalog.
+    names -= {"Guardrails"}
+    assert len(names) > 20, names
+    assert sorted(n for n in names if f"| {n} |" not in doc) == []
+
+
+def test_every_docs_page_is_in_the_nav():
+    nav = (DOCS.parent / "mkdocs.yml").read_text(encoding="utf-8")
+    for page in DOCS.rglob("*.md"):
+        assert page.relative_to(DOCS).as_posix() in nav, page.name

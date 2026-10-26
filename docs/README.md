@@ -15,6 +15,13 @@ installing and running it.
 
 - **[Spec reference](spec-reference.md)**: every key an agent spec can set,
   with its default.
+- **[Capabilities](capabilities/README.md)**: what an agent can do, and how
+  each part works.
+    - [Conversations and memory](capabilities/conversations-and-memory.md)
+    - [Context management](capabilities/context.md)
+    - [Files and code](capabilities/files-and-code.md)
+    - [Web and vision](capabilities/web-and-vision.md)
+    - [Orchestration and extensions](capabilities/orchestration.md)
 - **[Security](security/README.md)**: how the defenses fit together and how to
   choose a setup.
     - [Approvals](security/approvals.md): a person says yes or no to one call.

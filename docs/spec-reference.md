@@ -22,6 +22,9 @@ unknown key, because a half-applied security policy is worse than none.
 Paths accept `~`. Relative paths in blocks that take a root are relative to the
 repository root.
 
+Each capability's behaviour (tools, data, limits) is in
+[Capabilities](capabilities/README.md); this page is only the knobs.
+
 Contents: [Identity and model](#identity-and-model) ·
 [Run limits](#run-limits) · [Files and code](#files-and-code) ·
 [Execution](#execution) · [Security](#security) · [Memory and recall](#memory-and-recall) ·
@@ -309,8 +312,12 @@ never cuts into the turn in progress.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `allowed_domains` | none | Hosts (and their subdomains) the browser may reach. |
+| `allowed_domains` | `localhost`, `127.0.0.1`, `::1` | Hosts (and their subdomains) the browser may reach. A non-empty list replaces the default. |
 | `block_private_addresses` | `true` | Refuse loopback, private and link-local addresses even when allowlisted. `false` lets an allowlisted private host through. Cloud metadata (`169.254.169.254`) is always refused. |
+
+Because the default allowlist is loopback and loopback is a private address, the
+default browser reaches nothing until you list a host (and, for a local one, set
+`block_private_addresses: false`). See [Web and vision](capabilities/web-and-vision.md#browser).
 
 ### `visual`
 
