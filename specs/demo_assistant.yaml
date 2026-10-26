@@ -34,6 +34,12 @@ instructions: |
 
   Leave the user with a correct answer, a working solution, a finished artifact, or a clear next action.
 
+# usage_limits:
+#   request_limit: 50      # most model requests one turn may make
+
+# approvals:
+#   timeout: 600           # seconds an approval waits for you before it is denied
+
 model_settings:
   temperature: 0
   max_tokens: 32768
@@ -42,6 +48,7 @@ model_settings:
 
 # Pages `fetch_web_page` may pull into context. Search itself is unrestricted.
 web:
+  # search_backend: auto   # auto (Tavily if TAVILY_API_KEY is set, else DuckDuckGo) | tavily | duckduckgo
   search_domains:
     - docs.pydantic.dev
     - ai.pydantic.dev
@@ -66,16 +73,44 @@ browser:
     - developer.mozilla.org
     - github.com
     - example.com
+  # block_private_addresses: false   # lets an allowlisted local site be reached
 
 # Describes images and screenshots for the main model.
 visual:
   model: openai:gpt-6-luna
+
+# The next three default to the repository root. Uncomment to point them elsewhere.
+# filesystem:
+#   root_dir: .
+#   deny_secret_files: true      # refuse .env*, keys, .ssh/ at any depth
+#   denied_patterns: ["private/**"]
+# git:
+#   root: .
+# codebase_map:
+#   scan_root: .
+
+# A folder of Markdown notes (an Obsidian vault, say). Defaults to data/vault/.
+# vault:
+#   root: /path/to/your/notes
+#   allow: ["Projects/**"]
+#   deny: ["Private/**"]
+
+# Extra directories of SKILL.md files. Defaults to data/skills/.
+# skills:
+#   libraries: [data/skills]
+
+# What the model is told about paths and your environment each turn.
+# workspace:
+#   expose_paths: false
+#   notes: ["Projects live under ~/projects"]
 
 # Commands run on the host. Anything irreversible pauses for your approval with a
 # preview of what it would touch; with nobody attached it is refused. See
 # docs/security/shell-command-policy.md. For a container instead, add
 # `executor: {backend: docker}`.
 shell:
+  # cwd: .
+  # executor: {backend: docker, network: none, memory: 1g}
   command_policy:
     default: allow
     unparseable: approve
@@ -109,6 +144,8 @@ compact:
 
 memory:
   consolidate_turns: 5    # complete turns between background consolidation passes
+  # max_memory_size: 65536  # most characters of MEMORY.md injected per request
+  # pairwise_review: true   # merge duplicates and apply updates after each pass
   render:
     global_tokens: 2000
     project_tokens: 2500
@@ -123,5 +160,18 @@ subagents:
   agents: [writer_subagent, code_reviewer_subagent, coding_subagent]
   max_concurrent: 5
 
+# Recall over past turns (search_conversation_history).
+# search:
+#   max_matches: 10
+#   context_lines: 5
+#   scope: conversation    # or `all` for every conversation
+
 keywords:
-  curate: true
+  curate: true            # sends skill and note digests to the model provider
+  # inject: true
+  # top_k: 3
+  # min_score: 2.5
+  # query_turns: 2
+
+# Not in the demo profile: python (Docker sandbox), gating, guardrails and secrets.
+# They belong to the `secure` profile; see specs/secure_assistant.yaml.
