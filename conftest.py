@@ -29,3 +29,21 @@ if env_path.is_file():
 
     # override=False: don't clobber a key already set in the shell/CI env.
     load_dotenv(env_path, override=False)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _placeholder_provider_keys(monkeypatch):
+    """Tests that build a real agent (without calling a model) need a key to exist.
+
+    Set placeholders only when none is configured, at test time rather than import
+    time, so `skipif(os.getenv(...) is None)` markers still see the real environment.
+    CI has no keys; a developer's `.env` supplies real ones and wins.
+    """
+    import os
+
+    for name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+        if not os.environ.get(name):
+            monkeypatch.setenv(name, "test-placeholder")
