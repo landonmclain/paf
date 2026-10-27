@@ -51,3 +51,8 @@ site/
 
 # Retired code kept locally
 archive/
+
+# One-off experiments kept locally
+scripts/relate/
+scripts/analyze_memory_dedup.py
+scripts/verify_plan_rehome.py
