@@ -38,9 +38,8 @@ name: secure_assistant
 
 profile: secure
 
-# Provider-qualified model string; bare slug (no `:nitro`) so the determinism pin
-# in model_settings applies. Requires OPENROUTER_API_KEY in .env.
-model: openrouter:deepseek/deepseek-v4-flash-0731
+# Needs OPENAI_API_KEY. Any pydantic-ai model string works (openrouter:..., ollama:...).
+model: openai:gpt-6-luna
 
 instructions: |
   # Role
@@ -98,16 +97,7 @@ instructions: |
 model_settings:
   temperature: 0
   max_tokens: 16384
-  openrouter_cache_instructions: true
-  openrouter_cache_messages: true
-  openrouter_cache_tool_definitions: true
-  extra_body:
-    provider:
-      order: [deepinfra, parasail, coreweave]
-      quantizations: [fp8]
-    frequency_penalty: 1.0
-  openrouter_reasoning:
-    effort: none
+  openai_reasoning_effort: low
 
 # Per-run request ceiling: stops runaway tool loops. Lower than the demo agent's.
 usage_limits:
@@ -154,10 +144,8 @@ python:
 # capability added to the profile later is unreachable until someone decides to
 # allow it here. First matching rule wins.
 #
-# `approve` means "a human must confirm". No approval transport exists yet, so
-# the runtime enforces it as a refusal with an explanation (never a deferred
-# call nothing will answer). When approval ships, only the runtime changes; this
-# policy stays as written.
+# `approve` pauses the call for the person attached to the turn and runs it only
+# on a yes; with nobody attached it is refused. See docs/security/approvals.md.
 gating:
   default: block
   rules:
