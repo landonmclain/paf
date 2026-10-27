@@ -1,7 +1,6 @@
 # Leaf-agent spec for the `memory_extractor` background agent.
 #
-# The consolidation owner's model, model_settings (deterministic sampler +
-# OpenRouter provider pin) and operating guidance live here rather than in
+# The consolidation owner's model, model_settings and operating guidance live here rather than in
 # code/env (`consolidate_model()` + `_consolidation_model_settings()`). The
 # ownership invariants — sole writer, read-via-tools, append-only journal — stay
 # wired in Python (`_build_owner`); this spec only parameterizes the model and
@@ -9,32 +8,12 @@
 #
 # Resolved by bare name `memory_extractor` via the recursive get_spec_path.
 name: memory_extractor
-model: openrouter:deepseek/deepseek-v4-flash-0731
+model: openai:gpt-6-luna
 model_settings:
   temperature: 0
-  top_p: 1.0
   max_tokens: 32768
-  # Output-token ceiling (incl. reasoning). Bumped 2026-09-19 (12288 -> 32768) to
-  # match the memory reviewer after it clipped twice — the extractor consolidates
-  # large conversation seeds in one pass and can outgrow a lean ceiling. Not a
-  # runaway valve; verify actual output size in the trace.
-  extra_body:
-    provider:
-      order:
-        - deepinfra
-        - parasail
-        - coreweave
-      quantizations:
-        - fp8
-  # Reasoning effort for DeepSeek V4.1 Flash, pinned to `low` (matching the chat
-  # agents' specs). Without it the extractor — a deterministic
-  # consolidation pass over large seeds — runs at default/high effort and burns
-  # tens of thousands of reasoning tokens (the reviewer hit ~23k for 3 actions).
-  # `low` avoids 'thinking forever' loops; frequency_penalty
-  # breaks output/thinking repetition loops.
-  openrouter_reasoning:
-    effort: low
-  # frequency_penalty: 1.0
+  openai_reasoning_effort: low
+
 instructions: |
   You are the memory extractor for this user. You read a slice of conversation
   and append the durable facts in it to an append-only journal. You never edit,

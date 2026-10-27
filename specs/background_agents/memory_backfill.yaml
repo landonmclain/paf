@@ -7,21 +7,12 @@
 #   keep=true  -> reclassify: type / scope / project (tier is derived)
 # The journal is never rewritten.
 name: memory_backfill
-model: openrouter:deepseek/deepseek-v4-flash-0731
+model: openai:gpt-6-luna
 model_settings:
   temperature: 0
-  top_p: 1.0
   max_tokens: 16384
-  extra_body:
-    provider:
-      order:
-        - deepinfra
-        - parasail
-        - coreweave
-      quantizations:
-        - fp8
-  openrouter_reasoning:
-    effort: low
+  openai_reasoning_effort: low
+
 instructions: |
   You re-file OLD memory facts about the user. An earlier memory extractor wrote
   them with a looser filter and different categories; many are noise. For each

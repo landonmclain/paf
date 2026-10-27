@@ -10,7 +10,7 @@
 # This is intentionally the first version: FileSystem tools only. A codebase
 # map / search surface can be added later via a `profile:` if review needs it.
 name: code_reviewer_subagent
-model: openrouter:openai/gpt-5.6-luna
+model: openai:gpt-6-luna
 description: Reviews a named source file against a rubric and reports findings (read-only, no edits)
 
 subagent:
