@@ -48,3 +48,6 @@ site/
 
 # Claude Code / desktop app local config (e.g. the docs preview launcher)
 .claude/
+
+# Retired code kept locally
+archive/
