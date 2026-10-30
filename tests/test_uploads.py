@@ -249,3 +249,76 @@ def test_screenshot_refs_are_stable_across_restashes() -> None:
     s.save(b)
     s.save(_png(color="green"))  # evicts the least recently stashed (a)
     assert s.get(ref_a) is None and len(s) == 2
+
+
+# --- iPhone photos: MPO format + EXIF orientation ------------------------------------
+
+
+def _mpo(w: int = 64, h: int = 48) -> bytes:
+    """A JPEG with an extra appended frame, as an iPhone camera writes (Pillow: MPO)."""
+    out = io.BytesIO()
+    a, b = Image.new("RGB", (w, h), "red"), Image.new("RGB", (w, h), "blue")
+    a.save(out, "MPO", save_all=True, append_images=[b])
+    return out.getvalue()
+
+
+def _jpeg(w: int, h: int, orientation: int | None = None) -> bytes:
+    out = io.BytesIO()
+    kw = {}
+    if orientation is not None:
+        exif = Image.Exif()
+        exif[0x0112] = orientation
+        kw["exif"] = exif
+    Image.new("RGB", (w, h), "green").save(out, "JPEG", **kw)
+    return out.getvalue()
+
+
+def test_mpo_from_iphone_is_accepted_as_jpeg(store) -> None:
+    data = _mpo()
+    assert Image.open(io.BytesIO(data)).format == "MPO"  # what used to be rejected
+    meta = store.save(data, "IMG_0001.JPG")
+    assert (meta.media_type, meta.ext, meta.width, meta.height) == (
+        "image/jpeg",
+        "jpg",
+        64,
+        48,
+    )
+    assert store.path(meta.id).read_bytes() == data  # the original is kept as-is
+
+
+def test_large_mpo_model_copy_is_a_plain_first_frame_jpeg(store) -> None:
+    meta = store.save(_mpo(3000, 1000), "IMG_0002.JPG")
+    data, media_type = store.model_image(meta.id)
+    im = Image.open(io.BytesIO(data))
+    assert (
+        media_type == "image/jpeg" and im.format == "JPEG"
+    )  # not MPO, no extra frames
+    assert max(im.size) == _uploads.MODEL_MAX_SIDE
+
+
+def test_model_copy_bakes_in_exif_rotation_for_large_photos(store) -> None:
+    """Orientation 6 = the camera was held upright: stored 3000x1000 sensor pixels
+    display as 1000x3000. Re-encoding drops the tag, so the rotation must be applied."""
+    meta = store.save(_jpeg(3000, 1000, orientation=6), "IMG_0003.JPG")
+    data, _ = store.model_image(meta.id)
+    w, h = Image.open(io.BytesIO(data)).size
+    assert h > w and h == _uploads.MODEL_MAX_SIDE  # portrait, as the user sees it
+
+
+def test_small_rotated_photo_is_not_passed_through_sideways(store) -> None:
+    meta = store.save(_jpeg(100, 40, orientation=6), "IMG_0004.JPG")
+    data, media_type = store.model_image(meta.id)
+    assert media_type == "image/jpeg"
+    assert Image.open(io.BytesIO(data)).size == (
+        40,
+        100,
+    )  # rotated, so it was re-encoded
+
+
+def test_small_upright_jpeg_still_passes_through_untouched(store) -> None:
+    raw = _jpeg(100, 40)  # no EXIF orientation
+    meta = store.save(raw, "plain.jpg")
+    assert store.model_image(meta.id) == (raw, "image/jpeg")
+    upright = _jpeg(100, 40, orientation=1)  # explicit "normal" is also a no-op
+    meta2 = store.save(upright, "upright.jpg")
+    assert store.model_image(meta2.id) == (upright, "image/jpeg")

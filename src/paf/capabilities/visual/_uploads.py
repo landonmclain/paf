@@ -47,9 +47,26 @@ MODEL_MAX_SIDE = 2048
 _FORMATS = {
     "PNG": ("image/png", "png"),
     "JPEG": ("image/jpeg", "jpg"),
+    # iPhone camera photos: a normal JPEG (FFD8 header, first image decodes as any
+    # JPEG) with extra frames (depth / gain map) appended. Pillow reports the
+    # format as MPO, so without this entry they are rejected as "unsupported".
+    "MPO": ("image/jpeg", "jpg"),
     "WEBP": ("image/webp", "webp"),
     "GIF": ("image/gif", "gif"),
 }
+
+
+def _needs_rotation(data: bytes) -> bool:
+    """True if the image carries an EXIF orientation other than "upright"."""
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            return im.getexif().get(0x0112, 1) not in (0, 1)  # 0x0112 = Orientation
+    except Exception:  # noqa: BLE001 - unreadable here means "no tag"; save() validated it
+        return False
+
+
 _ID_RE = re.compile(r"^img_[0-9a-f]{16}$")
 
 DESCRIBE_PROMPT = """\
@@ -165,15 +182,23 @@ class UploadStore:
         """``(bytes, media_type)`` for the vision model: the original when it is
         small enough, else a copy shrunk to ``MODEL_MAX_SIDE`` (GIFs always
         become a PNG of the first frame)."""
-        from PIL import Image
+        from PIL import Image, ImageOps
 
         meta, path = self.meta(upload_id), self.path(upload_id)
         if meta is None or path is None:
             return None
         data = path.read_bytes()
-        if meta.ext != "gif" and max(meta.width, meta.height) <= MODEL_MAX_SIDE:
+        if (
+            meta.ext != "gif"
+            and max(meta.width, meta.height) <= MODEL_MAX_SIDE
+            and not _needs_rotation(data)
+        ):
             return data, meta.media_type
-        with Image.open(io.BytesIO(data)) as im:
+        with Image.open(io.BytesIO(data)) as raw:
+            # Camera photos store pixels in sensor orientation plus an EXIF tag
+            # that viewers apply. Re-encoding drops the tag, so bake the rotation
+            # in first or the model sees portrait photos sideways.
+            im = ImageOps.exif_transpose(raw)
             im.thumbnail((MODEL_MAX_SIDE, MODEL_MAX_SIDE))
             out = io.BytesIO()
             if meta.ext == "jpg":
