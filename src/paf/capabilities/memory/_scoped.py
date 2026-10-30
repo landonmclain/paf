@@ -101,7 +101,9 @@ async def _conversation_of_run(run_id: str, step_store=None) -> str | None:
     global _RUN_CONV_LOADED
     # `not _RUN_CONV` is the cold-start guard: time.monotonic() starts near 0 in a
     # fresh process, so the 60s staleness test alone would never fire at startup.
-    if run_id not in _RUN_CONV and (not _RUN_CONV or time.monotonic() - _RUN_CONV_LOADED > 60):
+    if run_id not in _RUN_CONV and (
+        not _RUN_CONV or time.monotonic() - _RUN_CONV_LOADED > 60
+    ):
         if step_store is None:
             from paf.capabilities.persistence import _build_store
 
