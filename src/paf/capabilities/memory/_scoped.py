@@ -90,7 +90,8 @@ def _tok(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-# --- run -> conversation (cached; refreshed on a miss at most once a minute) ----
+# --- run -> conversation (cached; first load unconditional, then refreshed on a
+#     miss at most once a minute) -----------------------------------------------
 
 _RUN_CONV: dict[str, str] = {}
 _RUN_CONV_LOADED = 0.0
@@ -98,7 +99,9 @@ _RUN_CONV_LOADED = 0.0
 
 async def _conversation_of_run(run_id: str, step_store=None) -> str | None:
     global _RUN_CONV_LOADED
-    if run_id not in _RUN_CONV and time.monotonic() - _RUN_CONV_LOADED > 60:
+    # `not _RUN_CONV` is the cold-start guard: time.monotonic() starts near 0 in a
+    # fresh process, so the 60s staleness test alone would never fire at startup.
+    if run_id not in _RUN_CONV and (not _RUN_CONV or time.monotonic() - _RUN_CONV_LOADED > 60):
         if step_store is None:
             from paf.capabilities.persistence import _build_store
 
