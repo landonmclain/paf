@@ -29,7 +29,7 @@ npx --yes pyright                                                  # typecheck
 | --- | --- | --- |
 | `paf-sse` | `ui/sse.py` SSE + REST transport over `Session` | 8090 |
 | `paf-ops` | `ui/ops.py` systemd control for paf-sse | 8091 |
-| `paf-ui` | paf-ui Next.js production server (behind `tailscale serve`) | 3001 |
+| `paf-ui` | paf-ui Next.js production server (put it behind your own HTTPS proxy if you need one; list its origin in `PAF_EXTRA_ORIGINS`) | 3001 |
 
 Don't start these by hand: a second copy collides on the port and leaves orphans.
 After changing Python under `src/` or `ui/`, restart `paf-sse`:

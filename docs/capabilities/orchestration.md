@@ -116,7 +116,7 @@ prompt short: the model sees the list and loads only what the task needs.
 ```yaml
 skills:
   libraries:
-    - ~/.hermes/skills
+    - ~/skills
     - ~/projects/skill-library
 ```
 

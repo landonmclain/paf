@@ -8,15 +8,10 @@ import pytest
 
 from paf.capabilities.web import WebToolset, _toolset
 from paf.capabilities.web._toolset import (
-    PREFERRED_DOC_DOMAINS,
     _resolve_backend,
     _with_site_filter,
 )
 from paf.specs import _spec_web_config
-
-
-def test_composer_domain_not_in_defaults():
-    assert "api.composer.trade" not in PREFERRED_DOC_DOMAINS
 
 
 def test_auto_backend_follows_tavily_key(monkeypatch):

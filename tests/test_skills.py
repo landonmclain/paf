@@ -396,13 +396,13 @@ def test_spec_skills_config_parses_block(tmp_path: Path) -> None:
         "model: openai:gpt-5.4-nano\n"
         "skills:\n"
         "  libraries:\n"
-        "    - ~/.hermes/skills\n"
+        "    - ~/skills\n"
         "    - data/skills\n"
     )
     cfg = _spec_skills_config(spec)
     assert cfg is not None
     # `~` expands to an absolute path; plain paths pass through.
-    assert cfg["libraries"][0] == str(Path.home() / ".hermes" / "skills")
+    assert cfg["libraries"][0] == str(Path.home() / "skills")
     assert cfg["libraries"][1] == "data/skills"
 
 

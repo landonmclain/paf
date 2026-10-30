@@ -84,10 +84,13 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
-        # Same-origin HTTPS via `tailscale serve` (the phone/PWA origin). The UI
-        # and /api + /ops share it, so these requests are not cross-origin; kept for
-        # tooling that sends an Origin header.
-        "https://paf.example.com",
+        # Extra origins (for example an HTTPS proxy in front of paf-ui):
+        # PAF_EXTRA_ORIGINS="https://paf.example.com,https://other.example".
+        *[
+            o.strip()
+            for o in os.environ.get("PAF_EXTRA_ORIGINS", "").split(",")
+            if o.strip()
+        ],
     ],
     allow_credentials=False,
     allow_methods=["*"],

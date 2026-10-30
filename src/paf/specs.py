@@ -128,7 +128,7 @@ def _spec_browser_config(spec_path: Path) -> dict | None:
         browser:
           allowed_domains:
             - localhost
-            - staging.example.com
+            - docs.python.org
           block_private_addresses: false   # optional; default true
 
     ``allowed_domains`` is the Browser capability's egress allowlist — hosts
@@ -217,7 +217,7 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
 
         skills:
           libraries:        # one or more full paths (~ expands); absent -> the
-            - ~/.hermes/skills          # paf-owned data/skills/ default
+            - ~/skills          # paf-owned data/skills/ default
             - ~/projects/Personal/skill-library
 
     ``libraries`` are **full absolute paths** (``~`` expanded via

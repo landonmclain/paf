@@ -9,6 +9,7 @@ every existing browser subscription (they are bound to the public key).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from py_vapid import Vapid
 
 from paf.push import b64url_encode
 
-SUBJECT = "mailto:you@example.com"
+SUBJECT = os.environ.get("PAF_VAPID_SUBJECT", "mailto:you@example.com")
 ENV = Path(__file__).resolve().parent.parent / ".env"
 
 

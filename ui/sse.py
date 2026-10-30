@@ -28,6 +28,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -515,10 +516,13 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:3001",  # paf-ui dev falls to :3001 while Langfuse holds :3000
         "http://127.0.0.1:3001",
-        # Same-origin HTTPS via `tailscale serve` (the phone/PWA origin). The UI
-        # and /api + /ops share it, so these requests are not cross-origin; kept for
-        # tooling that sends an Origin header.
-        "https://paf.example.com",
+        # Extra origins (for example an HTTPS proxy in front of paf-ui):
+        # PAF_EXTRA_ORIGINS="https://paf.example.com,https://other.example".
+        *[
+            o.strip()
+            for o in os.environ.get("PAF_EXTRA_ORIGINS", "").split(",")
+            if o.strip()
+        ],
     ],
     allow_credentials=False,
     allow_methods=["*"],

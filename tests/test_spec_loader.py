@@ -148,7 +148,7 @@ def test_building_a_spec_without_a_profile_says_so(tmp_path: Path) -> None:
 # into a particular person's home folder, notes or tooling. A personal spec such as
 # `assistant.yaml` is gitignored and not covered here.
 _MACHINE_SPECIFIC = re.compile(
-    r"/home/|/Users/|Obsidian|Documents/|\.hermes", re.IGNORECASE
+    r"/home/|/Users/|Obsidian|Documents/|~/\.hermes", re.IGNORECASE
 )
 
 
@@ -168,3 +168,31 @@ def test_shipped_specs_name_no_machine_specific_paths(path: Path) -> None:
         if _MACHINE_SPECIFIC.search(line)
     ]
     assert not hits, f"{path.name} names a specific machine:\n" + "\n".join(hits)
+
+
+def test_tracked_files_name_no_personal_details():
+    """No author email, home directory, tailnet host or client domain in the tree."""
+    import re
+    import subprocess
+
+    pattern = re.compile(
+        r"/home/alice|you|\.ts\.net|tailscale serve|staging"
+        r"|example|example|~/\.hermes"
+    )
+    root = Path(__file__).resolve().parent.parent
+    files = subprocess.run(
+        ["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    skip = {"uv.lock", "tests/test_spec_loader.py", ".gitignore"}
+    hits = []
+    for name in files:
+        if name in skip or name.endswith(
+            (".png", ".ico", ".lock", "package-lock.json")
+        ):
+            continue
+        try:
+            text = (root / name).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        hits += [f"{name}: {m.group(0)}" for m in pattern.finditer(text)]
+    assert not hits, "\n".join(hits)
