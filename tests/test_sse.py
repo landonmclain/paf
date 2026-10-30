@@ -412,3 +412,120 @@ def test_session_is_busy_guards_idle_reap() -> None:
     assert sse._session_is_busy(_S(_DetachedTurn())) is False, "orphan: reapable"
     assert sse._session_is_busy(_S(_DoneTurn())) is False, "settled: reapable"
     assert sse._session_is_busy(_S(None)) is False, "no turn: reapable"
+
+
+# --- cross-device: a turn started on one device shows up on the others ------------
+
+
+class _OneEvent:
+    def __init__(self) -> None:
+        self._sent = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._sent:
+            self._sent = True
+            return _event()
+        raise StopAsyncIteration
+
+
+class _PromptHandle(_FakeHandle):
+    def __init__(self, prompt: str) -> None:
+        super().__init__(_OneEvent())
+        self.prompt = prompt
+
+
+async def _drain(frames) -> list[str]:
+    out: list[str] = []
+    try:
+        async for f in frames:
+            out.append(f)
+    except StopAsyncIteration:
+        pass
+    return out
+
+
+def test_prompt_view_splits_images_like_history() -> None:
+    assert sse._prompt_view("hello there") == {"text": "hello there"}
+    assert sse._prompt_view("") == {"text": ""}
+
+
+def test_rejoin_leads_with_the_prompt_being_answered() -> None:
+    """A device attaching mid-turn never saw the question (history only gains it
+    when the turn settles), so the rejoin stream starts with it."""
+
+    class _Session:
+        agent_name = "x"
+        current_turn = _PromptHandle("write me an essay")
+
+    frames = sse._turn_frames(
+        _Session(),
+        "",
+        "conv-1",
+        _FakeRequest(),
+        rejoin=True,  # type: ignore[arg-type]
+    )
+    got = asyncio.run(_drain(frames))
+    assert got[0].startswith("event: prompt\n")
+    assert '"text": "write me an essay"' in got[0]
+    assert any("partial" in f for f in got[1:])  # then the live tail
+
+
+def test_rejoin_without_a_running_turn_is_still_empty() -> None:
+    class _Session:
+        agent_name = "x"
+        current_turn = None
+
+    frames = sse._turn_frames(_Session(), "", "c", _FakeRequest(), rejoin=True)  # type: ignore[arg-type]
+    assert asyncio.run(_drain(frames)) == []
+
+
+def test_a_new_user_turn_signals_the_other_devices() -> None:
+    """Starting a turn emits turn_started on the conversation feed (scoped id), the
+    same re-attach signal a background turn sends, so other devices stream it live."""
+    seen: list[ProcessEvent] = []
+
+    async def go() -> None:
+        emitter = get_agent_emitter("xdev-agent")
+        emitter.on_any(lambda ev: seen.append(ev))
+
+        class _Session:
+            agent_name = "xdev-agent"
+            current_turn = None
+
+            def scoped_id(self, cid):
+                return f"prof:{cid}"
+
+            def start_turn(self, prompt, *, conversation_id=None, interactive=False):
+                return _PromptHandle(prompt)
+
+        await _drain(sse._turn_frames(_Session(), "hi", "conv-9", _FakeRequest()))  # type: ignore[arg-type]
+
+    asyncio.run(go())
+    assert [(e.status.value, e.scope, e.lane) for e in seen] == [
+        ("turn_started", "prof:conv-9", "conversation")
+    ]
+
+
+def test_reattaching_to_a_running_turn_does_not_signal_again() -> None:
+    emitted: list[tuple] = []
+
+    async def fake_emit(agent, cid, run_id):
+        emitted.append((agent, cid))
+
+    class _Session:
+        agent_name = "x"
+        current_turn = _PromptHandle("already running")  # a turn is in flight
+
+        def start_turn(self, prompt, *, conversation_id=None, interactive=False):
+            return self.current_turn
+
+    orig = sse._emit_turn_started
+    sse._emit_turn_started = fake_emit  # type: ignore[assignment]
+    try:
+        asyncio.run(_drain(sse._turn_frames(_Session(), "again", "c", _FakeRequest())))  # type: ignore[arg-type]
+    finally:
+        sse._emit_turn_started = orig  # type: ignore[assignment]
+    assert emitted == []

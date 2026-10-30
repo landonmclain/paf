@@ -407,6 +407,10 @@ class TurnHandle:
         self._session = session
         self._token = token
         self.conversation_id = conversation_id
+        # The prompt this turn is answering: a client that attaches mid-turn (another
+        # device, a refresh) has no other way to learn it, since history only gains
+        # the user message once the turn settles.
+        self.prompt = prompt
         self.origin: TurnOrigin = origin
         self._subscribers: set[asyncio.Queue[TurnStreamEvent | None]] = set()
         # Set by the pump on an unexpected end (not a clean finish/cancel).

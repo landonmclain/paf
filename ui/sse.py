@@ -535,6 +535,19 @@ def _frame(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def _prompt_view(prompt: str) -> dict[str, Any]:
+    """A turn's prompt as the UI shows a user message: ``{text, images}``.
+
+    Same split as ``_serialize_history`` (image descriptions become attachments),
+    so a prompt streamed to a late-attaching device looks like the settled one.
+    """
+    text, images = split_image_blocks(prompt or "")
+    view: dict[str, Any] = {"text": text}
+    if images:
+        view["images"] = images
+    return view
+
+
 def _serialize_turn(ev: TurnStreamEvent) -> tuple[str, dict[str, Any]]:
     """Map a turn event to (sse-event-name, json-payload)."""
     if isinstance(ev, StreamEvent):
@@ -1295,6 +1308,12 @@ def _turn_frames(
             handle = session.current_turn
             if handle is None:
                 return
+            # Lead with the question being answered: a device that attaches mid-turn
+            # (the other one, or after a refresh) never saw it, and history only
+            # gains the user message when the turn settles.
+            view = _prompt_view(getattr(handle, "prompt", ""))
+            if view["text"] or view.get("images"):
+                out_q.put_nowait(("prompt", view))
         else:
             # Start (or re-attach to) the Session-owned turn. If a turn is
             # already running on this lane, start_turn returns that running
@@ -1302,9 +1321,18 @@ def _turn_frames(
             # design).
             # A browser is a person who can answer approval requests, so the
             # turn is interactive (scheduled and notify turns are not).
+            starting = getattr(session, "current_turn", None) is None
             handle = session.start_turn(
                 prompt, conversation_id=conversation_id, interactive=True
             )
+            if starting:
+                # Tell the OTHER devices watching this conversation that a turn
+                # began, so they attach and stream it live (the same signal a
+                # background turn sends). This device is already streaming it, and
+                # its own re-attach no-ops on a running lane.
+                await _emit_turn_started(
+                    getattr(session, "agent_name", ""), scoped_cid, uuid.uuid4().hex[:8]
+                )
 
         async def _on_plan(_ev: Any) -> None:
             # Full-snapshot per mutation (Plan-Live-Sidebar-Spec): read the

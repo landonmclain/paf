@@ -141,6 +141,10 @@ def test_rejoin_attaches_to_running_turn() -> None:
         sess = _bare_session()
         handle = sess.start_turn("hello")
         frames = sse._turn_frames(sess, "ignored", "conv-1", _Request(), rejoin=True)  # type: ignore[attr-defined]
+        # A rejoin leads with the question being answered (a late-attaching device
+        # never saw it), then catches the live tail.
+        lead = await anext(frames)
+        assert lead.startswith("event: prompt\n") and '"text": "hello"' in lead
         first = await anext(frames)
         assert "frame-" in first, "rejoin attaches to the in-flight turn"
         assert sess._turn is handle, "rejoin re-attaches, not a second turn"
