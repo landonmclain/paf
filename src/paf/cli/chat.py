@@ -32,6 +32,7 @@ import argparse
 import asyncio
 import io
 import os
+import re
 import shlex
 import signal
 import sys
@@ -48,6 +49,7 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
+from pydantic_ai.exceptions import UserError
 
 from paf.approvals import ApprovalRequest, ApprovalRequested
 from paf.background_processes._events import get_agent_emitter
@@ -1041,6 +1043,22 @@ def _show_memory(agent: str) -> None:
     _out(f"{DIM}{root_md}{RESET}\n{root_md.read_text(encoding='utf-8').strip()}\n")
 
 
+def _user_error_message(exc: UserError) -> str:
+    """One line for a provider setup error, instead of a traceback.
+
+    pydantic-ai raises ``UserError`` when a model's API key is not set; point at
+    where the key goes rather than dumping the stack.
+    """
+    text = str(exc)
+    match = re.search(r"Set the `([A-Z0-9_]+)` environment variable", text)
+    if match:
+        return (
+            f"paf chat: {match.group(1)} is not set. Add it to .env "
+            "(copy .env.example) or export it, then run again."
+        )
+    return f"paf chat: {text.split('. ')[0].rstrip('.')}."
+
+
 def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     ap = argparse.ArgumentParser(prog=prog, description="Chat with a paf agent.")
     ap.add_argument("agent", nargs="?", default=DEFAULT_AGENT, help="spec name")
@@ -1111,6 +1129,9 @@ def main(argv: list[str] | None = None, *, prog: str | None = None) -> int:
     except (AgentSpecNotFoundError, InvalidSpecError, MissingProfileError) as exc:
         # A spec problem the user fixes by editing a file: one line, no traceback.
         print(f"paf chat: {exc}", file=sys.stderr)
+        return 2
+    except UserError as exc:
+        print(_user_error_message(exc), file=sys.stderr)
         return 2
 
 

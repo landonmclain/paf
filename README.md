@@ -46,7 +46,7 @@ Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 git clone https://github.com/landonmclain/paf.git
 cd paf
 uv sync
-cp .env.example .env   # then set OPENROUTER_API_KEY
+cp .env.example .env   # then set OPENAI_API_KEY
 ```
 
 Start a conversation:
@@ -56,9 +56,12 @@ uv run paf chat                    # the default agent, demo_assistant
 uv run paf chat --new              # the same agent, in a fresh conversation
 ```
 
-The default model is DeepSeek V4 Flash via [OpenRouter](https://openrouter.ai),
-so an `OPENROUTER_API_KEY` is the only required setting. To use the browser
-capability, install Chromium once with `uv run playwright install chromium`.
+The default model is `openai:gpt-6-luna`, so an `OPENAI_API_KEY` is the only
+required setting. Any [pydantic-ai model string](https://ai.pydantic.dev/models/)
+works in a spec's `model:` key, for example `openrouter:...` (set
+`OPENROUTER_API_KEY`) or a local `ollama:...` model. Web search works without
+a key; set `TAVILY_API_KEY` to use Tavily instead. To use the browser capability,
+install Chromium once with `uv run playwright install chromium`.
 
 ## How it fits together
 
@@ -103,7 +106,7 @@ A spec is plain YAML. Abridged:
 ```yaml
 name: my_agent
 profile: assistant
-model: openrouter:deepseek/deepseek-v4-flash-0731
+model: openai:gpt-6-luna
 instructions: |
   You are a capable general-purpose assistant and technical collaborator...
 
@@ -309,7 +312,9 @@ Settings come from the environment or a `.env` file (see `.env.example`):
 
 | Setting | Purpose |
 | --- | --- |
-| `OPENROUTER_API_KEY` | Required for the default model. |
+| `OPENAI_API_KEY` | Required for the default model. |
+| `OPENROUTER_API_KEY` | For `openrouter:` models, and the optional memory screening step. |
+| `TAVILY_API_KEY` | Optional. Web search uses Tavily when set, otherwise keyless DuckDuckGo. |
 | `OTLP_ENDPOINT`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Send traces to Langfuse. Leave blank to turn tracing off. |
 | `PAF_HOME` | Where `specs/` and `data/` live. Defaults to the repository root in a source checkout, otherwise the current directory. |
 | `TIMEZONE` | The user's IANA time zone, for the date stamped on messages. Defaults to the machine's. |

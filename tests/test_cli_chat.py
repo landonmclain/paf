@@ -73,3 +73,21 @@ def test_status_refreshes_coalesce_during_a_burst() -> None:
 
     asyncio.run(scenario())
     assert reads == 2
+
+
+def test_missing_api_key_is_one_line_not_a_traceback():
+    from pydantic_ai.exceptions import UserError
+
+    from paf.cli.chat import _user_error_message
+
+    msg = _user_error_message(
+        UserError(
+            "Set the `OPENAI_API_KEY` environment variable or pass it via "
+            "`OpenAIProvider(api_key=...)` to use the OpenAI provider."
+        )
+    )
+    assert msg.startswith("paf chat: OPENAI_API_KEY is not set")
+    assert ".env" in msg and "\n" not in msg
+    assert _user_error_message(UserError("Unknown model: x. More text.")) == (
+        "paf chat: Unknown model: x."
+    )
