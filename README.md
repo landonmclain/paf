@@ -36,14 +36,13 @@ them:
 
 The principles behind it:
 
-- **Extensible by construction.** New behavior arrives as a capability, not a
-  fork of the runtime.
+- **Extend through capabilities.** New behavior arrives as a capability rather
+  than a change to the runtime.
 - **Single agent first.** An `Agent` is the unit; delegation and background
   agents are built from the same pieces.
-- **Lossless, inspectable state.** JSON and JSONL on disk, no database to run.
-  You can read, grep, and diff everything the agent remembers.
-- **Structured traces over logs.** Telemetry goes to Langfuse over
-  OpenTelemetry.
+- **Inspectable state.** JSON and JSONL on disk, no database to run, so you can
+  read, grep, and diff what the agent remembers.
+- **Optional tracing.** Telemetry can go to Langfuse over OpenTelemetry.
 
 ## Quickstart
 
@@ -141,12 +140,11 @@ these.
 - **ConversationSearch** gives the model `search_conversation_history` (BM25
   over the full transcript) and `read_turn` (the complete original turn behind
   a search hit).
-- **Memory** keeps a durable notebook of facts, injected into every request
-  (see [Memory](#memory)).
+- **Memory** keeps a durable notebook of facts and shows the agent the relevant
+  ones as context (see [Memory](#memory)).
 - **ThreadSummarizer** summarizes each conversation in the background.
 - **Compaction** keeps long conversations within budget: it trims the window at
-  turn boundaries and clears stale tool results, never cutting into the turn in
-  progress.
+  turn boundaries and clears stale tool results, avoiding the turn in progress.
 
 **Working with files and code**
 
@@ -183,11 +181,10 @@ these.
   CLI toolbar.
 - **Skills** lists and loads skill documents on demand, and lets the model
   create and edit them.
-- **KeywordCurator** points the model at relevant skills and notes. A
-  background agent (on when the spec sets `keywords: curate: true`) maintains a
-  vocabulary of entities and their aliases from the agent's skill libraries and
-  vault; each turn, matching terms inject a short `<relevance-hints>` block,
-  with no model call on the hot path.
+- **KeywordCurator** points the model at relevant skills and notes. When the spec
+  sets `keywords: curate: true`, a background agent maintains a vocabulary of
+  terms from the agent's skills and vault, and matching terms add a short hint
+  to each turn.
 - **ScheduledTasks** lets the agent schedule work on cron expressions
   (`schedule_task`, `list_scheduled_tasks`, `run_scheduled_task`, and so on).
   A job runs either as an agent turn in the conversation that scheduled it, or
@@ -211,13 +208,13 @@ listed directly in a spec's `capabilities:` block, with no Python needed.
 
 ## Security
 
-The runtime, not the model, enforces what an agent may do:
+The runtime, not the model, applies these checks:
 
 - **Approvals.** A risky call pauses until a person approves or denies it, in
   the terminal or in the browser. With nobody attached, it is refused.
-- **Shell command policy.** Each command is parsed (pipes, `sudo`, `bash -c`,
-  `find -delete` included) and allowed, sent for approval, or refused. The
-  lenient policy asks before anything irreversible.
+- **Shell command policy.** Each command is parsed (including pipes and
+  `bash -c`) and allowed, sent for approval, or refused. The lenient policy asks
+  before anything irreversible.
 - **Tool gating.** Per-call allow / approve / block rules for any tool, by path
   ("writes are fine under `out/`, elsewhere ask").
 - **Prompt-injection screening.** Tool results are scored by a local
@@ -229,29 +226,33 @@ The runtime, not the model, enforces what an agent may do:
   with no network and a read-only root; credential files are blanked inside it
   and refused by the file tools.
 
-The `secure` profile (`secure_assistant`) turns all of it on. See
+These layers reduce risk; they don't remove it. For untrusted input, use the
+`secure` profile (`secure_assistant`), which turns all of them on and runs code
+in a sandbox. See
 [docs/security](docs/security/README.md) for how the layers fit and how to
 configure each.
 
 ## Memory
 
-Memory is owned by paf and stored as plain files under `data/memory/<agent>/`:
+Memory is stored as plain files under `data/memory/<agent>/`:
 
 - `memory-journal.jsonl` is the **source of truth**: an append-only log, one
   record per fact, each with the date it became true and a reference back to
   the turn it came from.
-- `MEMORY.md` is a **rendered view** of the journal. It is what the agent sees,
-  and you can read it with `/memory` in the CLI.
+- `memory-overrides.jsonl` records archive and supersede decisions made after
+  the fact, so the journal itself is never rewritten.
+- `MEMORY.md` is a **rendered view** you can read with `/memory` in the CLI.
 
-The roles are split. A background **owner agent** reads new conversation turns
-and appends facts to the journal; it never edits or deletes. Duplicates and
-outdated facts are resolved when the view is rendered, so the journal itself is
-never rewritten. The assistant only reads memory, and when it needs more than
-memory holds, it recalls in order: what's in context, then
+Background agents do the writing. An extractor reads new conversation turns and
+appends facts; a reviewer compares each new fact with older ones and archives
+duplicates or supersedes outdated ones. Each turn, the agent is shown a view
+built for that conversation (what it knows about you, the current project, and
+recent history) within a token budget. It only reads memory. When it needs more
+than memory holds, it recalls in order: what's in context, then
 `search_conversation_history`, then `read_turn`.
 
-Because each fact carries its source reference, anything in memory can be
-traced back to the exact turn that produced it.
+Each fact carries a reference to its source, so anything in memory can be traced
+back to the turn that produced it.
 
 ## Using paf
 
