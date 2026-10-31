@@ -175,9 +175,11 @@ def test_tracked_files_name_no_personal_details():
     import re
     import subprocess
 
+    # Generic shapes only: a home directory other than the placeholder, a
+    # personal-mail address, a tailnet host, a Hermes skills path.
     pattern = re.compile(
-        r"/home/alice|you|\.ts\.net|tailscale serve|staging"
-        r"|example|example|~/\.hermes"
+        r"/home/(?!alice\b|runner\b|user\b|me\b)\w+|[\w.+-]+@gmail\.com|[\w-]+\.ts\.net"
+        r"|~/\.hermes"
     )
     root = Path(__file__).resolve().parent.parent
     files = subprocess.run(
