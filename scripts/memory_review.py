@@ -6,8 +6,8 @@ reviewer runs on its own.
 
 Usage (from the repo root):
     set -a && . ./.env && set +a
-    PYTHONPATH= .venv/bin/python scripts/memory_review.py --last 30          # dry run
-    PYTHONPATH= .venv/bin/python scripts/memory_review.py --apply           # from watermark
+    .venv/bin/python scripts/memory_review.py --last 30          # dry run
+    .venv/bin/python scripts/memory_review.py --apply           # from watermark
 """
 
 from __future__ import annotations

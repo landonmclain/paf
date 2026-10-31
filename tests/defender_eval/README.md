@@ -6,10 +6,10 @@ labeled corpus of tool outputs. Local ONNX classifier only: no LLM, no cost,
 deterministic, ~1 s.
 
 ```bash
-PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval            # full report
-PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --json v.json
-PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --harvest 24   # candidates from live traces
-PYTHONPATH= .venv/bin/python -m pytest tests/test_defender_eval.py      # the regression gate
+.venv/bin/python -m tests.defender_eval.eval            # full report
+.venv/bin/python -m tests.defender_eval.eval --json v.json
+.venv/bin/python -m tests.defender_eval.eval --harvest 24   # candidates from live traces
+.venv/bin/python -m pytest tests/test_defender_eval.py      # the regression gate
 ```
 
 ## Fixtures (`fixtures.jsonl`)
@@ -94,7 +94,7 @@ with an `injected_marker`, whether the injected text itself reached the model.
 That last row is ground truth, not the scorer grading itself.
 
 ```bash
-PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --compare observe,flag,redact,block,spec:secure_assistant
+.venv/bin/python -m tests.defender_eval.eval --compare observe,flag,redact,block,spec:secure_assistant
 ```
 
 Presets tighten the file-writing tools after a hit; `spec:<agent>` uses the

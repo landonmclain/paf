@@ -15,9 +15,6 @@ cp .env.example .env     # set OPENAI_API_KEY to run agents; tests need no key
 git config core.hooksPath .githooks
 ```
 
-If your shell sets a `PYTHONPATH` from another Python install, clear it for paf
-commands (`PYTHONPATH= uv run ...`), or the wrong `pydantic_core` build loads.
-
 ## Checks
 
 ```bash

@@ -5,19 +5,15 @@ front end is the SSE server (`ui/sse.py`) plus the separate paf-ui Next.js app. 
 Gradio UI (`ui/web.py`) is retired; don't use it. Test and benchmark details are in
 [`tests/AGENTS.md`](tests/AGENTS.md); orientation is in `README.md`.
 
-> **Run Python with `PYTHONPATH=` (empty) in front.** A `PYTHONPATH` inherited from
-> another Python install puts a mismatched `pydantic_core` build ahead of this venv's
-> and fails with an import error. Use `PYTHONPATH= .venv/bin/python ...`, never bare
-> `python` or `pytest`.
->
-> To load `.env` into a shell use `set -a && . ./.env && set +a`; plain `source` does
-> not export the variables.
+> To load `.env` into a shell use `set -a && . ./.env && set +a`; plain `source` does not
+> export the variables. If a `PYTHONPATH` is inherited from another tool and imports
+> fail with a `pydantic_core` error, clear it (`env -u PYTHONPATH ...`).
 
 ## Everyday commands
 
 ```bash
-PYTHONPATH= .venv/bin/python -m pytest -q -n 8                    # unit suite, ~50s
-PYTHONPATH= .venv/bin/ruff check src tests ui --output-format=concise
+.venv/bin/python -m pytest -q -n 8                    # unit suite, ~50s
+.venv/bin/ruff check src tests ui --output-format=concise
 npx --yes pyright                                                  # typecheck
 ```
 

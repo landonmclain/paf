@@ -1,7 +1,7 @@
 """Generate a VAPID keypair for Web Push and print the .env lines.
 
-    PYTHONPATH= .venv/bin/python scripts/gen_vapid.py            # print
-    PYTHONPATH= .venv/bin/python scripts/gen_vapid.py --write    # append to .env
+    .venv/bin/python scripts/gen_vapid.py            # print
+    .venv/bin/python scripts/gen_vapid.py --write    # append to .env
 
 Refuses to overwrite existing PAF_VAPID_* keys: rotating the keypair invalidates
 every existing browser subscription (they are bound to the public key).

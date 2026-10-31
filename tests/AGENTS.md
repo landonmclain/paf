@@ -5,7 +5,7 @@ Guide for agents working in `tests/`. The repo-level guide is [`../AGENTS.md`](.
 ## Unit suite
 
 ```bash
-PYTHONPATH= .venv/bin/python -m pytest -q -n 8     # ~50s, no network, no tokens
+.venv/bin/python -m pytest -q -n 8     # ~50s, no network, no tokens
 ```
 
 - `-n 8` runs it in parallel (pytest-xdist). Tests must not depend on machine-global
@@ -15,8 +15,6 @@ PYTHONPATH= .venv/bin/python -m pytest -q -n 8     # ~50s, no network, no tokens
 - `live` and `eval` tests are deselected by default (`addopts` in `pyproject.toml`).
   They call real models or services and need `.env`. Run them by marker:
   `pytest -m live tests/test_web.py`.
-- Always use `PYTHONPATH=` (empty) before `python`/`pytest`: a `PYTHONPATH` inherited
-  from another Python install puts the wrong `pydantic_core` build ahead of the venv's.
 - Adding a profile to `PROFILES` (`src/paf/capabilities/profiles.py`) means updating
   `test_profiles_are_the_complete_intentional_set` in `tests/test_capabilities.py`.
 - `tests/fixtures/sample_repo/` is the committed codebase the codebase-map tests analyze.
@@ -24,7 +22,7 @@ PYTHONPATH= .venv/bin/python -m pytest -q -n 8     # ~50s, no network, no tokens
 ## Lint
 
 ```bash
-PYTHONPATH= .venv/bin/ruff check tests/ --output-format=concise
+.venv/bin/ruff check tests/ --output-format=concise
 ```
 
 ## Defender eval (free)
@@ -33,7 +31,7 @@ Calibrates the prompt-injection guard against labeled tool outputs. Local classi
 deterministic, ~1s. See [`defender_eval/README.md`](defender_eval/README.md).
 
 ```bash
-PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval
+.venv/bin/python -m tests.defender_eval.eval
 ```
 
 ## LongMemEval benchmark (live, costs tokens)
@@ -56,8 +54,8 @@ unless asked.
 
 ```bash
 set -a && . ./.env && set +a      # plain `source` does not export; run_lmem does not load .env
-LME_MAX_QUESTIONS=4 PYTHONPATH= .venv/bin/python -u -m tests.run_lmem
-LME_QIDS="51a45a95" PYTHONPATH= .venv/bin/python -u -m tests.run_lmem     # one question
+LME_MAX_QUESTIONS=4 .venv/bin/python -u -m tests.run_lmem
+LME_QIDS="51a45a95" .venv/bin/python -u -m tests.run_lmem     # one question
 ```
 
 Run it as a module from the repo root; `python tests/run_lmem.py` fails with

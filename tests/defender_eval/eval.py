@@ -18,10 +18,10 @@ Fixture schema (one JSON object per line)::
     known_issue (optional bool: the verdict is currently WRONG and tracked)
 
 Usage:
-    PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval
-    PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --json out.json
-    PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --harvest 24
-    PYTHONPATH= .venv/bin/python -m tests.defender_eval.eval --compare block,redact,flag
+    .venv/bin/python -m tests.defender_eval.eval
+    .venv/bin/python -m tests.defender_eval.eval --json out.json
+    .venv/bin/python -m tests.defender_eval.eval --harvest 24
+    .venv/bin/python -m tests.defender_eval.eval --compare block,redact,flag
 
 ``--harvest N`` lists tool outputs from the last N hours of Langfuse traces in
 which the defender fired, as unlabeled candidates: label them and append to
