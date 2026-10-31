@@ -173,7 +173,7 @@ def _spec_vault_config(spec_path: Path) -> dict | None:
     reads the raw YAML separately. The block shape:
 
         vault:
-          root: ~/Documents/notes   # `~` expands via os.path.expanduser
+          root: ~/notes   # `~` expands via os.path.expanduser
           allow:            # optional; absent = whole root
             - Notes/**
           deny:             # optional; always wins over allow
