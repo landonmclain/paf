@@ -13,7 +13,6 @@ subagent:
   background: required   # allowed | required | never
 
 model_settings:
-  temperature: 0
   max_tokens: 32768
   openai_reasoning_effort: low
 

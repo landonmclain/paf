@@ -1,7 +1,7 @@
 # Leaf-agent spec for the `writer` sub-agent.
 #
-# Declarative config for the `writer` leaf agent: model, model_settings
-# (temperature), description, and system prompt live here rather than in code.
+# Declarative config for the `writer` leaf agent: model, model_settings,
+# description, and system prompt live here rather than in code.
 # `_build_subagents` reads this via `load_agent_spec("writer_subagent")` —
 # `get_spec_path` resolves the bare name into this `specs/sub_agents/` folder.
 #
@@ -31,7 +31,6 @@ subagent:
   background: allowed   # allowed | required | never
 
 model_settings:
-  temperature: 0.6
   max_tokens: 12288
 
 instructions: |

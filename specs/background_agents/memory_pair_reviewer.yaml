@@ -23,7 +23,6 @@ screen_min_confidence: 0.9
 
 model: openai:gpt-6-luna
 model_settings:
-  temperature: 0
   max_tokens: 8192
   openai_reasoning_effort: medium
 

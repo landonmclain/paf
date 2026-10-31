@@ -95,7 +95,6 @@ instructions: |
     what is left.
 
 model_settings:
-  temperature: 0
   max_tokens: 16384
   openai_reasoning_effort: low
 

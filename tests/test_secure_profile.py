@@ -251,7 +251,7 @@ def test_spec_declares_the_profile_and_secure_settings():
 
     data = yaml.safe_load(SPEC.read_text())
     assert data["profile"] == "secure" and data["name"] == "secure_assistant"
-    assert data["model_settings"]["temperature"] == 0
+    assert data["model_settings"]["openai_reasoning_effort"] == "low"
     assert _spec_python_config(SPEC)["allow_unsandboxed"] is False
     assert _spec_secrets_config(SPEC) == {"allowed": []}
     assert _spec_gating_config(SPEC)["default"] == "block"

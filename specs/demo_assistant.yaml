@@ -41,7 +41,6 @@ instructions: |
 #   timeout: 600           # seconds an approval waits for you before it is denied
 
 model_settings:
-  temperature: 0
   max_tokens: 32768
   # The `openai_` prefix is required: a bare `reasoning_effort` is silently dropped.
   openai_reasoning_effort: low

@@ -10,7 +10,6 @@
 name: memory_extractor
 model: openai:gpt-6-luna
 model_settings:
-  temperature: 0
   max_tokens: 32768
   openai_reasoning_effort: low
 
