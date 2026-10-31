@@ -69,23 +69,6 @@ Units live in `~/.config/systemd/user/paf-{sse,ops,ui}.service`.
 - The `assistant` profile name is kept on purpose: conversations are stored under
   `{profile}:{cid}`, so renaming it would orphan saved history.
 
-## ContextBench (codebase-map eval)
-
-Tests the codebase map as navigation. The `contextbench` profile and
-`specs/contextbench.yaml` hold both arms; the map arm comments out Shell, FileSystem
-and Git so the model must navigate with the map ladder:
-`get_overview` → `lookup_file` → `read_block(path:L1-L2)`, with `search_codebase` as an
-escape hatch only after orienting. `read_block` returns line numbers so the model can
-report a gold range. The profile has no Memory.
-
-```bash
-set -a && . ./.env && set +a
-cat task.md | PYTHONPATH= .venv/bin/python ui/chat.py contextbench --new
-```
-
-`--new` mints a fresh lane per run. Judge a run from its trace: a clean sequential tool
-order and no `memory.inject` span.
-
 ## Lint
 
 Clean `ruff` before and after edits. Code under `archive/` is untracked and not linted.

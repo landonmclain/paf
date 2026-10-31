@@ -633,7 +633,7 @@ class Session:
         # :class:`paf.background.BackgroundLanes` facade (via
         # ``BackgroundCoordinator.for_session(self)``) when the spec/profile
         # calls for memory/thread machinery; a memory-less profile (e.g.
-        # ``contextbench``) stays ``None`` so it carries no scaffolding.
+        # ``longmemeval``) stays ``None`` so it carries no scaffolding.
         self.background: BackgroundLanes | None = None
         # Session-held CancellationToken -> stop (created here so cancel()
         # works and iter() has a token from the start).
@@ -688,7 +688,7 @@ class Session:
         :class:`paf.background.BackgroundLanes` facade (shared agent lane +
         per-session conversation lane) scoped to this session's store/profile
         and assigns it to ``self.background``. A memory-less profile (e.g.
-        ``contextbench``) yields ``None`` — the session stays turn-only.
+        ``longmemeval``) yields ``None`` — the session stays turn-only.
         Returns the attached facade (or None).
         """
         self.background = BackgroundCoordinator.for_session(self)

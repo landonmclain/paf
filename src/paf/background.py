@@ -410,7 +410,7 @@ class BackgroundCoordinator:
     """Owns the session's background machinery: task registry + 3 queues + triggers.
 
     Constructed by the app/CLI and attached to a session via ``session.background``;
-    a bare ``Session`` (memory-less profile, e.g. ``contextbench``) is ``None``
+    a bare ``Session`` (memory-less profile, e.g. ``longmemeval``) is ``None``
     here.
 
     Owns:
@@ -596,7 +596,7 @@ class BackgroundCoordinator:
         :class:`BackgroundLanes` facade holding the shared per-agent lane
         (memory consolidation) and the per-session conversation lane
         (thread summarizer), or ``None`` for a profile that needs no background
-        machinery (no Memory, no ThreadSummarizer) -- e.g. ``contextbench`` --
+        machinery (no Memory, no ThreadSummarizer) -- e.g. ``longmemeval`` --
         so those agents run truly bare. Reads only public/duck-typed session
         attributes (no import of ``paf.runtime``), so there is no circular
         dependency.

@@ -135,9 +135,6 @@ The index sits beside the code in `.agent-codeindex/` (git-ignored) and is
 rebuilt when files change. The walk follows `.gitignore` and works for any
 language the extractors can parse; other files are listed but unparsed.
 
-The map is what paf's ContextBench evaluation tests: whether navigation finds
-the right lines more cheaply than search ([AGENTS.md](https://github.com/landonmclain/paf/blob/main/AGENTS.md)).
-
 ## Vault
 
 A folder of Markdown notes (an Obsidian vault, for example), navigated the same

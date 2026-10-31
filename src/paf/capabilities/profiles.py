@@ -117,23 +117,6 @@ DEMO_PROFILE = AgentProfile(
 )
 
 
-# The ContextBench benchmark-runner profile — the codebase-map × benchmark A/B
-# harness agent. Deliberately NOT the everything-sandbox: no Web/Browser/Vault/
-# Visual/Skills/Subagents/Planning — the benchmark agent should not wander off to
-# unrelated capability surfaces. It gets the codebrowser + the shell/git/
-# filesystem it needs to inspect and patch a snapshot.
-CONTEXTBENCH_PROFILE = AgentProfile(
-    name="contextbench",
-    capability_names=(
-        "CodebaseMap",
-        # "Shell",
-        # "FileSystem",
-        # "Git",
-        # "Workspace",
-    ),
-)
-
-
 # The LongMemEval benchmark-runner profile — the memory × benchmark harness
 # agent. Deliberately NOT the everything-sandbox: no Web/Browser/Vault/Visual/
 # Skills/Subagents/Planning — the benchmark agent should not wander off to
@@ -222,7 +205,6 @@ PROFILES: dict[str, AgentProfile] = {
     for profile in (
         ASSISTANT_PROFILE,
         DEMO_PROFILE,
-        CONTEXTBENCH_PROFILE,
         LONGMEMEVAL_PROFILE,
         SECURE_PROFILE,
     )

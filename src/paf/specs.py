@@ -535,7 +535,7 @@ def resolve_profile_name(
 
     The CLI entry points use this to choose the default profile for an agent
     kind when the user doesn't pass one explicitly: a spec declares the profile
-    it belongs to (``profile: contextbench`` → ``PROFILES["contextbench"]``), so
+    it belongs to (``profile: secure`` → ``PROFILES["secure"]``), so
     capability selection stays spec-declared and never depends on a hardcoded
     agent-name mapping in each `ui/*.py`.
 

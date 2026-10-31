@@ -109,7 +109,7 @@ from tests.lme_scoring import (
 # ---------------------------------------------------------------------------
 
 # Landon's call: gpt-4o-mini on OpenRouter, reuse the repo OPENROUTER_API_KEY.
-# The subject model comes from the spec (specs/longmemeval.yaml), not here.
+# The subject model comes from the spec (specs/benchmarks/longmemeval.yaml), not here.
 JUDGE_MODEL = "openrouter:openai/gpt-4o-mini"
 
 # Benchmark data file — v3 memory-system variant copy of the oracle split

@@ -18,7 +18,7 @@ Usage:
 
 With no conversation flag, an interactive run reopens the conversation last
 open in the CLI (per agent + profile); piped input uses the default lane.
-    cat task.md | paf chat contextbench --new   # one-shot: stdin = one message
+    cat task.md | paf chat --new   # one-shot: stdin = one message
 
 From a source checkout, ``python ui/chat.py`` is the same command.
 
@@ -571,7 +571,7 @@ class ChatApp:
 
     async def run(self) -> int:
         if not sys.stdin.isatty():
-            # Piped input (e.g. `cat task.md | chat.py contextbench --new`):
+            # Piped input (e.g. `cat task.md | chat.py --new`):
             # the whole of stdin is one message; stream the turn and exit.
             prompt = sys.stdin.read().strip()
             if prompt:

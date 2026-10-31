@@ -46,7 +46,11 @@ unless asked.
   correctness, plus recall@k over the surfaced `session=` tags.
 - Shared agent assembly: `tests/framework.py` (`_build_agent`, `_run_turn`). Edit it
   there; runners must not keep a parallel builder. It builds the same scoped memory
-  render as the live agent, with its knobs read from `specs/longmemeval.yaml`.
+  render as the live agent, with its knobs read from `specs/benchmarks/longmemeval.yaml`.
+- **Data is not in the repo.** The harness reads `data/benchmarks/memory-v3-lme_oracle.json`
+  (`LME_DATA_FILE` in `run_lmem.py`), which is untracked. It is derived from the official
+  LongMemEval oracle split (github.com/xiaowu0162/LongMemEval), but no script produces it
+  yet, so a fresh clone cannot run the benchmark until one is written.
 - Data: `data/benchmarks/` (the question file, per-question seeds and durable memory
   snapshots). Graded records go to `tests/results/`.
 
@@ -65,7 +69,7 @@ Env knobs:
 | --- | --- | --- |
 | `LME_MAX_QUESTIONS` | `15` | Questions sampled. |
 | `LME_QIDS` | unset | Comma-separated question ids; overrides sampling. |
-| `BEAM_LITE_SUBJECT_MODEL` | `openrouter:deepseek/deepseek-v4-flash-0731` | Answering model. |
+| `LME_SUBJECT_MODEL` | `openrouter:deepseek/deepseek-v4-flash-0731` | Answering model. |
 | `MEMORY` | `1` | `0` disables the memory arm (a no-memory baseline). |
 | `PAF_FRESH_MEMORY` | unset | Rebuild each question's durable memory instead of reusing the snapshot. |
 | `LME_NO_REVIEWER` | unset | Skip the pairwise reviewer when building memory. |

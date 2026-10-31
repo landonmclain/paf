@@ -44,7 +44,7 @@ from paf.specs import (
 
 # The shared profile for the offline test suite. Tests construct
 # Session("test", profile=TEST_PROFILE) instead of a production profile, so
-# they never depend on the production allowlist (assistant/demo/contextbench),
+# they never depend on the production allowlist (assistant/demo),
 # which changes as capabilities are promoted. Minimal + deterministic: the
 # store, the background machinery the integration tests exercise, and Shell.
 # No Browser/Visual/Subagents/Web — nothing that needs external infra
@@ -59,7 +59,7 @@ TEST_PROFILE = AgentProfile(
 # ---------------------------------------------------------------------------
 
 SUBJECT_MODEL = os.environ.get(
-    "BEAM_LITE_SUBJECT_MODEL",
+    "LME_SUBJECT_MODEL",
     "openrouter:deepseek/deepseek-v4-flash-0731",
 )
 
@@ -245,14 +245,14 @@ def _build_agent(
             if system_prompt is None:
                 raise RuntimeError(
                     "NO_READ_TURN=1 run requires a `search_only_no_readturn_instructions:` "
-                    "block in specs/longmemeval.yaml; refusing to reuse the read_turn prompt."
+                    "block in specs/benchmarks/longmemeval.yaml; refusing to reuse the read_turn prompt."
                 )
         else:
             system_prompt = _spec_search_only_instructions(get_spec_path("longmemeval"))
             if system_prompt is None:
                 raise RuntimeError(
                     "MEMORY=0 search-only run requires a `search_only_instructions:` "
-                    "block in specs/longmemeval.yaml; refusing to reuse the memory prompt."
+                    "block in specs/benchmarks/longmemeval.yaml; refusing to reuse the memory prompt."
                 )
     # Thread-summarizer arm: `thread_summary_instructions:` is a FULL standalone
     # prompt (memory arm + navigation-first ladder), so it REPLACES the base
@@ -264,7 +264,7 @@ def _build_agent(
         if system_prompt is None:
             raise RuntimeError(
                 "THREAD_SUMMARY=1 run requires a `thread_summary_instructions:` "
-                "block in specs/longmemeval.yaml; refusing to run without telling "
+                "block in specs/benchmarks/longmemeval.yaml; refusing to run without telling "
                 "the subject the tool exists."
             )
     source = SnapshotHistorySource(store)

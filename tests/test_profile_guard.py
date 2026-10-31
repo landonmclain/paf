@@ -1,7 +1,7 @@
 """Guard: no test may depend on the live/production profiles.
 
 Tests must use ``TEST_PROFILE`` (tests/framework.py) or a test-local
-``AgentProfile``, never the production allowlists (assistant/demo/contextbench),
+``AgentProfile``, never the production allowlists (assistant/demo),
 which change as capabilities are promoted. This guard fails if any collected
 test file references a live profile constant or constructs a ``Session`` with a
 live agent name — except ``test_capabilities.py``, the designated home for
@@ -19,9 +19,8 @@ TESTS = ROOT / "tests"
 _LIVE_PROFILE_NAMES = (
     "ASSISTANT_PROFILE",
     "DEMO_PROFILE",
-    "CONTEXTBENCH_PROFILE",
 )
-_LIVE_AGENT_NAMES = ("assistant", "demo_assistant", "contextbench")
+_LIVE_AGENT_NAMES = ("assistant", "demo_assistant")
 
 # test_capabilities.py is the designated home for production-profile registry
 # tests (the PROFILES mapping and no-dead-refs integrity). test_profile_guard.py

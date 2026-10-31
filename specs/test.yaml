@@ -2,7 +2,7 @@
 #
 # Purpose: a minimal, deterministic agent the test suite constructs via
 # Session("test", profile=TEST_PROFILE) instead of a production profile, so
-# tests never depend on the production allowlist (assistant/demo/contextbench),
+# tests never depend on the production allowlist (assistant/demo),
 # which changes as capabilities are promoted. Tests inject their own fold/span
 # seams and stores, so the model is never called here.
 #

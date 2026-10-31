@@ -50,7 +50,7 @@ that isn't registered, so a typo can never widen what an agent can do.
 | `assistant` | your own everyday agent (no shipped spec uses it) | conversation, memory, files, shell, git, codebase map, vault, web, browser, vision, skills, subagents, planning, scheduled tasks, push |
 | `demo` | trying new things | everything in `assistant`, plus MCP |
 | `secure` | high-stakes work | persistence, conversation search, compaction, scoped files, sandboxed Python, workspace, output limits, and all three guards (InjectionGuard, ToolGating, Secrets). No shell, no network, no memory. |
-| `contextbench`, `longmemeval` | benchmarks | the minimum each benchmark needs |
+| `longmemeval` | the memory benchmark | the minimum it needs |
 
 Subagent leaves use their own profiles (`researcher`, `coding`). The definitions
 live in `src/paf/capabilities/profiles.py`.
