@@ -1,5 +1,8 @@
 # paf
 
+[![CI](https://github.com/landonmclain/paf/actions/workflows/ci.yml/badge.svg)](https://github.com/landonmclain/paf/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 **paf** is a small, opinionated agent framework built on
 [pydantic-ai](https://ai.pydantic.dev) V2. You describe an agent in a YAML spec,
 choose which capabilities it may use, and paf assembles the agent and runs it
