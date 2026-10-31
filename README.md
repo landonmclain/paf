@@ -15,20 +15,24 @@ and a Python API (`Session`) that both are built on.
 
 paf started from a handful of design principles drawn from earlier agent
 projects, not from a library. When pydantic-ai V2 turned out to provide much of
-what those principles called for (capabilities as the extension point, typed
-tools, agent specs, per-step persistence), building thin on top of it made more
-sense than writing a new foundation.
+what those principles called for, building thin on top of it made more sense
+than writing a new foundation.
 
-So paf adds only what pydantic-ai deliberately leaves open:
+pydantic-ai and its harness supply the agent loop, capabilities as the extension
+point, typed tools, agent specs, and several ready-made capabilities (context
+compaction, output limits, guardrails, MCP, a browser). paf is the layer around
+them:
 
-- **A capability catalog and profiles.** One registry of everything an agent
-  could use, plus named allowlists that decide what a given agent does use.
-- **Spec loading that handles real objects.** YAML declares what YAML can
-  describe; capabilities that need live Python objects (stores, search indexes,
-  compaction strategies) are built in code and merged in.
-- **Storage, recall, and memory.** Every conversation is persisted to plain
-  files and stays searchable, and a background process distills durable facts
-  into a memory the agent reads on every request.
+- **Assembly.** One registry of everything an agent could use, and named profiles
+  that decide what a given agent does use. YAML declares what YAML can describe;
+  capabilities that need live Python objects (stores, search indexes) are built in
+  code and merged in.
+- **Capabilities written for paf.** Long-term memory, a Markdown vault, skills, a
+  codebase map, web search and fetch, scoped file and git tools, and a shell with
+  a command policy. The pydantic-ai ones are configured through the same specs.
+- **A runtime around them.** A `Session` that persists every conversation to plain
+  files and keeps it searchable, runs background work such as the memory and
+  summary passes, and sits behind the terminal chat and the SSE server.
 
 The principles behind it:
 
