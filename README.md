@@ -291,27 +291,29 @@ uv run python ui/sse.py   # serves on port 8090
 
 ### Python
 
+`Session` is the entry point the CLI and the server are both built on.
+
 ```python
+import asyncio
+
 from paf.runtime import Session, StreamEvent
 
 session = Session("demo_assistant", conversation_id="notes-1")
 
-# One turn, final text only.
-print(session.run_sync("What did we decide about the release date?"))
 
-
-# Or stream events: text, thinking, tool_call, tool_result.
 async def ask(prompt: str) -> None:
     async for event in session.stream(prompt):
         if isinstance(event, StreamEvent) and event.kind == "text":
             print(event.text, end="", flush=True)
 
 
+asyncio.run(ask("What did we decide about the release date?"))
 session.close()
 ```
 
-The same `conversation_id` resumes the same conversation in a later process.
-For long-running clients, `start_turn` returns a handle you can subscribe to,
+Events are `text`, `thinking`, `tool_call` and `tool_result`. The same
+`conversation_id` resumes the same conversation in a later process. For
+long-running clients, `start_turn` returns a handle you can subscribe to,
 cancel, or reattach to, and `enqueue` steers a turn that's in progress.
 
 ## Configuration
