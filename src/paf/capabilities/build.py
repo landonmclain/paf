@@ -39,6 +39,7 @@ from pydantic_ai_harness.tool_output_limits import (
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from paf.approvals import ApprovalBroker, approvals_available
+from paf.capabilities._mcp import tolerant
 from paf.capabilities._sandbox import (
     DockerExecutor,
     LocalProcessExecutor,
@@ -963,7 +964,8 @@ def _build_mcp(store, mcp_config: str | None = None) -> list:
     the builtin ``MCP(local=toolset)`` capability so the profile gate + the
     ``capabilities=`` seam see it like any other capability (connection stays
     lazy — building spawns no subprocess / opens no socket until the agent's
-    first turn needs the server's tools).
+    first turn needs the server's tools). Each server is wrapped so that one
+    failing to start logs a warning and drops its tools instead of ending the run.
 
     Returns a list of ``MCP`` capabilities (one per server). ``None``/absent
     config -> ``[]`` (the profile-gated capability is simply absent). A
@@ -975,7 +977,9 @@ def _build_mcp(store, mcp_config: str | None = None) -> list:
     path = Path(os.path.expanduser(mcp_config))
     if not path.is_absolute():
         path = PROJECT_ROOT / path
-    return [MCP(local=cast(Any, toolset)) for toolset in load_mcp_toolsets(path)]
+    return [
+        MCP(local=cast(Any, tolerant(toolset))) for toolset in load_mcp_toolsets(path)
+    ]
 
 
 def _build_scheduled_tasks(
