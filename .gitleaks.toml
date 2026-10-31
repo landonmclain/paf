@@ -1,0 +1,15 @@
+title = "paf"
+
+[extend]
+useDefault = true
+
+# Fake credentials the security tests use on purpose (secret handles, injection
+# guard, approvals, keyword curator). None is a real key.
+[[allowlists]]
+description = "fake credentials in security tests"
+paths = [
+  '''^tests/test_secret_handles\.py$''',
+  '''^tests/test_injection_guard\.py$''',
+  '''^tests/test_approvals\.py$''',
+  '''^tests/test_keyword_curator_background\.py$''',
+]
