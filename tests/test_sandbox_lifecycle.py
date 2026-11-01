@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -33,9 +34,18 @@ def _alive_only(*pids: int):
 
 
 @pytest.mark.parametrize("state", ["exited", "dead"])
-def test_any_stopped_labeled_container_is_a_husk(state):
-    rows = [("a", state, "exec", "42"), ("b", state, "bg", ""), ("c", state, "", "")]
-    assert select_reapable(rows, _alive_only(42)) == ["a", "b", "c"]
+def test_a_stopped_container_is_a_husk_only_when_its_owner_is_gone(state):
+    """A finished background container still holds its logs: its owner reads them
+    before calling ``stop()``. A sweep from a different process must not delete
+    output that owner has not read yet."""
+    rows = [
+        ("husk", state, "exec", "7"),  # owner gone
+        ("legacy", state, "", ""),  # pre-label husk: nobody owns it
+        ("junk", state, "exec", "notanumber"),
+        ("finished-bg", state, "bg", "42"),  # live owner: logs still pending
+        ("live-exec", state, "exec", "42"),  # live owner removes it itself
+    ]
+    assert select_reapable(rows, _alive_only(42)) == ["husk", "legacy", "junk"]
 
 
 def test_a_created_container_with_a_live_owner_is_mid_start_and_spared():
@@ -253,9 +263,14 @@ def test_docker_reap_removes_orphans_and_husks_but_spares_the_living(docker_clea
     cases = {
         # name: (labels, cmd, should_be_reaped)
         f"paf-test-husk-{tag}": (
-            {"paf.sandbox": "1", "paf.sandbox.kind": "exec", "paf.sandbox.pid": mine},
+            {"paf.sandbox": "1", "paf.sandbox.kind": "exec", "paf.sandbox.pid": dead},
             ["true"],
             True,
+        ),
+        f"paf-test-bgdone-{tag}": (
+            {"paf.sandbox": "1", "paf.sandbox.kind": "bg", "paf.sandbox.pid": mine},
+            ["true"],
+            False,  # finished, but its owner has not read the logs yet
         ),
         f"paf-test-orphan-{tag}": (
             {"paf.sandbox": "1", "paf.sandbox.kind": "exec", "paf.sandbox.pid": dead},
@@ -293,6 +308,7 @@ def test_docker_reap_removes_orphans_and_husks_but_spares_the_living(docker_clea
             "docker",
             "wait",
             f"paf-test-husk-{tag}",
+            f"paf-test-bgdone-{tag}",
             f"unrelated-{tag}",
             f"paf-sandbox-legacy{tag}",
         ],
@@ -306,3 +322,40 @@ def test_docker_reap_removes_orphans_and_husks_but_spares_the_living(docker_clea
     # another worker's first-use sweep may legitimately reap these orphans first.
     for name, (_, _, reaped) in cases.items():
         assert _exists(name) is (not reaped), f"{name}: reaped={reaped}"
+
+
+@needs_docker
+def test_docker_another_process_cannot_steal_a_finished_backgrounds_logs(
+    tmp_path, docker_cleanup
+):
+    """The race the owner check closes: a background job's logs are read *after*
+    it exits, so a sweep from a second process must not delete it first."""
+    async def scenario() -> tuple[str, str]:
+        ex = DockerExecutor(
+            mode="exec", container_name=f"paf-test-{uuid.uuid4().hex[:6]}"
+        )
+        docker_cleanup.append(ex._container_name)  # noqa: SLF001
+        handle = await ex.start("echo bg-output", cwd=tmp_path, env=None)
+        name = handle.state.container_id
+        docker_cleanup.append(name)
+
+        # A second process sweeps while this one still owns the finished job.
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from paf.capabilities._sandbox import reap_stale_containers; "
+                "reap_stale_containers()",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        status = await ex.check(handle)
+        await ex.close()
+        return status.stdout, name
+
+    stdout, name = _run(scenario())
+    assert "bg-output" in stdout, "the sweep deleted the container before it was read"
+    assert _exists(name)  # still there: its owner is alive

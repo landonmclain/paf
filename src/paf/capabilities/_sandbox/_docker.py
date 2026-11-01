@@ -254,7 +254,11 @@ def select_reapable(
 ) -> list[str]:
     """Which ``(id, state, kind, pid)`` rows are safe to remove.
 
-    - An exited or dead container is a husk: remove it.
+    - An exited or dead container is a husk only once nobody owns it. A finished
+      background job keeps its logs until the process that started it reads them
+      and calls ``stop()``; a sweep from a *different* process would delete output
+      its owner has not read yet. Remove it when its owner pid is gone, or when it
+      carries no label at all (pre-label ``paf-sandbox-*`` husks).
     - A ``created`` container is usually mid-start: ``docker run -d`` shows that
       state until the container is running. Remove it only when its owner pid is
       gone (a crash between create and start); a live owner is about to use it.
@@ -267,7 +271,12 @@ def select_reapable(
     reap: list[str] = []
     for cid, state, kind, pid_text in rows:
         if state in ("exited", "dead"):
-            reap.append(cid)
+            try:
+                owner_alive = is_alive(int(pid_text))
+            except ValueError:
+                owner_alive = False  # unlabeled legacy husk: nobody owns it
+            if not owner_alive:
+                reap.append(cid)
         elif state == "created":
             try:
                 owner_alive = is_alive(int(pid_text))
