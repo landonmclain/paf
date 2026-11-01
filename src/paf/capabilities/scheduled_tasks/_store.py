@@ -19,7 +19,7 @@ Layout::
     <root>/<agent>/scheduled_runs.jsonl    # run history — append-only
 
 An optional ``on_change`` callback is invoked after every mutation, so the
-scheduler (Phase 2) can wake on a store change instead of polling.
+scheduler can wake on a store change instead of polling.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ class ScheduledTaskStore:
         Re-validates the result (so e.g. setting `instructions` on a script job
         without clearing `script` raises the exactly-one-of error). `None` means
         "leave unchanged", so switching a job between `instructions`/`script`
-        modes is a toolset (Phase 4) concern, not handled here.
+        modes is a toolset concern, not handled here.
         """
         jobs = self._load_jobs()
         for index, existing in enumerate(jobs):
@@ -174,7 +174,7 @@ class ScheduledTaskStore:
         ``update_job`` treats ``None`` as "leave unchanged", so it cannot switch a
         job between ``instructions``/``script`` modes (setting one would leave the
         other set and fail the exactly-one-of validation). This method sets exactly
-        the given definition, clearing the other field — the toolset (Phase 4) uses
+        the given definition, clearing the other field — the toolset uses
         it for mode switches.
         """
         jobs = self._load_jobs()

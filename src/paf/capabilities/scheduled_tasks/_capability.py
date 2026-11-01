@@ -1,4 +1,4 @@
-"""Scheduled-tasks capability (Phase 4): the agent-facing toolset.
+"""Scheduled-tasks capability: the agent-facing toolset.
 
 Wraps the per-conversation ``ScheduledTaskStore`` behind a five-tool toolset
 (``schedule_task`` / ``list_scheduled_tasks`` / ``update_scheduled_task`` /

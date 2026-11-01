@@ -1,4 +1,4 @@
-"""Scheduled-tasks toolset — the agent-facing surface (Phase 4).
+"""Scheduled-tasks toolset — the agent-facing surface.
 
 Five tools over the per-conversation ``ScheduledTaskStore``: ``schedule_task``
 (create), ``list_scheduled_tasks``, ``update_scheduled_task``,

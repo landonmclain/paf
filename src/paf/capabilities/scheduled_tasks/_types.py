@@ -62,7 +62,7 @@ class ScheduledJob(BaseModel):
         description="What the task does / when it runs (shown in the UI).",
     )
     schedule: str = Field(
-        description="Cron expression. Parsed by the scheduler (Phase 2) via croniter."
+        description="Cron expression. Parsed by the scheduler via croniter."
     )
     instructions: str | None = Field(
         default=None,
@@ -111,8 +111,8 @@ class RunRecord(BaseModel):
     Mirrors the background-process RunJournal shape (run_id, job_id, agent,
     conversation_id, status, detail, timestamp) so it slots into the existing
     Processes feed without a new schema. The run-time fields (``verdict``,
-    ``skip_reason``, ``cost``, ``finished_at``) are deferred to Phase 5
-    (delivery); the store only appends and reads these records.
+    ``skip_reason``, ``cost``, ``finished_at``) are not recorded here; the store
+    only appends and reads these records.
     """
 
     run_id: str = Field(

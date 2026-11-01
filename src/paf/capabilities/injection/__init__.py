@@ -6,7 +6,7 @@ a result it flags is the *policy* (``_policy.py``), declared per tool in the spe
 the capability (``_capability.py``) applies one to the other and traces every
 decision.
 
-Phase 1 ships the actions ``off``, ``observe`` and ``block``. ``flag`` and
+The implemented actions are ``off``, ``observe`` and ``block``. ``flag`` and
 ``redact``, marking untrusted content, and tightening gating after flagged
 content are reserved names: the policy parser rejects them with a clear error
 until they are implemented, so a spec cannot silently ask for protection it does

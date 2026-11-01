@@ -1,8 +1,7 @@
 """Pairwise memory reviewer — keep every current fact unique and up to date.
 
 Replaces the old whole-memory reviewer (removed), which merged and
-over-archived to fit the render's count caps. This one is narrow by design
-(vault Designs/Memory-Pipeline-v2-Plan §2):
+over-archived to fit the render's count caps. This one is narrow by design:
 
 - **Incremental.** Each pass reviews only facts appended since its watermark
   (``memory-review-watermark.json``), each against OLDER current facts.

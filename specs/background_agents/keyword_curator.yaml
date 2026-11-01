@@ -12,8 +12,7 @@
 # hints. The instruction below is deliberately strict about that.
 #
 # Model starts as the same cheap structured-output model as the thread
-# summarizer; tune after the Phase 2 duplicate-entity review on the real skill
-# tree. Resolved by bare name `keyword_curator` via the recursive get_spec_path.
+# summarizer; tune after a duplicate-entity review on a real skill tree. Resolved by bare name `keyword_curator` via the recursive get_spec_path.
 name: keyword_curator
 model: openai:gpt-6-luna
 model_settings:

@@ -1,5 +1,5 @@
 # Leaf-agent spec for the `memory_pair_reviewer` background agent — the
-# pairwise memory reviewer's JUDGE (vault Designs/Memory-Pipeline-v2-Plan §2).
+# pairwise memory reviewer's JUDGE.
 #
 # The judge only LABELS. Code (memory/_pairwise.py) chooses which facts to
 # compare (each new fact vs its BM25 candidates among older current facts in

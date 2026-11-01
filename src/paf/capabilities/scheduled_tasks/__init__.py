@@ -1,9 +1,7 @@
 """paf-owned scheduled-tasks capability.
 
-Scheduled tasks (cron-expression schedules) for paf. The store (Phase 1),
-scheduler (Phase 2), run layer (Phase 3), and toolset/capability (Phase 4) are
-implemented; the paf-sse wiring and CLI land in Phase 4. See the vault spec
-``Scheduled-Tasks-Cron-Spec.md``.
+Scheduled tasks (cron-expression schedules) for paf: a per-conversation store,
+a scheduler, a run layer, and the agent-facing toolset/capability.
 
 - ``_types`` — ``NotifyMode``, ``ScheduledJob``, ``RunRecord``.
 - ``_store`` — ``ScheduledTaskStore`` (master list + run history + change signal).

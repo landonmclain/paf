@@ -1,7 +1,7 @@
 """Scoped memory render — what one conversation sees, computed per turn.
 
 Replaces the tier-capped ``MEMORY.md`` injection when the spec opts in
-(``memory: render:``; vault Designs/Memory-Pipeline-v2-Plan §3).
+(``memory: render:``).
 ``MEMORY.md`` stays the static full view (``/memory``, legacy tooling); this
 render depends on the CONVERSATION (its project) and the CURRENT MESSAGE, so
 it is built at injection time.

@@ -1,7 +1,7 @@
-"""Scheduled-task run layer — the queue that executes due jobs (Phase 3).
+"""Scheduled-task run layer — the queue that executes due jobs.
 
 A :class:`BackgroundQueueService` subclass (mirroring ``ShellBackgroundQueue``)
-that consumes the jobs the scheduler (Phase 2) enqueues. ``process_job`` runs
+that consumes the jobs the scheduler enqueues. ``process_job`` runs
 each job — an agent turn (``instructions``) or a script (``script``) — appends
 a minimal ``RunRecord`` to the run history, and feeds ``ProcessEvent``s for
 Processes-panel visibility.
@@ -9,7 +9,7 @@ Processes-panel visibility.
 The agent turn runs via the ``run_turn`` seam (wired in paf-sse to
 ``Session.notify``, the steer gate — follows shell exactly: it steers into a
 live turn or starts a new one). The verdict / cost / finished_at fields are
-deferred to Phase 5 (delivery); Phase 3 records only what's known at fire time.
+not recorded here; the queue records only what's known at fire time.
 """
 
 from __future__ import annotations

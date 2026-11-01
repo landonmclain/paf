@@ -1,7 +1,7 @@
 """paf-owned subagent delegation capability.
 
-See ``Subagents-Background-Capability-Spec`` (vault Designs/) for the design:
-a fixed roster of spec-driven leaf agents, one execution path that traces every
+The design is a fixed roster of spec-driven leaf agents, one execution path that
+traces every
 child run and persists every result (task JSONL + ``.md`` output files).
 """
 

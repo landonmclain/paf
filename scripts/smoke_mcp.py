@@ -1,4 +1,4 @@
-"""Phase 1 MCP smoke test — prove the builtin pydantic-ai MCP capability works.
+"""MCP smoke test — prove the builtin pydantic-ai MCP capability works.
 
 Runs a tiny **in-process** FastMCP server (no subprocess, no network), attaches it
 to an Agent through the builtin ``pydantic_ai.capabilities.MCP`` capability, and

@@ -1,7 +1,7 @@
-"""Scheduled-task scheduler — the generic time-triggered producer (Phase 2).
+"""Scheduled-task scheduler — the generic time-triggered producer.
 
 A per-agent background loop that fires due scheduled jobs by enqueuing them
-into a :class:`BackgroundQueueService` (the run layer, Phase 3, consumes them).
+into a :class:`BackgroundQueueService` (the run layer, which consumes them).
 It mirrors the shell background queue's shape: one instance per agent, with
 per-conversation state handled internally.
 
@@ -51,7 +51,7 @@ class ScheduledTaskScheduler:
     ``root`` is the scheduled-tasks data root (``data/scheduled_tasks``) and
     ``agent`` scopes it to
     one agent's conversations (``<root>/<agent>/conversations/<cid>/``). ``queue``
-    is the :class:`BackgroundQueueService` the run layer (Phase 3) consumes;
+    is the :class:`BackgroundQueueService` the run layer consumes;
     the scheduler only ever calls ``queue.enqueue(cid, job)``.
     """
 

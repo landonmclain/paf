@@ -1,4 +1,4 @@
-"""Schedule parsing for scheduled tasks (Phase 2).
+"""Schedule parsing for scheduled tasks.
 
 The only schedule form is a cron expression, parsed with ``croniter``. The
 scheduler computes the next fire time in the user's zone (via ``paf.clock``)

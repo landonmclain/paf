@@ -2,7 +2,7 @@
 
 The backend owns push (PWA-Push-Notifications-Spec): paf-ui only subscribes a
 device and displays what arrives. This module is transport-agnostic — ``ui/sse.py``
-exposes it over HTTP and (Phase 4) calls :meth:`PushService.broadcast` when a
+exposes it over HTTP and calls :meth:`PushService.broadcast` when a
 turn settles.
 
 * **Config** — VAPID keys live in the environment (sourced from ``.env`` by

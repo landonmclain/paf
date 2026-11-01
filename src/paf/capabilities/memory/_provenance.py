@@ -9,10 +9,10 @@ line id, and the journal row is the lookup table id -> ``source_ref``
 - a ``supersede`` override -> the replacing fact's turn too (old AND new
   statement), and a replacing fact -> the facts it replaced.
 
-**Read-time repair of legacy refs** (:func:`repair_ref`). Before 2026-10-01,
-consolidation numbered a turn by its position in the consolidation SLICE
-instead of in its own run (see ``_consolidate._turn_refs``), so ~41% of old
-refs point at the wrong turn. Their run id is still right — it is the run
+**Read-time repair of legacy refs** (:func:`repair_ref`). Older consolidation
+numbered a turn by its position in the consolidation SLICE instead of in its
+own run (see ``_consolidate._turn_refs``), so some old refs point at the wrong
+turn. Their run id is still right — it is the run
 that created the turn — so a ref is corrected to one of that run's OWN turns:
 the only one, or the one whose text best matches the fact (BM25). Refs written
 since the fix always point at an own turn, so the repair never changes them.

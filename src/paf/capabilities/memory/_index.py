@@ -264,10 +264,10 @@ def build_index(directory: str | os.PathLike) -> int:
             line_no, rec, directory
         )  # saves per fold (a bit chatty, fine for a build)
 
-    # Fuzzy cluster collapse (pass 2) was REMOVED (2026-09-21): it conflated
-    # distinct facts that merely share tokens — e.g. two different personal-best
-    # 5K times (27:12 vs 25:50) were treated as one duplicate and the newer value
-    # was dropped from the render, losing the gold answer from injected memory.
+    # Fuzzy cluster collapse is deliberately absent: it conflated distinct facts
+    # that merely share tokens — e.g. two different personal-best 5K times
+    # (27:12 vs 25:50) treated as one duplicate, dropping the newer value from
+    # the render and losing the gold answer from injected memory.
     # Only the exact/token dedup above (pass 1) is kept; paraphrase bloat is left
     # to the pairwise reviewer to archive deliberately.
 

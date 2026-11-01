@@ -5,7 +5,7 @@
 # built through the same build_runtime_capabilities path as a subject agent.
 # Leaf builds always strip persistence/recall/memory/summarizer/subagents.
 #
-# NOT in the default roster (the demo researcher was removed 2026-09-09). Opt in
+# NOT in the default roster. Opt in
 # per agent spec with:
 #   subagents:
 #     agents: [writer_subagent, researcher_subagent]
