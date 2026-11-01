@@ -174,7 +174,6 @@ def test_docker_run_captures_output(tmp_path):
     _run(scenario())
 
 
-@pytest.mark.live
 def test_docker_exec_mode_persists_state(tmp_path):
     async def scenario() -> None:
         ex = DockerExecutor(mode="exec")

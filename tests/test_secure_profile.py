@@ -373,7 +373,6 @@ def _run(agent, model, prompt="go"):
     return asyncio.run(go())
 
 
-@pytest.mark.live
 @needs_docker
 def test_e2e_run_python_executes_in_the_sandbox(secure_home, monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")

@@ -20,6 +20,7 @@ import pytest
 
 from paf.capabilities._sandbox import DockerExecutor, parse_size
 from paf.capabilities._sandbox._docker import (
+    _LABEL_PID,
     docker_available,
     enforce_writable_policy,
     tree_bytes,
@@ -176,7 +177,22 @@ FLOOD = (
 )
 
 
-@pytest.mark.live
+def _own_containers() -> set[str]:
+    """Containers this process created that are still around.
+
+    Scoped by the executor's pid label instead of a global ``docker ps`` scan:
+    under ``pytest -n auto`` other workers have their own ``paf-run-`` containers
+    live at the same time, so an unscoped assertion is a false positive, not a
+    leak.
+    """
+    out = subprocess.run(
+        ["docker", "ps", "-a", "-q", "--filter", f"label={_LABEL_PID}={os.getpid()}"],
+        capture_output=True,
+        text=True,
+    ).stdout
+    return set(out.split())
+
+
 @needs_docker
 def test_docker_a_runaway_writer_is_killed_and_cleaned_up(tmp_path):
     ts = _toolset(tmp_path)
@@ -189,13 +205,10 @@ def test_docker_a_runaway_writer_is_killed_and_cleaned_up(tmp_path):
     )
     assert tree_bytes([tmp_path / "out"]) <= parse_size("3m")
     assert not (tmp_path / "out" / "flood.bin").exists()  # this run's file removed
-    names = subprocess.run(
-        ["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True
-    ).stdout
-    assert "paf-run-" not in names
+    leftover = _own_containers()
+    assert not leftover, f"the killed run left its container behind: {sorted(leftover)}"
 
 
-@pytest.mark.live
 @needs_docker
 def test_docker_a_normal_write_under_the_cap_is_kept(tmp_path):
     ts = _toolset(tmp_path)
@@ -204,7 +217,6 @@ def test_docker_a_normal_write_under_the_cap_is_kept(tmp_path):
     assert (tmp_path / "out" / "r.txt").stat().st_size == 1000
 
 
-@pytest.mark.live
 @needs_docker
 def test_docker_overflow_deletes_only_this_runs_files(tmp_path):
     ts = _toolset(tmp_path)
@@ -215,7 +227,6 @@ def test_docker_overflow_deletes_only_this_runs_files(tmp_path):
     assert not (tmp_path / "out" / "flood.bin").exists()
 
 
-@pytest.mark.live
 @needs_docker
 def test_docker_fifos_and_symlinks_planted_in_out_are_removed(tmp_path):
     ts = _toolset(tmp_path)
