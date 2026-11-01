@@ -1,7 +1,7 @@
 """Corpus ingestion for the paf Skills capability (tree-aware).
 
 Adapted from `skill_note_hint.corpus` (MIT). The corpus models **skills as a
-tree** (the Hermes/Claude shape) rather than a flat skill/note dump:
+tree** rather than a flat skill/note dump:
 
 - A **skill** is a directory containing a `SKILL.md`, optionally under a
   *category* directory: `<root>/<category>/<skill>/SKILL.md` (or flat
@@ -262,8 +262,6 @@ class HintCorpus:
         fm = parse_frontmatter(skill_file)
         description = fm.get("description", "")
         tags = fm.get("tags", "")
-        if not tags and fm.get("metadata.hermes.tags"):
-            tags = fm["metadata.hermes.tags"]
         text = f"{name} {description} {tags}".strip().lower()
         if not text:
             return None

@@ -8,7 +8,7 @@ under the paf repo's ``data/.skills-index/`` (mirroring the vault's
 
 - ``<skills_index_dir>/<sha256(library_root)>/index.json``
   — per-skill rows: the known label set (skill_id, name, category, description,
-  tags, hermes_tags, keywords, hint) plus a resources manifest. No BM25
+  tags, keywords, hint) plus a resources manifest. No BM25
   postings or embeddings — the labels are the searchable vocabulary.
 - ``.../snapshot.json`` — ``{path: {mtime, size, sha256}}`` freshness
   fingerprints, used only for lazy staleness detection (stat gate, hash
@@ -143,7 +143,6 @@ def build_index(
                 "category": doc.category,
                 "description": fm.get("description", ""),
                 "tags": _as_list(fm.get("tags")),
-                "hermes_tags": _as_list(fm.get("metadata.hermes.tags")),
                 "keywords": _as_list(fm.get("metadata.paf.keywords")),
                 "hint": doc.hint,
                 "resources": [r.relative_path for r in doc.resources],

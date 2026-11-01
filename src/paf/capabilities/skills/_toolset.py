@@ -1,6 +1,6 @@
 """The paf-owned Skills toolset — list, load, and read skill resources.
 
-The Skills capability handles **Hermes/Claude-style skill trees**: skills
+The Skills capability handles **category-grouped skill trees**: skills
 grouped by category, with skill-scoped resources (`references/`, `scripts/`,
 `templates/`, `assets/`) that belong to their skill rather than polluting a flat
 note corpus.

@@ -87,7 +87,6 @@ def test_build_index_writes_label_rows_and_snapshot(tmp_path: Path) -> None:
     assert row["category"] == ""
     assert row["description"].startswith("Review a code change")
     assert row["tags"] == ["review", "code", "quality", "pr", "conventions"]
-    assert row["hermes_tags"] == []
     assert row["keywords"] == []
     assert row["hint"] == "consider: code-review"
     assert isinstance(row["resources"], list)
