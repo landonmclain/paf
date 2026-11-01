@@ -350,7 +350,7 @@ class ConversationSearchToolset(FunctionToolset[AgentDepsT]):
         # Loop guard: nudge / ModelRetry an agent re-searching without reading a hit.
         # Only when read_turn exists (it is the progress signal that clears the
         # streak). A read_turn-less tool has no expand step, so skip the guard and
-        # let the harness degeneration guards / bender backstop catch a real loop.
+        # let the harness degeneration guards catch a real loop.
         nudge = None
         if self._include_read_turn:
             nudge = self._guard_search(ctx, sig=f"search:{query.strip()}")

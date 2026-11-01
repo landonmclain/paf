@@ -63,17 +63,17 @@ SUBJECT_MODEL = os.environ.get(
     "openrouter:deepseek/deepseek-v4-flash-0731",
 )
 
-# Transient network-error retry knobs (bender-adjacent resilience). A single
-# OpenRouter/provider 5xx/429/408 blip should NOT kill a long graded run
-# (2026-08-15: a 502 "Network connection lost" on deepseek-v4-flash aborted a
-# 472-Q run at q328/472, discarding 327 completed questions — no JSON written).
+# Transient network-error retry knobs. A single OpenRouter/provider 5xx/429/408
+# blip should NOT kill a long graded run: a 502 "Network connection lost" once
+# aborted a 472-Q run at q328/472, discarding 327 completed questions with no
+# JSON written.
 # `_run_turn` retries retryable ModelHTTPError statuses up to
 # LME_RETRY_MAX_ATTEMPTS total attempts, sleeping LME_RETRY_BASE_BACKOFF seconds
 # between attempts (default constant; see LME_RETRY_BACKOFF_EXPONENTIAL), and
 # honoring the provider's `Retry-After` header when present. Auth/validation
 # 4xx (400/401/403/404/422) and 5xx-class codes NOT in the retryable set stay
-# fatal. Tunable per-run. Defaults (Landon 2026-08-15: "30s sleep with 5
-# retries") = 6 total attempts (initial + 5 retries) at a constant 30s.
+# fatal. Tunable per-run. Defaults: 6 total attempts (initial + 5 retries) at a
+# constant 30s.
 LME_RETRY_MAX_ATTEMPTS = int(os.environ.get("LME_RETRY_MAX_ATTEMPTS", "6"))
 LME_RETRY_BASE_BACKOFF = float(os.environ.get("LME_RETRY_BASE_BACKOFF", "30.0"))
 # Constant (default) vs exponential backoff. Exponential doubles the base each
@@ -94,7 +94,7 @@ LME_RETRYABLE_STATUSES = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# OpenRouter provider-pinning + sampler determinism (2026-08-15).
+# OpenRouter provider-pinning + sampler determinism.
 # The same `deepseek-v4-flash:nitro` slug scores differently run-to-run
 # (0.9043 vs 0.9468) because `:nitro` = throughput routing that silently
 # switches upstream providers, and providers serve the SAME checkpoint at
@@ -391,12 +391,12 @@ def _build_agent(
 def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
     """Run one turn; return {text, tools, tool_outputs, usage} over a root span.
 
-    Graceful tool-cut (bender guard): the whole recall loop is wrapped in
+    Graceful tool-cut (runaway guard): the whole recall loop is wrapped in
     `capture_run_messages()`. If the subject runs away calling retrieval tools
     and hits `UsageLimitExceeded`, instead of crashing the run we hand the
     captured history (up to the breach) to a ZERO-tool fallback agent that must
     produce a final answer. `RECALL_REQUEST_LIMIT` (default 50) lets a test
-    force the cap low to trip the bender cheaply; a normal run never exceeds
+    force the cap low to trip the guard cheaply; a normal run never exceeds
     50 requests so the fallback is a dead path unless the model loops.
     """
     tools: list[str] = []
@@ -426,7 +426,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
         ),
     )
     request_limit = int(os.environ.get("RECALL_REQUEST_LIMIT", "50"))
-    # Default ON: cap tool calls per recall turn at 25 so a bender can't run
+    # Default ON: cap tool calls per recall turn at 25 so a runaway can't run
     # forever (or hit the 50-request wall and crash the whole run). 25 is
     # enough for these benchmarks' retrieval needs; on a genuine runaway the
     # UsageLimitExceeded path hands the accumulated context to a zero-tool
@@ -442,7 +442,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
 
         # A single agent pass over the prompt: stream events, collect the
         # tool names/outputs and usage, set `text`. Returns after the run
-        # completes or a bender guard fires. Raises on fatal errors.
+        # completes or a runaway guard fires. Raises on fatal errors.
         async def _attempt() -> None:
             nonlocal text
             with capture_run_messages() as history:
@@ -456,7 +456,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                         # (NO_READ_TURN=1): a stuck pure-BM25 loop shows up as
                         # the model re-issuing the same search (ToolCallGuard)
                         # or narrating in a thinking loop (DegenerationGuard).
-                        # They fire far sooner than the 50-request bender, which
+                        # They fire far sooner than the 50-request cap, which
                         # stays as the builtin safety backstop.
                         think_guard = DegenerationGuard() if NO_READ_TURN else None
                         tool_guard = ToolCallGuard() if NO_READ_TURN else None
@@ -506,7 +506,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                                 usage["requests"] = getattr(u, "requests", 0) or 0
                                 text = event.result.output
                 except UsageLimitExceeded:
-                    # Bender: cut the model off AND force a graceful answer.
+                    # Runaway: cut the model off AND force a graceful answer.
                     # The captured history ends mid-tool-call (the cap fired
                     # before a tool ran), so repair the dangling tool calls
                     # (synthesized 'interrupted' returns) so the fallback can
@@ -529,7 +529,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                 except DegenerationError:
                     # Degeneration guard fired (thinking loop / exact tool-call
                     # repeat) on the read_turn-less arm: the subject is stuck
-                    # re-searching, not converging. Like the bender handlers,
+                    # re-searching, not converging. Like the other guards,
                     # don't let one question fail the turn — force a graceful
                     # answer from the captured history via the zero-tool fallback.
                     bailed = True  # noqa: F841  # read via `nonlocal bailed` -> returned in `out`
@@ -549,7 +549,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     usage["requests"] = len(history) if history else 1
 
                 except UnexpectedModelBehavior as umb:
-                    # Bender, output-token variant: the subject hit its
+                    # Output-token variant: the subject hit its
                     # max_tokens ceiling before producing a response (the
                     # "Model token limit ... exceeded" crash that killed full
                     # runs at a pathological question). Like UsageLimitExceeded,
@@ -584,7 +584,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                 "langfuse.session.id": session,
             },
         ) as _span:
-            # Retry transient provider/network failures (bender-adjacent
+            # Retry transient provider/network failures
             # resilience). A single 5xx/429/408 blip should NOT kill a long
             # graded run — retry the WHOLE turn on the same prompt, sleeping
             # LME_RETRY_BASE_BACKOFF (constant) between attempts and honoring
@@ -628,7 +628,7 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
 
                 try:
                     await _attempt()
-                    return  # succeeded (or bender guard produced an answer)
+                    return  # succeeded (or a runaway guard produced an answer)
                 except ModelHTTPError as exc:
                     retryable = exc.status_code in LME_RETRYABLE_STATUSES
                     if not retryable or attempt >= LME_RETRY_MAX_ATTEMPTS:
@@ -648,8 +648,8 @@ def _run_turn(agent, prompt: str, cid: str, name: str, session: str) -> dict:
                     # a response"). pydantic-ai surfaces these raw, NOT wrapped in
                     # ModelHTTPError (which requires a status_code), so the
                     # ModelHTTPError handler never saw them and a single blip
-                    # killed whole 2-hour runs (2026-08-15 502 & 2026-08-18
-                    # httpx.ReadError at q328/472). These are always transient —
+                    # killed whole 2-hour runs (a 502 and an httpx.ReadError, both
+                    # at q328/472). These are always transient —
                     # retry the whole turn with the same backoff budget.
                     if attempt >= LME_RETRY_MAX_ATTEMPTS:
                         raise  # out of retries — let it propagate fatally
