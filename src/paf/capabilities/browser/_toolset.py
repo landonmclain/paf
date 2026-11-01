@@ -4,45 +4,41 @@ External-service assumptions (Playwright SDK + bundled Chromium + `playwright` C
 These depend on Playwright internals and Chromium packaging that change on the
 vendor's schedule and that the mocked tests do not exercise. Re-verify against the
 installed package and the linked sources before changing version, selector, or
-teardown handling; bump the date when a fact still holds, update code and date
-together when it changed. Pinned in the `[playwright]` extra as
-`playwright>=1.61.0` (pyproject.toml). Every fact below was verified against
-1.61.0, and the signature-checkable ones re-verified against 1.62.0 on 2026-08-18.
+teardown handling. Pinned in the `[playwright]` extra as `playwright>=1.61.0`
+(pyproject.toml); the facts below were checked against 1.61.0 and the
+signature-checkable ones against 1.62.0.
 
 - `page.aria_snapshot(mode='ai')` returns an agent-oriented tree whose nodes carry
   `[ref=eN]` handles. `mode` accepts `Literal['ai', 'default'] | None` through
-  1.62.0; the `ref` attributes have shipped since Playwright 1.52. Verified
-  2026-08-18.
+  1.62.0; the `ref` attributes have shipped since Playwright 1.52.
   Source: <https://playwright.dev/python/docs/aria-snapshots>. Re-check:
   `inspect.signature(playwright.async_api.Page.aria_snapshot)` still offers 'ai'.
 - The `aria-ref=eN` handles from that snapshot are resolvable by the `aria-ref=`
   selector engine, so they can be passed straight to `page.click` / `page.fill`.
-  Verified 2026-08-18 (engine present in the bundled driver `coreBundle.js`).
+  (the ref engine is present in the bundled driver `coreBundle.js`).
   Source: <https://playwright.dev/python/docs/other-locators>. Re-check: pass a
   `snapshot` ref back into `click` against a live page, or grep the installed
   driver bundle for `aria-ref`.
 - `browser.new_context(service_workers='block')` disables page service workers;
-  the option is `Literal['allow', 'block'] | None` through 1.62.0. Verified
-  2026-08-18.
+  the option is `Literal['allow', 'block'] | None` through 1.62.0.
   Source: <https://playwright.dev/python/docs/api/class-browsercontext>
   (`serviceWorkers` option). Re-check: inspect the `service_workers` parameter of
   `Browser.new_context`.
 - `new_context` accepts downloads by default; `accept_downloads=False` refuses
   them, so a page cannot write attachments to the host's temporary storage.
-  Verified 2026-08-18 (parameter documented as "Defaults to `true` where all the
-  downloads are accepted"). Source:
+  (the parameter is documented as "Defaults to `true` where all the downloads
+  are accepted"). Source:
   <https://playwright.dev/python/docs/api/class-browser#browser-new-context>.
   Re-check: `inspect.getdoc(Browser.new_context)` still states that default.
 - `TargetClosedError` is not re-exported from `playwright.async_api` through
   1.62.0; it lives at `playwright._impl._errors`. A driver-raised instance only
-  carries `.name`, so `isinstance` is the reliable discriminator. Verified
-  2026-08-18.
+  carries `.name`, so `isinstance` is the reliable discriminator.
   Source: <https://github.com/microsoft/playwright-python> (async_api `__init__`).
   Re-check: `hasattr(playwright.async_api, 'TargetClosedError')` (expect `False`);
   if it becomes `True`, switch to the public import.
 - Missing-binary detection uses `chromium.executable_path` plus an on-disk
   `os.path.exists` check; the install command is `python -m playwright install
-  chromium`. Verified 2026-08-18. Source:
+  chromium`. Source:
   <https://playwright.dev/python/docs/browsers#install-browsers>. Re-check:
   confirm `BrowserType.executable_path` exists and `playwright install chromium`
   still fetches the binary.
@@ -50,7 +46,7 @@ together when it changed. Pinned in the `[playwright]` extra as
   `timeout=0` disables the deadline (the toolset treats 0 the same way in
   `_await_with_timeout`). The defaults here deliberately split that number in two:
   a missed element is usually a wrong selector and should fail fast, while a page
-  load legitimately takes longer. Verified 2026-08-18
+  load legitimately takes longer
   (`DEFAULT_PLAYWRIGHT_TIMEOUT_IN_MILLISECONDS = 30000` in `_impl/_helper.py`).
   Source: <https://playwright.dev/python/docs/api/class-page#page-set-default-timeout>.
   Re-check: grep the installed package for `DEFAULT_PLAYWRIGHT_TIMEOUT`.
@@ -58,42 +54,40 @@ together when it changed. Pinned in the `[playwright]` extra as
   frame they came from: the ref carries the frame sequence and the driver jumps to
   that frame before matching (`_jumpToAriaRefFrameIfNeeded` in the bundled
   driver). Plain CSS selectors do not cross frames, so a snapshot ref is the only
-  handle that reaches embedded content. Verified 2026-08-18 against a real
-  Chromium (read and click inside a cross-origin child frame).
+  handle that reaches embedded content (read and click work inside a
+  cross-origin child frame).
   Source: <https://playwright.dev/python/docs/other-locators>. Re-check: grep the
   driver bundle for `_jumpToAriaRefFrameIfNeeded`.
 - A request aborted by a context route reaches `requestfailed` with the failure
   text `net::ERR_FAILED`, which is what lets the guard's own entry (carrying the
-  reason) stand alone in the event log. Verified 2026-08-18 against a real
-  Chromium: a refused navigation produced exactly one recorded event. Source:
+  reason) stand alone in the event log: a refused navigation produces exactly
+  one recorded event. Source:
   <https://playwright.dev/python/docs/api/class-route#route-abort> (`errorCode`
   defaults to `failed`). Re-check: the private-address scenario in
   `scripts/playwright_smoke.py` asserts the single entry.
 - Attaching any `page.on('dialog')` handler takes Playwright out of its
   auto-dismiss behavior: the dialog then blocks the page until the handler calls
-  `accept`/`dismiss`, so every path through the handler has to answer. Verified
-  2026-08-18. Source: <https://playwright.dev/python/docs/dialogs>. Re-check: the
+  `accept`/`dismiss`, so every path through the handler has to answer.
+  Source: <https://playwright.dev/python/docs/dialogs>. Re-check: the
   dialog scenario in `scripts/playwright_smoke.py`.
 - A page a site opens (`window.open`, `target="_blank"`) arrives on the opener's
   `popup` event and belongs to the same `BrowserContext`, so the context's route
   guard and storage state already cover it. Its `url` at event time is usually
-  still `about:blank`. Verified 2026-08-18. Source:
+  still `about:blank`. Source:
   <https://playwright.dev/python/docs/pages#handling-new-pages>. Re-check: the
   tab scenario in `scripts/playwright_smoke.py`.
 - `locator.press_sequentially(text, timeout=...)` types key by key, unlike
-  `page.fill`, which sets the value and dispatches no key events. Verified
-  2026-08-18 against 1.62.0. Source:
+  `page.fill`, which sets the value and dispatches no key events. Source:
   <https://playwright.dev/python/docs/input#type-characters>. Re-check:
   `inspect.signature(playwright.async_api.Locator.press_sequentially)`.
 - `wait_for_selector(state='hidden')` is satisfied by an element that is hidden
   *or* absent, so a frame that never contained it reports success immediately --
   which is why the disappearance wait requires every frame rather than the first.
-  Verified 2026-08-18 against 1.62.0. Source:
+  Source:
   <https://playwright.dev/python/docs/api/class-page#page-wait-for-selector>.
   Re-check: the `state` parameter still accepts `'hidden'`.
 - `frame.inner_text('body')` reads a child frame the page-level call cannot see;
-  `page.wait_for_selector` matches in the main frame only. Verified 2026-08-18
-  against a real Chromium. Source:
+  `page.wait_for_selector` matches in the main frame only. Source:
   <https://playwright.dev/python/docs/frames>. Re-check: the iframe scenario in
   `scripts/playwright_smoke.py`.
 """
