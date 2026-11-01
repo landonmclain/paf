@@ -1,6 +1,6 @@
 """Scan-scope tests (spec §5.y): walk-everything-not-ignored + unparsed records.
 
-Covers the LOCKED 2026-08-22 design:
+Covers the scan-scope design:
 - ``walk_all_files`` returns every file that isn't (gitignore ∪ owned-skip) — language
   agnostic, never hardcodes an extension.
 - In-scope files with no parseable symbols appear in the artifacts as ``unparsed: true``

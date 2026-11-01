@@ -1,4 +1,4 @@
-"""InjectionGuard phase 2: the `flag` action, untrusted-content marking, and
+"""InjectionGuard: the `flag` action, untrusted-content marking, and
 tightening gating for the rest of a run after a hit.
 
 The point of flag mode: the model may SEE suspicious content (so a coding agent

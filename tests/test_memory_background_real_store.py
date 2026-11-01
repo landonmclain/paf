@@ -331,8 +331,7 @@ def test_session_hook_enqueues_job_past_cadence(tmp_path: Path) -> None:
 def test_turn_gate_fires_at_consolidate_turns_threshold(tmp_path: Path) -> None:
     """The trigger fires once ENOUGH COMPLETE turns have accrued (turn gate).
 
-    Regression for the DECIDED 2026-09-14 cadence change (see
-    Designs/Turn-Based-Background-Cadence): consolidation should fire once at
+    Regression for the turn-based cadence change: consolidation should fire once at
     least ``consolidate_turns`` (default 5, spec-configurable) *settled* turns
     have accrued since the last fold — NOT on a minute timer. This test pins
     the turn-count boundary and the spec configurability.

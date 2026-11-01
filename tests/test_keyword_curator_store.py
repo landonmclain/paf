@@ -1,4 +1,4 @@
-"""Keyword curator Phase 1: the journal, entity-map derivation, and watermark.
+"""Keyword curator: the journal, entity-map derivation, and watermark.
 
 No model and no capability wiring — pure storage behaviour: append-only
 idempotency, torn-line tolerance, latest-wins derivation with liveness, alias

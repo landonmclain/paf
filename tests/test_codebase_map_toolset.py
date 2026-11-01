@@ -7,7 +7,7 @@ Tests the agent-facing tools against a small synthetic fixture scanned with
 - ``lookup_file``       → 4 shapes (head / symbol head / detail / symbol detail)
 - ``read_block``        → exact source region + whole-file + missing-file
 - ``search_codebase``   → end-to-end over the built tokens.json, head snippets
-- ``get_repo_map``      → ranked zero-LLM orient map (Phase 2), budget-bound
+- ``get_repo_map``      → ranked zero-LLM orient map, budget-bound
 - ``run_codebase_map``  → re-indexes the rooted repo (new/changed files surfaced)
 
 All tool methods return bounded, readable ``str`` (None only for unknown
@@ -114,7 +114,7 @@ def test_get_overview_accepts_absolute_path_inside_scan_root(
 ) -> None:
     """An ABSOLUTE path pointing inside the scan root is rebased to repo-relative.
 
-    Regression for a live failure (2026-09-14): an agent passed the full
+    Regression: an agent passed the full
     absolute path (``/home/.../project/src``); the old code stripped only the
     leading ``/`` and looked up ``home/.../project/src`` as a repo-relative
     anchor, found nothing, and returned a misleading "no such directory" — the
@@ -463,7 +463,7 @@ def test_search_codebase_emits_pasteable_read_block_ref(
 
 
 def test_get_repo_map_built(scanned: tuple[Path, CodebaseMapToolset]) -> None:
-    """get_repo_map is now BUILT (Phase 2): produces a ranked zero-LLM map over the
+    """get_repo_map produces a ranked zero-LLM map over the
     scanned fixture (a fresh scan carries call_graph.json), no longer a stub."""
     _, t = scanned
     out = t.get_repo_map(map_tokens=20)

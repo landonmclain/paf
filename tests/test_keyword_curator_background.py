@@ -1,4 +1,4 @@
-"""Keyword curator Phase 3c: redaction, the queue, the pending gate, the trigger.
+"""Keyword curator: redaction, the queue, the pending gate, the trigger.
 
 No live model: passes are driven with a fake curator. The coordinator trigger is
 exercised against a throwaway processes root, with the opt-in settings and the

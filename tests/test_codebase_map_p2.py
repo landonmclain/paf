@@ -1,6 +1,6 @@
-"""Phase 2 tests: references_count population + BM25 first-pass search.
+"""Tests for references_count population + BM25 first-pass search.
 
-Covers the new Phase-2 surface:
+Covers the reference-counting surface:
   - ``reference_counts`` / ``apply_references`` — inbound in-degree at scan time,
     persisted into each ``FileInfo.references_count`` in the manifest.
   - ``rank`` / ``rank_fused`` — field-weighted BM25 over ``FileInfo`` records.

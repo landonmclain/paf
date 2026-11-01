@@ -1,4 +1,4 @@
-"""Phase 1 extraction tests: python node coverage + edge cases + byte-index contract.
+"""Extraction tests: python node coverage + edge cases + byte-index contract.
 
 Locks in the python extraction path for the codebase-map capability. Covers:
 

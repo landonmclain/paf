@@ -1,8 +1,7 @@
-"""Phase 0 tests: codebase-map storage seam + schema records.
+"""Tests for the codebase-map storage seam + schema records.
 
-Covers the implemented Phase 0 surface — `FlatFileStorage` (write/read/sync_changed/
-read_block), `index_dir_for_scan_root` co-location, and the schema records — not the
-stubbed extraction/search (Phases 1–4).
+Covers `FlatFileStorage` (write/read/sync_changed/read_block),
+`index_dir_for_scan_root` co-location, and the schema records.
 """
 
 from __future__ import annotations

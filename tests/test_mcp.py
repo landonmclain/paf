@@ -1,4 +1,4 @@
-"""Tests for the MCP capability wiring (Phase 2, Option A).
+"""Tests for the MCP capability wiring.
 
 MCP servers come from a Claude-Desktop-style ``mcpServers`` JSON (path declared by
 the spec's ``mcp:`` block), loaded by the builtin ``load_mcp_toolsets`` (recursive

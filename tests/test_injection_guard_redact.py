@@ -1,4 +1,4 @@
-"""InjectionGuard phase 3: the `redact` action.
+"""InjectionGuard: the `redact` action.
 
 Only the segments that score over the threshold are withheld; the rest of the
 result reaches the model. Redaction is only trusted when the redacted text, re-

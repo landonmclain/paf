@@ -448,7 +448,7 @@ def test_compaction_builds_real_strategy_objects() -> None:
     # isinstance against it. Assert each tier is a real concrete strategy (a class,
     # not a raw dict) drawn from the no-summary ladder's known types. The sliding
     # window is always the turn-bounded trim-only `TurnBoundSlidingWindow` (no
-    # consolidate toggle, retired 2026-09-02).
+    # consolidate toggle).
     strategy_types = (
         ClampOversizedMessages,
         ClearToolResults,
@@ -461,7 +461,7 @@ def test_compaction_builds_real_strategy_objects() -> None:
 def test_build_compaction_window_is_always_turn_bound_trim_only() -> None:
     """`build_compaction` always uses the turn-bounded trim-only window.
 
-    Regression for the 2026-09-02 decision: there is NO `consolidate` toggle.
+    Regression: there is NO `consolidate` toggle.
     Eviction is always trim-only `TurnBoundSlidingWindow` (never evicts the
     active user turn, never calls memory) — the background watermark worker is
     the sole memory writer. This pins that the two concerns are structurally

@@ -1,4 +1,4 @@
-"""Keyword curator Phase 3a: the hot-path matcher.
+"""Keyword curator: the hot-path matcher.
 
 Synthetic indexes, so each rule is pinned independent of any real store: terms
 come from a source's OWN record, bare entity names are discounted by the size of

@@ -1,4 +1,4 @@
-"""Keyword curator Phase 2: source readers, the curator call, the worker pass.
+"""Keyword curator: source readers, the curator call, the worker pass.
 
 No live model: the worker is driven with a fake ``curate`` callable, and the
 agent itself with a ``FunctionModel``. Covers digesting, batching, the receipt

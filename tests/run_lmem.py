@@ -710,17 +710,17 @@ def main(argv: list[str] | None = None) -> dict:
     # memory markdown — under a run-scoped dir alongside the report. Scores
     # without the underlying data are unfalsifiable: this lets us audit *why*
     # the model retrieved (or failed to retrieve) after the fact, instead of
-    # discarding it in a tempdir (the original flaw — see 2026-08-11).
+    # discarding it in a tempdir.
     # Clean up old artifacts with `rm -rf tests/results/lmem-*/`; keep recent
     # ones for audit while iterating.
     artifact_dir = RESULTS_DIR / session
     artifact_dir.mkdir(parents=True, exist_ok=True)
     store = FileStepStore(directory=artifact_dir / "store")
 
-    # ---- Incremental persistence (crash-resilience, 2026-08-18) ----
+    # ---- Incremental persistence (crash-resilience) ----
     # Each completed question's `row` is appended as JSONL to
     # `lmem-<session>.partial.jsonl` the moment it's judged, so a crash (e.g. the
-    # raw httpx.ReadError at q328/472 on 2026-08-18 that discarded 328 completed
+    # raw httpx.ReadError at q328/472 that discarded 328 completed
     # questions) never loses finished work. With `LME_RESUME_PARTIAL=1` the run
     # READS an existing partial file back into `all_recall_rows` and skips any
     # question_id already present, turning an interruption into a resumable one.

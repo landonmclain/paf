@@ -262,7 +262,7 @@ def test_job_status_summary_returns_idle_rows_when_idle() -> None:
 def test_job_status_summary_thread_row_reads_hashed_watermark_dir(monkeypatch) -> None:
     """The thread idle row must load the SAME hashed watermark the worker uses.
 
-    Bug (2026-09-14, PAF-UI issue): the idle block built the capture dir from the
+    Bug: the idle block built the capture dir from the
     raw ``conversation_id`` (``conversations/<cid>/``), which never exists --
     the worker writes under ``conversations/<sha256(cid)[:24]>/`` via
     ``ThreadSummaryStore``. So the idle watermark was always fresh -> every
@@ -406,7 +406,7 @@ def test_reconcile_keeps_active_task_running_past_hold() -> None:
 def test_reconcile_running_task_never_shows_idle_cadence_detail() -> None:
     """A running fold's row must NOT leak the idle turn-countdown as its detail.
 
-    Regression found live (2026-09-14): mid-fold, the Processes panel showed
+    Regression: mid-fold, the Processes panel showed
     ``running`` alongside ``idle · 3/5 turns to a fold``. The 3/5 countdown
     describes how far the NEXT cadence has progressed since the last fold
     watermark — it is unrelated to the fold currently running. The old
@@ -468,7 +468,7 @@ def test_reconcile_running_task_never_shows_idle_cadence_detail() -> None:
 def test_reconcile_prefers_newer_seq_over_stale_skip_on_timestamp_tie() -> None:
     """A running fold (higher seq) beats a stale skipped row even at EQUAL ts.
 
-    Regression found live (2026-09-14): the panel showed ``running`` +
+    Regression: the panel showed ``running`` +
     ``only 4 unsettled turn(s); need >= 5`` — the stale SKIPPED detail from
     the trigger that gated below threshold. _publish_task stamps ``updated_at``
     at microsecond resolution, so the skip and the fold that follows it within

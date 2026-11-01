@@ -1,4 +1,4 @@
-"""Keyword curator Phase 3b: rendering, the capability, and its wiring.
+"""Keyword curator: rendering, the capability, and its wiring.
 
 The capability is driven the way the agent graph drives it: a request context
 whose last message is the user's prompt, a RunContext carrying a tracer. Covers

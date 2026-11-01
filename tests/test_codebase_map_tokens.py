@@ -1,6 +1,6 @@
-"""Tokens search backend + slimmed lean-head index tests (LOCKED read-model, 2026-08-23).
+"""Tokens search backend + slimmed lean-head index tests.
 
-Covers the new Phase-3-adjacent surface landed with the read-model:
+Covers the read-model surface:
   - ``build_tokens`` — inverted, SYMBOL-SCOPED postings; tokenized fields are
     name + signature + doc ONLY (body deliberately excluded).
   - ``tokens_rank`` — field-weighted relevance (name > signature > doc); hits

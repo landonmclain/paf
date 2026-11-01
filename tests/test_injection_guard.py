@@ -1,4 +1,4 @@
-"""InjectionGuard: paf's rehomed prompt-injection defense (Phase 1).
+"""InjectionGuard: paf's prompt-injection defense.
 
 Covers the policy parser, each action with a deterministic fake scorer, the
 trace spans, the ordering fix (score the RAW result, before secrets redaction

@@ -1,9 +1,8 @@
 """Tests for the turn-bounded, trim-only eviction window (``TurnBoundSlidingWindow``).
 
 The assistant's eviction tier is a plain sliding window that (1) never consumes
-the ACTIVE user turn (the 2026-09-02 Option A gate — regression for run
-01a05ff8 where the live "implement it" prompt was evicted while its response
-survived) and (2) performs **no memory work** — durable-fact capture is the
+the ACTIVE user turn — regression for a case where the live "implement it"
+prompt was evicted while its response survived and (2) performs **no memory work** — durable-fact capture is the
 background watermark worker's job, never eviction.
 
 The former inline eviction-fold window (``MemoryConsolidationWindow``) is
