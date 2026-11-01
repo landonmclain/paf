@@ -12,13 +12,13 @@ server never takes down the thing that answered the restart request — the
 HTTP response returns even though the SSE process is being bounced.
 
 Authorization: THE ENDPOINT IS AUTHENTICATED. It is reachable from the whole
-Tailnet (bound 0.0.0.0 like the other services), so a request must carry the
+the private network (bound 0.0.0.0 like the other services), so a request must carry the
 ops token in an ``Authorization: Bearer <token>`` header. The token lives in
 ``.env`` as ``PAF_OPS_TOKEN`` (also mirrored to the frontend's
 ``NEXT_PUBLIC_PAF_OPS_TOKEN`` so the UI can send it). Compare with a
-constant-time check. This is the personal/Tailnet trust model — the token is
-only as secret as the built frontend, which is acceptable for a single-user
-Tailnet but would NOT be for a public multi-tenant deployment.
+constant-time check. This is a single-user trust model — the token is only as
+secret as the built frontend, which is acceptable for a private network but
+would NOT be for a public multi-tenant deployment.
 
 No runtime changes, no pydantic-ai imports beyond what's needed to run.
 """

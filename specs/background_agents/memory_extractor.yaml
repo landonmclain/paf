@@ -86,7 +86,7 @@ instructions: |
 
   `scope` — would this still matter in a conversation about a DIFFERENT project?
     - global  — yes: who the user is, their general preferences and rules, their
-                machines and setup. ("The user lives in Bentonville.")
+                machines and setup. ("The user's desktop runs Ubuntu.")
     - project — no: it is about the work in this conversation. ("The paf test
                 suite should run in under a minute.")
     The same kind of preference can be either: "prefers short sentences in all

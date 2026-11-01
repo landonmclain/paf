@@ -23,8 +23,8 @@ tests/fixtures/paf-src/
 # VS Code (machine-specific local editor config: interpreter path + data/ excludes)
 .vscode/
 
-# Hermes workspace-local plans (plan skill output). Plans are preserved in the
-# Obsidian vault (Portfolio-GitHub/History/), not in the public repo.
+# Workspace-local agent plans (scratch output from the plan skill). Kept out of
+# the repo; plans live in the notes vault instead.
 .hermes/
 
 # Persistence store — runtime state, not source. Historically a sqlite db;

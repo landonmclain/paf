@@ -138,7 +138,7 @@ def test_ordinary_config_values_are_not_redacted(monkeypatch):
         "PWD": "/home/alice/projects/paf",
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "SHELL": "/bin/bash",
-        "USER": "landonmclain",
+        "USER": "alice",
         "LANG": "en_US.UTF-8",
         "TERM": "xterm-256color",
         "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
@@ -148,7 +148,7 @@ def test_ordinary_config_values_are_not_redacted(monkeypatch):
         monkeypatch.setenv(name, value)
     text = (
         "/home/alice -> ERROR: FileNotFoundError /home/alice/projects/paf "
-        "en_US.UTF-8 landonmclain xterm-256color /usr/local/bin:/usr/bin:/bin"
+        "en_US.UTF-8 alice xterm-256color /usr/local/bin:/usr/bin:/bin"
     )
     for guard in (make_secret_result_guard(), make_secret_result_guard([])):
         assert guard(_result(text)).action == "allow"

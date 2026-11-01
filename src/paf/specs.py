@@ -218,7 +218,7 @@ def _spec_skills_config(spec_path: Path) -> dict | None:
         skills:
           libraries:        # one or more full paths (~ expands); absent -> the
             - ~/skills          # paf-owned data/skills/ default
-            - ~/projects/Personal/skill-library
+            - ~/projects/skill-library
 
     ``libraries`` are **full absolute paths** (``~`` expanded via
     ``os.path.expanduser``); each is a directory scanned for ``SKILL.md`` skills
@@ -600,9 +600,9 @@ def _spec_rooted_config(spec_path: Path, block_name: str, root_key: str) -> dict
     capability):
 
         filesystem:
-          root_dir: ~/projects/Personal/landonmclain-site
+          root_dir: ~/projects/my-site
         shell:
-          cwd: ~/projects/Personal/landonmclain-site
+          cwd: ~/projects/my-site
 
     ``root_key`` is the member inside the block that carries the path
     (``root_dir`` / ``cwd`` / ``root`` / ``scan_root``). Only that key is
@@ -704,7 +704,7 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
     execution backend:
 
         shell:
-          cwd: ~/projects/Personal/landonmclain-site
+          cwd: ~/projects/my-site
           executor:
             backend: docker   # local (default) | docker
             mode: exec        # exec (default) | run
@@ -869,7 +869,7 @@ def _spec_workspace_config(spec_path: Path) -> dict | None:
           expose_paths: false   # default true; false hides host paths (home,
                                 # tool roots) from the model — locked-down agents
           notes:
-            - Projects live under ~/projects/Personal.
+            - Projects live under ~/projects.
 
     Returns ``{"notes": [...]?, "expose_paths": False?}`` with only the keys that
     are set, or ``None`` when absent / empty.

@@ -1,14 +1,9 @@
 # Langfuse v4 self-hosted stack — PERSISTENT volume variant for paf's local observability.
 #
-# Fresh v4 install (2026-09-26). Forked from the hermes-config v3 compose, upgraded
-# to Langfuse v4 (`langfuse:4` / `langfuse-worker:4`) with a genuinely clean slate:
-# NEW `langfuse4_*` volumes so v4 can never collide with the parked v3 data.
-# v4 replaced the old `traces`/`observations` ClickHouse tables with a unified
-# `events` data model — a fresh install needs no migration/backfill/dual-write.
-#
-# The old v3 stack (volumes `langfuse_langfuse_*`) was parked via
-# `docker compose -p langfuse -f <hermes-config>/docker/langfuse.yaml down` and
-# kept intact as a fallback until the v4 data is confirmed sufficient.
+# Runs Langfuse v4 (`langfuse:4` / `langfuse-worker:4`) on dedicated `langfuse4_*`
+# volumes. v4 replaced the old `traces`/`observations` ClickHouse tables with a
+# unified `events` data model, so a fresh install needs no migration, backfill,
+# or dual-write.
 #
 # Usage (from paf repo root):
 #   docker compose -p langfuse4 --env-file .env -f deploy/langfuse.yaml up -d
@@ -67,7 +62,7 @@ services:
       LANGFUSE_S3_MEDIA_UPLOAD_ENABLED: "false"
       # Headless initialization — pre-seeds org, project, and API keys
       LANGFUSE_INIT_ORG_ID: paf-org
-      LANGFUSE_INIT_ORG_NAME: Landon
+      LANGFUSE_INIT_ORG_NAME: paf
       LANGFUSE_INIT_PROJECT_ID: paf-project
       LANGFUSE_INIT_PROJECT_NAME: paf-framework
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}

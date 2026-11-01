@@ -1,6 +1,6 @@
 """Wiring tests for the background memory-consolidation service + watermark trigger.
 
-Covers the NEW trigger path added 2026-08-28:
+Covers the trigger path:
 - ``_watermark.should_fire`` — the metric trigger that decides *when* a
   background consolidation job is enqueued (decoupled from eviction).
 - ``MemoryWatermark`` persistence — flat-file round-trip, fresh-on-corrupt.
@@ -82,7 +82,7 @@ def test_watermark_roundtrips(tmp_path) -> None:
 def test_watermark_fresh_when_file_absent(tmp_path) -> None:
     """A missing file is FRESH (nothing consumed) — do NOT pre-anchor run_id.
 
-    Regression (2026-09-09): ``load(..., run_id=tip_run)`` returned a fresh
+    Regression: ``load(..., run_id=tip_run)`` returned a fresh
     watermark re-anchored at the tip run, which ``resolve_unseen_span`` reads
     as *mid-history* (all runs strictly older are consumed). A turn-count-
     gated consumer (thread summarizer, >=10 unsettled turns) then deadlocked:
@@ -160,7 +160,7 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
     records = [
         MemoryRecord(
             type="fact",
-            fact="Landon lives in Bentonville",
+            fact="Ada lives in Springfield",
             tier="t1",
             born_on="2026-08-28T00:00:00Z",
             source_ref="r1:1",
@@ -194,12 +194,12 @@ def test_trigger_enqueues_and_drain_folds_journal_and_renders(tmp_path) -> None:
     journal = JournalStore(tmp_path)
     rows = journal.read_all()
     assert len(rows) == 2
-    assert rows[0][1].fact == "Landon lives in Bentonville"
+    assert rows[0][1].fact == "Ada lives in Springfield"
     assert rows[1][1].fact == "Prefers flat-file-first storage"
 
     # MEMORY.md rendered deterministically from the append-only journal.
     md = (tmp_path / "MEMORY.md").read_text(encoding="utf-8")
-    assert "Landon lives in Bentonville" in md
+    assert "Ada lives in Springfield" in md
     assert "Prefers flat-file-first storage" in md
 
     # Watermark advanced past what was consumed.

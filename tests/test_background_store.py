@@ -253,7 +253,7 @@ def test_fold_finish_reports_review_summary_and_changes(tmp_path: Path) -> None:
 
     coord = _memory_coordinator(tmp_path)
     journal = JournalStore(tmp_path / "memory")
-    for fact in ("The user lives in Tulsa.", "The user lives in Bentonville."):
+    for fact in ("The user lives in Tulsa.", "The user lives in Denver."):
         journal.append(
             type="identity",
             fact=fact,
@@ -277,8 +277,7 @@ def test_fold_finish_reports_review_summary_and_changes(tmp_path: Path) -> None:
     assert task.status == DONE
     assert task.detail == "2 records folded · reviewed 1: 1 superseded"
     assert task.lines == [
-        'superseded "The user lives in Tulsa." by "The user lives in Bentonville."'
-        " — moved"
+        'superseded "The user lives in Tulsa." by "The user lives in Denver." — moved'
     ]
     assert coord._run_events.read_all()[-1]["lines"] == task.lines
 

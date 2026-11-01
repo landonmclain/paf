@@ -172,7 +172,7 @@ def test_stream_thinking_detects_across_delta_boundaries():
 
 SEARCH_ARGS = {
     "pattern": "svg",
-    "path": "projects/Personal/landonmclain-site/src",
+    "path": "projects/my-site/src",
     "include_glob": "*.astro",
 }
 
@@ -225,7 +225,7 @@ def test_arg_key_order_is_canonical():
     guard = ToolCallGuard()
     reordered = {
         "include_glob": "*.astro",
-        "path": "projects/Personal/landonmclain-site/src",
+        "path": "projects/my-site/src",
         "pattern": "svg",
     }
     result = None
@@ -240,7 +240,7 @@ def test_tool_key_matches_ui_identity():
     key = _tool_key("search_files", SEARCH_ARGS)
     assert key.startswith("search_files(")
     assert "pattern: svg" in key
-    assert "path: projects/Personal/landonmclain-site/src" in key
+    assert "path: projects/my-site/src" in key
 
 
 def test_tool_guard_reset_clears_state():
