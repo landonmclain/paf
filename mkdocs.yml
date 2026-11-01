@@ -8,7 +8,7 @@ site_description: A small, opinionated agent framework built on pydantic-ai.
 repo_url: https://github.com/landonmclain/paf
 repo_name: landonmclain/paf
 edit_uri: edit/main/docs/
-copyright: MIT License
+copyright: Apache-2.0 License
 
 theme:
   name: material
