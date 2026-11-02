@@ -330,6 +330,7 @@ def test_docker_another_process_cannot_steal_a_finished_backgrounds_logs(
 ):
     """The race the owner check closes: a background job's logs are read *after*
     it exits, so a sweep from a second process must not delete it first."""
+
     async def scenario() -> tuple[str, str]:
         ex = DockerExecutor(
             mode="exec", container_name=f"paf-test-{uuid.uuid4().hex[:6]}"
