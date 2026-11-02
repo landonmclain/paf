@@ -1,13 +1,11 @@
 """paf SSE transport — thin HTTP stream over the ``Session`` runtime.
 
-Step 0 of the paf-ui plan (see vault ``Web-UI-Event-Streams-Candidate.md``):
-a minimal FastAPI surface that exposes the runtime's turn event stream + the
+A minimal FastAPI surface that exposes the runtime's turn event stream + the
 background-task timeline over standard SSE, with REST controls for
 steer/cancel, so a decoupled web frontend (paf-ui, Next.js + AI Elements) can
 consume paf without Gradio.
 
-Design (locked 2026-09-02, SSE + REST, per-lane; updated 2026-09-13 Phase 1 of
-Unified-Background-Process-Feed-Spec):
+Design:
 - One ``Session`` per conversation id, held in an in-memory registry. Each
   active conversation opens its OWN ``/api/chat`` SSE stream; steer/cancel are
   per-lane REST POSTs addressed to that lane's conversation id.
@@ -1055,9 +1053,9 @@ async def processes_stream(
 ) -> StreamingResponse:
     """Long-lived, turn-independent SSE feed of background processes/lifecycle.
 
-    Decoupled from ``/api/chat`` (see the Unified-Background-Process-Feed-Spec,
-    Phase 1): background ``task:`` frames are no longer merged into the turn
-    stream — they ride this dedicated feed instead, which opens ONCE per lane
+    Decoupled from ``/api/chat``: background ``task:`` frames are not merged
+    into the turn stream — they ride this dedicated feed instead, which opens
+    ONCE per lane
     and stays open as long as the client wants, with no turn-end sentinel.
 
     Lane-aware: ``lane=agent`` streams the shared per-agent lane (memory
@@ -1612,7 +1610,7 @@ async def cancel(body: dict[str, Any]) -> dict[str, Any]:
     return {"cancelled": True}
 
 
-# --- Web Push (PWA-Push-Notifications-Spec, Phase 2) -----------------------
+# --- Web Push -------------------------------------------------------------
 _push_service_singleton: PushService | None = None
 
 
