@@ -512,3 +512,106 @@ def test_run_guarded_thinking_chunks_across_deltas():
         raise AssertionError("expected DegenerationError")
     except DegenerationError:
         pass
+
+
+# -- dropping a looping thinking trace from the saved partial ------------------
+
+
+def _loop_msgs(*response_parts):
+    from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
+
+    return [
+        ModelRequest(parts=[UserPromptPart(content="go")]),
+        ModelResponse(parts=list(response_parts)),
+    ]
+
+
+def test_drop_looping_thinking_removes_aborted_thinking_only_response():
+    from pydantic_ai.messages import ThinkingPart
+
+    from paf.runtime import _drop_looping_thinking
+
+    out = _drop_looping_thinking(_loop_msgs(ThinkingPart(content="Let me go. " * 50)))
+    assert len(out) == 1  # the user's prompt stays, the empty response is gone
+
+
+def test_drop_looping_thinking_keeps_text_and_tool_calls():
+    from pydantic_ai.messages import TextPart, ThinkingPart, ToolCallPart
+
+    from paf.runtime import _drop_looping_thinking
+
+    call = ToolCallPart(tool_name="run_command", args={"cmd": "ls"})
+    out = _drop_looping_thinking(
+        _loop_msgs(ThinkingPart(content="loop loop"), TextPart(content="ok"), call)
+    )
+    assert [type(p).__name__ for p in out[-1].parts] == ["TextPart", "ToolCallPart"]
+
+
+def test_drop_looping_thinking_leaves_a_response_without_thinking_alone():
+    from pydantic_ai.messages import TextPart
+
+    from paf.runtime import _drop_looping_thinking
+
+    msgs = _loop_msgs(TextPart(content="done"))
+    assert _drop_looping_thinking(msgs) is msgs
+
+
+# -- one automatic retry after a thinking loop (TurnHandle._pump) --------------
+
+
+class _LoopingSession:
+    """Fake Session: stream() trips the guard `loops` times, then answers."""
+
+    def __init__(self, loops: int, reason: str = "thinking_loop") -> None:
+        from paf.degeneration_guard import DegenerationResult
+
+        self.prompts: list[str] = []
+        self._loops = loops
+        self._result = DegenerationResult(True, reason, "let me go", 5)
+
+    def _clear_turn(self, _handle) -> None:
+        pass
+
+    async def stream(self, prompt, *, conversation_id=None, _token=None):
+        from paf.runtime import StreamEvent
+
+        self.prompts.append(prompt)
+        if len(self.prompts) <= self._loops:
+            yield StreamEvent(kind="thinking", text="let me go")
+            raise DegenerationError(self._result)
+        yield StreamEvent(kind="text", text="done")
+
+
+def _run_pump(session):
+    from paf.runtime import CancellationToken, TurnHandle
+
+    async def go():
+        handle = TurnHandle(session, "task", None, CancellationToken())
+        await handle._task
+        return handle
+
+    return asyncio.run(go())
+
+
+def test_thinking_loop_is_retried_once_and_recovers():
+    session = _LoopingSession(loops=1)
+    handle = _run_pump(session)
+    assert handle.outcome == "ok"
+    assert session.prompts[0] == "task"
+    assert "repeating itself" in session.prompts[1]
+    assert len(session.prompts) == 2
+
+
+def test_second_thinking_loop_is_not_retried_again():
+    session = _LoopingSession(loops=5)
+    handle = _run_pump(session)
+    assert handle.outcome == "error"
+    assert isinstance(handle.error, DegenerationError)
+    assert len(session.prompts) == 2
+
+
+def test_repeated_tool_call_trip_is_not_retried():
+    session = _LoopingSession(loops=1, reason="repeated_tool_call")
+    handle = _run_pump(session)
+    assert handle.outcome == "error"
+    assert len(session.prompts) == 1

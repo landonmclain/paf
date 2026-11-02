@@ -237,6 +237,35 @@ def _run_output(result: Any) -> dict:
     return {"output": result.output if result is not None else None}
 
 
+_DEGENERATION_RETRY_PROMPT = (
+    "Your last attempt got stuck repeating itself and was cut off. Carry on with "
+    "the task from where you left off, without repeating that reasoning."
+)
+
+
+def _drop_looping_thinking(msgs: list[Any]) -> list[Any]:
+    """Remove the thinking from the aborted response of a thinking-loop trip.
+
+    The degeneration guard fires mid-stream, so the last ``ModelResponse`` holds
+    the looping reasoning. Persisting it verbatim puts the loop at the end of the
+    next request's context (pydantic-ai sends thinking back as a field or
+    ``<think>`` tags) and the model tends to continue it, which is why only a new
+    thread recovered. Thinking is dropped from that last response only; any text
+    or tool calls in it stay, and a response left with no parts is removed.
+    """
+    for i in range(len(msgs) - 1, -1, -1):
+        msg = msgs[i]
+        if not isinstance(msg, ModelResponse):
+            continue
+        parts = [p for p in msg.parts if not isinstance(p, ThinkingPart)]
+        if len(parts) == len(msg.parts):
+            break
+        if parts:
+            return [*msgs[:i], replace(msg, parts=parts), *msgs[i + 1 :]]
+        return [*msgs[:i], *msgs[i + 1 :]]
+    return msgs
+
+
 def _is_turn_start(msg: Any) -> bool:
     """True if ``msg`` is a user request that opens a fresh turn.
 
@@ -463,11 +492,29 @@ class TurnHandle:
             # generator executes in this task, so guards deep inside the agent
             # run see it (paf.approvals.approvals_available).
             with bind_channel(self.approvals):
-                async for ev in self._session.stream(
-                    prompt, conversation_id=conversation_id, _token=self._token
-                ):
-                    self._track_answer(ev)
-                    self._publish(ev)
+                retried = False
+                while True:
+                    try:
+                        async for ev in self._session.stream(
+                            prompt, conversation_id=conversation_id, _token=self._token
+                        ):
+                            self._track_answer(ev)
+                            self._publish(ev)
+                        break
+                    except DegenerationError as exc:
+                        # One automatic retry after a thinking loop. stream() has
+                        # already saved the partial with the loop removed, so the
+                        # retry continues from a clean context; sampling is not
+                        # greedy, so it is not a replay of the same tokens.
+                        if (
+                            retried
+                            or exc.result.reason != "thinking_loop"
+                            or self._token.cancelled
+                        ):
+                            raise
+                        retried = True
+                        prompt = _DEGENERATION_RETRY_PROMPT
+                        log.warning("thinking loop; retrying the turn once: %s", exc)
         except asyncio.CancelledError:
             outcome = "aborted"
         except Exception as exc:  # noqa: BLE001 - surface, don't crash the loop
@@ -1024,6 +1071,12 @@ class Session:
                 # surfaces a clean error frame to the user.
                 if _active_run is not None:
                     new_msgs = _active_run.new_messages()
+                    if (
+                        isinstance(exc, DegenerationError)
+                        and exc.result.reason == "thinking_loop"
+                    ):
+                        # Keep the loop out of the next request's context.
+                        new_msgs = _drop_looping_thinking(new_msgs)
                     if new_msgs:
                         self.history = [*self.history, *new_msgs]
                         _span.set_attribute(
