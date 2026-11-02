@@ -155,16 +155,16 @@ def test_ordinary_config_values_are_not_redacted(monkeypatch):
 
 
 def test_credential_named_variables_are_redacted(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-abcdef0123456789")
+    monkeypatch.setenv("DEMO_API_KEY", "demo-secret-abcdef012345")
     monkeypatch.setenv("GITHUB_TOKEN", "tok_0123456789abcdef")
     monkeypatch.setenv("DB_PASSWORD", "correct horse battery")
     out = make_secret_result_guard()(
         _result(
-            "k=sk-or-v1-abcdef0123456789 t=tok_0123456789abcdef p=correct horse battery"
+            "k=demo-secret-abcdef012345 t=tok_0123456789abcdef p=correct horse battery"
         )
     ).replacement
     assert out == (
-        "k=$SECRET:OPENROUTER_API_KEY t=$SECRET:GITHUB_TOKEN p=$SECRET:DB_PASSWORD"
+        "k=$SECRET:DEMO_API_KEY t=$SECRET:GITHUB_TOKEN p=$SECRET:DB_PASSWORD"
     )
 
 
@@ -186,12 +186,12 @@ def test_path_valued_credential_named_variables_are_left_alone(monkeypatch):
 
 def test_with_an_allowlist_only_listed_names_get_a_handle(monkeypatch):
     """Unlisted credentials become "[redacted]": no variable name, no handle."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-abcdef0123456789")
+    monkeypatch.setenv("DEMO_API_KEY", "demo-secret-abcdef012345")
     monkeypatch.setenv("BILLING_REF", "acct-98765-secret-ref")  # innocuous name
     guard = make_secret_result_guard(["BILLING_REF"])
-    out = guard(_result("a=sk-or-v1-abcdef0123456789 b=acct-98765-secret-ref"))
+    out = guard(_result("a=demo-secret-abcdef012345 b=acct-98765-secret-ref"))
     assert out.replacement == "a=[redacted] b=$SECRET:BILLING_REF"
-    assert "OPENROUTER" not in out.replacement
+    assert "DEMO" not in out.replacement
 
 
 def test_empty_allowlist_never_reveals_a_variable_name(monkeypatch):

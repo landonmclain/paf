@@ -58,7 +58,7 @@ FACTS = [
     ("The user prefers dark roast coffee.", None),  # 2
     ("The paf test suite takes about a minute.", "paf"),  # 3
     ("The site test suite takes about a minute.", "site"),  # 4
-    ("The user lives in Bentonville.", None),  # 5  update of 1
+    ("The user lives in Denver.", None),  # 5  update of 1
     ("The user prefers dark roast coffee, black.", None),  # 6  covers 2
     ("The paf test suite runs in GitHub Actions for every push.", "paf"),  # 7
 ]
@@ -157,9 +157,7 @@ def test_pending_suggestions_are_approved_or_rejected(tmp_path: Path) -> None:
 
     async def sugg(fact, reason, context):
         if fact.line == 1:
-            return SuggestionVerdict(
-                reason="newer fact says Bentonville", verdict="approve"
-            )
+            return SuggestionVerdict(reason="newer fact says Denver", verdict="approve")
         return SuggestionVerdict(reason="still true", verdict="reject")
 
     report = _run(d, ScriptedJudge({}), suggestion_judge=sugg)
@@ -189,7 +187,7 @@ def test_worker_passes_project_and_reviews_what_it_folded(
         seen_projects.append(ref["q"].current_project)
         JournalStore(directory).append(
             type="identity",
-            fact="The user lives in Bentonville.",
+            fact="The user lives in Denver.",
             tier="t1",
             born_on="2026-09-30T12:00:00+00:00",
             source_ref="r:9",
@@ -227,10 +225,10 @@ def test_worker_passes_project_and_reviews_what_it_folded(
 # --- status reporting: the job's review phase and outcome ----------------------
 
 
-def _fold_bentonville(directory, *_args) -> int:
+def _fold_denver(directory, *_args) -> int:
     JournalStore(directory).append(
         type="identity",
-        fact="The user lives in Bentonville.",
+        fact="The user lives in Denver.",
         tier="t1",
         born_on="2026-09-30T12:00:00+00:00",
         source_ref="r:9",
@@ -248,7 +246,7 @@ def _run_job(d: str, **hooks) -> list:
     )
 
     async def fold(messages, directory, watermark) -> int:
-        return _fold_bentonville(directory)
+        return _fold_denver(directory)
 
     q = MemoryConsolidationQueue(
         memory_directory=d,
@@ -290,7 +288,7 @@ def test_job_reports_review_phase_then_outcome(tmp_path: Path, monkeypatch) -> N
     assert outcome.records == 1 and outcome.error is None
     assert outcome.review.outcome() == "reviewed 1: 1 superseded"
     assert describe_actions(outcome.review, d) == [
-        'superseded "The user lives in Tulsa." by "The user lives in Bentonville."'
+        'superseded "The user lives in Tulsa." by "The user lives in Denver."'
         " — scripted"
     ]
 

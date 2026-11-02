@@ -1,6 +1,6 @@
 """Tests for the paf Skills capability — list/load on demand.
 
-Covers the unified capability (Landon 2026-08-19): the load mechanism
+Covers the unified capability: the load mechanism
 (list_skills / load_skill / list_skill_files / read_skill_file) plus the corpus's
 zero-LLM BM25 ranking over frontmatter vocab. Uses the checked-in
 `tests/fixtures/skills/` corpus as the deterministic test library.

@@ -45,10 +45,10 @@ def _store(tmp_path: Path) -> Path:
     j = KeywordJournalStore(tmp_path)
     recs = [
         make_record(
-            "skill:gmail-cleanup",
+            "skill:inbox-triage",
             "skill",
             ["batchModify"],
-            [{"canonical": "gmail", "aliases": ["bulk trash", "gws"]}],
+            [{"canonical": "inbox", "aliases": ["bulk trash", "mail"]}],
         ),
         make_record(
             "note:Designs/Keyword-Curator.md",
@@ -184,7 +184,7 @@ def test_injects_on_a_real_user_turn_with_a_marker(tmp_path: Path) -> None:
     assert len(request.parts) == 2
     [hint] = _hint_parts(request)
     assert "<relevance-hints>" in hint.content
-    assert 'load_skill("gmail-cleanup")' in hint.content
+    assert 'load_skill("inbox-triage")' in hint.content
     assert hint.metadata.startswith(KEYWORD_HINTS_MARKER_BASE + ":")
     assert KEYWORD_HINTS_MARKER_BASE in injected_artifact_markers()
 

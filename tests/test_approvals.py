@@ -169,10 +169,10 @@ def test_reason_comes_from_the_guards_annotation():
 
 
 def test_args_are_shown_with_secrets_scrubbed(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-abcdef0123456789")
+    monkeypatch.setenv("DEMO_API_KEY", "demo-secret-abcdef012345")
     ch, _ = _channel()
-    req = _request(ch, args={"header": "Bearer sk-or-v1-abcdef0123456789"})
-    assert "sk-or-v1" not in req.args and "$SECRET:OPENROUTER_API_KEY" in req.args
+    req = _request(ch, args={"header": "Bearer demo-secret-abcdef012345"})
+    assert "demo-secret" not in req.args and "$SECRET:DEMO_API_KEY" in req.args
     assert json.loads(req.args)["header"].startswith("Bearer ")
     assert _request(ch, args='{"a": 1}').args == '{"a": 1}'
 

@@ -101,7 +101,7 @@ def test_sections_and_render_time_filing(world) -> None:
     mem, steps = world
     j = JournalStore(mem)
     _add(
-        j, "The user lives in Bentonville.", type="identity", scope="global", tier="t1"
+        j, "The user lives in Denver.", type="identity", scope="global", tier="t1"
     )  # 1
     _add(j, "paf memory is scoped per project.", scope="project", project="paf")  # 2
     _add(
@@ -136,7 +136,7 @@ def test_sections_and_render_time_filing(world) -> None:
 
     out = _render(mem, steps, "conv-paf", "how is the extractor going")
     about, rest = out.split("## paf", 1)
-    assert "Bentonville. — #1" in about and "short sentences. — #5" in about
+    assert "Denver. — #1" in about and "short sentences. — #5" in about
     assert "scoped per project. — #2" in rest and "extractor. — #4" in rest
     assert "Astro" not in out  # other project: not injected...
     assert "Other projects: site (1 facts)" in out  # ...but named
@@ -184,14 +184,14 @@ def test_supersede_renders_as_a_replaced_history_line(world) -> None:
     j = JournalStore(mem)
     _add(j, "The user lives in Tulsa.", type="identity", scope="global", tier="t1")  # 1
     _add(
-        j, "The user lives in Bentonville.", type="identity", scope="global", tier="t1"
+        j, "The user lives in Denver.", type="identity", scope="global", tier="t1"
     )  # 2
     OverrideStore(mem).append(
         op="supersede", target_line=1, by="reviewer", superseded_by=2
     )
     out = _render(mem, steps, "conv-paf")
     about = out.split("## Recent history")[0]
-    assert "Tulsa" not in about and "Bentonville. — #2" in about
+    assert "Tulsa" not in about and "Denver. — #2" in about
     assert "replaced: The user lives in Tulsa. — #1 → #2" in out
 
 
@@ -298,14 +298,14 @@ def test_repair_ref_moves_legacy_refs_onto_the_runs_own_turn() -> None:
             "R": _turns_history(
                 [
                     ("P", "earlier question", "earlier answer"),
-                    ("R", "where do I live", "Bentonville"),
+                    ("R", "where do I live", "Denver"),
                 ]
             ),
             # S has two own turns (e.g. a follow-up after a background job).
             "S": _turns_history(
                 [
                     ("S", "coffee?", "you like dark roast"),
-                    ("S", "home?", "you moved to Bentonville"),
+                    ("S", "home?", "you moved to Denver"),
                 ]
             ),
         }
@@ -320,7 +320,7 @@ def test_repair_ref_moves_legacy_refs_onto_the_runs_own_turn() -> None:
         "R:1",
         False,
     )  # already own: kept
-    assert run(repair_ref("S:9", "The user moved to Bentonville.", src)) == (
+    assert run(repair_ref("S:9", "The user moved to Denver.", src)) == (
         "S:1",
         True,
     )
@@ -345,7 +345,7 @@ def browse(world, monkeypatch):
     )
     monkeypatch.setattr(_scoped, "_RUN_CONV_LOADED", time.monotonic())
     j = JournalStore(mem)
-    _add(j, "The user lives in Bentonville.", type="identity", scope="global", tier="t1")  # fmt: skip
+    _add(j, "The user lives in Denver.", type="identity", scope="global", tier="t1")  # fmt: skip
     _add(j, "The user prefers short sentences.", type="preference", scope="global", tier="t1")  # fmt: skip
     _add(j, "paf uses BM25 for search.", scope="project", project="paf")
     _add(j, "paf memory runs in the background.", type="decision", scope="project", project="paf")  # fmt: skip
@@ -359,7 +359,7 @@ def test_list_memory_pages_a_section(browse) -> None:
     out = run(browse.list_memory(_Ctx(), project="global"))
     lines = out.splitlines()
     assert lines[0] == "About you: facts 1-3 of 3"
-    assert "Bentonville. — #1" in lines[1]  # identity first
+    assert "Denver. — #1" in lines[1]  # identity first
     assert "5K race" in out  # events past the history window are still listed
     page = run(browse.list_memory(_Ctx(), project="paf", type="decision"))
     assert "background. — #4" in page and "BM25" not in page

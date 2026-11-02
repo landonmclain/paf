@@ -41,14 +41,14 @@ from paf.capabilities.memory import (
 def test_record_roundtrips_to_row_and_back() -> None:
     rec = MemoryRecord(
         type="preference",
-        fact="Landon prefers flat-file, diffable storage",
+        fact="The user prefers flat-file, diffable storage",
         tier="t1",
         born_on="2026-08-17T00:00:00Z",
         source_ref="seed-lmem-3f9a:12",
     )
     assert rec.to_row() == {
         "type": "preference",
-        "fact": "Landon prefers flat-file, diffable storage",
+        "fact": "The user prefers flat-file, diffable storage",
         "tier": "t1",
         "born_on": "2026-08-17T00:00:00+00:00",
         "source_ref": "seed-lmem-3f9a:12",

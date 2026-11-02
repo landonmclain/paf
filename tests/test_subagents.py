@@ -335,7 +335,7 @@ def test_no_leaves_means_no_tools_or_instructions(tmp_path: Path) -> None:
 
 def test_writer_leaf_from_spec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The real writer spec: runtime name, policy, TL;DR once, no parent-only tools."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # construction only, no calls
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")  # construction only, no calls
     from paf.capabilities.persistence import _build_store
     from paf.capabilities.subagents import load_leaf
     from paf.specs import load_agent_spec
@@ -770,7 +770,6 @@ def test_spec_subagents_config_parsing(tmp_path: Path) -> None:
 
 
 def test_roster_and_cap_from_subagents_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     from paf.capabilities import AgentProfile
     from paf.capabilities.build import build_runtime_capabilities
@@ -798,7 +797,6 @@ def test_roster_and_cap_from_subagents_config(monkeypatch: pytest.MonkeyPatch) -
 def test_researcher_leaf_gets_its_profile_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("TAVILY_API_KEY", "test-key")
     from paf.capabilities.persistence import _build_store
     from paf.capabilities.subagents import load_leaf
@@ -818,7 +816,6 @@ def test_leaf_profile_never_gets_excluded_capabilities(
 ) -> None:
     """Even a profile that allowlists them never gives a leaf persistence,
     recall, memory, the summarizer, or delegation (depth 1)."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     from paf.capabilities import AgentProfile
     from paf.capabilities.persistence import _build_store
     from paf.capabilities.profiles import PROFILES
@@ -858,10 +855,7 @@ def test_leaf_profile_never_gets_excluded_capabilities(
     }
 
 
-def test_unknown_leaf_profile_fails_loudly(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+def test_unknown_leaf_profile_fails_loudly(tmp_path: Path) -> None:
     from paf.capabilities.persistence import _build_store
     from paf.capabilities.subagents import load_leaf
 

@@ -79,7 +79,7 @@ def _note(root: Path, rel: str, text: str) -> Path:
 def skills(tmp_path: Path) -> Path:
     root = tmp_path / "skills"
     _skill(root, "trading", "quantconnect-api", "QuantConnect cloud API usage")
-    _skill(root, "", "gmail-cleanup", "Clean up a Gmail inbox")
+    _skill(root, "", "inbox-triage", "Triage an inbox")
     return root
 
 
@@ -150,7 +150,7 @@ def test_digest_is_bounded_and_keeps_headings_over_excerpt() -> None:
 
 def test_scan_skills_refs_and_snapshots(skills: Path) -> None:
     items = scan_skills([skills])
-    assert set(items) == {"skill:trading/quantconnect-api", "skill:gmail-cleanup"}
+    assert set(items) == {"skill:trading/quantconnect-api", "skill:inbox-triage"}
     it = items["skill:trading/quantconnect-api"]
     assert it.source_type == "skill" and "QuantConnect cloud API" in it.text
     st = (skills / "trading/quantconnect-api/SKILL.md").stat()
@@ -344,11 +344,11 @@ async def test_first_pass_keys_everything_and_builds_map(
     m = read_entity_map(store)
     assert set(m) == {
         "quantconnect-api",
-        "gmail-cleanup",
+        "inbox-triage",
         "memory-rework",
         "2026-10-08",
     }
-    assert m["gmail-cleanup"]["sources"] == ["skill:gmail-cleanup"]
+    assert m["inbox-triage"]["sources"] == ["skill:inbox-triage"]
     wm = KeywordWatermark.load(store)
     assert set(wm.files) == set(_sources(skills, vault))
 
@@ -370,17 +370,17 @@ async def test_only_changed_sources_are_recurated(
 ) -> None:
     store = tmp_path / "kw"
     await run_keyword_pass(store, _sources(skills, vault), curate=_fake_curate([]))
-    f = skills / "gmail-cleanup" / "SKILL.md"
+    f = skills / "inbox-triage" / "SKILL.md"
     f.write_text(f.read_text() + "\nMore text so the size changes.\n")
     calls: list = []
     res = await run_keyword_pass(
         store, _sources(skills, vault), curate=_fake_curate(calls)
     )
-    assert res.keyed == ["skill:gmail-cleanup"]
-    assert [c[0] for c in calls] == [["skill:gmail-cleanup"]]
+    assert res.keyed == ["skill:inbox-triage"]
+    assert [c[0] for c in calls] == [["skill:inbox-triage"]]
     # same curated content -> journal append was idempotent (no duplicate line)
     j = KeywordJournalStore(store).read_all()
-    assert sum(1 for r in j if r["source_ref"] == "skill:gmail-cleanup") == 1
+    assert sum(1 for r in j if r["source_ref"] == "skill:inbox-triage") == 1
 
 
 @_sync
@@ -389,15 +389,15 @@ async def test_vanished_source_leaves_the_map(
 ) -> None:
     store = tmp_path / "kw"
     await run_keyword_pass(store, _sources(skills, vault), curate=_fake_curate([]))
-    (skills / "gmail-cleanup" / "SKILL.md").unlink()
+    (skills / "inbox-triage" / "SKILL.md").unlink()
     res = await run_keyword_pass(
         store, _sources(skills, vault), curate=_fake_curate([])
     )
-    assert res.removed == ["skill:gmail-cleanup"] and res.keyed == []
-    assert "gmail-cleanup" not in read_entity_map(store)
-    assert "skill:gmail-cleanup" not in KeywordWatermark.load(store).files
+    assert res.removed == ["skill:inbox-triage"] and res.keyed == []
+    assert "inbox-triage" not in read_entity_map(store)
+    assert "skill:inbox-triage" not in KeywordWatermark.load(store).files
     # the journal is lossless: the line is still there, just not live
-    assert "skill:gmail-cleanup" in KeywordJournalStore(store).keyed_refs()
+    assert "skill:inbox-triage" in KeywordJournalStore(store).keyed_refs()
 
 
 @_sync
@@ -527,13 +527,13 @@ def test_report_counts_singletons_and_alias_free() -> None:
 
 def test_report_flags_split_entities_that_share_sources() -> None:
     m = _emap(
-        gws={"sources": ["skill:gmail", "skill:google-workspace"]},
+        **{"mail-cli": {"sources": ["skill:mail", "skill:google-workspace"]}},
         **{"google-workspace": {"sources": ["skill:google-workspace"]}},
         quantconnect={"sources": [f"skill:q{i}" for i in range(8)]},
         composer={"sources": ["skill:q0"]},
     )
     pairs = {frozenset((a, b)) for a, b, _ in find_issues(m)["overlapping_sources"]}
-    assert frozenset(("gws", "google-workspace")) in pairs
+    assert frozenset(("mail-cli", "google-workspace")) in pairs
     # a small entity inside a big one is normal, not a duplicate
     assert frozenset(("composer", "quantconnect")) not in pairs
 

@@ -108,9 +108,11 @@ from tests.lme_scoring import (
 # Config
 # ---------------------------------------------------------------------------
 
-# Landon's call: gpt-4o-mini on OpenRouter, reuse the repo OPENROUTER_API_KEY.
-# The subject model comes from the spec (specs/benchmarks/longmemeval.yaml), not here.
-JUDGE_MODEL = "openrouter:openai/gpt-4o-mini"
+# Judge on OpenRouter so the benchmark needs one key (OPENROUTER_API_KEY) for
+# both subject and judge. The subject model comes from the spec
+# (specs/benchmarks/longmemeval.yaml), not here. Override with LME_JUDGE_MODEL
+# to judge on another provider.
+JUDGE_MODEL = os.environ.get("LME_JUDGE_MODEL", "openrouter:openai/gpt-4o-mini")
 
 # Benchmark data file — v3 memory-system variant copy of the oracle split
 # (evidence-only sessions, ~1.9 sessions / ~22 turns per question). Hardcoded
@@ -847,8 +849,8 @@ def main(argv: list[str] | None = None) -> dict:
         if MEMORY:
             from paf.capabilities.memory._view import JournalViewStore
 
-            # HONEST-MEMORY GUARD (Landon: owner reads up to the question, not
-            # further). raw_turns is built purely from q["haystack_sessions"]
+            # HONEST-MEMORY GUARD: the owner reads up to the question, not
+            # further. raw_turns is built purely from q["haystack_sessions"]
             # (see _raw_turns), so the recall question/answer turn is asked
             # AFTER seeding and must NOT appear in the seed. Assert that so a
             # future refactor can't leak the answer turn into the owner.

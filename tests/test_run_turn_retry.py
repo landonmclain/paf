@@ -159,7 +159,7 @@ def test_retry_exhausted_still_raises(monkeypatch) -> None:
     # One sleep per retry that FAILED and was retried, before the final raise:
     # total attempts = LME_RETRY_MAX_ATTEMPTS; sleeps happen on attempts 1..N-1.
     assert len(slept) == LME_RETRY_MAX_ATTEMPTS - 1
-    # Constant backoff (Landon default 30s between 5 retries).
+    # Constant backoff (the default 30s between 5 retries).
     assert all(d == LME_RETRY_BASE_BACKOFF for d in slept)
 
 
