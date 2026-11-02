@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from opentelemetry import trace as _otel_trace
@@ -48,6 +48,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.usage import RequestUsage
 from pydantic_ai_harness.compaction import compact_now
 from pydantic_ai_harness.step_persistence import continue_run
 from pydantic_graph import End
@@ -903,15 +904,26 @@ class Session:
             if boundary_compaction is not None and self.history:
                 boundary_model = getattr(self._agent, "model", None)
                 if boundary_model is not None:
+                    # Zero the usage so the size is measured from the stored
+                    # messages, not anchored on the last response's prompt: that
+                    # prompt was the mid-turn *trimmed* view, while the stored
+                    # history is untrimmed, so the anchor reads far too small and
+                    # the trim never fires.
+                    unanchored = [
+                        replace(m, usage=RequestUsage())
+                        if isinstance(m, ModelResponse)
+                        else m
+                        for m in self.history
+                    ]
                     compacted = await compact_now(
                         boundary_compaction,
-                        list(self.history),
+                        unanchored,
                         model=boundary_model,
                         deps=None,
                         tracer=_otel_trace.get_tracer("paf"),
                         tokenizer=getattr(boundary_compaction, "tokenizer", None),
                     )
-                    if compacted != self.history:
+                    if compacted != unanchored:
                         self.history = compacted
 
             try:
