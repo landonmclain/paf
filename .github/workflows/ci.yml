@@ -24,10 +24,10 @@ jobs:
         run: uv sync --group dev
 
       - name: Ruff lint
-        run: uv run ruff check src tests ui
+        run: uv run ruff check src tests ui scripts
 
       - name: Ruff format check
-        run: uv run ruff format --check src tests ui
+        run: uv run ruff format --check src tests ui scripts
 
       - name: Pyright
         run: npx --yes pyright

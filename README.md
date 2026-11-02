@@ -351,8 +351,8 @@ data/
 ```bash
 uv run pytest                      # offline suite; live tests are opt-in
 uv run pytest -m live              # real model calls (needs .env)
-uv run ruff check src tests ui
-uv run ruff format --check src tests ui
+uv run ruff check src tests ui scripts
+uv run ruff format --check src tests ui scripts
 npx pyright
 uv run --group docs mkdocs serve   # documentation site at 127.0.0.1:8000
 ```
@@ -360,6 +360,33 @@ uv run --group docs mkdocs serve   # documentation site at 127.0.0.1:8000
 The offline suite uses pydantic-ai's `TestModel`, so it needs no API key. CI
 runs the same checks on every push, plus a strict build of the documentation
 site (`mkdocs.yml`, `docs/`), so a broken link or anchor fails it.
+
+### Benchmarks
+
+`tests/run_lmem.py` is the graded LongMemEval memory benchmark: it seeds each
+question's sessions into an isolated store, asks the question cold, and scores
+the answer with the official LongMemEval judge prompts. It makes real model
+calls, so it costs tokens.
+
+The dataset is not in the repo (`data/` is gitignored), so a fresh clone needs
+one download before the benchmark can run:
+
+```bash
+uv run scripts/download_benchmarks.py
+```
+
+Each dataset is pinned to a SHA-256 and checked against the schema the harness
+reads, so a partial or upstream-changed download never lands in
+`data/benchmarks/`. Then:
+
+```bash
+set -a && . ./.env && set +a
+LME_MAX_QUESTIONS=4 .venv/bin/python -u -m tests.run_lmem
+```
+
+Both the subject and the judge default to OpenRouter, so `OPENROUTER_API_KEY`
+is the only key the benchmark needs; set `LME_JUDGE_MODEL` to judge on another
+provider. The details are in [`tests/AGENTS.md`](tests/AGENTS.md).
 
 ## Project layout
 
@@ -377,6 +404,7 @@ src/paf/
 specs/              agent specs, plus sub_agents/ and background_agents/
 ui/                 sse.py (web server), chat.py (CLI shim)
 tests/              unit tests and the benchmark harness
+scripts/            one-off tools, including the benchmark data downloader
 ```
 
 ## License

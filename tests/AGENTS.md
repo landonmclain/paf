@@ -58,7 +58,8 @@ deterministic, ~1s. See [`defender_eval/README.md`](defender_eval/README.md).
 
 `tests/run_lmem.py` is the graded memory benchmark. It uses real models (subject and
 judge via OpenRouter) and writes Langfuse traces, so it costs money. Don't run it
-unless asked.
+unless asked. The judge is `openrouter:openai/gpt-4o-mini` by default; override with
+`LME_JUDGE_MODEL`.
 
 - Scoring: the verbatim LongMemEval judge prompts (`tests/lme_scoring.py`) for answer
   correctness, plus recall@k over the surfaced `session=` tags.
@@ -66,9 +67,11 @@ unless asked.
   there; runners must not keep a parallel builder. It builds the same scoped memory
   render as the live agent, with its knobs read from `specs/benchmarks/longmemeval.yaml`.
 - **Data is not in the repo.** The harness reads `data/benchmarks/memory-v3-lme_oracle.json`
-  (`LME_DATA_FILE` in `run_lmem.py`), which is untracked. It is derived from the official
-  LongMemEval oracle split (github.com/xiaowu0162/LongMemEval), but no script produces it
-  yet, so a fresh clone cannot run the benchmark until one is written.
+  (`LME_DATA_FILE` in `run_lmem.py`), which is untracked. Fetch it with
+  `uv run scripts/download_benchmarks.py` — that script pulls the official LongMemEval
+  oracle split (github.com/xiaowu0162/LongMemEval), pins it to a SHA-256, and validates
+  the schema before writing it. The v3 name is deliberate: it forces a distinct
+  durable-memory directory so v3 runs never clobber the older v2 snapshots.
 - Data: `data/benchmarks/` (the question file, per-question seeds and durable memory
   snapshots). Graded records go to `tests/results/`. Both directories are gitignored.
 
