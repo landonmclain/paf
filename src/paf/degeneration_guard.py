@@ -26,11 +26,10 @@ window of recent thinking lines — e.g.
 That is a "thinking forever" narration loop (saw it from DeepSeek v4.1 at low and medium
 effort). The guard is intentionally minimal and fast: exact repeated-line counting
 over a rolling window, no semantic classifier, no intent heuristics, no fuzzy/
-near-duplicate merging (a real loop repeats phrases verbatim). It only fires when
-`min_distinct_lines` DIFFERENT lines each repeat `max_repeats` times, so a single
-common phrase recurring while genuinely thinking (e.g. "hmm let me get the exact
-line first then decide") never trips it. If it proves ineffective or a false-positive,
-remove it — it's cheap insurance.
+near-duplicate merging (a real loop repeats phrases verbatim). It fires when
+`min_distinct_lines` DIFFERENT lines each repeat `max_repeats` times, or when
+one line repeats `max_consecutive_repeats` times without another nonblank line
+between. A common phrase recurring amid varied reasoning is still allowed.
 
 Only external dependency: `pydantic_ai.exceptions.UnexpectedModelBehavior` (the
 base of :class:`DegenerationError`, so the runtime's existing mid-stream failure
@@ -72,6 +71,7 @@ class DegenerationGuard:
         window: int = 32,
         max_repeats: int = 4,
         min_distinct_lines: int = 3,
+        max_consecutive_repeats: int = 8,
     ) -> None:
         """State for one generation.
 
@@ -85,10 +85,15 @@ class DegenerationGuard:
                 block of several different phrases cycling (e.g. "ok i'll run it
                 now" / "let me do it" / "let me run the command" / "let me go");
                 a single frequently-repeated phrase while thinking is normal.
+            max_consecutive_repeats: catch a single-line loop independently of
+                the distinct-line rule. Blank lines do not interrupt a streak.
         """
         self.window = window
         self.max_repeats = max_repeats
         self.min_distinct_lines = min_distinct_lines
+        self.max_consecutive_repeats = max_consecutive_repeats
+        self._last_line: str | None = None
+        self._consecutive_repeats = 0
 
         self.lines: deque[str] = deque(maxlen=window)
         self._buf: str = ""  # streaming accumulation, flushed on newline
@@ -122,14 +127,28 @@ class DegenerationGuard:
         Detection (exact-match only, deliberately simple): a real narration loop
         repeats whole phrases *identically*. We count how many DISTINCT lines each
         recur >= `max_repeats` times within the window, and only call it a loop
-        when >= `min_distinct_lines` distinct lines are doing so. A single common
-        phrase recurring a few times is normal thinking; a block of several
-        different phrases each cycling is a loop. No fuzzy/near-duplicate merging:
+        when >= `min_distinct_lines` distinct lines are doing so. Independently,
+        a single line repeating consecutively reaches `max_consecutive_repeats`.
+        A common phrase recurring among varied lines is allowed.
+        No fuzzy/near-duplicate merging:
         it is fragile for short phrases and the real loop repeats verbatim anyway.
         """
         normalized = _normalize(line)
         if not normalized:
             return None
+
+        if normalized == self._last_line:
+            self._consecutive_repeats += 1
+        else:
+            self._last_line = normalized
+            self._consecutive_repeats = 1
+        if self._consecutive_repeats >= self.max_consecutive_repeats:
+            return DegenerationResult(
+                detected=True,
+                reason="thinking_loop",
+                line=normalized,
+                repeat_count=self._consecutive_repeats,
+            )
 
         # Count occurrences of each distinct normalized line (window + this one).
         counts: Counter[str] = Counter(self.lines)

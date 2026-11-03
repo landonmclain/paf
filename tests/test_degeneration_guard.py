@@ -87,6 +87,47 @@ def test_blank_lines_do_not_pollute_or_false_positive():
     assert result is None
 
 
+def test_single_line_loop_trips_on_eighth_nonblank_line():
+    guard = DegenerationGuard()
+    for _ in range(7):
+        assert guard.stream_thinking("So.\n\n") is None
+    result = guard.stream_thinking("So.\n")
+    assert result is not None
+    assert result.reason == "thinking_loop"
+    assert result.line == "so"
+    assert result.repeat_count == 8
+
+
+def test_consecutive_loop_normalizes_and_handles_split_deltas():
+    guard = DegenerationGuard()
+    text = "So.\n\n SO! \nso\nSo?\n" * 2
+    result = None
+    for char in text:
+        result = guard.stream_thinking(char)
+        if result is not None:
+            break
+    assert result is not None
+    assert result.repeat_count == 8
+
+
+def test_different_line_resets_consecutive_streak():
+    guard = DegenerationGuard()
+    assert feed_lines(guard, "So.\n" * 7) is None
+    assert guard.add_line("The notes are in the vault.") is None
+    assert feed_lines(guard, "So.\n" * 7) is None
+    result = guard.add_line("So.")
+    assert result is not None
+    assert result.repeat_count == 8
+
+
+def test_consecutive_repeat_threshold_is_configurable():
+    guard = DegenerationGuard(max_consecutive_repeats=3)
+    assert feed_lines(guard, "Let me read.\n" * 2) is None
+    result = guard.add_line("Let me read.")
+    assert result is not None
+    assert result.repeat_count == 3
+
+
 def test_normal_thinking_no_false_positive():
     """A real, non-looping thinking turn must NOT trip the guard."""
     guard = DegenerationGuard()
