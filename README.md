@@ -11,6 +11,8 @@ with durable conversations, long-term memory, and context management.
 It ships with a terminal chat (`paf chat`), an SSE server for web front ends,
 and a Python API (`Session`) that both are built on.
 
+Full documentation lives at [landonmclain.github.io/paf](https://landonmclain.github.io/paf/).
+
 ## Why it exists
 
 paf started from a handful of design principles drawn from earlier agent
