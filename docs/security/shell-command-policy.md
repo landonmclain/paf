@@ -47,6 +47,29 @@ shell:
 
 ## How a command is read
 
+To permit SSH only after approval, enable `allow_interactive` and add a command
+rule to the shell policy:
+
+```yaml
+shell:
+  allow_interactive: true
+  command_policy:
+    default: allow
+    rules:
+      - commands: [ssh]
+        action: approve
+        why: SSH requires approval for each invocation
+```
+
+Add that rule alongside your existing rules. The command policy checks both
+`run_command` and `start_command`, including `/usr/bin/ssh` and supported wrappers
+such as `env ssh` and `bash -c 'ssh …'`. Without `allow_interactive: true`, a plain
+SSH command is still refused by the separate interactive-command check, even
+after approval. Use individual remote commands (`ssh host 'uptime'`): approval
+covers the whole tool call, not each command inside a remote session. This rule
+does not inspect remote effects, enforce read-only access, or detect SSH hidden
+inside script files. Restart `paf-sse` after changing a loaded agent's spec.
+
 The command is parsed with the bash grammar (tree-sitter), not split on spaces.
 Every simple command that would run is found and judged on its own:
 

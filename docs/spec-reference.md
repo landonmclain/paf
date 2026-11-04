@@ -160,6 +160,7 @@ relative paths start, and the user's time zone.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `cwd` | repository root | Where commands run. |
+| `allow_interactive` | `false` | Permit commands classified as interactive, including SSH. Must be a boolean. Command approval rules still apply; this does not provide an interactive terminal. |
 | `executor` | `backend: local` | Where commands execute: on the host, or in a Docker container. See [`executor`](#executor). |
 | `command_policy` | none | What happens to each command before it runs: allow, ask for approval, or block. See [Shell command policy](security/shell-command-policy.md). |
 

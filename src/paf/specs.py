@@ -697,10 +697,10 @@ def _spec_filesystem_config(spec_path: Path) -> dict | None:
 
 
 def _spec_shell_config(spec_path: Path) -> dict | None:
-    """Read the spec's top-level ``shell:`` block (cwd + executor).
+    """Read the spec's top-level ``shell:`` execution and policy settings.
 
-    Returns a dict with optional ``cwd`` and ``executor`` keys, or ``None``
-    when the block is absent / unreadable. The ``executor`` block selects the
+    Returns the supported settings, or ``None`` when the block is absent /
+    unreadable. The ``executor`` block selects the
     execution backend:
 
         shell:
@@ -725,6 +725,10 @@ def _spec_shell_config(spec_path: Path) -> dict | None:
     if not isinstance(block, dict):
         return None
     config: dict = {}
+    if "allow_interactive" in block:
+        if not isinstance(block["allow_interactive"], bool):
+            raise ValueError("shell.allow_interactive must be a boolean")
+        config["allow_interactive"] = block["allow_interactive"]
     cwd = block.get("cwd")
     if isinstance(cwd, str) and cwd.strip():
         config["cwd"] = cwd

@@ -470,6 +470,76 @@ def test_spec_reader_passes_the_block_through(tmp_path):
     assert cfg["command_policy"]["rules"][0]["action"] == "approve"
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_spec_wires_allow_interactive_to_shell_toolset(tmp_path, enabled):
+    spec = tmp_path / "a.yaml"
+    spec.write_text(f"shell:\n  allow_interactive: {str(enabled).lower()}\n")
+    shell = _build_shell(None, _spec_shell_config(spec))
+    assert shell.allow_interactive is enabled
+    toolset = shell.get_toolset()
+    if enabled:
+        toolset._check_command("ssh host 'uptime'")
+    else:
+        with pytest.raises(PermissionError, match="Interactive commands"):
+            toolset._check_command("ssh host 'uptime'")
+
+
+def test_allow_interactive_defaults_to_false():
+    assert _build_shell(None).allow_interactive is False
+
+
+@pytest.mark.parametrize("value", ['"false"', "1", "null", "[]"])
+def test_spec_rejects_non_boolean_allow_interactive(tmp_path, value):
+    spec = tmp_path / "a.yaml"
+    spec.write_text(f"shell:\n  allow_interactive: {value}\n")
+    with pytest.raises(ValueError, match="shell.allow_interactive must be a boolean"):
+        _spec_shell_config(spec)
+
+
+def test_builder_rejects_non_boolean_allow_interactive():
+    with pytest.raises(ValueError, match="shell.allow_interactive must be a boolean"):
+        _build_shell(None, {"allow_interactive": "false"})
+
+
+@pytest.mark.parametrize("tool", ["run_command", "start_command"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ssh host 'uptime'",
+        "/usr/bin/ssh host 'uptime'",
+        "env ssh host 'uptime'",
+        "bash -c \"ssh host 'uptime'\"",
+        "ssh host 'rm -rf /tmp/example'",
+    ],
+)
+def test_ssh_requires_approval_even_when_interactive_allowed(tmp_path, tool, command):
+    spec = tmp_path / "a.yaml"
+    spec.write_text(
+        "shell:\n  allow_interactive: true\n  command_policy:\n"
+        "    default: allow\n    rules:\n      - commands: [ssh]\n"
+        "        action: approve\n        why: SSH requires approval\n"
+    )
+    shell = _build_shell(None, _spec_shell_config(spec))
+    # No real SSH connection is made: exercise the execution gate and validation.
+    with pytest.raises(SkipToolExecution) as exc:
+        _hook(shell, command, tool=tool)
+    assert "no one is attached" in exc.value.result
+    channel = ApprovalChannel(emit=lambda ev: None)
+
+    async def scenario():
+        with bind_channel(channel), pytest.raises(ApprovalRequired):
+            await shell.before_tool_execute(
+                _ctx(),
+                call=ToolCallPart(tool, {"command": command}),
+                tool_def=ToolDefinition(name=tool),
+                args={"command": command},
+            )
+
+    _run(scenario())
+    assert _hook(shell, command, tool=tool, approved=True) == {"command": command}
+    shell.get_toolset()._check_command(command)
+
+
 # --- find from your home directory (demo_assistant's shell cwd is ~) -----------------------
 @pytest.mark.parametrize(
     ("command", "action"),

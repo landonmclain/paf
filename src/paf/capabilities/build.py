@@ -393,9 +393,9 @@ def _build_shell(
     `shell_config` is the spec's top-level ``shell:`` block (see
     ``specs._spec_shell_config``): ``cwd`` overrides the default ``PROJECT_ROOT``
     and ``executor`` selects the execution backend (local default, docker for
-    the sandbox). Absent/``None`` -> ``PROJECT_ROOT`` + local executor. The
-    built-in deny-list and interactive-command block always apply; these knobs
-    only move the cwd and the backend.
+    the sandbox). Absent/``None`` -> ``PROJECT_ROOT`` + local executor.
+    ``allow_interactive`` defaults to false; enabling it lifts the interactive
+    command block, while ``command_policy`` still decides approval or refusal.
 
     `agent_name` scopes shell's DURABLE background stores to
     ``data/processes/<agent>/`` (same root the coordinator's runs feed uses), so
@@ -417,10 +417,16 @@ def _build_shell(
     command_policy = None
     if isinstance(shell_config, dict) and shell_config.get("command_policy"):
         command_policy = parse_command_policy(shell_config["command_policy"])
+    allow_interactive = False
+    if isinstance(shell_config, dict) and "allow_interactive" in shell_config:
+        allow_interactive = shell_config["allow_interactive"]
+        if not isinstance(allow_interactive, bool):
+            raise ValueError("shell.allow_interactive must be a boolean")
     return _Shell(
         cwd=cwd,
         executor=executor,
         command_policy=command_policy,
+        allow_interactive=allow_interactive,
         processes_root=str(PROCESSES_DIR),
         agent=agent_name or "demo_assistant",
         on_complete=on_complete,
