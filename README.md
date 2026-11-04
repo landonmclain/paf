@@ -164,13 +164,12 @@ these.
   container (no network, read-only root, resource limits). It refuses to run on
   the host unless a spec explicitly allows it.
 
-**Web and vision**
+**Web**
 
 - **Web** searches the web and extracts pages (`search_web`, `fetch_web_page`,
   Tavily when a key is set, otherwise keyless DuckDuckGo).
 - **Browser** drives headless Chromium with a mobile-first viewport, limited to
   allowed domains.
-- **Visual** describes screenshots and images with a vision model.
 
 **Orchestration**
 
