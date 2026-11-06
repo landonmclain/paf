@@ -9,7 +9,8 @@ choose which capabilities it may use, and paf assembles the agent and runs it
 with durable conversations, long-term memory, and context management.
 
 It ships with a terminal chat (`paf chat`), an SSE server for web front ends,
-and a Python API (`Session`) that both are built on.
+and a Python API (`Session`) that both are built on. A companion web UI,
+[paf-ui](https://github.com/landonmclain/paf-ui), talks to that server.
 
 Full documentation lives at [landonmclain.github.io/paf](https://landonmclain.github.io/paf/).
 
@@ -63,6 +64,8 @@ Start a conversation:
 uv run paf chat                    # the default agent, demo_assistant
 uv run paf chat --new              # the same agent, in a fresh conversation
 ```
+
+![paf chat: tool calls, an approval prompt, slash commands, and resuming a conversation](docs/demo/demo.gif)
 
 The default model is `openai:gpt-6-luna`, so an `OPENAI_API_KEY` is the only
 required setting. Any [pydantic-ai model string](https://ai.pydantic.dev/models/)
@@ -285,6 +288,8 @@ endpoints for conversations, projects, plans, image uploads, and Web Push
 subscriptions. Turns run on the server, so a page refresh reattaches to a turn
 in progress. It also hosts the scheduler for scheduled tasks, and can push a
 notification to your devices when a turn finishes.
+[paf-ui](https://github.com/landonmclain/paf-ui) is a Next.js front end built
+for this server.
 
 ```bash
 uv run python ui/sse.py   # serves on port 8090
