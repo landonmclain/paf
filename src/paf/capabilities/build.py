@@ -464,7 +464,7 @@ def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _Code
 
     `store` is accepted for a uniform builder signature but unused — the codebase
     map reads/writes its own artifacts through the ``StorageService`` seam
-    (``FlatFileStorage`` default, co-located under ``.agent-codeindex/``), not the
+    (``FlatFileStorage`` default, under ``data/.paf-codebase-index/<sha256(root)>/``), not the
     persistence store. Rooting at PROJECT_ROOT indexes the repo the agent works in.
     The index is **on-demand**: ``get_overview`` / the ``run_codebase_map`` tool
     (re)build artifacts if missing or stale, so the capability constructs and
@@ -472,8 +472,8 @@ def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _Code
 
     `codebase_map_config` is the spec's top-level ``codebase_map:`` block (see
     ``specs._spec_codebase_map_config``): ``scan_root`` overrides the default
-    ``PROJECT_ROOT``. Absent/``None`` -> ``PROJECT_ROOT``. Index artifacts always
-    land under ``.agent-codeindex/`` inside whichever root is in effect.
+    ``PROJECT_ROOT``. Absent/``None`` -> ``PROJECT_ROOT``. Index artifacts live in paf-owned
+    ``data/.paf-codebase-index/<sha256(root)>/``, outside the scanned tree.
     """
     scan_root = PROJECT_ROOT
     if (
