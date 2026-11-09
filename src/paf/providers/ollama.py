@@ -30,6 +30,16 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 OLLAMA_CLIENT_TIMEOUT_S = 120.0
 OLLAMA_CLIENT_CONNECT_S = 5.0
 
+# Past thinking goes back to the server in the assistant message's
+# ``reasoning_content`` field, not as inline ``<think>`` text. A server that drops
+# historical ``reasoning_content`` (Strata does by default) then keeps old
+# reasoning out of the prompt; sent inline, it is replayed on every step (about
+# 73% of one long agent turn's tokens) and compaction cannot trim it.
+_THINKING_PROFILE = {
+    "openai_chat_send_back_thinking_parts": "field",
+    "openai_chat_thinking_field": "reasoning_content",
+}
+
 
 def model_with_client(model_name: str) -> OllamaModel:
     """Build an ``OllamaModel`` wrapping a bounded-timeout, no-retry client.
@@ -51,4 +61,8 @@ def model_with_client(model_name: str) -> OllamaModel:
         timeout=OpenAITimeout(OLLAMA_CLIENT_TIMEOUT_S, connect=OLLAMA_CLIENT_CONNECT_S),
         max_retries=0,
     )
-    return OllamaModel(model_name, provider=OllamaProvider(openai_client=client))
+    return OllamaModel(
+        model_name,
+        provider=OllamaProvider(openai_client=client),
+        profile=_THINKING_PROFILE,
+    )
