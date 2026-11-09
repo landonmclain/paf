@@ -92,6 +92,13 @@ The SSE server exposes the approval flow to any front end:
 The SSE server has no authentication of its own. It is meant to be reached over
 a private network (paf's deployment puts it behind Tailscale).
 
+Project roots can also be written over this API. The host-side
+`workspace.project_roots.within` policy bounds which roots an agent may use;
+API data cannot widen that policy. Containment is checked after resolving
+symlinks, on assignment and again before every turn. Invalid policy refuses
+execution. This bounds root selection, not the reach of an unsandboxed shell
+using absolute paths. See [workspace configuration](../spec-reference.md#workspace).
+
 ## Limits
 
 - **One call at a time.** There is no "approve everything like this for the

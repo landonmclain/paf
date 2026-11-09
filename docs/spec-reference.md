@@ -150,6 +150,34 @@ relative paths start, and the user's time zone.
 | `notes` | `[]` | Extra lines added to the block (for example, "Projects live under ~/projects"). |
 | `project_roots.within` | off | The `within` list holds allowed absolute parent directories for project roots, such as `[~/projects]`. An absent block or `within: []` disables the feature. Invalid policy raises an error. When enabled, file tools, shell, Python, git, and codebase map follow the conversation’s project root; a broken root refuses the turn. Vault and skills keep their agent roots. |
 
+To opt in, choose the host directories where this agent may use project roots:
+
+```yaml
+workspace:
+  project_roots:
+    within: [~/projects]
+```
+
+Each project has one optional root shared by file tools, shell, Python, git, and
+codebase map. A project without a root, or an unassigned conversation, uses the
+spec's tool roots. An archived project keeps its root. In a directory outside a
+Git work tree, Git tools are omitted and the workspace block explains why.
+A delegated leaf's explicit `filesystem.root_dir` overrides the project for all
+five tools; otherwise those tools follow the parent project's root.
+
+The policy is checked on assignment and reread at every turn start. Symlinks are
+resolved before checking containment. Missing directories, roots outside the
+policy, and missing assigned project records refuse execution with a repair
+message. Invalid policy also raises an error; it never silently disables the
+feature. Only an absent `project_roots` block or explicit `within: []` turns it off.
+
+Project/root changes apply on the next turn. The session retains its loaded
+model, instructions, and other capability settings across root rebuilds; start
+a new session to load changes to those settings. Wait for delegated tasks and
+background shell commands to finish before changing project roots or policy.
+Memory consolidation, keyword curation, and thread summarization are independent
+of these roots and continue normally.
+
 ---
 
 ## Execution
