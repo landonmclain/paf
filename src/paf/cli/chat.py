@@ -771,9 +771,22 @@ class ChatApp:
 
     def _projects_command(self, arg: str) -> None:
         """``/projects`` list · ``add <name> [-- description]`` · ``rename <slug> <name>``
-        · ``archive <slug>`` · ``unarchive <slug>``."""
+        · ``root <slug> <path | ->`` · ``archive <slug>`` · ``unarchive <slug>``."""
         sub, _, rest = arg.partition(" ")
         sub, rest = sub.lower(), rest.strip()
+        if sub == "root":
+            slug, _, root = rest.partition(" ")
+            if not slug or not root.strip():
+                _out(f"{RED}usage: /projects root <slug> <path | ->{RESET}\n")
+                return
+            try:
+                entry = self.projects.update(slug, root="" if root == "-" else root)
+                _out(f"root {slug}: {entry.get('root') or 'cleared'}\n")
+            except ProjectNotFoundError:
+                _out(f"{RED}unknown project {slug!r}{RESET}\n")
+            except ValueError as exc:
+                _out(f"{RED}{exc}{RESET}\n")
+            return
         if sub in ("rename", "archive", "unarchive"):
             slug, _, name = rest.partition(" ")
             if not slug or (sub == "rename" and not name.strip()):
@@ -879,6 +892,7 @@ _HELP = """\
   /hide · /unhide  hide this conversation from /list, or show it again
   /project [slug]  show this conversation's project, assign one, or 'none'
   /projects        list projects · /projects add <name> [-- description]
+                   /projects root <slug> <path | ->
                    · rename <slug> <name> · archive <slug> · unarchive <slug>
   /image <path> [message]  send an image; the agent's vision model describes it
   /history [n]     reprint the last n turns (default: all loaded)

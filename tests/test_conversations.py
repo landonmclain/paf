@@ -536,3 +536,62 @@ def test_list_conversations_tolerates_sessions_without_current_turn() -> None:
     with _empty_store():
         lane = TestClient(sse.app).get("/api/conversations").json()["conversations"][0]
     assert lane["running"] is False
+
+
+def test_project_root_round_trip_and_portable_home(tmp_path, monkeypatch):
+    from paf.conversations import ProjectStore
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "checkout"
+    root.mkdir()
+    store = ProjectStore(FlatFileStorage(tmp_path / "registry"))
+    assert "root" not in store.create("plain")
+    assert store.create("rooted", root=" ~/checkout ")["root"] == "~/checkout"
+    assert store.update("rooted", root=None)["root"] == "~/checkout"
+    assert store.update("rooted", root=str(root))["root"] == str(root)
+    assert "root" not in store.update("rooted", root="")
+
+
+def test_project_root_routes_validate_types_and_paths(tmp_path):
+    root = tmp_path / "with spaces"
+    root.mkdir()
+    file = tmp_path / "file"
+    file.touch()
+    with _temp_projects(tmp_path):
+        client = TestClient(sse.app)
+        response = client.post(
+            "/api/projects", json={"name": "rooted", "root": str(root)}
+        )
+        assert response.status_code == 201
+        assert response.json()["root"] == str(root)
+        for invalid in (
+            42,
+            True,
+            [],
+            {},
+            "relative",
+            str(file),
+            str(tmp_path / "missing"),
+        ):
+            response = client.post(
+                "/api/projects", json={"name": "bad", "root": invalid}
+            )
+            assert response.status_code == 400
+            assert "root" in response.json()["detail"]
+            response = client.patch("/api/projects/rooted", json={"root": invalid})
+            assert response.status_code == 400
+            assert client.get("/api/projects").json()["projects"][0]["root"] == str(
+                root
+            )
+        response = client.patch("/api/projects/rooted", json={"root": None})
+        assert response.status_code == 200
+        assert response.json()["root"] == str(root)
+        assert (
+            "root" not in client.patch("/api/projects/rooted", json={"root": ""}).json()
+        )
+        assert (
+            "root"
+            not in client.post(
+                "/api/projects", json={"name": "null", "root": None}
+            ).json()
+        )

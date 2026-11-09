@@ -91,3 +91,25 @@ def test_missing_api_key_is_one_line_not_a_traceback():
     assert _user_error_message(UserError("Unknown model: x. More text.")) == (
         "paf chat: Unknown model: x."
     )
+
+
+def test_projects_root_command(tmp_path, monkeypatch):
+    from paf.capabilities._storage import FlatFileStorage
+    from paf.cli import chat
+    from paf.conversations import ProjectStore
+
+    app = object.__new__(chat.ChatApp)
+    app.projects = ProjectStore(FlatFileStorage(tmp_path / "registry"))
+    app.projects.create("example")
+    output = []
+    monkeypatch.setattr(chat, "_out", output.append)
+    root = tmp_path / "directory with spaces"
+    root.mkdir()
+    app._projects_command(f"root example {root}")
+    assert app.projects.get("example")["root"] == str(root)
+    app._projects_command("root example missing")
+    assert "absolute path" in output[-1]
+    app._projects_command("root example -")
+    assert "root" not in app.projects.get("example")
+    app._projects_command("root unknown -")
+    assert "unknown project" in output[-1]

@@ -968,7 +968,9 @@ async def create_project(body: dict[str, Any]) -> dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST, detail="name required"
         )
     try:
-        return _project_store().create(name, str(body.get("description") or ""))
+        return _project_store().create(
+            name, str(body.get("description") or ""), root=body.get("root")
+        )
     except ProjectExistsError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -983,10 +985,10 @@ async def create_project(body: dict[str, Any]) -> dict[str, Any]:
 @app.patch("/api/projects/{slug}")
 async def update_project(slug: str, body: dict[str, Any]) -> dict[str, Any]:
     """Edit a project's name/description, or (un)archive it. Never deletes."""
-    if not any(k in body for k in ("name", "description", "archived")):
+    if not any(k in body for k in ("name", "description", "archived", "root")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="name, description, or archived required",
+            detail="name, description, archived, or root required",
         )
     name, description, archived = (
         body.get("name"),
@@ -999,6 +1001,7 @@ async def update_project(slug: str, body: dict[str, Any]) -> dict[str, Any]:
             name=None if name is None else str(name),
             description=None if description is None else str(description),
             archived=None if archived is None else bool(archived),
+            root=body.get("root"),
         )
     except ProjectNotFoundError as exc:
         raise HTTPException(
