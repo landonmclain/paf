@@ -148,6 +148,7 @@ relative paths start, and the user's time zone.
 | --- | --- | --- |
 | `expose_paths` | `true` | `false` hides host paths (your home directory, the tool roots) from the model. Use it for locked-down agents. |
 | `notes` | `[]` | Extra lines added to the block (for example, "Projects live under ~/projects"). |
+| `project_roots.within` | off | The `within` list holds allowed absolute parent directories for project roots, such as `[~/projects]`. An absent block or `within: []` disables the feature. Invalid policy raises an error. When enabled, file tools, shell, Python, git, and codebase map follow the conversation’s project root; a broken root refuses the turn. Vault and skills keep their agent roots. |
 
 ---
 

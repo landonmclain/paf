@@ -84,11 +84,13 @@ from paf.conversations import (
     default_project_store,
     list_conversations,
 )
+from paf.project_roots import ProjectRootError, project_root
 from paf.runtime import Session, TurnHandle
 from paf.specs import (
     AgentSpecNotFoundError,
     InvalidSpecError,
     MissingProfileError,
+    spec_project_root_policy,
     spec_visual_config,
 )
 
@@ -765,6 +767,11 @@ class ChatApp:
         if entry is None or entry.get("archived"):
             known = ", ".join(p["slug"] for p in self.projects.list()) or "none yet"
             _out(f"{RED}unknown project {arg!r}{RESET} (known: {known})\n")
+            return
+        try:
+            project_root(arg, spec_project_root_policy(self.agent), self.projects)
+        except ProjectRootError as exc:
+            _out(f"{RED}{exc}{RESET}\n")
             return
         self.meta.set_project(self.cid, arg)
         _out(f"project: {arg}\n")

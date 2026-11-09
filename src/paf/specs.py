@@ -14,6 +14,7 @@ from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
 from paf.capabilities.web._toolset import SEARCH_BACKENDS
 from paf.config import SPECS_DIR
+from paf.project_roots import ProjectRootError, ProjectRootPolicy
 from paf.providers.ollama import model_with_client as ollama_model_with_client
 from paf.providers.openrouter import model_with_client
 
@@ -866,6 +867,50 @@ def _spec_codebase_map_config(spec_path: Path) -> dict | None:
     return _spec_rooted_config(spec_path, "codebase_map", "scan_root")
 
 
+def _project_root_policy(spec_path: Path) -> ProjectRootPolicy | None:
+    """Fail closed on invalid or unreadable policy, including during live refresh."""
+    try:
+        data = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("spec must be a mapping")
+        workspace = data.get("workspace", {})
+        if not isinstance(workspace, dict):
+            raise ValueError("workspace must be a mapping")
+        if "project_roots" not in workspace:
+            return None
+        block = workspace["project_roots"]
+        if not isinstance(block, dict) or not isinstance(block.get("within"), list):
+            raise ValueError(
+                "workspace.project_roots.within must be a list of absolute paths"
+            )
+        within = []
+        for entry in block["within"]:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError("within entries must be non-blank strings")
+            path = Path(entry.strip()).expanduser()
+            if not path.is_absolute():
+                raise ValueError("within entries must be absolute after ~ expansion")
+            within.append(path.resolve())
+        return ProjectRootPolicy(tuple(within)) if within else None
+    except (OSError, RuntimeError, ValueError, yaml.YAMLError) as exc:
+        raise ProjectRootError(
+            f"Invalid project-root policy in {spec_path}: {exc}"
+        ) from exc
+
+
+def spec_project_root_policy(
+    agent_name: str, spec_directory: Path = DEFAULT_SPEC_DIRECTORY
+) -> ProjectRootPolicy | None:
+    """Read the current policy. Only an absent block or explicit [] disables it."""
+    try:
+        path = get_spec_path(agent_name, spec_directory)
+    except AgentSpecNotFoundError as exc:
+        raise ProjectRootError(
+            f"Cannot read project-root policy for {agent_name!r}: {exc}"
+        ) from exc
+    return _project_root_policy(path)
+
+
 def _spec_workspace_config(spec_path: Path) -> dict | None:
     """Read the spec's top-level ``workspace:`` block (extra always-present lines).
 
@@ -875,9 +920,12 @@ def _spec_workspace_config(spec_path: Path) -> dict | None:
           notes:
             - Projects live under ~/projects.
 
-    Returns ``{"notes": [...]?, "expose_paths": False?}`` with only the keys that
+    Also preserves a validated ``project_roots`` policy block.
+
+    Returns ``{"notes": [...]?, "expose_paths": False?, "project_roots": ...?}`` with only the keys that
     are set, or ``None`` when absent / empty.
     """
+    _project_root_policy(spec_path)
     try:
         with spec_path.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
@@ -887,6 +935,8 @@ def _spec_workspace_config(spec_path: Path) -> dict | None:
     if not isinstance(block, dict):
         return None
     config: dict = {}
+    if "project_roots" in block:
+        config["project_roots"] = block["project_roots"]
     notes = [n for n in block.get("notes") or [] if isinstance(n, str) and n.strip()]
     if notes:
         config["notes"] = notes

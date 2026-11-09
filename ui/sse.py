@@ -85,6 +85,7 @@ from paf.conversations import (
     persisted_lanes,
 )
 from paf.observability.instrumentation import root_span
+from paf.project_roots import ProjectRootError, project_root
 from paf.push import (
     AgentPusher,
     InvalidSubscription,
@@ -100,7 +101,7 @@ from paf.runtime import (
     TurnSettled,
     TurnStreamEvent,
 )
-from paf.specs import spec_visual_config
+from paf.specs import spec_project_root_policy, spec_visual_config
 
 if TYPE_CHECKING:
     from paf.capabilities._storage import FlatFileStorage
@@ -873,7 +874,7 @@ async def create_conversation(
     ``project`` (optional) assigns the new lane to a registered project.
     """
     if project:
-        _require_assignable_project(project)
+        _require_assignable_project(project, agent)
     conversation_id = f"paf-{uuid.uuid4().hex[:12]}"
     key = _session_key(agent, conversation_id)
     _sessions_last_used[key] = _sessions_touched[key] = _now()
@@ -882,7 +883,7 @@ async def create_conversation(
     return {"conversation_id": conversation_id, "agent": agent, "project": project}
 
 
-def _require_assignable_project(slug: str) -> None:
+def _require_assignable_project(slug: str, agent: str) -> None:
     """404 for an unknown project, 400 for an archived one."""
     entry = _project_store().get(slug)
     if entry is None:
@@ -894,6 +895,11 @@ def _require_assignable_project(slug: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"project {slug!r} is archived",
         )
+
+    try:
+        project_root(slug, spec_project_root_policy(agent), _project_store())
+    except ProjectRootError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.patch("/api/conversations/{conversation_id}")
@@ -928,7 +934,7 @@ async def update_conversation(
     if "project" in body:
         project = str(body["project"] or "").strip() or None
         if project is not None:
-            _require_assignable_project(project)
+            _require_assignable_project(project, agent)
 
     store = _meta_store(agent)
     saved = store.get(conversation_id)
