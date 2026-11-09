@@ -909,6 +909,7 @@ def _build_subagents(
     agent_name: str | None = None,
     on_complete=None,
     subagents_config: dict | None = None,
+    project_root: Path | None = None,
 ) -> Subagents:
     """paf-owned subagent delegation over the spec-driven leaf roster.
 
@@ -947,6 +948,7 @@ def _build_subagents(
             store=store,
             filesystem_config=filesystem_config,
             agent_name=agent_name,
+            project_root=project_root,
         )
         for name in roster
     ]
@@ -1037,6 +1039,7 @@ def build_runtime_capabilities(
     workspace_config: dict | None = None,
     scheduled_tasks_queue=None,
     push_notifier=None,
+    project_root: Path | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -1047,6 +1050,24 @@ def build_runtime_capabilities(
     ``StepPersistence`` — and that is exactly what it gets. Capability names
     without a Python builder are left for the spec-declared (YAML) path.
     """
+    if project_root is not None and "Git" in profile.capability_names:
+        from paf.project_roots import is_git_work_tree
+
+        root = (
+            Path((git_config or {}).get("root") or project_root).expanduser().resolve()
+        )
+        if not is_git_work_tree(root):
+            profile = AgentProfile(
+                name=profile.name,
+                capability_names=tuple(
+                    n for n in profile.capability_names if n != "Git"
+                ),
+            )
+            workspace_config = dict(workspace_config or {})
+            workspace_config["notes"] = [
+                *(workspace_config.get("notes") or []),
+                "This workspace is not a git repository, so git tools are unavailable.",
+            ]
     # Both builders are keyed by the SAME names a profile allowlists, so the
     # profile is the gatekeeper for each.
     builders = {
@@ -1177,7 +1198,12 @@ def build_runtime_capabilities(
             # own fresh run. `agent_name` scopes the durable task store.
             capabilities.append(
                 _build_subagents(
-                    store, filesystem_config, agent_name, on_complete, subagents_config
+                    store,
+                    filesystem_config,
+                    agent_name,
+                    on_complete,
+                    subagents_config,
+                    project_root=project_root,
                 )
             )
         elif name == "Visual":

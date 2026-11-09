@@ -100,6 +100,7 @@ def load_leaf(
     filesystem_config: dict | None,
     agent_name: str | None = None,
     spec_directory: Path | None = None,
+    project_root: Path | None = None,
 ) -> Leaf:
     """Build one leaf from its spec.
 
@@ -144,7 +145,17 @@ def load_leaf(
     block: dict[str, Any] = block_raw if isinstance(block_raw, dict) else {}
     name = str(block.get("name") or spec_name.removesuffix("_subagent"))
     configs = _spec_runtime_configs(spec_path)
+    explicit_root = (configs["filesystem_config"] or {}).get("root_dir")
     configs["filesystem_config"] = configs["filesystem_config"] or filesystem_config
+    if project_root is not None:
+        from paf.project_roots import with_project_root
+
+        project_root = (
+            Path(explicit_root).expanduser().resolve()
+            if explicit_root
+            else project_root
+        )
+        configs = with_project_root(configs, project_root)
     configs.pop("subagents_config", None)  # depth 1: a leaf never delegates
 
     profile_name = raw.get("profile")
@@ -164,6 +175,7 @@ def load_leaf(
             AgentProfile(name=f"subagent:{name}", capability_names=allowed),
             **configs,
             agent_name=agent_name,
+            project_root=project_root,
         )
     else:
         capabilities = [_build_filesystem(store, configs["filesystem_config"])]

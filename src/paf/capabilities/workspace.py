@@ -6,7 +6,7 @@ nothing told the model which. It would read ``ui/chat.py`` from the codebase
 map and hand that to ``read_file`` rooted at ``~``. This capability renders one
 static ``<workspace>`` block into the instructions, built from the roots the
 OTHER capabilities were actually constructed with — so it can never drift from
-the spec — plus the user's time zone (message ``[date: …]`` stamps are local;
+the effective tool configuration — plus the user's time zone (message ``[date: …]`` stamps are local;
 see ``paf.clock``) and any spec ``workspace.notes``.
 
 Static per agent build (no per-turn content), so it never breaks prompt
@@ -99,7 +99,7 @@ class Workspace(AbstractCapability):
             ]
             lines.append("Use relative paths; absolute paths are not supported.")
         elif self.roots:
-            lines.append("Tools resolve relative paths against different roots:")
+            lines.append("Tools resolve relative paths against these roots:")
             lines += [
                 f"- {label} ({tools}): {how.format(root=root)}"
                 for label, tools, how, root in self.roots

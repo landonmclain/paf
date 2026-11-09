@@ -14,7 +14,7 @@ from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
 from paf.capabilities.web._toolset import SEARCH_BACKENDS
 from paf.config import SPECS_DIR
-from paf.project_roots import ProjectRootError, ProjectRootPolicy
+from paf.project_roots import ProjectRootError, ProjectRootPolicy, with_project_root
 from paf.providers.ollama import model_with_client as ollama_model_with_client
 from paf.providers.openrouter import model_with_client
 
@@ -1222,6 +1222,7 @@ def build_agent(
     on_complete=None,
     scheduled_tasks_queue=None,
     push_notifier=None,
+    project_root: Path | None = None,
     **overrides: Any,
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
@@ -1249,6 +1250,8 @@ def build_agent(
     # Every per-capability config block (compact/web/browser/vault/skills/
     # memory/filesystem/shell/git/codebase_map/mcp/subagents) from the spec.
     runtime_configs = _spec_runtime_configs(spec_path)
+    if project_root is not None:
+        runtime_configs = with_project_root(runtime_configs, project_root)
     # Bounded-timeout OpenRouter client for `openrouter:` models (see
     # providers/openrouter.py); falls back to the plain string when no key.
     if (
@@ -1285,6 +1288,7 @@ def build_agent(
             on_complete=on_complete,
             scheduled_tasks_queue=scheduled_tasks_queue,
             push_notifier=push_notifier,
+            project_root=project_root,
         ),
         **overrides,
     )

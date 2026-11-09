@@ -196,3 +196,152 @@ def test_cli_assignment_refuses_invalid_root(tmp_path, monkeypatch):
     app._project_command("outside")
     assert app.meta.project_for("cid") is None
     assert "outside" in output[-1]
+
+
+def _assert_built_roots(caps, root):
+    expected = {
+        "FileSystem": "root_dir",
+        "Shell": "cwd",
+        "Python": "cwd",
+        "Git": "root",
+        "CodebaseMap": "scan_root",
+    }
+    found = {type(c).__name__: c for c in caps}
+    for name, attr in expected.items():
+        if name in found:
+            assert Path(getattr(found[name], attr)).resolve() == root
+    workspace = found.get("Workspace")
+    if workspace:
+        assert all(r == root for label, _, _, r in workspace.roots if label != "Vault")
+    return found
+
+
+def test_build_agent_moves_all_tools_and_workspace(tmp_path, monkeypatch):
+    from paf.capabilities import AgentProfile
+    from paf.specs import build_agent
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (tmp_path / "demo.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "demo",
+                "model": "test",
+                "instructions": "test",
+                "python": {"executor": {"backend": "local"}, "allow_unsandboxed": True},
+                "vault": {"root": str(vault)},
+                "workspace": {"notes": ["keep this note"]},
+            }
+        )
+    )
+    profile = AgentProfile(
+        "test",
+        ("FileSystem", "Shell", "Python", "Git", "CodebaseMap", "Workspace", "Vault"),
+    )
+    agent = build_agent(
+        "demo", spec_directory=tmp_path, profile=profile, project_root=root
+    )
+    caps = _assert_built_roots(agent.root_capability.capabilities, root)
+    assert {"FileSystem", "Shell", "Python", "Git", "CodebaseMap"} <= caps.keys()
+    assert Path(caps["Vault"].vault_root) == vault
+    assert "keep this note" in caps["Workspace"].render()
+    assert "Example:" not in caps["Workspace"].render()
+    default = build_agent("demo", spec_directory=tmp_path, profile=profile)
+    assert (
+        next(
+            c
+            for c in default.root_capability.capabilities
+            if type(c).__name__ == "FileSystem"
+        ).root_dir
+        != root
+    )
+
+
+def test_non_repo_git_filter_is_shared_and_does_not_mutate(tmp_path):
+    from paf.capabilities import AgentProfile
+    from paf.capabilities.build import build_runtime_capabilities
+
+    profile = AgentProfile("test", ("Git", "Workspace"))
+    workspace = {"notes": ["keep"]}
+    caps = build_runtime_capabilities(
+        profile,
+        git_config={"root": str(tmp_path)},
+        workspace_config=workspace,
+        project_root=tmp_path,
+    )
+    found = _assert_built_roots(caps, tmp_path)
+    assert "Git" not in found
+    assert "not a git repository" in found["Workspace"].render()
+    assert "keep" in found["Workspace"].notes
+    assert workspace == {"notes": ["keep"]}
+    assert profile.capability_names == ("Git", "Workspace")
+
+
+@pytest.mark.parametrize("explicit_repo", [None, False, True])
+def test_leaf_common_root_and_git_availability(tmp_path, monkeypatch, explicit_repo):
+    from paf.capabilities import AgentProfile
+    from paf.capabilities.profiles import SUBAGENT_PROFILES
+    from paf.capabilities.subagents import load_leaf
+
+    root = tmp_path / "project"
+    root.mkdir()
+    if explicit_repo is not True:
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    if explicit_repo:
+        subprocess.run(["git", "init", "-q", str(explicit)], check=True)
+    monkeypatch.setitem(
+        SUBAGENT_PROFILES,
+        "root-test",
+        AgentProfile(
+            "root-test",
+            ("FileSystem", "Shell", "Python", "Git", "CodebaseMap", "Workspace"),
+        ),
+    )
+    spec = {
+        "name": "leaf",
+        "model": "test",
+        "profile": "root-test",
+        "instructions": "test",
+        "shell": {"cwd": "/conflicting", "executor": {"backend": "local"}},
+        "python": {"executor": {"backend": "local"}, "allow_unsandboxed": True},
+    }
+    if explicit_repo is not None:
+        spec["filesystem"] = {"root_dir": str(explicit), "denied_patterns": ["private"]}
+    (tmp_path / "leaf.yaml").write_text(yaml.safe_dump(spec))
+    leaf = load_leaf(
+        "leaf",
+        store=None,
+        filesystem_config={"root_dir": "/parent"},
+        spec_directory=tmp_path,
+        project_root=root,
+    )
+    effective = root if explicit_repo is None else explicit
+    found = _assert_built_roots(leaf.agent.root_capability.capabilities, effective)
+    assert ("Git" in found) == (explicit_repo is not False)
+    if explicit_repo is not None:
+        assert found["FileSystem"].denied_patterns == ["private"]
+    if explicit_repo is False:
+        assert "not a git repository" in found["Workspace"].render()
+
+
+def test_coding_and_filesystem_only_leaves_follow_project(tmp_path, monkeypatch):
+    from paf.capabilities.subagents import load_leaf
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    for name in ("coding_subagent", "writer_subagent"):
+        leaf = load_leaf(
+            name,
+            store=None,
+            filesystem_config={"root_dir": "/parent"},
+            project_root=tmp_path,
+        )
+        found = _assert_built_roots(leaf.agent.root_capability.capabilities, tmp_path)
+        assert Path(found["FileSystem"].root_dir) == tmp_path
+        if name == "coding_subagent":
+            assert Path(found["CodebaseMap"].scan_root) == tmp_path
