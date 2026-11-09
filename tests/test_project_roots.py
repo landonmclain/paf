@@ -345,3 +345,53 @@ def test_coding_and_filesystem_only_leaves_follow_project(tmp_path, monkeypatch)
         assert Path(found["FileSystem"].root_dir) == tmp_path
         if name == "coding_subagent":
             assert Path(found["CodebaseMap"].scan_root) == tmp_path
+
+
+def test_leaf_rebuild_uses_loaded_spec_snapshot(tmp_path):
+    from paf.capabilities.subagents import load_leaf
+
+    path = tmp_path / "writer.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "name": "writer",
+                "model": "test",
+                "instructions": "original",
+                "filesystem": {"denied_patterns": ["original-denial"]},
+            }
+        )
+    )
+    snapshots = {}
+    first = load_leaf(
+        "writer",
+        store=None,
+        filesystem_config=None,
+        spec_directory=tmp_path,
+        project_root=tmp_path,
+        leaf_snapshots=snapshots,
+    )
+    path.write_text("invalid: [")
+    other = tmp_path / "other"
+    other.mkdir()
+    second = load_leaf(
+        "writer",
+        store=None,
+        filesystem_config=None,
+        spec_directory=tmp_path,
+        project_root=other,
+        leaf_snapshots=snapshots,
+    )
+    first_fs = next(
+        c
+        for c in first.agent.root_capability.capabilities
+        if type(c).__name__ == "FileSystem"
+    )
+    second_fs = next(
+        c
+        for c in second.agent.root_capability.capabilities
+        if type(c).__name__ == "FileSystem"
+    )
+    assert first_fs.root_dir == tmp_path
+    assert second_fs.root_dir == other
+    assert second_fs.denied_patterns == ["original-denial"]
+    assert snapshots["writer"].spec.instructions == "original"

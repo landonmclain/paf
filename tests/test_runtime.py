@@ -256,9 +256,7 @@ def test_session_init_injects_spec_profile_for_keyword_agent_name(
     monkeypatch.setattr(
         runtime,
         "build_agent",
-        lambda name, profile=None, on_complete=None, scheduled_tasks_queue=None, push_notifier=None: (
-            object()
-        ),
+        lambda name, **kwargs: object(),
     )
     monkeypatch.setattr(runtime, "_build_store", lambda: object())
     monkeypatch.setattr(runtime, "setup_observability", lambda: None)
@@ -430,6 +428,7 @@ def test_stream_preserves_partial_history_on_stop(monkeypatch) -> None:
     swallowed — only first-party ``RunCancelled``.
     """
     s = object.__new__(runtime.Session)  # type: ignore[attr-defined]
+    s._sync_project_root = lambda cid: None
     s.agent_name = "x"
     s.profile = None
     s.conversation_id = "conv-1"
@@ -484,6 +483,7 @@ def test_stream_propagates_real_cancellation(monkeypatch) -> None:
     """External ``asyncio.CancelledError`` must NOT be swallowed."""
 
     s = object.__new__(runtime.Session)  # type: ignore[attr-defined]
+    s._sync_project_root = lambda cid: None
     s.agent_name = "x"
     s.profile = None
     s.conversation_id = "conv-1"

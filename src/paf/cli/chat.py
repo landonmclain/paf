@@ -761,7 +761,7 @@ class ChatApp:
             return
         if arg.lower() == "none":
             self.meta.set_project(self.cid, None)
-            _out("project cleared\n")
+            _out("project cleared — applies from the next turn\n")
             return
         entry = self.projects.get(arg)
         if entry is None or entry.get("archived"):
@@ -774,7 +774,7 @@ class ChatApp:
             _out(f"{RED}{exc}{RESET}\n")
             return
         self.meta.set_project(self.cid, arg)
-        _out(f"project: {arg}\n")
+        _out(f"project: {arg} — applies from the next turn\n")
 
     def _projects_command(self, arg: str) -> None:
         """``/projects`` list · ``add <name> [-- description]`` · ``rename <slug> <name>``

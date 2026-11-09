@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from pydantic_ai import Agent, AgentSpec, UsageLimits
 from paf.capabilities import PROFILES, AgentProfile
 from paf.capabilities.build import build_runtime_capabilities
 from paf.capabilities.compaction import CompactionConfig
+from paf.capabilities.subagents._roster import LeafBuildSnapshot
 from paf.capabilities.web._toolset import SEARCH_BACKENDS
 from paf.config import SPECS_DIR
 from paf.project_roots import ProjectRootError, ProjectRootPolicy, with_project_root
@@ -1215,6 +1218,16 @@ def _declared_profile(agent_name: str, spec_directory: Path) -> AgentProfile:
     return PROFILES[declared]
 
 
+@dataclass
+class AgentBuildSnapshot:
+    """Session-owned loaded configuration; only project-root policy is live."""
+
+    spec: AgentSpec | None = None
+    profile: AgentProfile | None = None
+    runtime_configs: dict[str, Any] = field(default_factory=dict)
+    leaves: dict[str, LeafBuildSnapshot] = field(default_factory=dict)
+
+
 def build_agent(
     agent_name: str,
     spec_directory: Path = DEFAULT_SPEC_DIRECTORY,
@@ -1223,6 +1236,7 @@ def build_agent(
     scheduled_tasks_queue=None,
     push_notifier=None,
     project_root: Path | None = None,
+    snapshot: AgentBuildSnapshot | None = None,
     **overrides: Any,
 ) -> Agent[Any, Any]:
     """Construct an agent from a named spec, with optional overrides.
@@ -1240,16 +1254,25 @@ def build_agent(
 
     Overrides are passed as kwargs to ``Agent.from_spec``. Supported:
     ``model``, ``instructions``, ``model_settings``, ``name``, ``output_type``.
-    Tools and spec-declarable capabilities must be declared in the spec YAML.
+    ``snapshot`` retains the loaded configuration across root changes; callers
+    that omit it load fresh settings. Tools and spec-declarable capabilities
+    must be declared in the spec YAML.
     ``model_settings`` is the spec's to declare; when a spec omits it, the
     model runs on pydantic-ai's plain defaults.
     """
-    profile = profile or _declared_profile(agent_name, spec_directory)
-    spec = load_agent_spec(agent_name, spec_directory)
-    spec_path = get_spec_path(agent_name, spec_directory)
-    # Every per-capability config block (compact/web/browser/vault/skills/
-    # memory/filesystem/shell/git/codebase_map/mcp/subagents) from the spec.
-    runtime_configs = _spec_runtime_configs(spec_path)
+    snapshot = snapshot if snapshot is not None else AgentBuildSnapshot()
+    if snapshot.spec is None:
+        profile = profile or _declared_profile(agent_name, spec_directory)
+        spec = load_agent_spec(agent_name, spec_directory)
+        configs = _spec_runtime_configs(get_spec_path(agent_name, spec_directory))
+        snapshot.spec, snapshot.profile, snapshot.runtime_configs = (
+            spec,
+            profile,
+            configs,
+        )
+    spec, profile = snapshot.spec, snapshot.profile
+    assert profile is not None
+    runtime_configs = deepcopy(snapshot.runtime_configs)
     if project_root is not None:
         runtime_configs = with_project_root(runtime_configs, project_root)
     # Bounded-timeout OpenRouter client for `openrouter:` models (see
@@ -1289,6 +1312,7 @@ def build_agent(
             scheduled_tasks_queue=scheduled_tasks_queue,
             push_notifier=push_notifier,
             project_root=project_root,
+            leaf_snapshots=snapshot.leaves,
         ),
         **overrides,
     )

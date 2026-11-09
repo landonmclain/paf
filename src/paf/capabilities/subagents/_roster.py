@@ -20,11 +20,12 @@ default to bounded values when a spec omits them.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, AgentSpec
 from pydantic_ai.usage import UsageLimits
 
 BackgroundPolicy = Literal["allowed", "required", "never"]
@@ -93,6 +94,15 @@ class Leaf:
     policy: LeafPolicy = field(default_factory=LeafPolicy)
 
 
+@dataclass(frozen=True)
+class LeafBuildSnapshot:
+    """Loaded leaf configuration, retained when a session changes roots."""
+
+    spec: AgentSpec
+    raw: dict[str, Any]
+    configs: dict[str, Any]
+
+
 def load_leaf(
     spec_name: str,
     *,
@@ -101,6 +111,7 @@ def load_leaf(
     agent_name: str | None = None,
     spec_directory: Path | None = None,
     project_root: Path | None = None,
+    leaf_snapshots: dict[str, LeafBuildSnapshot] | None = None,
 ) -> Leaf:
     """Build one leaf from its spec.
 
@@ -139,12 +150,19 @@ def load_leaf(
     )
 
     spec_dir = spec_directory or DEFAULT_SPEC_DIRECTORY
-    spec, raw = resolve_background_spec(spec_name, spec_dir)
-    spec_path = get_spec_path(spec_name, spec_dir)
+    saved = leaf_snapshots.get(spec_name) if leaf_snapshots is not None else None
+    if saved is None:
+        spec, raw = resolve_background_spec(spec_name, spec_dir)
+        saved = LeafBuildSnapshot(
+            spec, raw, _spec_runtime_configs(get_spec_path(spec_name, spec_dir))
+        )
+        if leaf_snapshots is not None:
+            leaf_snapshots[spec_name] = saved
+    spec, raw = saved.spec, saved.raw
     block_raw = raw.get("subagent")
     block: dict[str, Any] = block_raw if isinstance(block_raw, dict) else {}
     name = str(block.get("name") or spec_name.removesuffix("_subagent"))
-    configs = _spec_runtime_configs(spec_path)
+    configs = deepcopy(saved.configs)
     explicit_root = (configs["filesystem_config"] or {}).get("root_dir")
     configs["filesystem_config"] = configs["filesystem_config"] or filesystem_config
     if project_root is not None:

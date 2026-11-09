@@ -74,6 +74,7 @@ from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.shell._command_policy import parse_command_policy
 from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.subagents import Subagents
+from paf.capabilities.subagents._roster import LeafBuildSnapshot
 from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault as _Vault
 from paf.capabilities.visual import Visual as _Visual
@@ -910,6 +911,7 @@ def _build_subagents(
     on_complete=None,
     subagents_config: dict | None = None,
     project_root: Path | None = None,
+    leaf_snapshots: dict[str, LeafBuildSnapshot] | None = None,
 ) -> Subagents:
     """paf-owned subagent delegation over the spec-driven leaf roster.
 
@@ -949,6 +951,7 @@ def _build_subagents(
             filesystem_config=filesystem_config,
             agent_name=agent_name,
             project_root=project_root,
+            leaf_snapshots=leaf_snapshots,
         )
         for name in roster
     ]
@@ -1040,6 +1043,7 @@ def build_runtime_capabilities(
     scheduled_tasks_queue=None,
     push_notifier=None,
     project_root: Path | None = None,
+    leaf_snapshots: dict[str, LeafBuildSnapshot] | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -1204,6 +1208,7 @@ def build_runtime_capabilities(
                     on_complete,
                     subagents_config,
                     project_root=project_root,
+                    leaf_snapshots=leaf_snapshots,
                 )
             )
         elif name == "Visual":
