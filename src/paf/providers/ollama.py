@@ -24,6 +24,7 @@ import os
 from openai import AsyncOpenAI
 from openai import Timeout as OpenAITimeout
 from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.profiles.openai import OpenAIModelProfile
 from pydantic_ai.providers.ollama import OllamaProvider
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -35,10 +36,10 @@ OLLAMA_CLIENT_CONNECT_S = 5.0
 # historical ``reasoning_content`` (Strata does by default) then keeps old
 # reasoning out of the prompt; sent inline, it is replayed on every step (about
 # 73% of one long agent turn's tokens) and compaction cannot trim it.
-_THINKING_PROFILE = {
-    "openai_chat_send_back_thinking_parts": "field",
-    "openai_chat_thinking_field": "reasoning_content",
-}
+_THINKING_PROFILE = OpenAIModelProfile(
+    openai_chat_send_back_thinking_parts="field",
+    openai_chat_thinking_field="reasoning_content",
+)
 
 
 def model_with_client(model_name: str) -> OllamaModel:
