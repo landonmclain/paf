@@ -1,14 +1,14 @@
 """Storage seam for the codebase-map capability — the one seam everything hangs off.
 
 ``StorageService`` is the *byte-medium* seam: it decides **where artifacts live** (flat
-JSON files under ``<scan_root>/.agent-codeindex/codebase_indexes/<sha256(scan_root)>/``
+JSON files under paf’s ``data/.paf-codebase-index/<sha256(scan_root)>/``
 today; SQLite / object-store / MCP later). It is **not** a search seam — *how* queries
 are answered is ``_retrieval.py``'s job. Swapping storage does not make search semantic.
 
 ``FlatFileStorage`` is the default impl. Requirements:
 
-- **Root = scan_root, co-located** — the index lives under the scanned repo root at
-  ``.agent-codeindex/`` (like ``.git/``), NOT in a separate paf ``directory``.
+- **Root-keyed, paf-owned** — indexes live in paf’s data directory, outside the
+  scanned repository. Existing ``.agent-codeindex/`` directories remain excluded.
 - **Hash lives ONLY in ``snapshot.json``** — per-file ``{mtime, size, sha256}``; the
   per-file records in structure/manifest/tokens carry no ``content_hash``.
 - **Freshness: on-query lazy** — ``sync_changed`` does a cheap ``stat`` walk, sha256's
@@ -36,6 +36,7 @@ from typing import Any, Protocol
 # The canonical copies live in ``paf.capabilities._storage._atomic`` and this
 # capability conforms to them. Behavior is byte-identical (staging + ``os.replace``);
 # the storage seam stays self-contained without coupling to any other capability.
+from paf import config
 from paf.capabilities._storage._atomic import read_json, write_json_atomic
 
 from ._schema import BlockRef
@@ -69,7 +70,6 @@ _ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
 }
 
 _INDEX_SUBDIR = ".agent-codeindex"
-_CODEDEX_DIR = "codebase_indexes"
 
 # --- Scan scope: the single source of truth for "what is part of the codebase". ---
 # The corpus = every file under the scan root minus (gitignore ∪ owned-skip). The
@@ -83,7 +83,8 @@ _CODEDEX_DIR = "codebase_indexes"
 # big tree like data/ or .venv/ is never descended into — that is what keeps the scan
 # fast. Names here are single path parts; multi-segment dirs go in _OWNED_SKIP_PATHS.
 _OWNED_SKIP_DIRS = {
-    _INDEX_SUBDIR,  # our own derived index — never index the index
+    _INDEX_SUBDIR,  # legacy derived indexes stay out of the corpus
+    ".paf-codebase-index",  # also skip the central index if its parent is scanned
     ".git",  # git internals
     "__pycache__",  # bytecode (also usually gitignored; belt + suspenders)
     "node_modules",  # vendored js deps (may not be gitignored)
@@ -250,13 +251,13 @@ def _sha256_of_path(root: str | Path) -> str:
 
 
 def index_dir_for_scan_root(root: str | Path) -> Path:
-    """Co-located index dir: ``<scan_root>/.agent-codeindex/codebase_indexes/<sha256(root)>/``."""
+    """Paf-owned index dir: ``data/.paf-codebase-index/<sha256(root)>/``."""
     root = Path(root)
-    return root / _INDEX_SUBDIR / _CODEDEX_DIR / _sha256_of_path(root)
+    return config.DATA_DIR / ".paf-codebase-index" / _sha256_of_path(root)
 
 
 class FlatFileStorage:
-    """Default storage backend: flat JSON under the co-located index dir (atomic writes).
+    """Default storage backend: atomic JSON files in a paf-owned, root-keyed index.
 
     Reads/writes never raise on a missing/corrupt artifact — ``read`` returns ``None``
     so callers treat "not indexed yet" and "corrupt once" the same way.
@@ -270,6 +271,7 @@ class FlatFileStorage:
 
     # -- location ------------------------------------------------------------
     def _dir_for(self, scan_root: str | Path) -> Path:
+        # The default stays outside the scanned tree, keyed by its path hash.
         return self._index_root_override or index_dir_for_scan_root(scan_root)
 
     def _path_for(self, kind: ArtifactKind, scan_root: str | Path) -> Path:
@@ -285,11 +287,9 @@ class FlatFileStorage:
         write_json_atomic(path, payload)
 
     def list_scan_roots(self) -> list[Path]:
-        """List scan roots that have at least one artifact in their co-located index dir.
+        """Return an explicit override, or no roots (discovery is caller-owned).
 
-        NOTE: with a purely co-located (non-central) index there is no single registry
-        to enumerate from — discovery would require walking every candidate repo. So
-        this returns the override/empty set and is mainly exercised by tests.
+        Hashed index directories are not a registry of their original scan roots.
         """
         if self._index_root_override is not None:
             return [self._index_root_override]
@@ -305,8 +305,8 @@ class FlatFileStorage:
 
         Quirk of the seam: ``BlockRef.file`` reaching us must already be an **absolute**
         path — the caller (the ``read_block`` tool) resolves the repo-relative pointer
-        against ``scan_root`` before crossing the seam, so a fully co-located backend
-        doesn't need its own scan_root to locate a file.
+        against ``scan_root`` before crossing the seam, so storage needs no scan
+        root to locate the source file.
         """
         from ._block import read_block  # local import to avoid a cycle with _schema
 

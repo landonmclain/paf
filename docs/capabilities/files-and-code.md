@@ -131,9 +131,12 @@ get_overview ──▶ lookup_file ──▶ read_block ("path:L1-L2")
   signature, then docstring). Each hit comes with a ready `read_block` pointer.
 - **`run_codebase_map`**: rebuild the index.
 
-The index sits beside the code in `.agent-codeindex/` (git-ignored) and is
-rebuilt when files change. The walk follows `.gitignore` and works for any
-language the extractors can parse; other files are listed but unparsed.
+The index lives in paf’s `data/.paf-codebase-index/<sha256(root)>/`, outside
+the scanned repository, and is rebuilt when files change. Each scan root gets
+its own directory. Old `.agent-codeindex/` directories are left untouched and
+excluded from scans; the first query rebuilds the index at the new location.
+The walk follows `.gitignore` and works for any language the extractors can
+parse; other files are listed but unparsed.
 
 ## Vault
 
@@ -159,10 +162,17 @@ Without help, a model reads `ui/chat.py` from the codebase map and hands it to a
 file tool rooted somewhere else. Workspace adds one static `<workspace>` block
 to the instructions: where each tool family's relative paths start, built from
 the roots the other capabilities were actually given, plus your time zone and
-any `workspace.notes`. It can't drift from the spec, and being static it never
-breaks prompt caching.
+any `workspace.notes`. The block is static for each built agent. When a project
+root changes, the session rebuilds it from the effective tool roots on the next
+turn; otherwise the block remains stable for prompt caching.
 
 `workspace.expose_paths: false` hides the real paths: every root is described
 as "the workspace root", your home directory isn't named, and the model is told
 to use relative paths. Locked-down agents use it, which also keeps the text true
 when a sandbox mounts the workspace somewhere other than its host path.
+
+When `workspace.project_roots.within` is enabled, a conversation's project root
+supplies the common root for file tools, shell, Python, git, and codebase map.
+Vault and skill-library paths stay per agent. See the
+[workspace configuration](../spec-reference.md#workspace) and
+[project commands](conversations-and-memory.md#projects).

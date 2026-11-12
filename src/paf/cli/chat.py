@@ -84,11 +84,13 @@ from paf.conversations import (
     default_project_store,
     list_conversations,
 )
+from paf.project_roots import ProjectRootError, project_root
 from paf.runtime import Session, TurnHandle
 from paf.specs import (
     AgentSpecNotFoundError,
     InvalidSpecError,
     MissingProfileError,
+    spec_project_root_policy,
     spec_visual_config,
 )
 
@@ -759,21 +761,39 @@ class ChatApp:
             return
         if arg.lower() == "none":
             self.meta.set_project(self.cid, None)
-            _out("project cleared\n")
+            _out("project cleared — applies from the next turn\n")
             return
         entry = self.projects.get(arg)
         if entry is None or entry.get("archived"):
             known = ", ".join(p["slug"] for p in self.projects.list()) or "none yet"
             _out(f"{RED}unknown project {arg!r}{RESET} (known: {known})\n")
             return
+        try:
+            project_root(arg, spec_project_root_policy(self.agent), self.projects)
+        except ProjectRootError as exc:
+            _out(f"{RED}{exc}{RESET}\n")
+            return
         self.meta.set_project(self.cid, arg)
-        _out(f"project: {arg}\n")
+        _out(f"project: {arg} — applies from the next turn\n")
 
     def _projects_command(self, arg: str) -> None:
         """``/projects`` list · ``add <name> [-- description]`` · ``rename <slug> <name>``
-        · ``archive <slug>`` · ``unarchive <slug>``."""
+        · ``root <slug> <path | ->`` · ``archive <slug>`` · ``unarchive <slug>``."""
         sub, _, rest = arg.partition(" ")
         sub, rest = sub.lower(), rest.strip()
+        if sub == "root":
+            slug, _, root = rest.partition(" ")
+            if not slug or not root.strip():
+                _out(f"{RED}usage: /projects root <slug> <path | ->{RESET}\n")
+                return
+            try:
+                entry = self.projects.update(slug, root="" if root == "-" else root)
+                _out(f"root {slug}: {entry.get('root') or 'cleared'}\n")
+            except ProjectNotFoundError:
+                _out(f"{RED}unknown project {slug!r}{RESET}\n")
+            except ValueError as exc:
+                _out(f"{RED}{exc}{RESET}\n")
+            return
         if sub in ("rename", "archive", "unarchive"):
             slug, _, name = rest.partition(" ")
             if not slug or (sub == "rename" and not name.strip()):
@@ -879,6 +899,7 @@ _HELP = """\
   /hide · /unhide  hide this conversation from /list, or show it again
   /project [slug]  show this conversation's project, assign one, or 'none'
   /projects        list projects · /projects add <name> [-- description]
+                   /projects root <slug> <path | ->
                    · rename <slug> <name> · archive <slug> · unarchive <slug>
   /image <path> [message]  send an image; the agent's vision model describes it
   /history [n]     reprint the last n turns (default: all loaded)

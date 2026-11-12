@@ -74,6 +74,7 @@ from paf.capabilities.shell import Shell as _Shell
 from paf.capabilities.shell._command_policy import parse_command_policy
 from paf.capabilities.skills import Skills as _Skills
 from paf.capabilities.subagents import Subagents
+from paf.capabilities.subagents._roster import LeafBuildSnapshot
 from paf.capabilities.thread_summarizer import ThreadSummarizer
 from paf.capabilities.vault import Vault as _Vault
 from paf.capabilities.visual import Visual as _Visual
@@ -463,7 +464,7 @@ def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _Code
 
     `store` is accepted for a uniform builder signature but unused — the codebase
     map reads/writes its own artifacts through the ``StorageService`` seam
-    (``FlatFileStorage`` default, co-located under ``.agent-codeindex/``), not the
+    (``FlatFileStorage`` default, under ``data/.paf-codebase-index/<sha256(root)>/``), not the
     persistence store. Rooting at PROJECT_ROOT indexes the repo the agent works in.
     The index is **on-demand**: ``get_overview`` / the ``run_codebase_map`` tool
     (re)build artifacts if missing or stale, so the capability constructs and
@@ -471,8 +472,8 @@ def _build_codebase_map(store, codebase_map_config: dict | None = None) -> _Code
 
     `codebase_map_config` is the spec's top-level ``codebase_map:`` block (see
     ``specs._spec_codebase_map_config``): ``scan_root`` overrides the default
-    ``PROJECT_ROOT``. Absent/``None`` -> ``PROJECT_ROOT``. Index artifacts always
-    land under ``.agent-codeindex/`` inside whichever root is in effect.
+    ``PROJECT_ROOT``. Absent/``None`` -> ``PROJECT_ROOT``. Index artifacts live in paf-owned
+    ``data/.paf-codebase-index/<sha256(root)>/``, outside the scanned tree.
     """
     scan_root = PROJECT_ROOT
     if (
@@ -909,6 +910,8 @@ def _build_subagents(
     agent_name: str | None = None,
     on_complete=None,
     subagents_config: dict | None = None,
+    project_root: Path | None = None,
+    leaf_snapshots: dict[str, LeafBuildSnapshot] | None = None,
 ) -> Subagents:
     """paf-owned subagent delegation over the spec-driven leaf roster.
 
@@ -947,6 +950,8 @@ def _build_subagents(
             store=store,
             filesystem_config=filesystem_config,
             agent_name=agent_name,
+            project_root=project_root,
+            leaf_snapshots=leaf_snapshots,
         )
         for name in roster
     ]
@@ -1037,6 +1042,8 @@ def build_runtime_capabilities(
     workspace_config: dict | None = None,
     scheduled_tasks_queue=None,
     push_notifier=None,
+    project_root: Path | None = None,
+    leaf_snapshots: dict[str, LeafBuildSnapshot] | None = None,
 ) -> list:
     """Build the capabilities the profile allowlists, over one shared store.
 
@@ -1047,6 +1054,24 @@ def build_runtime_capabilities(
     ``StepPersistence`` — and that is exactly what it gets. Capability names
     without a Python builder are left for the spec-declared (YAML) path.
     """
+    if project_root is not None and "Git" in profile.capability_names:
+        from paf.project_roots import is_git_work_tree
+
+        root = (
+            Path((git_config or {}).get("root") or project_root).expanduser().resolve()
+        )
+        if not is_git_work_tree(root):
+            profile = AgentProfile(
+                name=profile.name,
+                capability_names=tuple(
+                    n for n in profile.capability_names if n != "Git"
+                ),
+            )
+            workspace_config = dict(workspace_config or {})
+            workspace_config["notes"] = [
+                *(workspace_config.get("notes") or []),
+                "This workspace is not a git repository, so git tools are unavailable.",
+            ]
     # Both builders are keyed by the SAME names a profile allowlists, so the
     # profile is the gatekeeper for each.
     builders = {
@@ -1177,7 +1202,13 @@ def build_runtime_capabilities(
             # own fresh run. `agent_name` scopes the durable task store.
             capabilities.append(
                 _build_subagents(
-                    store, filesystem_config, agent_name, on_complete, subagents_config
+                    store,
+                    filesystem_config,
+                    agent_name,
+                    on_complete,
+                    subagents_config,
+                    project_root=project_root,
+                    leaf_snapshots=leaf_snapshots,
                 )
             )
         elif name == "Visual":

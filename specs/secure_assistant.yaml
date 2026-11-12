@@ -105,6 +105,7 @@ usage_limits:
 # Keep host paths (the user's home, the workspace's real location) out of the
 # model's context. Tools take workspace-relative paths only.
 workspace:
+  # project_roots stays off on purpose: this workspace is fixed by the host.
   expose_paths: false
 
 # The one directory both the file tools and run_python see. Keep it free of

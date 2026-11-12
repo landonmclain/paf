@@ -18,6 +18,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Literal
 
 from opentelemetry import trace as _otel_trace
@@ -89,11 +90,14 @@ from paf.observability.instrumentation import (
     setup_observability,
     shutdown_observability,
 )
+from paf.project_roots import ProjectRootError, conversation_root
 from paf.push import PushRequest, PushResult
 from paf.specs import (
+    AgentBuildSnapshot,
     build_agent,
     resolve_profile_name,
     spec_approval_timeout,
+    spec_project_root_policy,
     spec_usage_limits,
 )
 
@@ -656,15 +660,17 @@ class Session:
         self._store = store if store is not None else _build_store()
         if trace:
             setup_observability()
-        self._agent: Agent[Any, Any] = build_agent(
-            agent_name,
-            profile=profile,
-            on_complete=on_complete,
-            scheduled_tasks_queue=scheduled_tasks_queue,
-            # The Push capability's `send_push` tool, only when the embedder
-            # supplied a delivery backend (paf-sse); the CLI has none.
-            push_notifier=self._notify_user if push_notifier is not None else None,
-        )
+        self._on_complete = on_complete
+        self._scheduled_tasks_queue = scheduled_tasks_queue
+        self._build_snapshot = AgentBuildSnapshot()
+        self._root_policy = spec_project_root_policy(agent_name)
+        try:
+            root = self._resolve_root(conversation_id)
+        except ProjectRootError as exc:
+            log.warning("project root unavailable at session start: %s", exc)
+            root = None
+        self._built_root = root
+        self._agent = self._make_agent(root)
         # Tier A turn-boundary compaction strategy (routine trim). Built from the
         # spec's `compact:` block; None when `compact.turn_boundary` is explicitly
         # false (control arm). Driven via compact_now at the top of stream(). Must
@@ -690,6 +696,35 @@ class Session:
         self._run: Any = None
         # Session-owned running turn handle (durable turns). None when idle.
         self._turn: TurnHandle | None = None
+
+    def _make_agent(self, project_root: Path | None) -> Agent[Any, Any]:
+        return build_agent(
+            self.agent_name,
+            profile=self.profile,
+            on_complete=self._on_complete,
+            scheduled_tasks_queue=self._scheduled_tasks_queue,
+            push_notifier=self._notify_user
+            if self._push_notifier is not None
+            else None,
+            project_root=project_root,
+            snapshot=self._build_snapshot,
+        )
+
+    def _resolve_root(self, cid: str | None) -> Path | None:
+        return conversation_root(
+            self.agent_name,
+            cid,
+            profile=_profile_name(self.profile),
+            policy=self._root_policy,
+        )
+
+    def _sync_project_root(self, cid: str | None) -> None:
+        """Refresh live policy and project assignment before any turn execution."""
+        self._root_policy = spec_project_root_policy(self.agent_name)
+        root = self._resolve_root(cid)
+        if root != self._built_root:
+            agent = self._make_agent(root)
+            self._agent, self._built_root = agent, root
 
     # -- introspection ---------------------------------------------------------
 
@@ -906,6 +941,7 @@ class Session:
         """
         cid = conversation_id if conversation_id is not None else self.conversation_id
         scoped = self.scoped_id(cid)
+        self._sync_project_root(cid)
         # A fresh turn must NOT inherit a previously-cancelled token: cancel()
         # is one-way on CancellationToken, so a token cancelled by an earlier
         # stop would instantly cancel every later run ("The agent run was

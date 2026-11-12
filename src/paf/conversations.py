@@ -17,7 +17,8 @@ Layout::
 Keyed by a permanent ``slug`` derived from the name at creation. Memory records
 store the slug, so ``name``/``description`` can change freely without touching
 the journal. Projects are archived, never deleted (journal records point at
-slugs); an archived project is hidden from listings but its slug stays taken.
+slugs). An optional ``root`` selects a local working directory. An archived
+project is hidden from listings but its slug stays taken.
 
 **Conversation meta** — per-agent map ``conversation_id -> {title?, project?,
 hidden?, updated_at}``. The filename stays ``conversation-titles.json`` for backward
@@ -32,6 +33,7 @@ from __future__ import annotations
 import re
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from paf.capabilities._storage import FlatFileStorage
@@ -62,8 +64,25 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _validated_root(root: str) -> str:
+    """Validate a local directory, retaining a portable ``~`` in storage."""
+    if not isinstance(root, str):
+        raise ValueError("project root must be a string")
+    root = root.strip()
+    try:
+        path = Path(root).expanduser()
+        valid = bool(root) and path.is_absolute() and path.is_dir()
+    except (OSError, RuntimeError, ValueError):
+        valid = False
+    if not valid:
+        raise ValueError(
+            "project root must be an absolute path to an existing directory"
+        )
+    return root
+
+
 class ProjectStore:
-    """The global project registry: ``slug -> {name, description, archived, created_at}``."""
+    """The global project registry: ``slug -> {name, description, root?, archived, created_at}``."""
 
     def __init__(self, storage: FlatFileStorage) -> None:
         self._storage = storage
@@ -93,7 +112,9 @@ class ProjectStore:
         entry = self._load().get(slug)
         return self._row(slug, entry) if entry is not None else None
 
-    def create(self, name: str, description: str = "") -> dict[str, Any]:
+    def create(
+        self, name: str, description: str = "", root: str | None = None
+    ) -> dict[str, Any]:
         """Register a project; the slug is derived from ``name`` and permanent."""
         name = name.strip()
         slug = slugify(name)
@@ -110,6 +131,8 @@ class ProjectStore:
             "archived": False,
             "created_at": _utc_now(),
         }
+        if root is not None:
+            projects[slug]["root"] = _validated_root(root)
         self._save(projects)
         return self._row(slug, projects[slug])
 
@@ -120,8 +143,12 @@ class ProjectStore:
         name: str | None = None,
         description: str | None = None,
         archived: bool | None = None,
+        root: str | None = None,
     ) -> dict[str, Any]:
-        """Edit display fields or (un)archive. The slug never changes."""
+        """Edit display fields, root, or (un)archive; the slug never changes.
+
+        Empty root clears the setting; None preserves it.
+        """
         projects = self._load()
         entry = projects.get(slug)
         if entry is None:
@@ -134,6 +161,11 @@ class ProjectStore:
             entry["description"] = description.strip()
         if archived is not None:
             entry["archived"] = bool(archived)
+        if root is not None:
+            if root == "":
+                entry.pop("root", None)
+            else:
+                entry["root"] = _validated_root(root)
         self._save(projects)
         return self._row(slug, entry)
 

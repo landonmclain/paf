@@ -50,3 +50,13 @@ def sample_ts() -> dict[str, FileInfo]:
 def _no_jev_screen(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the pairwise reviewer's Jev screen off so no test hits OpenRouter."""
     monkeypatch.setenv("PAF_PAIR_SCREEN", "0")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_codebase_index_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default codebase indexes must never write into the real paf data tree."""
+    from paf import config
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "paf-data")

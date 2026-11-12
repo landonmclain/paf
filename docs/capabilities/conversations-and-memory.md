@@ -105,19 +105,41 @@ memory:
 
 ### Projects
 
-A project is a label on a conversation. In the scoped render it decides which
-facts count as "this project's" and which as global. Manage them in `paf chat`:
+A project labels a conversation and can optionally select its working directory.
+In the scoped memory render it decides which facts count as "this project's"
+and which as global. Manage them in `paf chat`:
 
 | Command | |
 | --- | --- |
 | `/projects` | list projects |
 | `/projects add <name> [-- description]` | create one |
 | `/projects rename <slug> <name>`, `archive <slug>`, `unarchive <slug>` | edit |
+| `/projects root <slug> <path>` | set an existing absolute directory (`~` is supported) |
+| `/projects root <slug> -` | clear the root |
 | `/project` | show this conversation's project |
 | `/project <slug>`, `/project none` | assign or clear |
 
 Tagging a conversation after the fact is fine: its earlier facts are filed
 under the project at the next render.
+
+Project roots are stored in `data/projects/projects.json`; conversations store
+only their assigned project slug. Editing a root therefore affects all
+conversations assigned to that project, on their next turn. The agent must opt
+in with [workspace.project_roots.within](../spec-reference.md#workspace).
+Without that policy, stored project roots are ignored. A disallowed or broken
+root refuses the turn instead of falling back to another directory.
+
+The REST API accepts optional `root` on `POST /api/projects` and
+`PATCH /api/projects/{slug}`. A string sets a validated directory, `null` is
+unchanged on update (omitted on create), and `""` clears it on update. Invalid
+values return 400 with a repair message. Assign with
+`POST /api/conversations?project=<slug>` or
+`PATCH /api/conversations/{id}` with `{"project": "<slug>"}`; disallowed roots
+are rejected before assignment.
+
+Wait for background shell commands and delegated tasks to finish before
+switching a conversation's project or changing its root. The maintenance
+workers for memory, keywords, and summaries remain independent.
 
 ### Files
 
