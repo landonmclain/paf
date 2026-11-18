@@ -615,6 +615,22 @@ class DockerExecutor:
         exit_code = proc.returncode if proc.returncode is not None else 0
         return exit_code, stdout, stderr
 
+    async def _rm_confirm(self, name: str) -> None:
+        """Force-remove a container and wait until the daemon reports it gone.
+
+        ``docker rm -f`` on a running container returns when the daemon accepts
+        the kill; the container passes through ``dead`` state until removal
+        finishes, so a ``docker ps -a`` scan right after can still see it. Poll
+        ``inspect`` until the name no longer resolves, so a killed run leaves
+        no husk behind.
+        """
+        await self._docker(["docker", "rm", "-f", name], timeout=30.0)
+        for _ in range(40):
+            code, _, _ = await self._docker(["docker", "inspect", name], timeout=15.0)
+            if code != 0:
+                return
+            await anyio.sleep(0.25)
+
     async def _ensure_container(self, cwd: Path) -> None:
         """Create the long-lived container for ``mode='exec'`` on first use."""
         if self._container_id is not None:
@@ -727,7 +743,7 @@ class DockerExecutor:
                 size = await run_sync(tree_bytes, roots)
                 if size > self._max_writable_bytes:
                     capped["hit"] = True
-                    await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
+                    await self._rm_confirm(run_name)
                     return
 
         timed_out = False
@@ -744,7 +760,7 @@ class DockerExecutor:
                 # kill wrap the command in ``timeout``.)
                 timed_out = True
                 if run_name is not None:
-                    await self._docker(["docker", "rm", "-f", run_name], timeout=30.0)
+                    await self._rm_confirm(run_name)
             finally:
                 tg.cancel_scope.cancel()
         notes = await run_sync(
