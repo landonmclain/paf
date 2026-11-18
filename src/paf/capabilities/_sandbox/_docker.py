@@ -616,19 +616,24 @@ class DockerExecutor:
         return exit_code, stdout, stderr
 
     async def _rm_confirm(self, name: str) -> None:
-        """Force-remove a container and wait until the daemon reports it gone.
+        """Force-remove a container and confirm it is gone from ``docker ps -a``.
 
-        ``docker rm -f`` on a running container returns when the daemon accepts
-        the kill; the container passes through ``dead`` state until removal
-        finishes, so a ``docker ps -a`` scan right after can still see it. Poll
-        ``inspect`` until the name no longer resolves, so a killed run leaves
-        no husk behind.
+        ``docker rm -f`` returns when the daemon accepts the kill; a running
+        container then sits in ``dead`` state until removal finishes, and a
+        ``--rm`` container racing its own auto-removal can leave a husk the
+        first kill never clears. Re-issue the kill and poll the name-scoped
+        scan (the same filter the tests assert against) until the name no
+        longer appears, so a killed run leaves nothing behind. Bounded to fit
+        the size-cap test's 20s kill assertion.
         """
         await self._docker(["docker", "rm", "-f", name], timeout=30.0)
         for _ in range(40):
-            code, _, _ = await self._docker(["docker", "inspect", name], timeout=15.0)
-            if code != 0:
+            code, out, _ = await self._docker(
+                ["docker", "ps", "-a", "-q", "--filter", f"name={name}"], timeout=15.0
+            )
+            if code == 0 and not out.strip():
                 return
+            await self._docker(["docker", "rm", "-f", name], timeout=30.0)
             await anyio.sleep(0.25)
 
     async def _ensure_container(self, cwd: Path) -> None:
