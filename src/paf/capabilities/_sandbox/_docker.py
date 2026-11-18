@@ -616,16 +616,18 @@ class DockerExecutor:
         return exit_code, stdout, stderr
 
     async def _rm_confirm(self, name: str) -> None:
-        """Force-remove a container and confirm it is gone from ``docker ps -a``.
+        """Stop, remove, and confirm a container is gone from ``docker ps -a``.
 
-        ``docker rm -f`` returns when the daemon accepts the kill; a running
-        container then sits in ``dead`` state until removal finishes, and a
-        ``--rm`` container racing its own auto-removal can leave a husk the
-        first kill never clears. Re-issue the kill and poll the name-scoped
-        scan (the same filter the tests assert against) until the name no
-        longer appears, so a killed run leaves nothing behind. Bounded to fit
-        the size-cap test's 20s kill assertion.
+        ``docker rm -f`` on a running container returns when the daemon accepts
+        the kill; the container then sits in ``removing``/``dead`` state while
+        the daemon unmounts its mounts, and a flood-writing ``--rm`` container
+        racing its own auto-removal extends that window past any short poll on
+        a loaded runner. ``docker kill`` stops the process synchronously
+        first, so the removal's unmounts race nothing; then poll the
+        name-scoped scan (the filter the tests assert against) until it is
+        empty. Bounded to fit the size-cap test's 20s kill assertion.
         """
+        await self._docker(["docker", "kill", name], timeout=30.0)
         await self._docker(["docker", "rm", "-f", name], timeout=30.0)
         for _ in range(40):
             code, out, _ = await self._docker(
