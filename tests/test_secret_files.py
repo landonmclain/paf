@@ -279,17 +279,8 @@ def _overlay_dirs() -> set[Path]:
     return set(Path(tempfile.gettempdir()).glob("paf-overlay-*"))
 
 
-@pytest.fixture
-def private_tmpdir(tmp_path, monkeypatch) -> Path:
-    """Point this process's temp dir at a fresh folder, so overlay counts are ours.
-
-    Overlays are created with ``tempfile.mkdtemp``; in the shared system temp dir,
-    other pytest-xdist workers' overlays come and go while we count.
-    """
-    private = tmp_path / "tmp"
-    private.mkdir()
-    monkeypatch.setattr(tempfile, "tempdir", str(private))
-    return private
+# ``private_tmpdir`` lives in tests/conftest.py: the exec-mode lifecycle test in
+# test_sandbox_lifecycle.py needs it too.
 
 
 @needs_docker

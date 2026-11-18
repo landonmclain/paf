@@ -6,6 +6,7 @@ codebase built to exercise specific analyzer behaviors (see its README).
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,19 @@ def sample_py() -> tuple[list[FileInfo], dict[str, str]]:
 def sample_ts() -> dict[str, FileInfo]:
     """The sample repo's TypeScript files, keyed by repo-relative path."""
     return _analyze((".ts", ".tsx"))
+
+
+@pytest.fixture
+def private_tmpdir(tmp_path, monkeypatch) -> Path:
+    """Point this process's temp dir at a fresh folder, so overlay counts are ours.
+
+    Overlays are created with ``tempfile.mkdtemp``; in the shared system temp dir,
+    other pytest-xdist workers' overlays come and go while we count.
+    """
+    private = tmp_path / "tmp"
+    private.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(private))
+    return private
 
 
 @pytest.fixture(autouse=True)

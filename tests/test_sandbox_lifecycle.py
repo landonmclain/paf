@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -220,9 +221,9 @@ def test_docker_close_without_starting_anything_is_a_noop(tmp_path):
 
 
 @needs_docker
-def test_docker_close_removes_the_exec_overlay_dir(tmp_path):
+def test_docker_close_removes_the_exec_overlay_dir(tmp_path, private_tmpdir):
     (tmp_path / ".env").write_text("s")
-    before = set(Path("/tmp").glob("paf-overlay-*"))
+    before = set(Path(tempfile.gettempdir()).glob("paf-overlay-*"))
 
     async def scenario() -> set[Path]:
         ex = DockerExecutor(
@@ -231,13 +232,13 @@ def test_docker_close_removes_the_exec_overlay_dir(tmp_path):
             container_name=f"paf-test-{uuid.uuid4().hex[:6]}",
         )
         await ex.run("true", cwd=tmp_path, env=None, timeout=30)
-        during = set(Path("/tmp").glob("paf-overlay-*")) - before
+        during = set(Path(tempfile.gettempdir()).glob("paf-overlay-*")) - before
         await ex.close()
         return during
 
     during = _run(scenario())
     assert len(during) == 1  # held while the container lives
-    assert set(Path("/tmp").glob("paf-overlay-*")) - before == set()
+    assert set(Path(tempfile.gettempdir()).glob("paf-overlay-*")) - before == set()
 
 
 @needs_docker
